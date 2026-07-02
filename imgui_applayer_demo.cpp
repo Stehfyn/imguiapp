@@ -411,12 +411,6 @@ namespace
     bool Redo;
     bool OpenProblems;  // problems chip clicked -> reveal the code/problems panel
     bool Diff;          // diff current graph's codegen vs the saved-on-disk graph -> clipboard
-    bool HistGoto;      // time-travel scrubber moved this frame
-    int  HistIndex;     // target snapshot index
-    bool ScrubSet;      // "App time" checkbox toggled this frame
-    bool Scrub;         // its captured value
-    bool ScrubIdxSet;   // app-time slider moved this frame
-    int  ScrubIdx;      // target app-state snapshot index
   };
   struct ToolbarControl : ImGuiAppControl<ToolbarData, ToolbarTempData>
   {
@@ -469,20 +463,6 @@ namespace
       if (temp_data->Redo)
       {
         ImGui::AppGraphRedo(&doc->Graph);
-      }
-      if (temp_data->HistGoto)
-      {
-        ImGui::AppGraphHistoryGoto(&doc->Graph, temp_data->HistIndex);
-      }
-      if (temp_data->ScrubSet)
-      {
-        doc->TimeScrub = temp_data->Scrub;
-        if (doc->TimeScrub)
-          doc->TimeScrubIndex = ImMax(0, doc->MirrorHistory.Count - 1);   // enter the timeline at "now"
-      }
-      if (temp_data->ScrubIdxSet)
-      {
-        doc->TimeScrubIndex = temp_data->ScrubIdx;
       }
       if (temp_data->Diff)
       {
@@ -555,39 +535,16 @@ namespace
         ImGui::EndDisabled();
         ImGui::SetItemTooltip("Redo (Ctrl+Y)");
 
-        // Edit-history scrubber (time travel over undo states).
-        const int hist_count  = ImGui::AppGraphHistoryCount(&doc->Graph);
-        const int hist_cursor = ImGui::AppGraphHistoryCursor(&doc->Graph);
-        temp_data->HistGoto = false;
-        if (hist_count > 1)
-        {
-          ImGui::SameLine();
-          ImGui::SetNextItemWidth(em * 8.0f);
-          int idx = hist_cursor;
-          if (ImGui::SliderInt("##history", &idx, 0, hist_count - 1, "t-%d"))
-          {
-            temp_data->HistGoto  = true;
-            temp_data->HistIndex = idx;
-          }
-          ImGui::SetItemTooltip("Time-travel: scrub %d undo states", hist_count);
-        }
-
-        // -- Right cluster: problems chip, panel toggles, run controls. Width measured so it hugs the edge.
-        temp_data->ScrubSet    = false;
-        temp_data->ScrubIdxSet = false;
-        const int app_frames = doc->MirrorHistory.Count;
-        const bool show_time = app_frames > 1 || doc->TimeScrub;
-
+        // -- Right cluster: problems chip + panel toggles. Width measured so it hugs the edge. Run controls
+        //    (App time) live on the viewport's transport overlay, not here.
         char prob_lbl[48];
-        ImFormatString(prob_lbl, IM_ARRAYSIZE(prob_lbl), "%s %d", (nerr + nwarn) > 0 ? ICON_FA_TRIANGLE_EXCLAMATION : ICON_FA_CHECK, nerr + nwarn);
+        ImFormatString(prob_lbl, IM_ARRAYSIZE(prob_lbl), "%s %d##problems", (nerr + nwarn) > 0 ? ICON_FA_TRIANGLE_EXCLAMATION : ICON_FA_CHECK, nerr + nwarn);
         const char* code_lbl = ICON_FA_CODE "  Code";
-        const char* live_lbl = show_live ? ICON_FA_EYE "  Live" : ICON_FA_EYE_SLASH "  Live";
+        const char* live_lbl = show_live ? ICON_FA_EYE "  Live###live" : ICON_FA_EYE_SLASH "  Live###live";
         const float pad2 = style.FramePadding.x * 2.0f;
-        float cluster_w = ImGui::CalcTextSize(prob_lbl).x + pad2
-                        + ImGui::CalcTextSize(code_lbl).x + pad2 + style.ItemSpacing.x
-                        + ImGui::CalcTextSize(live_lbl).x + pad2 + style.ItemSpacing.x;
-        if (show_time)
-          cluster_w += ImGui::CalcTextSize(ICON_FA_CLOCK "  App time").x + pad2 + style.ItemSpacing.x + (doc->TimeScrub ? em * 9.0f + style.ItemSpacing.x : 0.0f);
+        const float cluster_w = ImGui::CalcTextSize(prob_lbl, ImGui::FindRenderedTextEnd(prob_lbl)).x + pad2
+                              + ImGui::CalcTextSize(code_lbl).x + pad2 + style.ItemSpacing.x
+                              + ImGui::CalcTextSize(live_lbl, ImGui::FindRenderedTextEnd(live_lbl)).x + pad2 + style.ItemSpacing.x;
         ImGui::SameLine(ImMax(ImGui::GetCursorPosX() + em, ImGui::GetContentRegionMax().x - cluster_w - em * 0.2f));
 
         // Problems chip: severity-colored count; click reveals the Problems tab's panel.
@@ -616,36 +573,6 @@ namespace
         temp_data->SetShowLive = live_clicked;
         temp_data->ShowLive    = live_clicked ? !show_live : show_live;
         ImGui::SetItemTooltip("Show / hide read-only nodes mirrored from the running app");
-
-        // App timeline: freeze the MIRRORED app and scrub its recorded state ring -- the framework's state
-        // discipline (OnUpdate sole mutator, registered storage) makes ANY app scrubbable; this is that
-        // theorem as a slider.
-        if (show_time)
-        {
-          ImGui::SameLine();
-          bool scrub = doc->TimeScrub;
-          if (scrub)
-            ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonActive]);
-          if (ImGui::Button(ICON_FA_CLOCK "  App time"))
-          {
-            temp_data->ScrubSet = true;
-            temp_data->Scrub = !scrub;
-          }
-          if (scrub)
-            ImGui::PopStyleColor();
-          ImGui::SetItemTooltip("Freeze the running app and scrub its recorded state history (%d frames)", app_frames);
-          if (doc->TimeScrub && app_frames > 0)
-          {
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(em * 9.0f);
-            int idx = ImClamp(doc->TimeScrubIndex, 0, app_frames - 1);
-            if (ImGui::SliderInt("##appscrub", &idx, 0, app_frames - 1, "frame %d"))
-            {
-              temp_data->ScrubIdxSet = true;
-              temp_data->ScrubIdx    = idx;
-            }
-          }
-        }
       }
       ImGui::EndChild();
     }
@@ -777,6 +704,10 @@ namespace
     bool  CodeSnapClosed;      // resolved code height collapsed below threshold while idle
     bool  SelectionChanged;    // tree/canvas changed the selection this frame
     int   Selection;           // the new selection
+    bool  ScrubSet;            // transport overlay: "App time" freeze toggled this frame
+    bool  Scrub;               // its captured value
+    bool  ScrubIdxSet;         // transport overlay: frame scrubber moved this frame
+    int   ScrubIdx;            // target app-state snapshot index
   };
   struct EditorBodyControl : ImGuiAppControl<EditorBodyData, EditorBodyTempData>
   {
@@ -823,18 +754,38 @@ namespace
         doc->Selection = temp_data->Selection;
       }
 
-      // Regenerate the inspector text for the current selection while the panel is open.
+      // Transport overlay intents (App-time freeze + frame scrub over the mirror's state ring).
+      if (temp_data->ScrubSet)
+      {
+        doc->TimeScrub = temp_data->Scrub;
+        if (doc->TimeScrub)
+          doc->TimeScrubIndex = ImMax(0, doc->MirrorHistory.Count - 1);   // enter the timeline at "now"
+      }
+      if (temp_data->ScrubIdxSet)
+      {
+        doc->TimeScrubIndex = temp_data->ScrubIdx;
+      }
+
+      // Regenerate the inspector text while the panel is open: the selected node's code, or -- with nothing
+      // selected -- the WHOLE app's. The panel must never open blank: out of the box the button shows the
+      // entire generated program, and selecting any node focuses the view onto its contribution.
       data->CodeText.clear();
       data->HasCode = false;
       data->CodeName[0] = 0;
-      if (doc->CodeH > 0.0f && doc->Selection >= 0)
+      if (doc->CodeH > 0.0f)
       {
-        if (ImGuiAppNode* seln = ImGui::AppGraphFindNode(&doc->Graph, doc->Selection))
+        ImGuiAppNode* seln = doc->Selection >= 0 ? ImGui::AppGraphFindNode(&doc->Graph, doc->Selection) : nullptr;
+        if (seln != nullptr)
         {
           ImGui::GenerateAppNodeCode(&doc->Graph, seln, &data->CodeText);
           ImStrncpy(data->CodeName, seln->Draft.Name, sizeof(data->CodeName));
-          data->HasCode = true;
         }
+        else
+        {
+          ImGui::GenerateAppGraphCode(&doc->Graph, &data->CodeText);
+          ImStrncpy(data->CodeName, "whole app  (select a node to focus its code)", sizeof(data->CodeName));
+        }
+        data->HasCode = data->CodeText.size() > 0;
       }
 
       // Validation problems for the Problems tab (only while the panel is open -- it scans the whole graph).
@@ -902,6 +853,49 @@ namespace
         if (ImGui::BeginChild("##NodeGraph", ImVec2(col_w, canvas_h), ImGuiChildFlags_Borders))
         {
           ImGui::ShowAppGraphEditor(app, graph, &selection, doc->ShowLive);
+
+          // Transport overlay (bottom-center of the canvas): the run-time controls float on the viewport,
+          // the game-editor play bar. Freeze the MIRRORED app ("App time") and scrub its recorded state
+          // ring -- the framework's state discipline makes ANY app scrubbable; this is that theorem as a
+          // slider. Real ImGui items submitted after the editor, so they win hover over the canvas.
+          temp_data->ScrubSet    = false;
+          temp_data->ScrubIdxSet = false;
+          const int app_frames = doc->MirrorHistory.Count;
+          if (app_frames > 1 || doc->TimeScrub)
+          {
+            const ImGuiStyle& tstyle  = ImGui::GetStyle();
+            const char*       t_lbl   = doc->TimeScrub ? ICON_FA_CLOCK "  App time###apptime" : ICON_FA_CLOCK "###apptime";
+            const float       t_btn_w = ImGui::CalcTextSize(t_lbl, ImGui::FindRenderedTextEnd(t_lbl)).x + tstyle.FramePadding.x * 2.0f;
+            const float       t_w     = t_btn_w + (doc->TimeScrub ? tstyle.ItemSpacing.x + em * 11.0f : 0.0f);
+            const ImVec2      c_min   = ImGui::GetWindowPos();
+            const ImVec2      c_size  = ImGui::GetWindowSize();
+            const ImVec2      t_pos(c_min.x + (c_size.x - t_w) * 0.5f, c_min.y + c_size.y - ImGui::GetFrameHeight() - em * 0.7f);
+            ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(t_pos.x - em * 0.4f, t_pos.y - em * 0.25f),
+                                                      ImVec2(t_pos.x + t_w + em * 0.4f, t_pos.y + ImGui::GetFrameHeight() + em * 0.25f),
+                                                      IM_COL32(24, 25, 28, 215), em * 0.5f);
+            ImGui::SetCursorScreenPos(t_pos);
+            if (doc->TimeScrub)
+              ImGui::PushStyleColor(ImGuiCol_Button, tstyle.Colors[ImGuiCol_ButtonActive]);
+            if (ImGui::Button(t_lbl))
+            {
+              temp_data->ScrubSet = true;
+              temp_data->Scrub    = !doc->TimeScrub;
+            }
+            if (doc->TimeScrub)
+              ImGui::PopStyleColor();
+            ImGui::SetItemTooltip("Freeze the running app and scrub its recorded state history (%d frames)", app_frames);
+            if (doc->TimeScrub && app_frames > 0)
+            {
+              ImGui::SameLine();
+              ImGui::SetNextItemWidth(em * 11.0f);
+              int idx = ImClamp(doc->TimeScrubIndex, 0, app_frames - 1);
+              if (ImGui::SliderInt("##appscrub", &idx, 0, app_frames - 1, "frame %d"))
+              {
+                temp_data->ScrubIdxSet = true;
+                temp_data->ScrubIdx    = idx;
+              }
+            }
+          }
         }
         ImGui::EndChild();
 
@@ -1198,6 +1192,11 @@ namespace ImGui
       if (!editor_ready)
       {
         ImGuiViewport* vp = ImGui::GetMainViewport();
+        // Task layer FIRST: control OnUpdate runs there since the core moved it out of the Window layer --
+        // without it every Composer control's update (toolbar intents, splitters, mirror, time travel) is
+        // silently skipped. No Command/Status layers: the Composer emits no commands and the status overlay
+        // belongs to the example app.
+        ImGui::PushAppLayer<ImGuiAppTaskLayer>(&editor_app);
         ImGui::PushAppLayer<ImGuiAppWindowLayer>(&editor_app);
 
         // Demo control panel (menu + blurb).
