@@ -81,11 +81,22 @@ namespace ImGui
   IMGUI_API ImVec2 CanvasFromScreen(const ImGuiCanvasState* c, ImVec2 screen);
   IMGUI_API void   CanvasCenterOn(ImGuiCanvasState* c, ImVec2 model_pos);                    // MoveToNode successor
   IMGUI_API void   CanvasFitRect(ImGuiCanvasState* c, ImVec2 model_min, ImVec2 model_max, float margin_px);
+  IMGUI_API void   CanvasFitNodes(ImGuiCanvasState* c, const int* node_ids, int count, float margin_px);
+  IMGUI_API void   CanvasFitAll(ImGuiCanvasState* c, float margin_px);                       // over nodes submitted last frame
+
+  // Minimap: call between CanvasBegin/CanvasEnd; drawn by CanvasEnd in the given corner at
+  // size_fraction of the canvas. Click/drag inside it recenters the camera; its rect is excluded
+  // from the canvas FSM.
+  IMGUI_API void   CanvasMiniMap(ImGuiCanvasState* c, float size_fraction);
 
   // ---- nodes (geometry in MODEL units, always) --------------------------------------------------
   // Between BeginCanvasNode/EndCanvasNode submit ordinary ImGui widgets; the engine renders them
   // under the zoomed font + scaled layout metrics and measures the node the SAME frame.
   IMGUI_API void   CanvasNextNodeTitle(const char* title, ImU32 title_color /*= 0 -> style*/);
+  // Editable variant (host-driven rename): while *editing, the engine renders an InputText in the
+  // title bar bound to buf and clears *editing when it deactivates. Pair with CanvasNodeDoubleClicked
+  // to enter the state (the host decides whether a double-click renames or drills).
+  IMGUI_API void   CanvasNextNodeTitleEditable(char* buf, int buf_size, bool* editing, ImU32 title_color);
   IMGUI_API bool   CanvasBeginNode(ImGuiCanvasState* c, int node_id);   // false if culled (off-screen): body may be skipped, geometry persists
   IMGUI_API void   CanvasEndNode(ImGuiCanvasState* c);
   IMGUI_API ImVec2 CanvasNodePos(const ImGuiCanvasState* c, int node_id);        // model
@@ -116,6 +127,7 @@ namespace ImGui
   IMGUI_API bool   CanvasWireCreated(const ImGuiCanvasState* c, int* out_pin_a, int* out_pin_b);   // drag completed pin->pin (snap or release)
   IMGUI_API bool   CanvasWireDropped(const ImGuiCanvasState* c, int* out_from_pin, ImVec2* out_model_pos);   // released on empty canvas
   IMGUI_API bool   CanvasWireDetached(const ImGuiCanvasState* c, int* out_wire_id, int* out_grabbed_end_pin); // endpoint dragged off a pin
+  IMGUI_API bool   CanvasNodeDoubleClicked(const ImGuiCanvasState* c, int* out_node_id); // LMB double-click on a node
   IMGUI_API bool   CanvasMenuRequestNode(const ImGuiCanvasState* c, int* out_node_id);   // short RMB click resolution
   IMGUI_API bool   CanvasMenuRequestWire(const ImGuiCanvasState* c, int* out_wire_id);
   IMGUI_API bool   CanvasMenuRequestEmpty(const ImGuiCanvasState* c, ImVec2* out_model_pos);

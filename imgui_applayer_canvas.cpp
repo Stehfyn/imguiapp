@@ -113,7 +113,17 @@ struct ImGuiCanvasState
   ImVector<int>    DragNodes;
   int    DragWireFromPin;                      // DragWire: the fixed end
 
+  // Rename hook: per-frame pointers captured by CanvasNextNodeTitleEditable (host-owned storage).
+  char*  EditBuf;    int EditBufSize;   bool* EditFlag;   int EditNodeIdx;   bool EditFocusPending;
+  int    LastEditingNodeId;             // focus-once tracking across frames
+
+  // Minimap
+  bool   MiniMapReq;   float MiniMapFraction;
+  ImVec2 MiniRectMin, MiniRectMax;      // last drawn rect (screen); the FSM keeps out of it
+  ImVec2 MiniModelMin, MiniModelMax;    // the model extents that rect mapped (for click-to-jump)
+
   // Latched events (valid from CanvasEnd until the next CanvasBegin)
+  bool   NodeDblClickReq; int NodeDblClickId;
   bool   MenuNodeReq;   int    MenuNodeId;
   bool   MenuWireReq;   int    MenuWireId;
   bool   MenuEmptyReq;  ImVec2 MenuEmptyModel;
@@ -169,6 +179,11 @@ struct ImGuiCanvasState
     Interaction = ImGuiCanvasInteraction_None;
     GestureStartMouse = GestureStartPan = ImVec2(0.0f, 0.0f);
     DragWireFromPin = -1;
+    EditBuf = nullptr; EditBufSize = 0; EditFlag = nullptr; EditNodeIdx = -1; EditFocusPending = false;
+    LastEditingNodeId = -1;
+    MiniMapReq = false; MiniMapFraction = 0.2f;
+    MiniRectMin = MiniRectMax = MiniModelMin = MiniModelMax = ImVec2(0.0f, 0.0f);
+    NodeDblClickReq = false; NodeDblClickId = -1;
     MenuNodeReq = MenuWireReq = MenuEmptyReq = false;
     MenuNodeId = MenuWireId = -1;
     MenuEmptyModel = ImVec2(0.0f, 0.0f);
@@ -294,6 +309,42 @@ namespace ImGui
     c->Zoom = ImClamp(ImMin(avail.x / span.x, avail.y / span.y), c->IO.ZoomMin, c->IO.ZoomMax);
     CanvasCenterOn(c, (model_min + model_max) * 0.5f);
   }
+
+  void CanvasFitNodes(ImGuiCanvasState* c, const int* node_ids, int count, float margin_px)
+  {
+    ImVec2 mn(FLT_MAX, FLT_MAX), mx(-FLT_MAX, -FLT_MAX);
+    for (int i = 0; i < count; i++)
+      if (const ImGuiCanvasNodeRec* n = CanvasFindNode(c, node_ids[i]))
+      {
+        mn = ImMin(mn, n->Pos);
+        mx = ImMax(mx, n->Pos + n->Size);
+      }
+    if (mn.x <= mx.x)
+      CanvasFitRect(c, mn, mx, margin_px);
+  }
+
+  void CanvasFitAll(ImGuiCanvasState* c, float margin_px)
+  {
+    const int frame = GetFrameCount();
+    ImVec2 mn(FLT_MAX, FLT_MAX), mx(-FLT_MAX, -FLT_MAX);
+    for (int i = 0; i < c->Nodes.Size; i++)
+    {
+      const ImGuiCanvasNodeRec* n = &c->Nodes.Data[i];
+      if (n->LastFrame < frame - 1)
+        continue;   // fit what the canvas is showing, not every node ever seen
+      mn = ImMin(mn, n->Pos);
+      mx = ImMax(mx, n->Pos + n->Size);
+    }
+    if (mn.x <= mx.x)
+      CanvasFitRect(c, mn, mx, margin_px);
+  }
+
+  void CanvasMiniMap(ImGuiCanvasState* c, float size_fraction)
+  {
+    IM_ASSERT(c->InsideCanvas);
+    c->MiniMapReq = true;
+    c->MiniMapFraction = ImClamp(size_fraction, 0.05f, 0.5f);
+  }
 }
 
 //-----------------------------------------------------------------------------
@@ -352,8 +403,33 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
   ImGuiIO& io = ImGui::GetIO();
   const ImVec2 mouse = io.MousePos;
 
+  // The minimap owns its rect: gestures there recenter the camera (handled where it draws) and the
+  // canvas FSM stays out.
+  const bool in_minimap = mouse.x >= c->MiniRectMin.x && mouse.x < c->MiniRectMax.x
+                       && mouse.y >= c->MiniRectMin.y && mouse.y < c->MiniRectMax.y;
+  if (in_minimap && c->Interaction == ImGuiCanvasInteraction_None)
+  {
+    c->HoveredNode = -1;
+    if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && canvas_item_hovered)
+    {
+      // Click/drag-to-jump: map the minimap point back to model space and center there.
+      const ImVec2 t((mouse.x - c->MiniRectMin.x) / ImMax(1.0f, c->MiniRectMax.x - c->MiniRectMin.x),
+                     (mouse.y - c->MiniRectMin.y) / ImMax(1.0f, c->MiniRectMax.y - c->MiniRectMin.y));
+      ImGui::CanvasCenterOn(c, ImVec2(c->MiniModelMin.x + t.x * (c->MiniModelMax.x - c->MiniModelMin.x),
+                                      c->MiniModelMin.y + t.y * (c->MiniModelMax.y - c->MiniModelMin.y)));
+    }
+    return;
+  }
+
   // Hover resolution: current camera x current model. Valid for this whole frame.
   c->HoveredNode = canvas_item_hovered || c->Interaction != ImGuiCanvasInteraction_None ? CanvasHitNode(c, mouse) : -1;
+
+  // Double-click on a node: reported, not interpreted -- the host decides (rename vs drill-down).
+  if (c->HoveredNode >= 0 && canvas_item_hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+  {
+    c->NodeDblClickReq = true;
+    c->NodeDblClickId = c->HoveredNode;
+  }
 
   // Wheel zoom, cursor-anchored: empty canvas plain; Ctrl anywhere over the canvas (node widgets
   // keep the plain wheel for their own behaviors, e.g. value scrubbing).
@@ -546,6 +622,7 @@ namespace ImGui
     // Latched events die at the next frame's begin.
     c->MenuNodeReq = c->MenuWireReq = c->MenuEmptyReq = false;
     c->WireCreatedReq = c->WireDroppedReq = c->WireDetachedReq = false;
+    c->NodeDblClickReq = false;
     c->Wires.resize(0);
     for (int i = 0; i < c->Pins.Size; i++)
       c->Pins.Data[i].WiredCount = 0;
@@ -589,6 +666,9 @@ namespace ImGui
   // Next-node scratch (submission-scoped, like SetNextWindow*; consumed by CanvasBeginNode).
   static char  s_next_title[64] = { 0 };
   static ImU32 s_next_title_color = 0;
+  static char* s_next_edit_buf = nullptr;
+  static int   s_next_edit_size = 0;
+  static bool* s_next_edit_flag = nullptr;
 
   void CanvasNextNodeTitle(const char* title, ImU32 title_color)
   {
@@ -597,6 +677,19 @@ namespace ImGui
     else
       s_next_title[0] = 0;
     s_next_title_color = title_color;
+    s_next_edit_buf = nullptr;
+    s_next_edit_size = 0;
+    s_next_edit_flag = nullptr;
+  }
+
+  void CanvasNextNodeTitleEditable(char* buf, int buf_size, bool* editing, ImU32 title_color)
+  {
+    // The title bar always occupies its band (a blank editable title still needs somewhere to type).
+    ImStrncpy(s_next_title, buf != nullptr && buf[0] ? buf : " ", IM_ARRAYSIZE(s_next_title));
+    s_next_title_color = title_color;
+    s_next_edit_buf = buf;
+    s_next_edit_size = buf_size;
+    s_next_edit_flag = editing;
   }
 
   bool CanvasBeginNode(ImGuiCanvasState* c, int node_id)
@@ -608,6 +701,28 @@ namespace ImGui
     n->TitleColor = s_next_title_color;
     s_next_title[0] = 0;
     s_next_title_color = 0;
+
+    // Rename hook: capture the host's edit binding for THIS node (pointers live for the frame only).
+    c->EditNodeIdx = -1;
+    if (s_next_edit_flag != nullptr && s_next_edit_buf != nullptr)
+    {
+      c->EditBuf = s_next_edit_buf;
+      c->EditBufSize = s_next_edit_size;
+      c->EditFlag = s_next_edit_flag;
+      c->EditNodeIdx = c->NodeIdx.GetInt((ImGuiID)node_id, 0) - 1;
+      if (*s_next_edit_flag && c->LastEditingNodeId != node_id)
+      {
+        c->EditFocusPending = true;      // focus once, when the edit state ARRIVES on this node
+        c->LastEditingNodeId = node_id;
+      }
+      else if (!*s_next_edit_flag && c->LastEditingNodeId == node_id)
+      {
+        c->LastEditingNodeId = -1;
+      }
+    }
+    s_next_edit_buf = nullptr;
+    s_next_edit_size = 0;
+    s_next_edit_flag = nullptr;
 
     c->CurNode = c->NodeIdx.GetInt((ImGuiID)node_id, 0) - 1;
     c->SubmitOrderNow.push_back(node_id);
@@ -666,17 +781,38 @@ namespace ImGui
     const float rounding = c->Style.NodeRounding * z;
     c->Splitter.SetCurrentChannel(c->DrawList, 1);
     c->DrawList->AddRectFilled(mn, mx, selected ? c->Style.NodeBgSelected : hovered ? c->Style.NodeBgHovered : c->Style.NodeBg, rounding);
+    const bool editing_title = c->EditNodeIdx == c->CurNode && c->EditFlag != nullptr && *c->EditFlag && title_h > 0.0f;
     if (title_h > 0.0f)
     {
       const ImU32 tb = n->TitleColor != 0 ? n->TitleColor
                      : selected ? c->Style.TitleBarSelected : hovered ? c->Style.TitleBarHovered : c->Style.TitleBar;
       c->DrawList->AddRectFilled(mn, ImVec2(mx.x, mn.y + title_h), tb, rounding, ImDrawFlags_RoundCornersTop);
-      c->DrawList->AddText(ImVec2(mn.x + c->Style.NodePadding.x * z, mn.y + (title_h - GetFontSize()) * 0.5f),
-                           IM_COL32(235, 236, 240, 255), n->Title);
+      if (!editing_title)
+        c->DrawList->AddText(ImVec2(mn.x + c->Style.NodePadding.x * z, mn.y + (title_h - GetFontSize()) * 0.5f),
+                             IM_COL32(235, 236, 240, 255), n->Title);
     }
     c->DrawList->AddRect(mn, mx, selected ? IM_COL32(230, 200, 120, 255) : c->Style.NodeOutline, rounding, 0,
                          ImMax(1.0f, c->Style.NodeBorder * z));
     c->Splitter.SetCurrentChannel(c->DrawList, 2);
+
+    // Rename in place: an InputText over the title band, bound to the host's buffer; deactivation
+    // hands the edit state back (still under the zoomed font, so the field tracks the canvas scale).
+    if (editing_title)
+    {
+      SetCursorScreenPos(ImVec2(mn.x + c->Style.NodePadding.x * z, mn.y + ImMax(0.0f, (title_h - GetFrameHeight()) * 0.5f)));
+      SetNextItemWidth(ImMax(GetFontSize() * 3.0f, (mx.x - mn.x) - c->Style.NodePadding.x * z * 2.0f));
+      if (c->EditFocusPending)
+      {
+        SetKeyboardFocusHere();
+        c->EditFocusPending = false;
+      }
+      PushStyleColor(ImGuiCol_FrameBg, IM_COL32(20, 20, 24, 255));
+      InputText("##canvas_title_edit", c->EditBuf, (size_t)c->EditBufSize, ImGuiInputTextFlags_AutoSelectAll);
+      const bool done = IsItemDeactivated();
+      PopStyleColor();
+      if (done)
+        *c->EditFlag = false;
+    }
 
     PopID();
     PopFont();
@@ -860,6 +996,64 @@ namespace ImGui
       }
     }
 
+    // Minimap: bottom-right inset, drawn from THIS frame's model geometry (node rects + camera
+    // viewport), aspect-preserving. Its screen rect is remembered so the next frame's FSM stays out
+    // and click-to-jump can invert the mapping.
+    if (c->MiniMapReq)
+    {
+      c->MiniMapReq = false;
+      const int mm_frame = GetFrameCount();
+      ImVec2 bmin(FLT_MAX, FLT_MAX), bmax(-FLT_MAX, -FLT_MAX);
+      for (int i = 0; i < c->Nodes.Size; i++)
+      {
+        const ImGuiCanvasNodeRec* n = &c->Nodes.Data[i];
+        if (n->LastFrame != mm_frame)
+          continue;
+        bmin = ImMin(bmin, n->Pos);
+        bmax = ImMax(bmax, n->Pos + n->Size);
+      }
+      if (bmin.x <= bmax.x)
+      {
+        // Include the current viewport in the mapped extents so the view box is always visible.
+        bmin = ImMin(bmin, CanvasFromScreen(c, c->Origin));
+        bmax = ImMax(bmax, CanvasFromScreen(c, c->Origin + c->CanvasSize));
+        const ImVec2 span(ImMax(1.0f, bmax.x - bmin.x), ImMax(1.0f, bmax.y - bmin.y));
+        const float  max_w = c->CanvasSize.x * c->MiniMapFraction;
+        const float  max_h = c->CanvasSize.y * c->MiniMapFraction;
+        const float  s = ImMin(max_w / span.x, max_h / span.y);
+        const ImVec2 rect_sz(span.x * s, span.y * s);
+        const ImVec2 rmax(c->Origin.x + c->CanvasSize.x - 12.0f, c->Origin.y + c->CanvasSize.y - 12.0f);
+        const ImVec2 rmin(rmax.x - rect_sz.x, rmax.y - rect_sz.y);
+        c->MiniRectMin = rmin;
+        c->MiniRectMax = rmax;
+        c->MiniModelMin = bmin;
+        c->MiniModelMax = bmax;
+        auto to_mini = [&](ImVec2 m) {
+          return ImVec2(rmin.x + (m.x - bmin.x) * s, rmin.y + (m.y - bmin.y) * s);
+        };
+        c->DrawList->AddRectFilled(rmin, rmax, IM_COL32(20, 21, 24, 235), 4.0f);
+        c->DrawList->AddRect(rmin, rmax, IM_COL32(90, 92, 100, 180), 4.0f);
+        for (int i = 0; i < c->Nodes.Size; i++)
+        {
+          const ImGuiCanvasNodeRec* n = &c->Nodes.Data[i];
+          if (n->LastFrame != mm_frame)
+            continue;
+          c->DrawList->AddRectFilled(to_mini(n->Pos), to_mini(n->Pos + n->Size),
+                                     n->TitleColor != 0 ? (n->TitleColor & 0x00FFFFFF) | 0xB4000000 : IM_COL32(150, 152, 160, 180), 2.0f);
+        }
+        c->DrawList->AddRect(to_mini(CanvasFromScreen(c, c->Origin)), to_mini(CanvasFromScreen(c, c->Origin + c->CanvasSize)),
+                             IM_COL32(235, 236, 240, 200), 2.0f);
+      }
+      else
+      {
+        c->MiniRectMin = c->MiniRectMax = ImVec2(0.0f, 0.0f);
+      }
+    }
+    else
+    {
+      c->MiniRectMin = c->MiniRectMax = ImVec2(0.0f, 0.0f);
+    }
+
     EndChild();
     PopStyleColor();
     PopStyleVar();
@@ -940,6 +1134,13 @@ namespace ImGui
       if (out_grabbed_end_pin != nullptr) *out_grabbed_end_pin = c->DetachedGrabbedPin;
     }
     return c->WireDetachedReq;
+  }
+
+  bool CanvasNodeDoubleClicked(const ImGuiCanvasState* c, int* out_node_id)
+  {
+    if (c->NodeDblClickReq && out_node_id != nullptr)
+      *out_node_id = c->NodeDblClickId;
+    return c->NodeDblClickReq;
   }
 
   bool CanvasMenuRequestNode(const ImGuiCanvasState* c, int* out_node_id)
