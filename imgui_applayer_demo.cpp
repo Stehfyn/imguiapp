@@ -817,7 +817,6 @@ namespace
         case ComposerHostCmd_Diff:         temp_data->Diff = true; break;
         case ComposerHostCmd_PanelCode:    temp_data->RevealPanel = ComposerPanel_Code; break;
         case ComposerHostCmd_PanelProject: temp_data->RevealPanel = ComposerPanel_Project; break;
-        case ComposerHostCmd_PanelPreview: temp_data->RevealPanel = ComposerPanel_Preview; break;
         case ComposerHostCmd_PanelOutput:  temp_data->RevealPanel = ComposerPanel_Output; break;
         case ComposerHostCmd_ToggleLive:   temp_data->ToggleLive = true; break;
         default: break;
@@ -1059,6 +1058,13 @@ namespace
     bool            HasCode;                 // CodeText is non-empty
     bool            HasNodeCode;             // a node is selected and its code was generated
     char            CodeName[IM_LABEL_SIZE]; // selected node's draft name (the Node tab label)
+
+    // Code panel's Diff MODE (usability findings #3: diff is a way of LOOKING at the code, not a clipboard
+    // side effect). Regenerated behind the same signature gate as the code buffers.
+    bool            DiffMode;                // Code tab shows diff-vs-saved instead of the whole program
+    ImGuiTextBuffer DiffText;
+    ImVector<int>   DiffLines;
+    bool            HasDiff;                 // a saved graph existed to diff against
     ImVector<ImGui::ImGuiAppGraphIssue> Issues;  // validation problems, recomputed while the panel is open
 
     // Project tab: the document's files on disk (graph, generated header, write-ahead logs), rescanned on a
@@ -1093,6 +1099,7 @@ namespace
     bool  OpenOutput;          // viewport status strip clicked -> reveal + select the Output tab
     bool  AckReveal;           // the bottom tab bar consumed the one-shot RevealPanel intent this frame
     bool  ClearLog;            // Output tab: clear the document log
+    bool  ToggleDiffMode;      // Code tab header: flip whole-program <-> diff-vs-saved
   };
 
   // Project-level inspector (workbench §5.3): the empty selection shows the DOCUMENT -- the altitude above
@@ -1205,6 +1212,8 @@ namespace
       data->CodeSel = -2;   // "never generated" (a real empty selection is -1)
       data->InspDragging = false;
       data->ProjRescan = 0.0f;
+      data->DiffMode = false;
+      data->HasDiff = false;
     }
 
     virtual void OnUpdate(float dt, EditorBodyData* data, const EditorBodyTempData* temp_data, const EditorBodyTempData* last_temp_data) const override final
@@ -1316,6 +1325,11 @@ namespace
       // Regenerate the code buffers only when their inputs changed (graph signature or selection): derived
       // state lives in PersistData, computed here, drawn from const data in OnRender. A closed panel keeps
       // its stale buffers -- the signature gate makes them correct again the moment they are next needed.
+      if (temp_data->ToggleDiffMode)
+      {
+        data->DiffMode = !data->DiffMode;
+        data->CodeSig = 0;   // force the gated regen below to build (or drop) the diff buffer
+      }
       const ImGuiID gsig = ImGui::AppGraphSignature(&doc->Graph);
       if (gsig != data->CodeSig || doc->Selection != data->CodeSel)   // inspector + code tab both feed off these
       {
@@ -1349,6 +1363,21 @@ namespace
           data->HasNodeCode = data->CodeNodeText.size() > 0;
         }
         index_lines(data->CodeNodeText, &data->NodeLines);
+
+        // Diff mode: regenerate behind the same gate (diff is a VIEW of the code, findings #3).
+        data->DiffText.clear();
+        data->HasDiff = false;
+        if (data->DiffMode)
+        {
+          ImGuiAppGraph saved;
+          if (ImGui::LoadAppGraph(doc->GraphPath, &saved))
+          {
+            ImGui::AppGraphDiffCode(&saved, &doc->Graph, &data->DiffText);
+            data->HasDiff = true;
+          }
+          saved.Nodes.clear_destruct();   // scratch graph owns its nodes' inner vectors
+        }
+        index_lines(data->DiffText, &data->DiffLines);
       }
 
       // Validation problems for the Problems tab (only while the panel is open -- it scans the whole graph).
@@ -1442,7 +1471,6 @@ namespace
             { "File: Diff vs saved -> clipboard", "", ComposerHostCmd_Diff },
             { "Panel: Code", "", ComposerHostCmd_PanelCode },
             { "Panel: Project", "", ComposerHostCmd_PanelProject },
-            { "Panel: Preview", "", ComposerHostCmd_PanelPreview },
             { "Panel: Output", "", ComposerHostCmd_PanelOutput },
             { "View: Toggle live mirror", "", ComposerHostCmd_ToggleLive },
           };
@@ -1555,24 +1583,40 @@ namespace
               // Code: the whole generated program, source-mapped -- the selection's lines highlight and
               // scroll into view, hover brushes both ways, clicking a line selects the node. Scopes are
               // TABS (the idiom this panel already speaks), so the focused view is its own tab below.
+              temp_data->ToggleDiffMode = false;
               if (ImGui::BeginTabItem("Code", nullptr, doc->RevealPanel == ComposerPanel_Code ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
               {
+                // Shared header grammar (findings #3): context label left, actions right -- every tab the same.
                 ImGui::AlignTextToFramePadding();
-                ImGui::TextDisabled("Whole program");
-                if (data->HasCode)
-                {
-                  ImGui::SameLine();
-                  if (ImGui::Button("Copy"))
-                  {
-                    ImGui::SetClipboardText(data->CodeText.c_str());
-                  }
-                }
+                ImGui::TextDisabled(data->DiffMode ? "Diff vs saved graph" : "Whole program");
                 if (doc->WriteMsg[0])
                 {
                   ImGui::SameLine();
                   ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f), "%s", doc->WriteMsg);
                 }
-                if (!data->HasCode)
+                {
+                  const float right = ImGui::GetContentRegionMax().x;
+                  ImGui::SameLine(right - em * 9.0f);
+                  if (data->DiffMode)
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
+                  temp_data->ToggleDiffMode = ImGui::SmallButton("Diff");
+                  if (data->DiffMode)
+                    ImGui::PopStyleColor();
+                  ImGui::SetItemTooltip("Show the generated C++ as a diff against the SAVED graph");
+                  ImGui::SameLine();
+                  if (ImGui::SmallButton("Copy"))
+                    ImGui::SetClipboardText(data->DiffMode ? data->DiffText.c_str() : data->CodeText.c_str());
+                }
+                if (data->DiffMode)
+                {
+                  if (!data->HasDiff)
+                    ImGui::TextDisabled("No saved graph to diff against -- Save first.");
+                  else if (data->DiffText.size() == 0)
+                    ImGui::TextDisabled("No differences: the graph matches the save.");
+                  else
+                    ShowGeneratedCodeView("##codediff", data->DiffText, data->DiffLines, nullptr, nullptr);
+                }
+                else if (!data->HasCode)
                 {
                   ImGui::TextDisabled("The graph generates no code yet -- add a window or a control.");
                 }
@@ -1587,6 +1631,8 @@ namespace
               if (ImGui::BeginTabItem("Project", nullptr, doc->RevealPanel == ComposerPanel_Project ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
               {
                 temp_data->ProjLoadGraph = false;
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextDisabled("Document files on disk");   // shared header grammar: context label left
                 if (data->ProjFiles.Size == 0)
                 {
                   ImGui::TextDisabled("No document files yet -- Save the graph or Generate the header.");
@@ -1635,12 +1681,8 @@ namespace
                 }
                 ImGui::EndTabItem();
               }
-              // Preview ("Play"): render the selected control's fields as a live mock UI.
-              if (ImGui::BeginTabItem("Preview", nullptr, doc->RevealPanel == ComposerPanel_Preview ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
-              {
-                ImGui::AppGraphRenderMockPanel(graph, selection);
-                ImGui::EndTabItem();
-              }
+              // (Preview moved into the Inspector -- it previews the SELECTION; it was mis-altituded among
+              // document-level tabs. Findings #3.)
               // Output: validation issues (clickable, brushing) + the running document log -- config errors
               // AND a debugging trail in one stream. The tab label carries the issue count; the viewport
               // status strip's click lands here (one-shot SetSelected via doc->RevealPanel).
@@ -1652,21 +1694,53 @@ namespace
               temp_data->AckReveal = doc->RevealPanel != ComposerPanel_None;   // consume the one-shot select
               if (ImGui::BeginTabItem(output_label, nullptr, doc->RevealPanel == ComposerPanel_Output ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
               {
-                if (data->Issues.Size == 0)
+                // The console operates like one (findings #3): severity chips + a text filter up top, one
+                // filtered stream below (issues first, then the log, newest first). Filter state is pure view
+                // state, session-lived.
+                static bool s_out_err = true, s_out_warn = true, s_out_info = true;
+                static ImGuiTextFilter s_out_filter;
+                int nerr2 = 0, nwarn2 = 0;
+                for (int i = 0; i < data->Issues.Size; i++)
+                  (data->Issues.Data[i].Severity >= 2 ? nerr2 : nwarn2)++;
+
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextDisabled("%d error(s)  %d warning(s)  %d log line(s)", nerr2, nwarn2, doc->Log.Size);
                 {
-                  ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f), ICON_FA_CHECK "  No configuration problems.");
+                  const float right = ImGui::GetContentRegionMax().x;
+                  ImGui::SameLine(right - em * 22.0f);
+                  auto sev_chip = [](const char* lbl, bool* on, const ImVec4& col) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, *on ? col : ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
+                    if (ImGui::SmallButton(lbl))
+                      *on = !*on;
+                    ImGui::PopStyleColor();
+                    ImGui::SameLine();
+                  };
+                  sev_chip("err",  &s_out_err,  ImVec4(0.92f, 0.45f, 0.45f, 1.0f));
+                  sev_chip("warn", &s_out_warn, ImVec4(0.92f, 0.80f, 0.40f, 1.0f));
+                  sev_chip("info", &s_out_info, ImGui::GetStyle().Colors[ImGuiCol_Text]);
+                  ImGui::SetNextItemWidth(em * 9.0f);
+                  s_out_filter.Draw("##outfilter");
+                  ImGui::SetItemTooltip("Filter the stream");
+                  ImGui::SameLine();
+                  temp_data->ClearLog = ImGui::SmallButton("Clear");
+                  ImGui::SetItemTooltip("Clear the document log (issues re-derive from the graph)");
                 }
-                else
+                ImGui::Separator();
+
+                if (ImGui::BeginChild("##outstream", ImVec2(-FLT_MIN, -FLT_MIN)))
                 {
+                  if (data->Issues.Size == 0 && s_out_err && s_out_warn)
+                    ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f), ICON_FA_CHECK "  No configuration problems.");
                   for (int i = 0; i < data->Issues.Size; i++)
                   {
                     const ImGui::ImGuiAppGraphIssue& it = data->Issues.Data[i];
+                    if ((it.Severity >= 2 && !s_out_err) || (it.Severity < 2 && !s_out_warn) || !s_out_filter.PassFilter(it.Text))
+                      continue;
                     const ImVec4 col = (it.Severity >= 2) ? ImVec4(0.92f, 0.45f, 0.45f, 1.0f) : ImVec4(0.92f, 0.80f, 0.40f, 1.0f);
                     ImGui::PushID(i);
                     ImGui::PushStyleColor(ImGuiCol_Text, col);
-                    const char* dot = (it.Severity >= 2) ? "[x] " : "[!] ";
                     char row[288];
-                    ImFormatString(row, IM_ARRAYSIZE(row), "%s%s", dot, it.Text);
+                    ImFormatString(row, IM_ARRAYSIZE(row), "%s%s", (it.Severity >= 2) ? "[x] " : "[!] ", it.Text);
                     if (ImGui::Selectable(row) && it.NodeId >= 0)
                     {
                       selection = it.NodeId;   // reveal + select the offending node in tree + canvas
@@ -1677,28 +1751,21 @@ namespace
                     ImGui::PopStyleColor();
                     ImGui::PopID();
                   }
-                }
-
-                ImGui::SeparatorText("Log");
-                ImGui::SameLine();
-                temp_data->ClearLog = ImGui::SmallButton("Clear");
-                if (doc->Log.Size == 0)
-                {
-                  ImGui::TextDisabled("(empty -- actions, file IO and refused links land here)");
-                }
-                else if (ImGui::BeginChild("##doclog", ImVec2(-FLT_MIN, -FLT_MIN)))
-                {
+                  if (doc->Log.Size == 0)
+                    ImGui::TextDisabled("(log empty -- actions, file IO and refused links land here)");
                   for (int i = doc->Log.Size - 1; i >= 0; i--)   // newest first
                   {
                     const GraphDocData::DocLogLine& ln = doc->Log.Data[i];
+                    if ((ln.Severity >= 2 && !s_out_err) || (ln.Severity == 1 && !s_out_warn) || (ln.Severity == 0 && !s_out_info)
+                        || !s_out_filter.PassFilter(ln.Text))
+                      continue;
                     const ImVec4 lcol = ln.Severity >= 2 ? ImVec4(0.92f, 0.45f, 0.45f, 1.0f)
                                       : ln.Severity == 1 ? ImVec4(0.92f, 0.80f, 0.40f, 1.0f)
                                                          : ImGui::GetStyle().Colors[ImGuiCol_TextDisabled];
                     ImGui::TextColored(lcol, "%s", ln.Text);
                   }
                 }
-                if (doc->Log.Size > 0)
-                  ImGui::EndChild();
+                ImGui::EndChild();
                 ImGui::EndTabItem();
               }
               ImGui::EndTabBar();
@@ -1736,6 +1803,10 @@ namespace
         else
         {
           ImGui::EditAppNodeInspectorEx(graph, selection, doc->Mirror);
+          // Preview lives HERE (findings #3): it previews the SELECTION -- inspector content, not a
+          // document-level tab.
+          if (ImGui::AppInspectorSection("##sec_preview", ICON_FA_PLAY, "Preview", nullptr, nullptr))
+            ImGui::AppGraphRenderMockPanel(graph, selection);
           if (data->HasNodeCode)
           {
             ImGui::SeparatorText("Generated C++");
