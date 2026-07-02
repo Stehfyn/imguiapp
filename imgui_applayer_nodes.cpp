@@ -1224,17 +1224,35 @@ namespace ImGui
   static bool AppEditorNodeWasSubmitted(int node_id);          // fwd (defined with the editor)
   static const ImGuiAppGraph* g_editor_pool_graph = nullptr;   // the graph whose ids the imnodes pool holds
 
+  // [Phase-coherent geometry] Node sizes in MODEL units, captured in the post-submission read-back with the
+  // zoom those pixels were rendered at (same frame == coherent). Consumers transform with the CURRENT zoom,
+  // so no transform change can mix phases -- last-frame pixels combined with this-frame zoom is exactly the
+  // stale-frame bug class this framework exists to remove. Entries persist for evicted nodes: the last
+  // coherent measurement beats a per-kind guess.
+  static ImGuiStorage g_node_model_w;
+  static ImGuiStorage g_node_model_h;
+
+  static bool AppNodeModelSize(int node_id, ImVec2* out)
+  {
+    const float w = g_node_model_w.GetFloat((ImGuiID)node_id, 0.0f);
+    const float h = g_node_model_h.GetFloat((ImGuiID)node_id, 0.0f);
+    if (w <= 1.0f || h <= 1.0f)
+      return false;
+    *out = ImVec2(w, h);
+    return true;
+  }
+
   // A node's footprint in MODEL units: last frame's measurement when it has been on the canvas, a per-kind
   // estimate before that. Placement and tidy both size against THIS -- fixed fantasy row heights are what made
   // the old layout pile tall nodes onto each other. The pool-graph guard matters: a DIFFERENT graph's node ids
   // (tests, tools) can collide numerically with the editor pool, and imnodes asserts on a stale id.
   static ImVec2 AppLayoutNodeSize(const ImGuiAppGraph* g, const ImGuiAppNode* n)
   {
-    if (g == g_editor_pool_graph && AppEditorNodeWasSubmitted(n->Id))
+    if (g == g_editor_pool_graph)   // the model-size cache is keyed by THIS graph's ids
     {
-      const ImVec2 d = ImNodes::GetNodeDimensions(n->Id) / AppCanvasZoom();
-      if (d.x > 1.0f && d.y > 1.0f)
-        return d;
+      ImVec2 m;
+      if (AppNodeModelSize(n->Id, &m))
+        return m;
     }
     switch (n->Kind)
     {
@@ -3001,7 +3019,7 @@ namespace ImGui
     return false;
   }
 
-  static bool AppTreeRowIcon(const char* icon, ImVec2 center, float r, ImU32 col);   // fwd (defined with the outliner)
+  static bool AppTreeRowIcon(const char* icon, ImVec2 center, float r, ImU32 col, ImDrawList* dl_override = nullptr);   // fwd (defined with the outliner)
 
   // Status hint written by ShowAppGraphEditor, rendered by the host's status bar (AppGraphStatusHint).
   static char s_status_hint[256] = "";
@@ -3021,6 +3039,12 @@ namespace ImGui
   static void AppDrawLayerGroupBox(const ImGuiAppGraph* g, bool show_live)
   {
     // Per visible layer: screen y-span + accent, for the Unity-execution-order-style flow rail and phase bands.
+    // [Phase-coherent geometry] positions come from the MODEL (GridPos) and sizes from the model-size cache,
+    // both transformed with THIS frame's zoom + panning -- never from last frame's pixel rects, which lag one
+    // frame behind any zoom change (the stale flash this framework exists to remove).
+    const float  z = AppCanvasZoom();
+    const ImVec2 co = ImGui::GetWindowPos() + ImNodes::EditorContextGetPanning();   // canvas origin + pan (inner child, zero padding)
+
     struct LRow { float Top; float Bot; ImU32 Accent; };
     ImVector<LRow> rows;
     bool any = false;
@@ -3034,10 +3058,13 @@ namespace ImGui
         continue;
       if (!show_live && n->IsLive)
         continue;
-      if (!AppEditorNodeWasSubmitted(n->Id))
-        continue;   // no imnodes pool entry to read until the node's first submission completes
-      const ImVec2 pos = ImNodes::GetNodeScreenSpacePos(n->Id);
-      const ImVec2 size = ImNodes::GetNodeDimensions(n->Id);
+      if (!n->HasGridPos && !AppEditorNodeWasSubmitted(n->Id))
+        continue;   // neither a settled model position nor a first measurement yet
+      const ImVec2 pos = co + n->GridPos * z;
+      ImVec2 m;
+      if (!AppNodeModelSize(n->Id, &m))
+        m = ImVec2(g_app_layer_uniform_w, kAppGraphLayerRowH);
+      const ImVec2 size = m * z;
       bb_min.y = ImMin(bb_min.y, pos.y);
       bb_max.x = ImMax(bb_max.x, pos.x + size.x);
       bb_max.y = ImMax(bb_max.y, pos.y + size.y);
@@ -3059,7 +3086,7 @@ namespace ImGui
           rows.Data[b] = t;
         }
 
-    const float em = ImGui::GetFontSize();
+    const float em = ImGui::GetFontSize();   // already zoom-scaled: this draws under the canvas content font
     const float pad = em * 0.75f;
     const float rail_w = em * 2.0f;      // left gutter housing the numbered execution-order rail
     const float title_h = ImGui::GetFrameHeight();
@@ -4255,15 +4282,29 @@ namespace ImGui
 
   // Execution-order badges + dashed flow arrows over the scope's members (the drilled-in counterpart of the
   // root pipeline rail). Numbering follows the full sequence; folded/hidden members keep their number unseen.
-  static void AppDrawScopeSequence(const ImGuiAppGraph* g, bool show_live)
+  static void AppDrawScopeSequence(const ImGuiAppGraph* g, bool show_live, ImVec2 editor_min)
   {
     ImVector<int> seq;
     AppScopeSequenceIds(g, &seq);
     if (seq.Size == 0)
       return;
 
+    // [Phase-coherent geometry] model positions + cached model sizes, transformed with THIS frame's zoom and
+    // panning (this runs after EndNodeEditor: last frame's pixel rects would lag a zoom change by a frame).
+    const float  z = AppCanvasZoom();
+    const ImVec2 co = editor_min + ImNodes::EditorContextGetPanning();
+    auto geom = [&](int id, ImVec2* p, ImVec2* s)
+    {
+      const ImGuiAppNode* n = AppGraphFindNodeConst(g, id);
+      *p = co + n->GridPos * z;
+      ImVec2 m;
+      if (!AppNodeModelSize(id, &m))
+        m = AppLayoutNodeSize(g, n);
+      *s = m * z;
+    };
+
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const float em = ImGui::GetFontSize();
+    const float em = ImGui::GetFontSize() * z;   // post-EndNodeEditor: the content font is popped, scale by hand
     const ImU32 accent = AppScopeAccent(g);
     const ImU32 flow = (accent & 0x00FFFFFF) | 0x66000000;
 
@@ -4281,10 +4322,9 @@ namespace ImGui
         continue;
       if (prev >= 0)
       {
-        const ImVec2 ap = ImNodes::GetNodeScreenSpacePos(prev);
-        const ImVec2 ad = ImNodes::GetNodeDimensions(prev);
-        const ImVec2 bp = ImNodes::GetNodeScreenSpacePos(seq.Data[i]);
-        const ImVec2 bd = ImNodes::GetNodeDimensions(seq.Data[i]);
+        ImVec2 ap, ad, bp, bd;
+        geom(prev, &ap, &ad);
+        geom(seq.Data[i], &bp, &bd);
         AppDrawDashedArrow(dl, ImVec2(ap.x + ad.x, ap.y + ad.y * 0.5f), ImVec2(bp.x, bp.y + bd.y * 0.5f), flow);
       }
       prev = seq.Data[i];
@@ -4295,14 +4335,17 @@ namespace ImGui
     {
       if (!visible(seq.Data[i]))
         continue;
-      const ImVec2 p = ImNodes::GetNodeScreenSpacePos(seq.Data[i]);
+      ImVec2 p, d;
+      geom(seq.Data[i], &p, &d);
       const ImVec2 c(p.x, p.y);   // top-left corner, half overlapping the node like a slate marker
       dl->AddCircleFilled(c, r, AppScaleRGB(accent, 0.85f));
       dl->AddCircle(c, r, IM_COL32(20, 20, 22, 220), 0, 1.5f);
       char num[8];
       ImFormatString(num, IM_ARRAYSIZE(num), "%d", i + 1);
+      ImGui::PushFont(nullptr, em);   // badge numerals track the zoomed badge size
       const ImVec2 ns = ImGui::CalcTextSize(num);
       dl->AddText(ImVec2(c.x - ns.x * 0.5f, c.y - ns.y * 0.5f), IM_COL32(20, 20, 22, 255), num);
+      ImGui::PopFont();
     }
   }
 
@@ -4572,18 +4615,20 @@ namespace ImGui
       }
     }
 
-    // Uniform layer width: take the widest layer's CONTENT (last frame's measurement, model units) so every
-    // layer node renders at the same width this frame (see g_app_layer_uniform_w).
+    // Uniform layer width, constrained TOGETHER, from the phase-coherent MODEL-size cache: the widest layer's
+    // content raises everyone's width. Model units are zoom-invariant, so a zoom change can never show a
+    // stale width -- the value only settles across frames when CONTENT changes (the framework's T+1 rule).
     {
-      const float z = AppCanvasZoom();
       const float pad2 = ImNodes::GetStyle().NodePadding.x * 2.0f;   // base padding (pre zoom-scale below)
       float w = kAppGraphLayerNodeWidth;
       for (int i = 0; i < g->Nodes.Size; i++)
       {
         const ImGuiAppNode* n = &g->Nodes.Data[i];
-        if (n->Kind != ImGuiAppNodeKind_Layer || (!show_live && n->IsLive) || !AppEditorNodeWasSubmitted(n->Id))
+        if (n->Kind != ImGuiAppNodeKind_Layer || (!show_live && n->IsLive))
           continue;
-        w = ImMax(w, ImNodes::GetNodeDimensions(n->Id).x / z - pad2);
+        ImVec2 m;
+        if (AppNodeModelSize(n->Id, &m))
+          w = ImMax(w, m.x - pad2);
       }
       g_app_layer_uniform_w = w;
     }
@@ -5173,6 +5218,16 @@ namespace ImGui
       if (AppNodeHiddenByCollapse(g, g->Nodes.Data[i].Id)) continue;
       ImGuiAppNode* n = &g->Nodes.Data[i];
       const ImVec2 pos = AppCanvasNodePos(n->Id);   // model units, like GridPos
+      // [Phase-coherent geometry] capture: these pixels were rendered THIS frame at THIS zoom -- dividing
+      // by the same zoom yields the zoom-invariant model size every consumer transforms fresh next frame.
+      {
+        const ImVec2 mdl = ImNodes::GetNodeDimensions(n->Id) / AppCanvasZoom();
+        if (mdl.x > 1.0f && mdl.y > 1.0f)
+        {
+          g_node_model_w.SetFloat((ImGuiID)n->Id, mdl.x);
+          g_node_model_h.SetFloat((ImGuiID)n->Id, mdl.y);
+        }
+      }
       if (n->Kind == ImGuiAppNodeKind_Layer && n->HasGridPos
           && (ImAbs(pos.x - n->GridPos.x) > 0.5f || ImAbs(pos.y - n->GridPos.y) > 0.5f))
       {
@@ -5199,7 +5254,7 @@ namespace ImGui
     {
       // Drilled in: number the members in the order the framework runs them each frame, and invite the first
       // build step when the scope is empty. The breadcrumb (below) names where we are and what executes here.
-      AppDrawScopeSequence(g, show_live);
+      AppDrawScopeSequence(g, show_live, editor_min);
       AppDrawScopeEmptyCTA(g, show_live, editor_min, editor_size);
     }
     s_editor_ran_once = true;   // the imnodes pool now exists; the in-canvas pipeline box may draw next frame
@@ -6123,7 +6178,10 @@ namespace ImGui
       const float em = ImGui::GetFontSize();
       const float r = em * 0.72f;
       const float step = r * 2.0f + em * 0.30f;
-      ImDrawList* dl = ImGui::GetWindowDrawList();
+      // Viewport chrome renders ABOVE canvas content, always: the window list sits UNDER imnodes' child, so
+      // any node scrolled beneath the gizmo column used to occlude the controls (dead-looking chrome again).
+      ImDrawList* dl = ImGui::GetForegroundDrawList();
+      dl->PushClipRect(editor_min, editor_min + editor_size, true);
 
       const int   count = 7;
       const ImVec2 col_c(editor_min.x + editor_size.x - em * 1.2f, editor_min.y + em * 1.2f);
@@ -6140,7 +6198,7 @@ namespace ImGui
         gy += step;
         if (on)
           dl->AddCircleFilled(c, r, (lit & 0x00FFFFFF) | 0x38000000);
-        const bool clicked = AppTreeRowIcon(icon, c, r, on ? lit : dim);
+        const bool clicked = AppTreeRowIcon(icon, c, r, on ? lit : dim, dl);
         const ImVec2 m = ImGui::GetIO().MousePos;
         const float dx = m.x - c.x, dy = m.y - c.y;
         if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && dx * dx + dy * dy <= r * r)
@@ -6202,6 +6260,7 @@ namespace ImGui
         }
         ImGui::EndPopup();
       }
+      dl->PopClipRect();
     }
 
     // Shortcut cheat-sheet (F1): a translucent reference card in the canvas corner.
@@ -9782,7 +9841,7 @@ namespace ImGui
   // A small flat icon "button" for the outliner row's eye + hover actions, drawn ENTIRELY on the draw list with a
   // manual hit-test (no ImGui item / no SetCursorScreenPos -- those would extend the tree window's boundaries and
   // trip ImGui's cursor-boundary assert). Returns true on a left click within the icon's circle.
-  static bool AppTreeRowIcon(const char* icon, ImVec2 center, float r, ImU32 col)
+  static bool AppTreeRowIcon(const char* icon, ImVec2 center, float r, ImU32 col, ImDrawList* dl_override)
   {
     // AllowWhenBlockedByActiveItem: the icon overlays the row's TreeNode item, and the mouse press makes
     // that item active BEFORE this hit-test runs -- plain IsWindowHovered() is false on exactly the click
@@ -9793,7 +9852,7 @@ namespace ImGui
     const float dx = m.x - center.x;
     const float dy = m.y - center.y;
     const bool hov = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && (dx * dx + dy * dy) <= r * r;
-    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImDrawList* dl = dl_override != nullptr ? dl_override : ImGui::GetWindowDrawList();
     if (hov)
     {
       dl->AddCircleFilled(center, r, ImGui::GetColorU32(ImGuiCol_ButtonHovered));

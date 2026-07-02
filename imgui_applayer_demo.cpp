@@ -1549,26 +1549,39 @@ namespace
             const ImVec2 c_min  = ImGui::GetWindowPos();
             const ImVec2 c_size = ImGui::GetWindowSize();
             const float  h      = ImGui::GetTextLineHeight() + em * 0.5f;
-            const float  hw     = ImGui::CalcTextSize(health).x;
-            const float  lw     = last_log[0] ? ImMin(ImGui::CalcTextSize(last_log).x + em * 0.9f, c_size.x * 0.45f) : 0.0f;
             const ImVec2 s_min(c_min.x + em * 0.6f, c_min.y + c_size.y - h - em * 0.55f);
-            const ImVec2 s_max(s_min.x + hw + lw + em * 0.8f, s_min.y + h);
 
-            ImDrawList* sdl = ImGui::GetWindowDrawList();
-            sdl->AddRectFilled(s_min, s_max, IM_COL32(24, 25, 28, 252), em * 0.35f);
-            const ImU32 health_col = nerr > 0 ? IM_COL32(230, 115, 108, 255) : nwarn > 0 ? IM_COL32(230, 191, 89, 255) : IM_COL32(128, 191, 128, 255);
-            sdl->AddText(ImVec2(s_min.x + em * 0.4f, s_min.y + em * 0.25f), health_col, health);
-            if (last_log[0])
+            // A real overlay WINDOW, not draw-list-over-canvas: viewport chrome must render above canvas
+            // content AND keep its hit-test when a node scrolls beneath it (the parent-window invisible
+            // button went dead under imnodes' child -- the dead-chrome class again).
+            ImGui::SetNextWindowPos(s_min);
+            ImGui::SetNextWindowBgAlpha(0.99f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, em * 0.35f);
+            ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(24, 25, 28, 252));
+            temp_data->OpenOutput = false;
+            if (ImGui::Begin("##canvas_health", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
+                             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                             ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollbar))
             {
-              sdl->PushClipRect(s_min, s_max, true);
-              sdl->AddText(ImVec2(s_min.x + em * 0.4f + hw + em * 0.9f, s_min.y + em * 0.25f), ImGui::GetColorU32(ImGuiCol_TextDisabled), last_log);
-              sdl->PopClipRect();
+              const ImU32 health_col = nerr > 0 ? IM_COL32(230, 115, 108, 255) : nwarn > 0 ? IM_COL32(230, 191, 89, 255) : IM_COL32(128, 191, 128, 255);
+              ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(health_col), "%s", health);
+              if (last_log[0])
+              {
+                ImGui::SameLine();
+                char clipped[64];
+                ImStrncpy(clipped, last_log, IM_ARRAYSIZE(clipped));
+                ImGui::TextDisabled("%s", clipped);
+              }
+              temp_data->OpenOutput = ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+              if (ImGui::IsWindowHovered())
+              {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                ImGui::SetTooltip("%d error(s), %d warning(s) -- click to open Output", nerr, nwarn);
+              }
             }
-            ImGui::SetCursorScreenPos(s_min);
-            temp_data->OpenOutput = ImGui::InvisibleButton("##outputchip", s_max - s_min);
-            ImGui::SetItemTooltip("%d error(s), %d warning(s) -- click to open Output", nerr, nwarn);
-            if (ImGui::IsItemHovered())
-              ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            ImGui::End();
+            ImGui::PopStyleColor();
+            ImGui::PopStyleVar();
           }
 
           temp_data->ToggleScrub = false;
@@ -1585,27 +1598,35 @@ namespace
             const ImVec2      c_min   = ImGui::GetWindowPos();
             const ImVec2      c_size  = ImGui::GetWindowSize();
             const ImVec2      t_pos(c_min.x + (c_size.x - t_w) * 0.5f, c_min.y + c_size.y - ImGui::GetFrameHeight() - em * 0.7f);
-            ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(t_pos.x - em * 0.4f, t_pos.y - em * 0.25f),
-                                                      ImVec2(t_pos.x + t_w + em * 0.4f, t_pos.y + ImGui::GetFrameHeight() + em * 0.25f),
-                                                      IM_COL32(24, 25, 28, 252), em * 0.5f);
-            ImGui::SetCursorScreenPos(t_pos);
-            if (doc->TimeScrub)
-              ImGui::PushStyleColor(ImGuiCol_Button, tstyle.Colors[ImGuiCol_ButtonActive]);
-            temp_data->ToggleScrub = ImGui::Button(t_lbl);   // record the click; OnUpdate derives the new state
-            if (doc->TimeScrub)
-              ImGui::PopStyleColor();
-            ImGui::SetItemTooltip("Freeze the running app and scrub its recorded state history (%d frames)", app_frames);
-            if (doc->TimeScrub && app_frames > 0)
+            // Real overlay window (same reason as the health chip: z-order AND hit-testing above nodes).
+            ImGui::SetNextWindowPos(ImVec2(t_pos.x - em * 0.4f, t_pos.y - em * 0.25f));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, em * 0.5f);
+            ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(24, 25, 28, 252));
+            if (ImGui::Begin("##canvas_transport", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
+                             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                             ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollbar))
             {
-              ImGui::SameLine();
-              ImGui::SetNextItemWidth(em * 11.0f);
-              int idx = ImClamp(doc->TimeScrubIndex, 0, app_frames - 1);
-              if (ImGui::SliderInt("##appscrub", &idx, 0, app_frames - 1, "frame %d"))
+              if (doc->TimeScrub)
+                ImGui::PushStyleColor(ImGuiCol_Button, tstyle.Colors[ImGuiCol_ButtonActive]);
+              temp_data->ToggleScrub = ImGui::Button(t_lbl);   // record the click; OnUpdate derives the new state
+              if (doc->TimeScrub)
+                ImGui::PopStyleColor();
+              ImGui::SetItemTooltip("Freeze the running app and scrub its recorded state history (%d frames)", app_frames);
+              if (doc->TimeScrub && app_frames > 0)
               {
-                temp_data->ScrubIdxSet = true;
-                temp_data->ScrubIdx    = idx;
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(em * 11.0f);
+                int idx = ImClamp(doc->TimeScrubIndex, 0, app_frames - 1);
+                if (ImGui::SliderInt("##appscrub", &idx, 0, app_frames - 1, "frame %d"))
+                {
+                  temp_data->ScrubIdxSet = true;
+                  temp_data->ScrubIdx    = idx;
+                }
               }
             }
+            ImGui::End();
+            ImGui::PopStyleColor();
+            ImGui::PopStyleVar();
           }
         }
         ImGui::EndChild();
