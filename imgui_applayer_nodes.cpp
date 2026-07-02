@@ -3329,6 +3329,8 @@ namespace ImGui
     const ImGuiAppNode* n = AppGraphFindNodeConst(g, owner_id);
     if (n == nullptr || (!show_live && n->IsLive) || AppNodeHiddenByCollapse(g, owner_id))
       return;   // a node hidden behind a collapsed ancestor was never submitted -> reading its pos would assert
+    if (!AppEditorNodeWasSubmitted(owner_id))
+      return;   // not in the imnodes pool (frames draw from LAST frame's rects, before this frame's submission)
     const ImVec2 p = ImNodes::GetNodeScreenSpacePos(owner_id);
     const ImVec2 d = ImNodes::GetNodeDimensions(owner_id);
     mn->x = ImMin(mn->x, p.x); mn->y = ImMin(mn->y, p.y);
@@ -3877,6 +3879,139 @@ namespace ImGui
     if (at_root && s_editor_ran_once && s_ov_bands)
       AppDrawLayerGroupBox(g, show_live);
 
+    // Semantic group frames: a translucent labeled box around each containment group, drawn INTO the canvas
+    // list right after the grid and before the nodes (same layering as the pipeline box above) -- the grid can
+    // never cut through a frame or its caption chip, and nodes render on top of their frame (Blender order).
+    // Geometry comes from LAST frame's node rects (only pooled ids are read; AppGroupAccumulate guards).
+    // Passes are depth-ordered: windows/sidebars behind, control data clusters, then structs in front.
+    if (s_editor_ran_once && s_ov_frames)
+    {
+      auto group_box = [&](int owner_id, ImU32 kind_col, int depth)
+      {
+        ImVec2 mn(FLT_MAX, FLT_MAX);
+        ImVec2 mx(-FLT_MAX, -FLT_MAX);
+        AppGroupAccumulate(g, owner_id, show_live, &mn, &mx);
+        if (mn.x > mx.x)
+          return;
+        const ImGuiAppNode* owner = AppGraphFindNodeConst(g, owner_id);
+        const float em = ImGui::GetFontSize();
+        const float pad = em * (0.5f + 0.22f * (float)depth);   // outer groups get more breathing room
+        const float title_h = ImGui::GetFrameHeight();
+        mn.x -= pad; mx.x += pad; mx.y += pad;
+        mn.y -= title_h + pad * 0.4f;
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImU32 fill = (kind_col & 0x00FFFFFF) | (IM_COL32(0, 0, 0, 18) & 0xFF000000);
+        const ImU32 line = (kind_col & 0x00FFFFFF) | (IM_COL32(0, 0, 0, 130) & 0xFF000000);
+        dl->AddRectFilled(mn, mx, fill, 5.0f);
+        dl->AddRect(mn, mx, line, 5.0f, 0, 1.5f);
+        if (owner != nullptr)
+        {
+          const char* title = owner->Draft.Name[0] ? owner->Draft.Name : AppNodeKindName(owner->Kind);
+          ImVector<int> members;
+          AppGraphCollectSubtree(g, owner_id, &members);
+          const int member_count = members.Size - 1;   // exclude the owner itself
+
+          // Chip text: name, plus a "+N" hidden-count badge when the group is folded.
+          char label[160];
+          if (owner->GroupCollapsed)
+            ImFormatString(label, IM_ARRAYSIZE(label), "%s  +%d", title, member_count);
+          else
+            ImStrncpy(label, title, IM_ARRAYSIZE(label));
+
+          const float tri_w = em * 0.9f;
+          const ImVec2 ts = ImGui::CalcTextSize(label);
+          const ImVec2 chip_mn(mn.x + pad, mn.y);
+          const ImVec2 chip_mx(chip_mn.x + tri_w + ts.x + em * 0.5f, mn.y + title_h);
+
+          // The chip is both a fold toggle and a move handle: a click (no drag) collapses/expands the group; a
+          // drag moves the owner + every descendant together. One gesture at a time, tracked across frames.
+          static bool s_group_moved = false;
+          ImGui::SetCursorScreenPos(chip_mn);
+          ImGui::PushID(owner_id);
+          ImGui::InvisibleButton("##grouphandle", chip_mx - chip_mn);
+          const bool hov = ImGui::IsItemHovered();
+          const bool act = ImGui::IsItemActive();
+          if (ImGui::IsItemActivated())
+            s_group_moved = false;
+          if (act && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+          {
+            const ImVec2 d = ImGui::GetIO().MouseDelta;
+            if (d.x != 0.0f || d.y != 0.0f)
+            {
+              s_group_moved = true;
+              for (int m = 0; m < members.Size; m++)
+              {
+                ImGuiAppNode* mm = AppGraphFindNode(g, members.Data[m]);
+                if (mm == nullptr || (!show_live && mm->IsLive))
+                  continue;
+                if (AppNodeHiddenByCollapse(g, members.Data[m]) || !AppEditorNodeWasSubmitted(members.Data[m]))
+                {
+                  mm->GridPos += d;        // not in the imnodes pool: move its stored pos only
+                  mm->HasGridPos = true;
+                  mm->_NeedsPlace = true;  // re-seat it at this pos when it next submits
+                }
+                else
+                {
+                  const ImVec2 np = ImNodes::GetNodeGridSpacePos(members.Data[m]) + d;
+                  ImNodes::SetNodeGridSpacePos(members.Data[m], np);
+                  mm->GridPos = np;
+                }
+              }
+            }
+          }
+          if (ImGui::IsItemDeactivated() && !s_group_moved)
+          {
+            if (ImGuiAppNode* o = AppGraphFindNode(g, owner_id))
+            {
+              o->GroupCollapsed = !o->GroupCollapsed;
+              if (!o->GroupCollapsed)                  // expanding: re-seat descendants at their stored positions
+                for (int m = 0; m < members.Size; m++)
+                  if (ImGuiAppNode* mm = AppGraphFindNode(g, members.Data[m]))
+                    mm->_NeedsPlace = true;
+            }
+          }
+          if (hov || act)
+            ImGui::SetMouseCursor(member_count > 0 ? ImGuiMouseCursor_Hand : ImGuiMouseCursor_ResizeAll);
+          ImGui::PopID();
+
+          const ImU32 chip_bg = (hov || act) ? ((line & 0x00FFFFFF) | 0xFF000000) : line;
+          dl->AddRectFilled(chip_mn, chip_mx, IM_COL32(26, 27, 30, 255), 3.0f);   // opaque plate under the tint
+          dl->AddRectFilled(chip_mn, chip_mx, chip_bg, 3.0f);
+          // Disclosure triangle: right-pointing when folded, down-pointing when open.
+          const ImU32 glyph = IM_COL32(235, 235, 235, 255);
+          const ImVec2 tc(chip_mn.x + tri_w * 0.5f, (chip_mn.y + chip_mx.y) * 0.5f);
+          const float a = em * 0.22f;
+          if (owner->GroupCollapsed)
+            dl->AddTriangleFilled(ImVec2(tc.x - a * 0.55f, tc.y - a), ImVec2(tc.x - a * 0.55f, tc.y + a), ImVec2(tc.x + a * 0.8f, tc.y), glyph);
+          else
+            dl->AddTriangleFilled(ImVec2(tc.x - a, tc.y - a * 0.55f), ImVec2(tc.x + a, tc.y - a * 0.55f), ImVec2(tc.x, tc.y + a * 0.8f), glyph);
+          dl->AddText(ImVec2(chip_mn.x + tri_w, mn.y + (title_h - ts.y) * 0.5f), glyph, label);
+        }
+      };
+
+      // Pass 1: windows/sidebars hosting controls (outermost).
+      for (int i = 0; i < g->Nodes.Size; i++)
+      {
+        const ImGuiAppNode* n = &g->Nodes.Data[i];
+        if ((n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar) && !(!show_live && n->IsLive) && AppGraphHostsControl(g, n->Id))
+          group_box(n->Id, AppKindColor(n->Kind), 2);
+      }
+      // Pass 2: control data clusters (a control with an exploded Persist/Temp struct).
+      for (int i = 0; i < g->Nodes.Size; i++)
+      {
+        const ImGuiAppNode* n = &g->Nodes.Data[i];
+        if (n->Kind == ImGuiAppNodeKind_Control && (n->PersistStructId >= 0 || n->TempStructId >= 0))
+          group_box(n->Id, AppKindColor(ImGuiAppNodeKind_Control), 1);
+      }
+      // Pass 3: structs with exploded fields (innermost).
+      for (int i = 0; i < g->Nodes.Size; i++)
+      {
+        const ImGuiAppNode* n = &g->Nodes.Data[i];
+        if (n->Kind == ImGuiAppNodeKind_Struct && !(!show_live && n->IsLive) && AppGraphFieldNodeCount(g, n->Id, 0) > 0)
+          group_box(n->Id, AppKindColor(ImGuiAppNodeKind_Struct), 0);
+      }
+    }
+
     // Last frame's pool ids, kept for the re-entry check below; the current list is rebuilt from scratch
     // every frame: exactly the ids this submission puts in the pool.
     static ImVector<int> s_editor_prev_pool_ids;
@@ -4190,137 +4325,6 @@ namespace ImGui
     ImNodes::EndNodeEditor();
     const ImVec2 editor_size = ImGui::GetItemRectSize();   // captured before later items, for fit-all centering
     const ImVec2 editor_min  = ImGui::GetItemRectMin();    // editor canvas top-left (screen), for overlay extents
-
-    // Semantic group frames: a translucent labeled box around each containment group, layered by depth so inner
-    // groups sit atop outer ones -- windows/sidebars (+ hosted controls) behind, control data clusters, then
-    // structs (+ their fields) in front.
-    if (s_ov_frames)
-    {
-      auto group_box = [&](int owner_id, ImU32 kind_col, int depth)
-      {
-        ImVec2 mn(FLT_MAX, FLT_MAX);
-        ImVec2 mx(-FLT_MAX, -FLT_MAX);
-        AppGroupAccumulate(g, owner_id, show_live, &mn, &mx);
-        if (mn.x > mx.x)
-          return;
-        const ImGuiAppNode* owner = AppGraphFindNodeConst(g, owner_id);
-        const float em = ImGui::GetFontSize();
-        const float pad = em * (0.5f + 0.22f * (float)depth);   // outer groups get more breathing room
-        const float title_h = ImGui::GetFrameHeight();
-        mn.x -= pad; mx.x += pad; mx.y += pad;
-        mn.y -= title_h + pad * 0.4f;
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        const ImU32 fill = (kind_col & 0x00FFFFFF) | (IM_COL32(0, 0, 0, 18) & 0xFF000000);
-        const ImU32 line = (kind_col & 0x00FFFFFF) | (IM_COL32(0, 0, 0, 130) & 0xFF000000);
-        dl->AddRectFilled(mn, mx, fill, 5.0f);
-        dl->AddRect(mn, mx, line, 5.0f, 0, 1.5f);
-        if (owner != nullptr)
-        {
-          const char* title = owner->Draft.Name[0] ? owner->Draft.Name : AppNodeKindName(owner->Kind);
-          ImVector<int> members;
-          AppGraphCollectSubtree(g, owner_id, &members);
-          const int member_count = members.Size - 1;   // exclude the owner itself
-
-          // Chip text: name, plus a "+N" hidden-count badge when the group is folded.
-          char label[160];
-          if (owner->GroupCollapsed)
-            ImFormatString(label, IM_ARRAYSIZE(label), "%s  +%d", title, member_count);
-          else
-            ImStrncpy(label, title, IM_ARRAYSIZE(label));
-
-          const float tri_w = em * 0.9f;
-          const ImVec2 ts = ImGui::CalcTextSize(label);
-          const ImVec2 chip_mn(mn.x + pad, mn.y);
-          const ImVec2 chip_mx(chip_mn.x + tri_w + ts.x + em * 0.5f, mn.y + title_h);
-
-          // The chip is both a fold toggle and a move handle: a click (no drag) collapses/expands the group; a
-          // drag moves the owner + every descendant together. One gesture at a time, tracked across frames.
-          static bool s_group_moved = false;
-          ImGui::SetCursorScreenPos(chip_mn);
-          ImGui::PushID(owner_id);
-          ImGui::InvisibleButton("##grouphandle", chip_mx - chip_mn);
-          const bool hov = ImGui::IsItemHovered();
-          const bool act = ImGui::IsItemActive();
-          if (ImGui::IsItemActivated())
-            s_group_moved = false;
-          if (act && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
-          {
-            const ImVec2 d = ImGui::GetIO().MouseDelta;
-            if (d.x != 0.0f || d.y != 0.0f)
-            {
-              s_group_moved = true;
-              for (int m = 0; m < members.Size; m++)
-              {
-                ImGuiAppNode* mm = AppGraphFindNode(g, members.Data[m]);
-                if (mm == nullptr || (!show_live && mm->IsLive))
-                  continue;
-                if (AppNodeHiddenByCollapse(g, members.Data[m]))
-                {
-                  mm->GridPos += d;        // folded member: not in the imnodes pool, move its stored pos only
-                  mm->HasGridPos = true;
-                  mm->_NeedsPlace = true;  // re-seat it at this pos when the group is expanded
-                }
-                else
-                {
-                  const ImVec2 np = ImNodes::GetNodeGridSpacePos(members.Data[m]) + d;
-                  ImNodes::SetNodeGridSpacePos(members.Data[m], np);
-                  mm->GridPos = np;
-                }
-              }
-            }
-          }
-          if (ImGui::IsItemDeactivated() && !s_group_moved)
-          {
-            if (ImGuiAppNode* o = AppGraphFindNode(g, owner_id))
-            {
-              o->GroupCollapsed = !o->GroupCollapsed;
-              if (!o->GroupCollapsed)                  // expanding: re-seat descendants at their stored positions
-                for (int m = 0; m < members.Size; m++)
-                  if (ImGuiAppNode* mm = AppGraphFindNode(g, members.Data[m]))
-                    mm->_NeedsPlace = true;
-            }
-          }
-          if (hov || act)
-            ImGui::SetMouseCursor(member_count > 0 ? ImGuiMouseCursor_Hand : ImGuiMouseCursor_ResizeAll);
-          ImGui::PopID();
-
-          const ImU32 chip_bg = (hov || act) ? ((line & 0x00FFFFFF) | 0xFF000000) : line;
-          dl->AddRectFilled(chip_mn, chip_mx, IM_COL32(26, 27, 30, 255), 3.0f);   // opaque underlay -- the grid must never cut through a caption plate
-          dl->AddRectFilled(chip_mn, chip_mx, chip_bg, 3.0f);
-          // Disclosure triangle: right-pointing when folded, down-pointing when open.
-          const ImU32 glyph = IM_COL32(235, 235, 235, 255);
-          const ImVec2 tc(chip_mn.x + tri_w * 0.5f, (chip_mn.y + chip_mx.y) * 0.5f);
-          const float a = em * 0.22f;
-          if (owner->GroupCollapsed)
-            dl->AddTriangleFilled(ImVec2(tc.x - a * 0.55f, tc.y - a), ImVec2(tc.x - a * 0.55f, tc.y + a), ImVec2(tc.x + a * 0.8f, tc.y), glyph);
-          else
-            dl->AddTriangleFilled(ImVec2(tc.x - a, tc.y - a * 0.55f), ImVec2(tc.x + a, tc.y - a * 0.55f), ImVec2(tc.x, tc.y + a * 0.8f), glyph);
-          dl->AddText(ImVec2(chip_mn.x + tri_w, mn.y + (title_h - ts.y) * 0.5f), glyph, label);
-        }
-      };
-
-      // Pass 1: windows/sidebars hosting controls (outermost).
-      for (int i = 0; i < g->Nodes.Size; i++)
-      {
-        const ImGuiAppNode* n = &g->Nodes.Data[i];
-        if ((n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar) && !(!show_live && n->IsLive) && AppGraphHostsControl(g, n->Id))
-          group_box(n->Id, AppKindColor(n->Kind), 2);
-      }
-      // Pass 2: control data clusters (a control with an exploded Persist/Temp struct).
-      for (int i = 0; i < g->Nodes.Size; i++)
-      {
-        const ImGuiAppNode* n = &g->Nodes.Data[i];
-        if (n->Kind == ImGuiAppNodeKind_Control && (n->PersistStructId >= 0 || n->TempStructId >= 0))
-          group_box(n->Id, AppKindColor(ImGuiAppNodeKind_Control), 1);
-      }
-      // Pass 3: structs with exploded fields (innermost).
-      for (int i = 0; i < g->Nodes.Size; i++)
-      {
-        const ImGuiAppNode* n = &g->Nodes.Data[i];
-        if (n->Kind == ImGuiAppNodeKind_Struct && !(!show_live && n->IsLive) && AppGraphFieldNodeCount(g, n->Id, 0) > 0)
-          group_box(n->Id, AppKindColor(ImGuiAppNodeKind_Struct), 0);
-      }
-    }
 
     // Live-mirror diff dots: a small status dot at each node's top-right corner showing how it relates to the
     // running app -- blue = a live mirror node, green = a design node already running (promoted), amber = a
