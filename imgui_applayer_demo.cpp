@@ -325,6 +325,11 @@ namespace
     ImGuiID         WrittenSig;       // AppGraphSignature at the last header write (0 = never) -> Generate state
     char            GraphPath[256];
     char            HeaderPath[256];
+    // Output panel: a running document log (actions, refused links, file IO) beside the validation issues.
+    struct DocLogLine { int Severity; char Text[184]; };
+    ImVector<DocLogLine> Log;         // newest last; capped in DocLog()
+    bool            WantOutputTab;    // one-shot: reveal + select the Output tab (viewport chip click)
+    int             LinkErrSeqSeen;   // last Graph.LastLinkErrSeq folded into the log
     ImGuiApp*       Mirror;           // app reflected into the live graph (set after push; see ShowAppLayerDemo)
     ImGuiAppStateHistory MirrorHistory;   // the mirrored app's recorded state ring (time travel)
     bool            TimeScrub;        // true: freeze the mirror at TimeScrubIndex instead of recording
@@ -336,6 +341,21 @@ namespace
   static GraphDocData* GetGraphDoc(ImGuiApp* app)
   {
     return static_cast<GraphDocData*>(app->Data.GetVoidPtr(ImGuiType<GraphDocData>::ID));
+  }
+
+  // Append one line to the document log (Output panel). Severity: 0 info, 1 warning, 2 error. Called from
+  // OnUpdate paths only -- the log is document state, and update is its sole mutator.
+  static void DocLog(GraphDocData* doc, int severity, const char* fmt, ...)
+  {
+    GraphDocData::DocLogLine line;
+    line.Severity = severity;
+    va_list args;
+    va_start(args, fmt);
+    ImFormatStringV(line.Text, IM_ARRAYSIZE(line.Text), fmt, args);
+    va_end(args);
+    doc->Log.push_back(line);
+    if (doc->Log.Size > 256)
+      doc->Log.erase(doc->Log.Data, doc->Log.Data + 64);   // drop the oldest chunk, keep the ring bounded
   }
 
   struct GraphDocControl : ImGuiAppControl<GraphDocData, GraphDocTempData>
@@ -350,6 +370,8 @@ namespace
       data->InspW       = 0.0f;          // 0 -> EditorBody picks a default on first layout
       data->WriteMsg[0] = 0;
       data->WrittenSig  = 0;
+      data->WantOutputTab = false;
+      data->LinkErrSeqSeen = 0;
       data->Mirror      = nullptr;       // set after push by ShowAppLayerDemo
       data->TimeScrub   = false;
       data->TimeScrubIndex = 0;
@@ -367,6 +389,15 @@ namespace
       if (data->Mirror != nullptr)
       {
         ImGui::BuildAppLiveGraph(data->Mirror, &data->Graph);
+      }
+
+      // Fold refused-link reasons into the document log: the status bar shows them for three seconds, the
+      // Output panel keeps them (a debugging trail, not just a toast).
+      if (data->Graph.LastLinkErrSeq != data->LinkErrSeqSeen)
+      {
+        data->LinkErrSeqSeen = data->Graph.LastLinkErrSeq;
+        if (data->Graph.LastLinkErr[0])
+          DocLog(data, 1, "link refused: %s", data->Graph.LastLinkErr);
       }
 
       // Time travel over the mirrored app. While scrubbing, re-impose the chosen snapshot every frame (the
@@ -412,7 +443,6 @@ namespace
     bool ToggleLive;    // Live-eye toggle clicked this frame (OnUpdate derives the new state)
     bool Undo;          // undo / redo edit-intents (applied in OnUpdate)
     bool Redo;
-    bool OpenProblems;  // problems chip clicked -> reveal the code/problems panel
     bool Diff;          // diff current graph's codegen vs the saved-on-disk graph -> clipboard
   };
   struct ToolbarControl : ImGuiAppControl<ToolbarData, ToolbarTempData>
@@ -429,11 +459,13 @@ namespace
       if (temp_data->Save)
       {
         ImGui::SaveAppGraph(doc->GraphPath, &doc->Graph);
+        DocLog(doc, 0, "saved graph -> %s", doc->GraphPath);
       }
       if (temp_data->Load)
       {
         ImGui::LoadAppGraph(doc->GraphPath, &doc->Graph);
         ImGui::AppGraphEnsureFoundation(&doc->Graph);   // the frame's phases anchor the root, always
+        DocLog(doc, 0, "loaded graph <- %s", doc->GraphPath);
       }
       if (temp_data->WriteHeader)
       {
@@ -445,11 +477,12 @@ namespace
           ImFileClose(fh);
           ImFormatString(doc->WriteMsg, IM_ARRAYSIZE(doc->WriteMsg), "wrote %s", doc->HeaderPath);
           doc->WrittenSig = ImGui::AppGraphSignature(&doc->Graph);   // Generate button reads fresh vs stale off this
+          DocLog(doc, 0, "generated C++ -> %s", doc->HeaderPath);
         }
-      }
-      if (temp_data->OpenProblems && doc->CodeH <= 0.0f)
-      {
-        doc->CodeH = ImGui::GetFontSize() * 12.0f;   // reveal the panel that hosts the Problems tab
+        else
+        {
+          DocLog(doc, 2, "could not open %s for writing", doc->HeaderPath);
+        }
       }
       if (temp_data->ToggleCode)
       {
@@ -476,10 +509,12 @@ namespace
           ImGui::AppGraphDiffCode(&saved, &doc->Graph, &d);
           ImGui::SetClipboardText(d.c_str());
           ImFormatString(doc->WriteMsg, IM_ARRAYSIZE(doc->WriteMsg), "diff vs saved -> clipboard");
+          DocLog(doc, 0, "diff vs saved graph -> clipboard");
         }
         else
         {
           ImFormatString(doc->WriteMsg, IM_ARRAYSIZE(doc->WriteMsg), "no saved graph to diff (Save first)");
+          DocLog(doc, 1, "diff skipped: no saved graph (Save first)");
         }
       }
     }
@@ -538,26 +573,14 @@ namespace
         ImGui::EndDisabled();
         ImGui::SetItemTooltip("Redo (Ctrl+Y)");
 
-        // -- Right cluster: problems chip + panel toggles. Width measured so it hugs the edge. Run controls
-        //    (App time) live on the viewport's transport overlay, not here.
-        char prob_lbl[48];
-        ImFormatString(prob_lbl, IM_ARRAYSIZE(prob_lbl), "%s %d##problems", (nerr + nwarn) > 0 ? ICON_FA_TRIANGLE_EXCLAMATION : ICON_FA_CHECK, nerr + nwarn);
+        // -- Right cluster: panel toggles. Width measured so it hugs the edge. Run controls (App time)
+        //    live on the viewport's transport overlay; the health chip lives on the viewport status strip.
         const char* code_lbl = ICON_FA_CODE "  Code";
         const char* live_lbl = show_live ? ICON_FA_EYE "  Live###live" : ICON_FA_EYE_SLASH "  Live###live";
         const float pad2 = style.FramePadding.x * 2.0f;
-        const float cluster_w = ImGui::CalcTextSize(prob_lbl, ImGui::FindRenderedTextEnd(prob_lbl)).x + pad2
-                              + ImGui::CalcTextSize(code_lbl).x + pad2 + style.ItemSpacing.x
+        const float cluster_w = ImGui::CalcTextSize(code_lbl).x + pad2
                               + ImGui::CalcTextSize(live_lbl, ImGui::FindRenderedTextEnd(live_lbl)).x + pad2 + style.ItemSpacing.x;
         ImGui::SameLine(ImMax(ImGui::GetCursorPosX() + em, ImGui::GetContentRegionMax().x - cluster_w - em * 0.2f));
-
-        // Problems chip: severity-colored count; click reveals the Problems tab's panel.
-        ImGui::PushStyleColor(ImGuiCol_Text, nerr > 0 ? ImVec4(0.90f, 0.45f, 0.42f, 1.0f)
-                                           : nwarn > 0 ? ImVec4(0.90f, 0.75f, 0.35f, 1.0f)
-                                                       : ImVec4(0.50f, 0.75f, 0.50f, 1.0f));
-        temp_data->OpenProblems = ImGui::Button(prob_lbl);
-        ImGui::PopStyleColor();
-        ImGui::SetItemTooltip("%d error(s), %d warning(s) -- click to open Problems", nerr, nwarn);
-        ImGui::SameLine();
 
         if (code_open)
           ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonActive]);
@@ -828,6 +851,9 @@ namespace
     bool  InspGripActivated;   // inspector splitter drag started this frame
     float BodyMaxX;            // body row right edge (screen) -- the inspector width derives from it
     bool  ProjLoadGraph;       // Project tab: load the graph file
+    bool  OpenOutput;          // viewport status strip clicked -> reveal + select the Output tab
+    bool  AckOutputTab;        // the Output tab consumed its one-shot select this frame
+    bool  ClearLog;            // Output tab: clear the document log
   };
   struct EditorBodyControl : ImGuiAppControl<EditorBodyData, EditorBodyTempData>
   {
@@ -885,11 +911,28 @@ namespace
           doc->InspW = temp_data->BodyMaxX - temp_data->MouseX;
       }
 
+      // Output panel intents (viewport status strip + the tab itself).
+      if (temp_data->OpenOutput)
+      {
+        if (doc->CodeH <= 0.0f)
+          doc->CodeH = ImGui::GetFontSize() * 12.0f;
+        doc->WantOutputTab = true;
+      }
+      if (temp_data->AckOutputTab)
+      {
+        doc->WantOutputTab = false;
+      }
+      if (temp_data->ClearLog)
+      {
+        doc->Log.resize(0);
+      }
+
       // Project tab intents + slow directory rescan (the document's files: graph, header, WALs).
       if (temp_data->ProjLoadGraph)
       {
         ImGui::LoadAppGraph(doc->GraphPath, &doc->Graph);
         ImGui::AppGraphEnsureFoundation(&doc->Graph);
+        DocLog(doc, 0, "loaded graph <- %s (Project)", doc->GraphPath);
       }
       data->ProjRescan -= dt;
       if (data->ProjRescan <= 0.0f)
@@ -1042,6 +1085,47 @@ namespace
           // the game-editor play bar. Freeze the MIRRORED app ("App time") and scrub its recorded state
           // ring -- the framework's state discipline makes ANY app scrubbable; this is that theorem as a
           // slider. Real ImGui items submitted after the editor, so they win hover over the canvas.
+          // Viewport status strip (bottom-left): the Output panel's health at a glance -- error/warning
+          // counts from the cached validation plus the newest log line. Clicking it reveals + selects
+          // Output (the toolbar's old check/warning chip lives here now, on the viewport it describes).
+          {
+            const ImVector<ImGui::ImGuiAppGraphIssue>* issues = ImGui::AppGraphIssuesCached(graph);
+            int nerr = 0, nwarn = 0;
+            for (int i = 0; i < issues->Size; i++)
+              (issues->Data[i].Severity >= 2 ? nerr : nwarn)++;
+
+            char health[48];
+            if (nerr + nwarn > 0)
+              ImFormatString(health, IM_ARRAYSIZE(health), ICON_FA_TRIANGLE_EXCLAMATION " %d   ! %d", nerr, nwarn);
+            else
+              ImFormatString(health, IM_ARRAYSIZE(health), ICON_FA_CHECK " 0");
+            const char* last_log = doc->Log.Size > 0 ? doc->Log.back().Text : "";
+
+            const ImVec2 c_min  = ImGui::GetWindowPos();
+            const ImVec2 c_size = ImGui::GetWindowSize();
+            const float  h      = ImGui::GetTextLineHeight() + em * 0.5f;
+            const float  hw     = ImGui::CalcTextSize(health).x;
+            const float  lw     = last_log[0] ? ImMin(ImGui::CalcTextSize(last_log).x + em * 0.9f, c_size.x * 0.45f) : 0.0f;
+            const ImVec2 s_min(c_min.x + em * 0.6f, c_min.y + c_size.y - h - em * 0.55f);
+            const ImVec2 s_max(s_min.x + hw + lw + em * 0.8f, s_min.y + h);
+
+            ImDrawList* sdl = ImGui::GetWindowDrawList();
+            sdl->AddRectFilled(s_min, s_max, IM_COL32(24, 25, 28, 215), em * 0.35f);
+            const ImU32 health_col = nerr > 0 ? IM_COL32(230, 115, 108, 255) : nwarn > 0 ? IM_COL32(230, 191, 89, 255) : IM_COL32(128, 191, 128, 255);
+            sdl->AddText(ImVec2(s_min.x + em * 0.4f, s_min.y + em * 0.25f), health_col, health);
+            if (last_log[0])
+            {
+              sdl->PushClipRect(s_min, s_max, true);
+              sdl->AddText(ImVec2(s_min.x + em * 0.4f + hw + em * 0.9f, s_min.y + em * 0.25f), ImGui::GetColorU32(ImGuiCol_TextDisabled), last_log);
+              sdl->PopClipRect();
+            }
+            ImGui::SetCursorScreenPos(s_min);
+            temp_data->OpenOutput = ImGui::InvisibleButton("##outputchip", s_max - s_min);
+            ImGui::SetItemTooltip("%d error(s), %d warning(s) -- click to open Output", nerr, nwarn);
+            if (ImGui::IsItemHovered())
+              ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+          }
+
           temp_data->ToggleScrub = false;
           temp_data->ScrubIdxSet = false;
           const int app_frames = doc->MirrorHistory.Count;
@@ -1186,21 +1270,20 @@ namespace
                 ImGui::AppGraphRenderMockPanel(graph, selection);
                 ImGui::EndTabItem();
               }
-              // Problems: validation findings. The tab label carries the count; clicking a row reveals the node.
-              char problems_label[32];
+              // Output: validation issues (clickable, brushing) + the running document log -- config errors
+              // AND a debugging trail in one stream. The tab label carries the issue count; the viewport
+              // status strip's click lands here (one-shot SetSelected via doc->WantOutputTab).
+              char output_label[32];
               if (data->Issues.Size > 0)
-              {
-                ImFormatString(problems_label, IM_ARRAYSIZE(problems_label), "Problems (%d)###problems", data->Issues.Size);
-              }
+                ImFormatString(output_label, IM_ARRAYSIZE(output_label), "Output (%d)###output", data->Issues.Size);
               else
-              {
-                ImStrncpy(problems_label, "Problems###problems", IM_ARRAYSIZE(problems_label));
-              }
-              if (ImGui::BeginTabItem(problems_label))
+                ImStrncpy(output_label, "Output###output", IM_ARRAYSIZE(output_label));
+              temp_data->AckOutputTab = doc->WantOutputTab;   // consume the one-shot select
+              if (ImGui::BeginTabItem(output_label, nullptr, doc->WantOutputTab ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
               {
                 if (data->Issues.Size == 0)
                 {
-                  ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f), "No problems found.");
+                  ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f), ICON_FA_CHECK "  No configuration problems.");
                 }
                 else
                 {
@@ -1224,6 +1307,27 @@ namespace
                     ImGui::PopID();
                   }
                 }
+
+                ImGui::SeparatorText("Log");
+                ImGui::SameLine();
+                temp_data->ClearLog = ImGui::SmallButton("Clear");
+                if (doc->Log.Size == 0)
+                {
+                  ImGui::TextDisabled("(empty -- actions, file IO and refused links land here)");
+                }
+                else if (ImGui::BeginChild("##doclog", ImVec2(-FLT_MIN, -FLT_MIN)))
+                {
+                  for (int i = doc->Log.Size - 1; i >= 0; i--)   // newest first
+                  {
+                    const GraphDocData::DocLogLine& ln = doc->Log.Data[i];
+                    const ImVec4 lcol = ln.Severity >= 2 ? ImVec4(0.92f, 0.45f, 0.45f, 1.0f)
+                                      : ln.Severity == 1 ? ImVec4(0.92f, 0.80f, 0.40f, 1.0f)
+                                                         : ImGui::GetStyle().Colors[ImGuiCol_TextDisabled];
+                    ImGui::TextColored(lcol, "%s", ln.Text);
+                  }
+                }
+                if (doc->Log.Size > 0)
+                  ImGui::EndChild();
                 ImGui::EndTabItem();
               }
               ImGui::EndTabBar();
