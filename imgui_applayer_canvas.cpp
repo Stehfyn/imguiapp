@@ -114,22 +114,39 @@ struct ImGuiCanvasState
   int    DragWireFromPin;                      // DragWire: the fixed end
 
   // Rename hook: per-frame pointers captured by CanvasNextNodeTitleEditable (host-owned storage).
-  char*  EditBuf;    int EditBufSize;   bool* EditFlag;   int EditNodeIdx;   bool EditFocusPending;
-  int    LastEditingNodeId;             // focus-once tracking across frames
+  char*  EditBuf;
+  int    EditBufSize;
+  bool*  EditFlag;
+  int    EditNodeIdx;
+  bool   EditFocusPending;
+  int    LastEditingNodeId;    // focus-once tracking across frames
 
   // Minimap
-  bool   MiniMapReq;   float MiniMapFraction;
-  ImVec2 MiniRectMin, MiniRectMax;      // last drawn rect (screen); the FSM keeps out of it
-  ImVec2 MiniModelMin, MiniModelMax;    // the model extents that rect mapped (for click-to-jump)
+  bool   MiniMapReq;
+  float  MiniMapFraction;
+  ImVec2 MiniRectMin;          // last drawn rect (screen); the FSM keeps out of it
+  ImVec2 MiniRectMax;
+  ImVec2 MiniModelMin;         // the model extents that rect mapped (for click-to-jump)
+  ImVec2 MiniModelMax;
 
   // Latched events (valid from CanvasEnd until the next CanvasBegin)
-  bool   NodeDblClickReq; int NodeDblClickId;
-  bool   MenuNodeReq;   int    MenuNodeId;
-  bool   MenuWireReq;   int    MenuWireId;
-  bool   MenuEmptyReq;  ImVec2 MenuEmptyModel;
-  bool   WireCreatedReq;  int  CreatedPinA, CreatedPinB;
-  bool   WireDroppedReq;  int  DroppedFromPin; ImVec2 DroppedModel;
-  bool   WireDetachedReq; int  DetachedWireId, DetachedGrabbedPin;
+  bool   NodeDblClickReq;
+  int    NodeDblClickId;
+  bool   MenuNodeReq;
+  int    MenuNodeId;
+  bool   MenuWireReq;
+  int    MenuWireId;
+  bool   MenuEmptyReq;
+  ImVec2 MenuEmptyModel;
+  bool   WireCreatedReq;
+  int    CreatedPinA;
+  int    CreatedPinB;
+  bool   WireDroppedReq;
+  int    DroppedFromPin;
+  ImVec2 DroppedModel;
+  bool   WireDetachedReq;
+  int    DetachedWireId;
+  int    DetachedGrabbedPin;
 
   ImGuiCanvasState()
   {
