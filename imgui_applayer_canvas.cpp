@@ -41,6 +41,7 @@ struct ImGuiCanvasPinRec
   int    NodeId;
   int    Kind;             // ImGuiCanvasPin_In / _Out
   int    Shape;            // circle (data) / square (containment)
+  ImU32  Color;            // 0 = style (by shape); set via CanvasNextPinColor
   ImVec2 Anchor;           // MODEL units: pin center at the node edge, row-centered
   int    LastFrame;
   int    WiredCount;       // wires touching this pin THIS frame (filled pin glyph)
@@ -500,6 +501,7 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
     }
     else if (c->HoveredNode >= 0)
     {
+      c->SelectedWire = -1;
       if (io.KeyCtrl)
       {
         // Additive toggle.
@@ -520,9 +522,15 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
       }
       CanvasBeginNodeDrag(c);
     }
-    else if (c->IO.LmbPansEmptyCanvas)
+    else
     {
-      c->Interaction = ImGuiCanvasInteraction_Pan;
+      // Click on empty canvas deselects (Blender/imnodes convention); Ctrl preserves the set so an
+      // additive gesture that misses a node does not wipe it.
+      if (!io.KeyCtrl)
+        c->Selection.resize(0);
+      c->SelectedWire = -1;
+      if (c->IO.LmbPansEmptyCanvas)
+        c->Interaction = ImGuiCanvasInteraction_Pan;
     }
   }
 
@@ -678,6 +686,13 @@ namespace ImGui
 
     SetCursorScreenPos(c->Origin);
     c->SubmitOrderNow.resize(0);
+  }
+
+  ImDrawList* CanvasBackgroundDrawList(ImGuiCanvasState* c)
+  {
+    IM_ASSERT(c->InsideCanvas && c->CurNode == -1);
+    c->Splitter.SetCurrentChannel(c->DrawList, 0);
+    return c->DrawList;
   }
 
   // Next-node scratch (submission-scoped, like SetNextWindow*; consumed by CanvasBeginNode).
@@ -841,6 +856,12 @@ namespace ImGui
   // center in MODEL units; the horizontal edge resolves in CanvasEndNode once the width is known.
   static int   s_cur_pin = -1;
   static float s_cur_pin_y0 = 0.0f;
+  static ImU32 s_next_pin_color = 0;
+
+  void CanvasNextPinColor(ImU32 color)
+  {
+    s_next_pin_color = color;
+  }
 
   void CanvasBeginPin(ImGuiCanvasState* c, int pin_id, int kind, int shape)
   {
@@ -849,6 +870,8 @@ namespace ImGui
     p->NodeId = c->Nodes.Data[c->CurNode].Id;
     p->Kind = kind;
     p->Shape = shape;
+    p->Color = s_next_pin_color;
+    s_next_pin_color = 0;
     p->LastFrame = GetFrameCount();
     s_cur_pin = c->PinIdx.GetInt((ImGuiID)pin_id, 0) - 1;
     s_cur_pin_y0 = GetCursorScreenPos().y;
@@ -974,6 +997,7 @@ namespace ImGui
       const ImVec2 s = CanvasToScreen(c, p->Anchor);
       const bool hov = p->Id == c->HoveredPin;
       const ImU32 col = hov ? c->Style.PinHovered
+                      : p->Color != 0 ? p->Color
                       : p->Shape == ImGuiCanvasPinShape_Square ? c->Style.PinContainment : c->Style.PinData;
       const float r = c->Style.PinRadius * z * (hov ? 1.35f : 1.0f);
       if (p->Shape == ImGuiCanvasPinShape_Square)

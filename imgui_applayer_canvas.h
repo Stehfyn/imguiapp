@@ -72,6 +72,11 @@ namespace ImGui
   IMGUI_API void CanvasBegin(ImGuiCanvasState* c, const char* str_id, ImVec2 size /*= 0,0*/);
   IMGUI_API void CanvasEnd(ImGuiCanvasState* c);
 
+  // Decoration hook: returns the canvas draw list switched to the BACKGROUND channel (above the grid,
+  // below node plates; wires land in the same channel later, so they draw over these decorations).
+  // Call between CanvasBegin and the first node; the next CanvasBeginNode restores the content channel.
+  IMGUI_API ImDrawList* CanvasBackgroundDrawList(ImGuiCanvasState* c);
+
   // ---- camera (pan in pixels, zoom unitless; screen = origin + pan + model * zoom) -------------
   IMGUI_API ImVec2 CanvasGetPan(const ImGuiCanvasState* c);
   IMGUI_API void   CanvasSetPan(ImGuiCanvasState* c, ImVec2 pan);
@@ -107,6 +112,7 @@ namespace ImGui
   // ---- pins + wires -----------------------------------------------------------------------------
   enum ImGuiCanvasPinKind_ { ImGuiCanvasPin_In = 0, ImGuiCanvasPin_Out = 1 };
   enum ImGuiCanvasPinShape_ { ImGuiCanvasPinShape_Circle = 0, ImGuiCanvasPinShape_Square = 1 };
+  IMGUI_API void   CanvasNextPinColor(ImU32 color);   // 0 -> style (by shape); consumed by the next CanvasBeginPin
   IMGUI_API void   CanvasBeginPin(ImGuiCanvasState* c, int pin_id, int kind /*In|Out*/, int shape);
   IMGUI_API void   CanvasEndPin(ImGuiCanvasState* c);
   IMGUI_API void   CanvasWire(ImGuiCanvasState* c, int wire_id, int pin_a, int pin_b, ImU32 color /*= 0 -> style*/);

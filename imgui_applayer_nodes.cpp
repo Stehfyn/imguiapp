@@ -1,6 +1,8 @@
-// ImGuiAppLayer data-driven node tooling: imnodes scaffolding. Keeping imnodes confined to
-// this translation unit lets imgui_applayer_nodes.h stay free of the imnodes dependency, so
-// callers reflect over their data without pulling in the node-editor backend at the header level.
+// ImGuiAppLayer data-driven node tooling. The Composer's whole-graph editor runs on the in-house
+// canvas engine (imgui_applayer_canvas.h) -- model-unit geometry, native camera, same-frame
+// measurement. The legacy BeginAppNode/CaptureAppNodeLinks wrappers below still target imnodes for
+// older call sites and go away with it in slice C5. Keeping both backends confined to this
+// translation unit lets imgui_applayer_nodes.h stay free of either dependency.
 //
 // Index of this file (search for "[SECTION]"):
 // [SECTION] Blender-style field widgets (node body)
@@ -25,6 +27,7 @@
 
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "imgui_applayer_nodes.h"
+#include "imgui_applayer_canvas.h"
 #include "imnodes.h"
 #include "IconsFontAwesome6.h"             // Font Awesome glyphs for layer roles (font merged by the host app)
 
@@ -1247,37 +1250,46 @@ namespace ImGui
   }
 
   //-----------------------------------------------------------------------------
-  // [SECTION] Phase-coherent geometry cache (docs/phase-coherence.md)
+  // [SECTION] Phase-coherent geometry (docs/phase-coherence.md) -- served by the canvas engine
   //-----------------------------------------------------------------------------
 
   static bool AppEditorNodeWasSubmitted(int node_id);          // fwd (defined with the editor)
-  static const ImGuiAppGraph* g_editor_pool_graph = nullptr;   // the graph whose ids the imnodes pool holds
+  static const ImGuiAppGraph* g_editor_pool_graph = nullptr;   // the graph whose ids the editor canvas holds
 
-  // [Phase-coherent geometry] Node sizes in MODEL units, captured in the post-submission read-back with the
-  // zoom those pixels were rendered at (same frame == coherent). Consumers transform with the CURRENT zoom,
-  // so no transform change can mix phases -- last-frame pixels combined with this-frame zoom is exactly the
-  // stale-frame bug class this framework exists to remove. Entries persist for evicted nodes: the last
-  // coherent measurement beats a per-kind guess.
-  static ImGuiStorage g_node_model_w;
-  static ImGuiStorage g_node_model_h;
+  // The Composer's single canvas instance (the engine stores node geometry in MODEL units and
+  // measures it the same frame it renders -- the stale-frame bug class is unrepresentable there,
+  // see imgui_applayer_canvas.h). Created on first use; engine defaults match the Composer theme.
+  static ImGuiCanvasState* g_app_canvas = nullptr;
 
+  static ImGuiCanvasState* AppEditorCanvas()
+  {
+    if (g_app_canvas == nullptr)
+      g_app_canvas = ImGui::CanvasCreate();
+    return g_app_canvas;
+  }
+
+  ImGuiCanvasState* AppGraphEditorCanvas()
+  {
+    return AppEditorCanvas();
+  }
+
+  // A node's engine-measured size in MODEL units; false until it has been submitted once.
   static bool AppNodeModelSize(int node_id, ImVec2* out)
   {
-    const float w = g_node_model_w.GetFloat((ImGuiID)node_id, 0.0f);
-    const float h = g_node_model_h.GetFloat((ImGuiID)node_id, 0.0f);
-    if (w <= 1.0f || h <= 1.0f)
+    const ImVec2 s = ImGui::CanvasNodeSize(AppEditorCanvas(), node_id);
+    if (s.x <= 1.0f || s.y <= 1.0f)
       return false;
-    *out = ImVec2(w, h);
+    *out = s;
     return true;
   }
 
   // A node's footprint in MODEL units: last frame's measurement when it has been on the canvas, a per-kind
   // estimate before that. Placement and tidy both size against THIS -- fixed fantasy row heights are what made
   // the old layout pile tall nodes onto each other. The pool-graph guard matters: a DIFFERENT graph's node ids
-  // (tests, tools) can collide numerically with the editor pool, and imnodes asserts on a stale id.
+  // (tests, tools) can collide numerically with the editor canvas's, returning another graph's geometry.
   static ImVec2 AppLayoutNodeSize(const ImGuiAppGraph* g, const ImGuiAppNode* n)
   {
-    if (g == g_editor_pool_graph)   // the model-size cache is keyed by THIS graph's ids
+    if (g == g_editor_pool_graph)   // the engine's sizes are keyed by THIS graph's ids
     {
       ImVec2 m;
       if (AppNodeModelSize(n->Id, &m))
@@ -1383,10 +1395,10 @@ namespace ImGui
   static ImVec2 AppCanvasNodePos(int node_id);                         // fwd: imnodes grid -> model units
   static void   AppCanvasSetNodePos(int node_id, const ImVec2& model); // fwd: model units -> imnodes grid
 
-  // MODEL-unit node height (imnodes reports zoomed pixels; the layer-column packer works in model units).
+  // MODEL-unit node height (the engine measures in model units; fallback row pitch until measured).
   static float AppGraphLayerNodeHeight(int node_id)
   {
-    const float h = ImNodes::GetNodeDimensions(node_id).y / AppCanvasZoom();
+    const float h = ImGui::CanvasNodeSize(AppEditorCanvas(), node_id).y;
     return h > 1.0f ? h : kAppGraphLayerRowH;
   }
 
@@ -1402,7 +1414,7 @@ namespace ImGui
 
     // Default placement: pack the stack tight -- each fresh node sits directly below the previous one,
     // separated by exactly `gap`, using actual node heights (not a fixed row pitch that left big holes).
-    // imnodes reports a node's height as ~0 until it has been submitted once, so AppGraphLayerNodeHeight
+    // The engine reports a node's height as 0 until it has been submitted once, so AppGraphLayerNodeHeight
     // falls back to kAppGraphLayerRowH on the first frame. Only FINALIZE (HasGridPos) once every fresh
     // node's height is real; otherwise keep the placement provisional and re-pack next frame with true
     // heights -- finalizing early would freeze the fallback pitch and leave the holes we're removing.
@@ -1410,7 +1422,7 @@ namespace ImGui
     for (int i = 0; i < ids.Size; i++)
     {
       ImGuiAppNode* n = AppGraphFindNodeById(g, ids.Data[i]);
-      if (n != nullptr && !n->HasGridPos && ImNodes::GetNodeDimensions(n->Id).y <= 1.0f)
+      if (n != nullptr && !n->HasGridPos && ImGui::CanvasNodeSize(AppEditorCanvas(), n->Id).y <= 1.0f)
       {
         all_heights_known = false;
         break;
@@ -2598,15 +2610,22 @@ namespace ImGui
         }
   }
 
+  // A wire-detach re-drag dropped on empty canvas must not open the drop-create palette (the gesture
+  // means "delete", not "create here"). Set by the detach event below, consumed by the editor's
+  // CanvasWireDropped handler.
+  static bool s_drag_was_detach = false;
+
   bool CaptureAppGraphLinks(ImGuiAppGraph* g, char* err, int err_size)
   {
     IM_ASSERT(g != nullptr);
+    ImGuiCanvasState* cv = AppEditorCanvas();
     bool changed = false;
     if (err && err_size > 0) err[0] = 0;
 
     int sa = 0, ea = 0;
-    if (ImNodes::IsLinkCreated(&sa, &ea))
+    if (ImGui::CanvasWireCreated(cv, &sa, &ea))
     {
+      s_drag_was_detach = false;
       int s = 0, d = 0; ImGuiAppEdgeKind k = ImGuiAppEdgeKind_Data;
       if (AppGraphResolveLink(g, sa, ea, &s, &d, &k, err, err_size))
       {
@@ -2641,14 +2660,18 @@ namespace ImGui
       }
     }
 
-    int destroyed = 0;
-    if (ImNodes::IsLinkDestroyed(&destroyed))
+    // Endpoint dragged off a pin: the wire dies NOW (the drag continues from the surviving end as a
+    // pending wire -- releasing on a pin re-creates via the event above, on empty it just stays dead).
+    int detached_wire = 0;
+    int detached_grab = 0;
+    if (ImGui::CanvasWireDetached(cv, &detached_wire, &detached_grab))
     {
+      s_drag_was_detach = true;
       for (int i = 0; i < g->Links.Size; i++)
-        if (g->Links.Data[i].Id == destroyed)
+        if (g->Links.Data[i].Id == detached_wire)
         {
           for (int bi = g->Bindings.Size - 1; bi >= 0; bi--)
-            if (g->Bindings.Data[bi].LinkId == destroyed)
+            if (g->Bindings.Data[bi].LinkId == detached_wire)
               g->Bindings.erase(g->Bindings.Data + bi);
           g->Links.erase(g->Links.Data + i);
           changed = true;
@@ -2735,25 +2758,20 @@ namespace ImGui
     return &s_view;
   }
 
-  // Canvas zoom WITHOUT touching imnodes (upstream is read-only for us): imnodes' grid space is treated as
-  // MODEL units * zoom. Authored positions (ImGuiAppNode::GridPos, serialization, layout constants) stay in
-  // model units; the two helpers below convert at the submit/read seam. The pixel-flavored ImNodes style
-  // scalars are scaled around Begin/EndNodeEditor and our node content renders under a zoomed font, so the
-  // whole canvas scales geometrically while imnodes stays bone-stock.
+  // Canvas camera + node geometry, straight from the engine (model units everywhere; the camera is
+  // the engine's one transform). These names survive from the imnodes zoom-emulation seam so the many
+  // call sites read unchanged; the bodies are now trivial passthroughs.
   static float AppCanvasZoom()
   {
-    float& z = AppGraphViewState()->Zoom;
-    if (!(z > 0.0f))
-      z = 1.0f;   // a zeroed sidecar or uninitialized load must never divide by zero
-    return z;
+    return ImGui::CanvasGetZoom(AppEditorCanvas());
   }
-  static ImVec2 AppCanvasNodePos(int node_id)                       // imnodes -> model units
+  static ImVec2 AppCanvasNodePos(int node_id)
   {
-    return ImNodes::GetNodeGridSpacePos(node_id) / AppCanvasZoom();
+    return ImGui::CanvasNodePos(AppEditorCanvas(), node_id);
   }
-  static void AppCanvasSetNodePos(int node_id, const ImVec2& model) // model units -> imnodes
+  static void AppCanvasSetNodePos(int node_id, const ImVec2& model)
   {
-    ImNodes::SetNodeGridSpacePos(node_id, model * AppCanvasZoom());
+    ImGui::CanvasSetNodePos(AppEditorCanvas(), node_id, model);
   }
 
   namespace
@@ -3017,10 +3035,10 @@ namespace ImGui
     return IM_COL32(ImMin(r, 255), ImMin(g, 255), ImMin(b, 255), 255);
   }
 
-  // Push a node's title-bar tint. Live/promoted nodes use their origin color (state cue); every other (design)
-  // node gets a muted kind-colored header, Blender-style, so node category reads at a glance. Hover brightens.
-  // Returns the push count for a balanced pop. TitleBarSelected is left to imnodes so selection stays legible.
-  static int AppNodePushOriginStyle(const ImGuiAppNode* n)
+  // A node's title-bar tint (per-node color rides the engine's CanvasNextNodeTitle). Live/promoted nodes
+  // use their origin color (state cue); every other (design) node gets a muted kind-colored header,
+  // Blender-style, so node category reads at a glance. Selection legibility stays engine-side (outline).
+  static ImU32 AppNodeTitleColor(const ImGuiAppNode* n)
   {
     ImU32 base = AppGraphOriginColor(n);
     if (base == 0)
@@ -3030,14 +3048,12 @@ namespace ImGui
       const ImU32 raw = (n->Kind == ImGuiAppNodeKind_Layer) ? AppLayerAccent(n->LayerType) : AppKindColor(n->Kind);
       base = AppScaleRGB(raw, 0.52f);
     }
-    ImNodes::PushColorStyle(ImNodesCol_TitleBar, base);
-    ImNodes::PushColorStyle(ImNodesCol_TitleBarHovered, AppScaleRGB(base, 1.35f));
-    return 2;
+    return base;
   }
 
-  // Node ids the editor submitted on the last completed frame == the ids present in the imnodes pool (imnodes
-  // evicts entries that skip a frame, and its position getters ASSERT on missing ids -- there is no public
-  // existence query). Single editor instance, same assumption as the editor's other function statics.
+  // Node ids the editor submitted on the last completed frame -- the set whose geometry queries are
+  // meaningful (the engine keeps last-known geometry for evicted nodes, but decorations must not frame
+  // nodes that are currently hidden). Single editor instance, same assumption as the other statics.
   static ImVector<int> s_editor_pool_ids;
 
   static bool AppEditorNodeWasSubmitted(int node_id)
@@ -3061,18 +3077,17 @@ namespace ImGui
     return s_status_hint;
   }
 
-  // Draw INSIDE the imnodes canvas, right after BeginNodeEditor: the canvas draw list then holds grid ->
-  // this box -> nodes, so the grid can never show through the box/bands and the bands sit under the nodes.
-  // Geometry comes from the PREVIOUS frame's node rects (imnodes position getters are pool reads, legal
-  // mid-editor) -- only ids in s_editor_pool_ids may be read.
+  // Draw INSIDE the canvas, between CanvasBegin and the first node, on the engine's background channel:
+  // grid -> this box -> nodes, so the grid can never show through the box/bands and the bands sit under
+  // the nodes. Caller wraps this in the zoomed font (decorations size against em like node content).
   static void AppDrawLayerGroupBox(const ImGuiAppGraph* g, bool show_live)
   {
     // Per visible layer: screen y-span + accent, for the Unity-execution-order-style flow rail and phase bands.
-    // [Phase-coherent geometry] positions come from the MODEL (GridPos) and sizes from the model-size cache,
-    // both transformed with THIS frame's zoom + panning -- never from last frame's pixel rects, which lag one
-    // frame behind any zoom change (the stale flash this framework exists to remove).
+    // [Phase-coherent geometry] positions come from the MODEL (GridPos) and sizes from the engine's model
+    // measurement, both transformed with THIS frame's camera -- never from last frame's pixel rects, which lag
+    // one frame behind any zoom change (the stale flash this framework exists to remove).
+    ImGuiCanvasState* cv = AppEditorCanvas();
     const float  z = AppCanvasZoom();
-    const ImVec2 co = ImGui::GetWindowPos() + ImNodes::EditorContextGetPanning();   // canvas origin + pan (inner child, zero padding)
 
     struct LRow { float Top; float Bot; ImU32 Accent; };
     ImVector<LRow> rows;
@@ -3089,7 +3104,7 @@ namespace ImGui
         continue;
       if (!n->HasGridPos && !AppEditorNodeWasSubmitted(n->Id))
         continue;   // neither a settled model position nor a first measurement yet
-      const ImVec2 pos = co + n->GridPos * z;
+      const ImVec2 pos = ImGui::CanvasToScreen(cv, n->GridPos);
       ImVec2 m;
       if (!AppNodeModelSize(n->Id, &m))
         m = ImVec2(g_app_layer_uniform_w, kAppGraphLayerRowH);
@@ -3124,7 +3139,7 @@ namespace ImGui
     bb_max.x += pad;
     bb_max.y += pad;
 
-    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImDrawList* dl = ImGui::CanvasBackgroundDrawList(cv);
     const ImU32 fill = ImGui::GetColorU32(ImVec4(0.32f, 0.32f, 0.34f, 0.14f));
     const ImU32 outline = ImGui::GetColorU32(ImVec4(0.70f, 0.70f, 0.70f, 0.55f));
     const ImU32 title_bg = ImGui::GetColorU32(ImVec4(0.14f, 0.14f, 0.16f, 1.00f));   // opaque: grid must not bleed through text
@@ -3201,8 +3216,8 @@ namespace ImGui
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
       dragging_id = 0;
 
-    int hovered = 0;
-    if (dragging_id == 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImNodes::IsNodeHovered(&hovered))
+    const int hovered = ImGui::CanvasHoveredNode(AppEditorCanvas());   // last CanvasEnd's resolution
+    if (dragging_id == 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hovered >= 0)
     {
       ImGuiAppNode* n = AppGraphFindNodeById(g, hovered);
       if (n != nullptr && n->Kind == ImGuiAppNodeKind_Layer && (show_live || !n->IsLive))
@@ -4018,9 +4033,9 @@ namespace ImGui
   // Accumulate the screen-space bounding box of a containment group: the owner node + all its descendants
   // (window/sidebar -> hosted controls -> their data structs -> fields; control -> its structs -> fields;
   // struct -> fields). Skips hidden live nodes. Recursive.
-  // [Phase-coherent geometry] group frames draw BEFORE this frame's submission, so the pool's screen rects
-  // here are last frame's pixels -- one frame stale under any zoom change. Model position x current zoom +
-  // current panning, size from the model cache: coherent every frame (docs/phase-coherence.md).
+  // [Phase-coherent geometry] group frames draw BEFORE this frame's submission -- model position and the
+  // engine's model measurement, transformed with THIS frame's camera: coherent every frame
+  // (docs/phase-coherence.md).
   static void AppGroupAccumulate(const ImGuiAppGraph* g, int owner_id, bool show_live, ImVec2* mn, ImVec2* mx)
   {
     const ImGuiAppNode* n = AppGraphFindNodeConst(g, owner_id);
@@ -4029,8 +4044,7 @@ namespace ImGui
     if (!n->HasGridPos && !AppEditorNodeWasSubmitted(owner_id))
       return;   // neither a settled model position nor a measurement yet (first-ever frame)
     const float  z = AppCanvasZoom();
-    const ImVec2 co = ImGui::GetWindowPos() + ImNodes::EditorContextGetPanning();
-    const ImVec2 p = co + n->GridPos * z;
+    const ImVec2 p = ImGui::CanvasToScreen(AppEditorCanvas(), n->GridPos);
     ImVec2 m;
     if (!AppNodeModelSize(owner_id, &m))
       m = AppLayoutNodeSize(g, n);
@@ -4336,14 +4350,15 @@ namespace ImGui
     if (seq.Size == 0)
       return;
 
-    // [Phase-coherent geometry] model positions + cached model sizes, transformed with THIS frame's zoom and
-    // panning (this runs after EndNodeEditor: last frame's pixel rects would lag a zoom change by a frame).
+    // [Phase-coherent geometry] model positions + the engine's model sizes, transformed with THIS frame's
+    // camera (this runs after CanvasEnd: last frame's pixel rects would lag a zoom change by a frame).
+    IM_UNUSED(editor_min);
+    ImGuiCanvasState* cv = AppEditorCanvas();
     const float  z = AppCanvasZoom();
-    const ImVec2 co = editor_min + ImNodes::EditorContextGetPanning();
     auto geom = [&](int id, ImVec2* p, ImVec2* s)
     {
       const ImGuiAppNode* n = AppGraphFindNodeConst(g, id);
-      *p = co + n->GridPos * z;
+      *p = ImGui::CanvasToScreen(cv, n->GridPos);
       ImVec2 m;
       if (!AppNodeModelSize(id, &m))
         m = AppLayoutNodeSize(g, n);
@@ -4351,7 +4366,7 @@ namespace ImGui
     };
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const float em = ImGui::GetFontSize() * z;   // post-EndNodeEditor: the content font is popped, scale by hand
+    const float em = ImGui::GetFontSize() * z;   // post-CanvasEnd: the content font is popped, scale by hand
     const ImU32 accent = AppScopeAccent(g);
     const ImU32 flow = (accent & 0x00FFFFFF) | 0x66000000;
 
@@ -4564,17 +4579,15 @@ namespace ImGui
   {
     IM_ASSERT(g != nullptr);
     IM_UNUSED(app);
+    ImGuiCanvasState* cv = AppEditorCanvas();
 
-    // Snap-to-grid: toggled by the G key (latched in the shared view state, applied to the imnodes style for
-    // this frame). When on, imnodes snaps node origins to the grid as they're dragged. View state lives behind
+    // Snap-to-grid: toggled by the G key (latched in the shared view state, applied to the canvas style).
+    // When on, the engine snaps node origins to the grid as they're dragged. View state lives behind
     // AppGraphViewState() so the host can persist it across sessions.
     bool& s_snap_grid = AppGraphViewState()->SnapGrid;
     static bool s_help = false;       // F1 shortcut cheat-sheet overlay
     static bool s_quick_insp = false; // N: floating quick inspector beside the selection
-    if (s_snap_grid)
-      ImNodes::GetStyle().Flags |= ImNodesStyleFlags_GridSnapping;
-    else
-      ImNodes::GetStyle().Flags &= ~ImNodesStyleFlags_GridSnapping;
+    ImGui::CanvasGetStyle(cv)->GridSnap = s_snap_grid;
 
     // Canvas overlay toggles, driven from the gizmo cluster's popover (Blender's overlays popover): each is
     // presentation-only and never touches the model. Same persistable view state as snap.
@@ -4582,14 +4595,21 @@ namespace ImGui
     bool& s_ov_bands = AppGraphViewState()->OvBands;
     bool& s_ov_frames = AppGraphViewState()->OvFrames;
     bool& s_ov_minimap = AppGraphViewState()->OvMinimap;
-    if (s_ov_grid)
-      ImNodes::GetStyle().Flags |= (ImNodesStyleFlags_GridLines | ImNodesStyleFlags_GridLinesPrimary);
-    else
-      ImNodes::GetStyle().Flags &= ~(ImNodesStyleFlags_GridLines | ImNodesStyleFlags_GridLinesPrimary);
+    ImGui::CanvasGetStyle(cv)->GridLines = s_ov_grid;
 
-    // While hidden, live nodes are not submitted, so imnodes evicts them from its pool. On the hidden->shown
-    // transition, re-arm _NeedsPlace so each one is re-placed at its saved GridPos (otherwise imnodes recreates
-    // it at the default origin). Single editor instance in the demo, so a function-local latch is enough.
+    // Zoom persistence: the engine owns the live camera; the view state is the SAVED value. An external
+    // write (sidecar load) pushes into the engine here; the engine value is mirrored back after CanvasEnd.
+    {
+      float& vz = AppGraphViewState()->Zoom;
+      if (!(vz > 0.0f))
+        vz = 1.0f;   // a zeroed sidecar must never produce a degenerate camera
+      if (ImFabs(vz - ImGui::CanvasGetZoom(cv)) > 0.001f)
+        ImGui::CanvasSetZoom(cv, vz, ImGui::GetCursorScreenPos());
+    }
+
+    // While hidden, live nodes are not submitted. On the hidden->shown transition, re-arm _NeedsPlace so
+    // each one is re-seated at its saved GridPos. Single editor instance in the demo, so a function-local
+    // latch is enough.
     static bool prev_show_live = true;
     if (show_live && !prev_show_live)
       for (int i = 0; i < g->Nodes.Size; i++)
@@ -4612,10 +4632,9 @@ namespace ImGui
           if (!(!show_live && g->Nodes.Data[i].IsLive) && !AppNodeHiddenByCollapse(g, g->Nodes.Data[i].Id))
             g->Nodes.Data[i]._NeedsPlace = true;
         s_pending_fit = 1;
-        // imnodes selection is stored as POOL INDICES, and a scope change evicts/re-adds pool entries -- a
-        // stale index would silently resolve to a DIFFERENT node after the reshuffle. Selection state does
-        // not survive scope transitions; *selected_node_id is the survivor and re-applies onto the new pool.
-        ImNodes::ClearNodeSelection();
+        // Selection does not survive scope transitions by design: *selected_node_id is the survivor and
+        // re-applies onto the new scope (the sync block after CanvasEnd).
+        ImGui::CanvasClearSelection(cv);
       }
       s_scope_sig = scope_sig;
     }
@@ -4641,32 +4660,14 @@ namespace ImGui
     ImGuiAppNodeKind pending_build_kind = ImGuiAppNodeKind_COUNT;   // COUNT = none
     int              pending_build_owner = -1;
 
-    // Panning without the middle mouse button: LMB-drag on empty canvas PANS (three-button emulation with an
-    // always-true modifier -- the box selector loses its LMB binding; Ctrl+click multi-select and A/select-all
-    // remain), and RMB-drag pans too (UE's binding; a short RMB CLICK still opens the context menus via the
-    // release-with-no-drag trigger after EndNodeEditor). Node and pin drags are unaffected.
-    static const bool s_lmb_pans = true;
-    ImNodes::GetIO().AltMouseButton = ImGuiMouseButton_Right;
-    ImNodes::GetIO().EmulateThreeButtonMouse.Modifier = &s_lmb_pans;
+    // Camera bindings (LMB-drag pan, RMB pan + short-click menu, cursor-anchored wheel zoom) are the
+    // engine's IO defaults -- the Composer's field-tested policy IS the default policy.
 
-    // Canvas zoom (see AppCanvasZoom): when the zoom changed since the last frame, re-seat every placed node
-    // at GridPos * zoom -- the model is authoritative, imnodes' coordinates are derived.
-    {
-      static float s_zoom_applied = 1.0f;
-      if (s_zoom_applied != AppCanvasZoom())
-      {
-        s_zoom_applied = AppCanvasZoom();
-        for (int i = 0; i < g->Nodes.Size; i++)
-          if (g->Nodes.Data[i].HasGridPos)
-            g->Nodes.Data[i]._NeedsPlace = true;
-      }
-    }
-
-    // Uniform layer width, constrained TOGETHER, from the phase-coherent MODEL-size cache: the widest layer's
+    // Uniform layer width, constrained TOGETHER, from the engine's MODEL measurements: the widest layer's
     // content raises everyone's width. Model units are zoom-invariant, so a zoom change can never show a
     // stale width -- the value only settles across frames when CONTENT changes (the framework's T+1 rule).
     {
-      const float pad2 = ImNodes::GetStyle().NodePadding.x * 2.0f;   // base padding (pre zoom-scale below)
+      const float pad2 = ImGui::CanvasGetStyle(cv)->NodePadding.x * 2.0f;   // model units, like the sizes
       float w = kAppGraphLayerNodeWidth;
       for (int i = 0; i < g->Nodes.Size; i++)
       {
@@ -4686,58 +4687,25 @@ namespace ImGui
         g_app_layer_uniform_w = w;
     }
 
-    // Scale the pixel-flavored ImNodes style scalars for this frame (grid, pins, links, node padding), and
-    // render our node content under a zoomed font below -- geometric zoom without forking imnodes.
-    const ImNodesStyle style_backup = ImNodes::GetStyle();
-    {
-      ImNodesStyle& ns = ImNodes::GetStyle();
-      const float z = AppCanvasZoom();
-      ns.GridSpacing *= z;
-      ns.NodeCornerRounding *= z;
-      ns.NodePadding = ns.NodePadding * z;
-      ns.NodeBorderThickness *= z;
-      ns.LinkThickness *= z;
-      ns.LinkHoverDistance *= z;
-      ns.PinCircleRadius *= z;
-      ns.PinQuadSideLength *= z;
-      ns.PinTriangleSideLength *= z;
-      ns.PinLineThickness *= z;
-      ns.PinHoverRadius *= z;
-      ns.PinOffset *= z;
-    }
+    // The canvas: the engine owns the camera, the zoomed font + layout metrics for node content, the
+    // grid, wire editing (detach + snap-create), and the interaction FSM.
+    ImGui::CanvasBegin(cv, "##app_canvas", ImVec2(0.0f, 0.0f));
 
-    ImNodes::BeginNodeEditor();
-    // Node content tracks the canvas scale: the FONT alone is not enough -- imgui's pixel-flavored layout
-    // metrics (paddings, spacings, rounding) must scale with it or node internals lay out with unscaled
-    // chrome around scaled text and every body renders subtly (or grossly) wrong at zoom != 1.
-    {
-      const float z = AppCanvasZoom();
-      const ImGuiStyle& gs = ImGui::GetStyle();
-      ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,     ImVec2(gs.FramePadding.x * z, gs.FramePadding.y * z));
-      ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,      ImVec2(gs.ItemSpacing.x * z, gs.ItemSpacing.y * z));
-      ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(gs.ItemInnerSpacing.x * z, gs.ItemInnerSpacing.y * z));
-      ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing,    gs.IndentSpacing * z);
-      ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,    gs.FrameRounding * z);
-      ImGui::PushFont(nullptr, ImGui::GetFontSize() * z);
-    }
-    // Link editing: drag a wire's endpoint off a pin to detach + rewire it; snap-create completes a wire when its
-    // free end hovers a compatible pin. Both apply to every attribute submitted this frame.
-    ImNodes::PushAttributeFlag(ImNodesAttributeFlags_EnableLinkDetachWithDragClick);
-    ImNodes::PushAttributeFlag(ImNodesAttributeFlags_EnableLinkCreationOnSnap);
+    // In-canvas decorations size against em like node content, so they render under the zoomed font
+    // (the engine only pushes it per node).
+    ImGui::PushFont(nullptr, ImGui::GetFontSize() * AppCanvasZoom());
 
-    // Pipeline box, drawn into the canvas list between the grid (already emitted by BeginNodeEditor) and the
-    // nodes (emitted below): grid under box, box under nodes. Uses last frame's node rects, so it needs the
-    // imnodes pool to exist -- skip until one editor frame has completed.
-    static bool s_editor_ran_once = false;
-    if (at_root && s_editor_ran_once && s_ov_bands)
+    // Pipeline box, drawn on the engine's background channel between the grid and the nodes: grid under
+    // box, box under nodes. Model geometry with this frame's camera -- valid from the very first frame
+    // (unmeasured nodes fall back to per-kind estimates).
+    if (at_root && s_ov_bands)
       AppDrawLayerGroupBox(g, show_live);
 
-    // Semantic group frames: a translucent labeled box around each containment group, drawn INTO the canvas
-    // list right after the grid and before the nodes (same layering as the pipeline box above) -- the grid can
-    // never cut through a frame or its caption chip, and nodes render on top of their frame (Blender order).
-    // Geometry comes from LAST frame's node rects (only pooled ids are read; AppGroupAccumulate guards).
+    // Semantic group frames: a translucent labeled box around each containment group, same background
+    // channel as the pipeline box -- the grid can never cut through a frame or its caption chip, and
+    // nodes render on top of their frame (Blender order).
     // Passes are depth-ordered: windows/sidebars behind, control data clusters, then structs in front.
-    if (s_editor_ran_once && s_ov_frames)
+    if (s_ov_frames)
     {
       auto group_box = [&](int owner_id, ImU32 kind_col, int depth)
       {
@@ -4752,7 +4720,7 @@ namespace ImGui
         const float title_h = ImGui::GetFrameHeight();
         mn.x -= pad; mx.x += pad; mx.y += pad;
         mn.y -= title_h + pad * 0.4f;
-        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImDrawList* dl = ImGui::CanvasBackgroundDrawList(cv);
         const ImU32 fill = (kind_col & 0x00FFFFFF) | (IM_COL32(0, 0, 0, 18) & 0xFF000000);
         const ImU32 line = (kind_col & 0x00FFFFFF) | (IM_COL32(0, 0, 0, 130) & 0xFF000000);
         dl->AddRectFilled(mn, mx, fill, 5.0f);
@@ -4799,16 +4767,16 @@ namespace ImGui
                   continue;
                 if (AppNodeHiddenByCollapse(g, members.Data[m]) || !AppEditorNodeWasSubmitted(members.Data[m]))
                 {
-                  mm->GridPos += d / AppCanvasZoom();   // not in the imnodes pool: move its stored (model) pos only
+                  mm->GridPos += d / AppCanvasZoom();   // not on the canvas: move its stored (model) pos only
                   mm->HasGridPos = true;
                   mm->_NeedsPlace = true;  // re-seat it at this pos when it next submits
                 }
                 else
                 {
-                  // Drag delta is pixels == imnodes grid; the stored GridPos is model units.
-                  const ImVec2 np = ImNodes::GetNodeGridSpacePos(members.Data[m]) + d;
-                  ImNodes::SetNodeGridSpacePos(members.Data[m], np);
-                  mm->GridPos = np / AppCanvasZoom();
+                  // Drag delta is pixels; the stored GridPos and the engine's positions are model units.
+                  const ImVec2 np = AppCanvasNodePos(members.Data[m]) + d / AppCanvasZoom();
+                  AppCanvasSetNodePos(members.Data[m], np);
+                  mm->GridPos = np;
                 }
               }
             }
@@ -4865,13 +4833,14 @@ namespace ImGui
           group_box(n->Id, AppKindColor(ImGuiAppNodeKind_Struct), 0);
       }
     }
+    ImGui::PopFont();   // decoration font (node content gets its own from the engine)
 
-    // Last frame's pool ids, kept for the re-entry check below; the current list is rebuilt from scratch
-    // every frame: exactly the ids this submission puts in the pool.
+    // Last frame's submitted ids, kept for the re-entry check below; the current list is rebuilt from
+    // scratch every frame: exactly the ids this submission puts on the canvas.
     static ImVector<int> s_editor_prev_pool_ids;
     s_editor_prev_pool_ids.swap(s_editor_pool_ids);
     s_editor_pool_ids.resize(0);
-    g_editor_pool_graph = g;   // measurement guard: pool ids only mean anything for THIS graph (see AppLayoutNodeSize)
+    g_editor_pool_graph = g;   // measurement guard: canvas ids only mean anything for THIS graph (see AppLayoutNodeSize)
     for (int i = 0; i < g->Nodes.Size; i++)
     {
       ImGuiAppNode* n = &g->Nodes.Data[i];
@@ -4886,32 +4855,38 @@ namespace ImGui
       s_editor_pool_ids.push_back(n->Id);
 
       // Rejoining the canvas after a frame of eviction (unhidden via the outliner eye / show-all / H, a group
-      // expand, or any other path with no explicit re-arm): imnodes recreated the pool entry at the default
-      // origin, and the post-submit read-back would overwrite the stored GridPos with that origin -- the saved
-      // position would be destroyed, not just ignored. Re-seat the node at its stored position instead.
+      // expand, or any other path with no explicit re-arm): the engine kept the last-known geometry, but the
+      // stored GridPos is authoritative for a node the MODEL moved while it was off-canvas -- re-seat it.
       if (n->HasGridPos && !n->_NeedsPlace && !AppIdInSet(s_editor_prev_pool_ids, n->Id))
         n->_NeedsPlace = true;
 
-      if (n->Kind == ImGuiAppNodeKind_Layer)
-        ImNodes::SetNodeDraggable(n->Id, false);
+      ImGui::CanvasSetNodeDraggable(cv, n->Id, n->Kind != ImGuiAppNodeKind_Layer);
 
-      // Position must be set BEFORE BeginNode (imnodes lays out content at the node origin).
       if (n->_NeedsPlace)
       {
         AppCanvasSetNodePos(n->Id, n->GridPos);
         n->_NeedsPlace = false;
       }
 
-      const int origin_styles = AppNodePushOriginStyle(n);   // balanced pop after EndAppNode
+      const ImU32 title_col = AppNodeTitleColor(n);
 
       // Live nodes mirror the running app and are read-only: static (non-renamable) title. Core layers are the
       // frame's phases -- fixed titles; a CUSTOM layer's name IS its generated class name, so it renames.
+      // Rename entry is the double-click event after CanvasEnd (host decides rename vs drill); the engine
+      // renders the in-title field while the shared edit latch points at this node and hands it back on
+      // deactivation.
+      static bool s_title_editing = false;   // one node renames at a time (same latch idiom as before)
+      const bool was_editing = g->EditingNodeId == n->Id;
       if (n->IsLive)
-        ImGui::BeginAppNode(n->Id, n->Draft.Name[0] ? n->Draft.Name : "(live)");
+        ImGui::CanvasNextNodeTitle(n->Draft.Name[0] ? n->Draft.Name : "(live)", title_col);
       else if (n->Kind == ImGuiAppNodeKind_Layer && AppLayerIsCore(n->LayerType))
-        ImGui::BeginAppNode(n->Id, AppLayerNodeName(n->LayerType));
+        ImGui::CanvasNextNodeTitle(AppLayerNodeName(n->LayerType), title_col);
       else
-        ImGui::BeginAppNodeRenamable(n->Id, n->Draft.Name, IM_ARRAYSIZE(n->Draft.Name), &g->EditingNodeId);
+      {
+        s_title_editing = was_editing;
+        ImGui::CanvasNextNodeTitleEditable(n->Draft.Name, IM_ARRAYSIZE(n->Draft.Name), &s_title_editing, title_col);
+      }
+      ImGui::CanvasBeginNode(cv, n->Id);
 
       // Input-side ports first (left). For a control, the "persist"/"temp" tie pins are NOT drawn here -- they are
       // drawn at their own body rows below (so an exploded PersistData/TempData wire enters lower than "deps").
@@ -4925,11 +4900,12 @@ namespace ImGui
           continue;
         if (port->Kind != ImGuiAppPortKind_DataIn && port->Kind != ImGuiAppPortKind_ChildOut)
           continue;
-        ImNodes::PushColorStyle(ImNodesCol_Pin, AppPinColor(port->Kind));
-        ImNodes::BeginInputAttribute(port->Id);
+        // Containment pins render square (kind legibility), data pins circular -- the engine draws pins.
+        ImGui::CanvasNextPinColor(AppPinColor(port->Kind));
+        ImGui::CanvasBeginPin(cv, port->Id, ImGui::ImGuiCanvasPin_In,
+                              port->Kind == ImGuiAppPortKind_ChildOut ? ImGui::ImGuiCanvasPinShape_Square : ImGui::ImGuiCanvasPinShape_Circle);
         ImGui::TextUnformatted(port->Name);
-        ImNodes::EndInputAttribute();
-        ImNodes::PopColorStyle();
+        ImGui::CanvasEndPin(cv);
       }
 
       // A control's exploded PersistData/TempData tie pins, each on its own row (so the wire enters at that line).
@@ -4942,8 +4918,8 @@ namespace ImGui
           if (sid < 0)
             continue;
           const int pin = AppNodePortByName(n, temp ? "temp" : "persist");
-          ImNodes::PushColorStyle(ImNodesCol_Pin, kAppPinTie);
-          ImNodes::BeginInputAttribute(pin);
+          ImGui::CanvasNextPinColor(kAppPinTie);
+          ImGui::CanvasBeginPin(cv, pin, ImGui::ImGuiCanvasPin_In, ImGui::ImGuiCanvasPinShape_Circle);
           ImGui::PushID(100 + list);
           if (AppBlDisclosure("##tie", true))
           {
@@ -4955,13 +4931,11 @@ namespace ImGui
           const ImGuiAppNode* sn = AppGraphFindNodeConst(g, sid);
           ImGui::TextDisabled("%s -> %s", temp ? "TempData" : "PersistData", sn != nullptr ? sn->Draft.Name : "(struct)");
           ImGui::PopID();
-          ImNodes::EndInputAttribute();
-          ImNodes::PopColorStyle();
+          ImGui::CanvasEndPin(cv);
         }
       }
 
-      // Body (a dedicated static attribute id; always submits >=1 item so imnodes' empty-body assert can't fire).
-      ImNodes::BeginStaticAttribute(n->BodyAttrId);
+      // Body: plain widgets between CanvasBeginNode/EndNode (no attribute scaffolding needed).
       ImGui::PushID(n->Id);
       if (n->IsLive)
         ImGui::TextDisabled("live - read-only (mirrors running app)");
@@ -5133,7 +5107,6 @@ namespace ImGui
           ImGui::TextDisabled("%s", AppNodeKindName(n->Kind));
       }
       ImGui::PopID();
-      ImNodes::EndStaticAttribute();
 
       // Output-side ports (right). The parent's "children" pin sits here so containment wires leave the
       // parent's right edge and land on the child's left -- the tree read (see the input loop's note).
@@ -5142,15 +5115,18 @@ namespace ImGui
         ImGuiAppNodePort* port = &n->Ports.Data[p];
         if (port->Kind != ImGuiAppPortKind_DataOut && port->Kind != ImGuiAppPortKind_ChildIn)
           continue;
-        ImNodes::PushColorStyle(ImNodesCol_Pin, AppPinColor(port->Kind));
-        ImNodes::BeginOutputAttribute(port->Id);
+        ImGui::CanvasNextPinColor(AppPinColor(port->Kind));
+        ImGui::CanvasBeginPin(cv, port->Id, ImGui::ImGuiCanvasPin_Out,
+                              port->Kind == ImGuiAppPortKind_ChildIn ? ImGui::ImGuiCanvasPinShape_Square : ImGui::ImGuiCanvasPinShape_Circle);
         ImGui::TextUnformatted(port->Name);
-        ImNodes::EndOutputAttribute();
-        ImNodes::PopColorStyle();
+        ImGui::CanvasEndPin(cv);
       }
 
-      ImGui::EndAppNode();
-      for (int s = 0; s < origin_styles; s++) ImNodes::PopColorStyle();   // balanced with AppNodePushOriginStyle
+      ImGui::CanvasEndNode(cv);
+
+      // The engine cleared the edit latch on deactivation (Enter / Escape / click-away): hand it back.
+      if (was_editing && !s_title_editing)
+        g->EditingNodeId = -1;
     }
 
     // Draw links. When live nodes are hidden, skip any link incident on a hidden (live) owner: that attribute
@@ -5169,23 +5145,15 @@ namespace ImGui
       // Brushing echo on wires: the link another view (inspector binding rows) points at renders bright.
       ImGuiAppHoverSource lsrc = ImGuiAppHoverSource_None;
       const bool brushed = g->Links.Data[li].Id == AppGraphHoveredLink(&lsrc) && lsrc != ImGuiAppHoverSource_Canvas && lsrc != ImGuiAppHoverSource_None;
-      if (brushed)
-        ImNodes::PushColorStyle(ImNodesCol_Link, IM_COL32(250, 250, 252, 220));
-      ImNodes::Link(g->Links.Data[li].Id, g->Links.Data[li].StartAttr, g->Links.Data[li].EndAttr);
-      if (brushed)
-        ImNodes::PopColorStyle();
+      ImGui::CanvasWire(cv, g->Links.Data[li].Id, g->Links.Data[li].StartAttr, g->Links.Data[li].EndAttr,
+                        brushed ? IM_COL32(250, 250, 252, 220) : 0);
     }
 
-    // Overview minimap (drawn as an overlay inside the editor; must precede EndNodeEditor). Lets the user see
-    // and jump to nodes that sit past the visible canvas edge.
-    ImNodes::PopAttributeFlag();
-    ImNodes::PopAttributeFlag();
+    // Overview minimap (engine inset, bottom-right; click/drag to jump). Lets the user see and reach
+    // nodes past the visible canvas edge.
     if (s_ov_minimap)
-      ImNodes::MiniMap(0.2f, ImNodesMiniMapLocation_BottomRight);
-    ImGui::PopFont();                                      // zoomed node-content font (pushed after BeginNodeEditor)
-    ImGui::PopStyleVar(5);                                 // zoomed node-content layout metrics
-    ImNodes::EndNodeEditor();
-    ImNodes::GetStyle() = style_backup;                    // restore the zoom-scaled style scalars
+      ImGui::CanvasMiniMap(cv, 0.2f);
+    ImGui::CanvasEnd(cv);
     const ImVec2 editor_size = ImGui::GetItemRectSize();   // captured before later items, for fit-all centering
     const ImVec2 editor_min  = ImGui::GetItemRectMin();    // editor canvas top-left (screen), for overlay extents
 
@@ -5199,7 +5167,7 @@ namespace ImGui
       for (int i = 0; i < g->Nodes.Size; i++)
       {
         const ImGuiAppNode* n = &g->Nodes.Data[i];
-        if ((!show_live && n->IsLive) || AppNodeHiddenByCollapse(g, n->Id))
+        if ((!show_live && n->IsLive) || AppNodeHiddenByCollapse(g, n->Id) || !AppEditorNodeWasSubmitted(n->Id))
           continue;
 
         ImU32 dot = 0;
@@ -5222,8 +5190,8 @@ namespace ImGui
         if (dot == 0)
           continue;
 
-        const ImVec2 p = ImNodes::GetNodeScreenSpacePos(n->Id);
-        const ImVec2 d = ImNodes::GetNodeDimensions(n->Id);
+        const ImVec2 p = ImGui::CanvasToScreen(cv, AppCanvasNodePos(n->Id));
+        const ImVec2 d = ImGui::CanvasNodeSize(cv, n->Id) * AppCanvasZoom();
         const ImVec2 c(p.x + d.x - r * 1.6f, p.y + r * 1.6f);
         dl->AddCircleFilled(c, r, dot);
         dl->AddCircle(c, r, IM_COL32(20, 20, 20, 160));
@@ -5240,8 +5208,8 @@ namespace ImGui
 
     // Port hover tooltip: name + (for data pins) the carried data type.
     {
-      int hov_pin = 0;
-      if (ImNodes::IsPinHovered(&hov_pin))
+      const int hov_pin = ImGui::CanvasHoveredPin(cv);
+      if (hov_pin >= 0)
       {
         ImGuiAppNode* owner = nullptr;
         ImGuiAppNodePort* port = AppGraphFindPort(g, hov_pin, &owner);
@@ -5270,17 +5238,7 @@ namespace ImGui
       if (!show_live && g->Nodes.Data[i].IsLive) continue;
       if (AppNodeHiddenByCollapse(g, g->Nodes.Data[i].Id)) continue;
       ImGuiAppNode* n = &g->Nodes.Data[i];
-      const ImVec2 pos = AppCanvasNodePos(n->Id);   // model units, like GridPos
-      // [Phase-coherent geometry] capture: these pixels were rendered THIS frame at THIS zoom -- dividing
-      // by the same zoom yields the zoom-invariant model size every consumer transforms fresh next frame.
-      {
-        const ImVec2 mdl = ImNodes::GetNodeDimensions(n->Id) / AppCanvasZoom();
-        if (mdl.x > 1.0f && mdl.y > 1.0f)
-        {
-          g_node_model_w.SetFloat((ImGuiID)n->Id, mdl.x);
-          g_node_model_h.SetFloat((ImGuiID)n->Id, mdl.y);
-        }
-      }
+      const ImVec2 pos = AppCanvasNodePos(n->Id);   // model units, like GridPos (drags land here)
       if (n->Kind == ImGuiAppNodeKind_Layer && n->HasGridPos
           && (ImAbs(pos.x - n->GridPos.x) > 0.5f || ImAbs(pos.y - n->GridPos.y) > 0.5f))
       {
@@ -5310,37 +5268,39 @@ namespace ImGui
       AppDrawScopeSequence(g, show_live, editor_min);
       AppDrawScopeEmptyCTA(g, show_live, editor_min, editor_size);
     }
-    s_editor_ran_once = true;   // the imnodes pool now exists; the in-canvas pipeline box may draw next frame
+    AppGraphViewState()->Zoom = ImGui::CanvasGetZoom(cv);   // mirror the live camera into the saved view state
     AppDrawScopeBreadcrumb(g, selected_node_id, editor_min);
 
     // In-widget node palette: right-click the canvas to add any node kind. The graph is the app, so every
-    // pillar -- layers, windows, sidebars, controls -- is created here, inside the editor itself.
-    // Trigger on right-click over empty canvas. ImNodes::IsEditorHovered() can't be used here: it calls
-    // ImGui::IsWindowHovered() with no flags, but this runs AFTER EndNodeEditor where the current window is the
-    // host child and the mouse sits over imnodes' (now-ended) scrolling-region child -> always false. Use a
-    // child-inclusive hover test and skip clicks landing on a node / pin / link so only empty canvas opens it.
+    // pillar -- layers, windows, sidebars, controls -- is created here, inside the editor itself. Hover and
+    // menu requests come latched from CanvasEnd (the engine's RMB short-click already disambiguated pan).
     static ImVec2 add_popup_grid = ImVec2(0.0f, 0.0f);
     static int    ctx_node_id = -1;
     static int    ctx_link_id = -1;
-    int  hovered_node = 0;
-    int  hovered_link = 0;
-    int  hovered_pin  = 0;
-    const bool over_node = ImNodes::IsNodeHovered(&hovered_node);
-    const bool over_link = ImNodes::IsLinkHovered(&hovered_link);
-    const bool over_pin  = ImNodes::IsPinHovered(&hovered_pin);
+    const int  hovered_node = ImGui::CanvasHoveredNode(cv);
+    const int  hovered_link = ImGui::CanvasHoveredWire(cv);
+    const int  hovered_pin  = ImGui::CanvasHoveredPin(cv);
+    const bool over_node = hovered_node >= 0;
+    const bool over_link = hovered_link >= 0;
+    const bool over_pin  = hovered_pin >= 0;
     // Brushing: report the canvas's hovered datum so the other views can echo it next frame.
     if (over_node)
       AppGraphHoverNode(hovered_node, ImGuiAppHoverSource_Canvas);
     if (over_link)
       AppGraphHoverLink(hovered_link, ImGuiAppHoverSource_Canvas);
-    // Double-click drills into a node's composition where the title is not a rename target: layers always
-    // (their titles are static), live mirrors too. Design windows/controls rename on title double-click, so
-    // they enter via Tab / the outliner instead.
-    if (over_node && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+    // Double-click: reported by the engine, interpreted here. Drill into a node's composition where the
+    // title is not a rename target (layers, live mirrors); everything else renames in place -- the engine
+    // shows the in-title field while g->EditingNodeId points at the node.
     {
-      const ImGuiAppNode* dn = AppGraphFindNodeConst(g, hovered_node);
-      if (dn != nullptr && AppScopeCanEnter(dn) && (dn->Kind == ImGuiAppNodeKind_Layer || dn->IsLive))
-        g->ViewScope.push_back(dn->Id);
+      int dbl_id = -1;
+      if (ImGui::CanvasNodeDoubleClicked(cv, &dbl_id))
+      {
+        const ImGuiAppNode* dn = AppGraphFindNodeConst(g, dbl_id);
+        if (dn != nullptr && AppScopeCanEnter(dn) && (dn->Kind == ImGuiAppNodeKind_Layer || dn->IsLive))
+          g->ViewScope.push_back(dn->Id);
+        else if (dn != nullptr && !dn->IsLive && (dn->Kind != ImGuiAppNodeKind_Layer || dn->LayerType == ImGuiAppLayerType_Custom))
+          g->EditingNodeId = dn->Id;
+      }
     }
 
     // Host "Add" entry point (the toolbar's compose verb): open the same add palette the RMB / Space / +
@@ -5348,51 +5308,28 @@ namespace ImGui
     if (g_add_palette_request)
     {
       g_add_palette_request = false;
-      add_popup_grid = (ImVec2(editor_size.x * 0.5f, editor_size.y * 0.5f) - ImNodes::EditorContextGetPanning()) / AppCanvasZoom();
+      add_popup_grid = ImGui::CanvasFromScreen(cv, editor_min + editor_size * 0.5f);
       ImGui::OpenPopup("##AppGraphAdd");
     }
 
-    // Wheel zoom about the cursor: over empty canvas plain, anywhere with Ctrl. A plain wheel over a node is
-    // left to the node's own items (combo hover-scrub, value fields). Screen point under the cursor stays
-    // fixed: screen = editor_min + model * zoom + panning.
+    // Context menus: the engine's RMB short-click events (a travelled RMB is a pan and never menus).
     {
-      const float wheel = ImGui::GetIO().MouseWheel;
-      if (wheel != 0.0f && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows)
-          && (ImGui::GetIO().KeyCtrl || (!over_node && !over_pin && !over_link && !ImGui::IsAnyItemHovered())))
+      int    menu_id = -1;
+      ImVec2 menu_model(0.0f, 0.0f);
+      if (ImGui::CanvasMenuRequestNode(cv, &menu_id))
       {
-        const float z_old = AppCanvasZoom();
-        const float z_new = ImClamp(z_old * powf(1.15f, wheel), 0.3f, 2.5f);
-        if (z_new != z_old)
-        {
-          const ImVec2 pan = ImNodes::EditorContextGetPanning();
-          const ImVec2 mouse = ImGui::GetIO().MousePos;
-          const ImVec2 model_pt = (mouse - editor_min - pan) / z_old;
-          AppGraphViewState()->Zoom = z_new;
-          ImNodes::EditorContextResetPanning(mouse - editor_min - model_pt * z_new);
-        }
-      }
-    }
-
-    // RMB now also PANS (drag). The menus open on RMB RELEASE with no meaningful drag (UE's disambiguation):
-    // MouseDragMaxDistanceSqr is the whole gesture's travel, so a pan can end over a node without menuing it.
-    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseReleased(ImGuiMouseButton_Right)
-        && ImGui::GetIO().MouseDragMaxDistanceSqr[ImGuiMouseButton_Right] < 9.0f)
-    {
-      if (over_node)
-      {
-        ctx_node_id = hovered_node;                 // right-click a node -> per-node context menu (Duplicate/Delete)
+        ctx_node_id = menu_id;                      // right-click a node -> per-node context menu (Duplicate/Delete)
         ImGui::OpenPopup("##AppGraphNodeCtx");
       }
-      else if (over_link)
+      else if (ImGui::CanvasMenuRequestWire(cv, &menu_id))
       {
-        ctx_link_id = hovered_link;                 // right-click a link -> link context menu (Delete)
+        ctx_link_id = menu_id;                      // right-click a link -> link context menu (Delete)
         ImGui::OpenPopup("##AppGraphLinkCtx");
       }
-      else if (!over_pin)
+      else if (ImGui::CanvasMenuRequestEmpty(cv, &menu_model))
       {
-        // Model units: (screen - origin - panning) / zoom.
-        add_popup_grid = (ImGui::GetIO().MousePos - ImGui::GetItemRectMin() - ImNodes::EditorContextGetPanning()) / AppCanvasZoom();
-        ImGui::OpenPopup("##AppGraphAdd");          // right-click empty canvas -> add-node palette
+        add_popup_grid = menu_model;                // right-click empty canvas -> add-node palette (model units)
+        ImGui::OpenPopup("##AppGraphAdd");
       }
     }
 
@@ -5400,33 +5337,41 @@ namespace ImGui
     // while a text field is active (renaming a node) so the key still edits text. Valid post-EndNodeEditor.
     if (!ImGui::GetIO().WantTextInput && ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && ImGui::IsKeyPressed(ImGuiKey_Delete, false))
     {
-      const int node_count = ImNodes::NumSelectedNodes();
+      const int node_count = ImGui::CanvasNumSelectedNodes(cv);
       if (node_count > 0)
       {
         ImVector<int> picks;
         picks.resize(node_count);
-        ImNodes::GetSelectedNodes(picks.Data);
+        ImGui::CanvasGetSelectedNodes(cv, picks.Data, node_count);
         for (int i = 0; i < node_count; i++)
         {
           const ImGuiAppNode* n = AppGraphFindNode(g, picks.Data[i]);
           if (n != nullptr && !n->IsLive)
             AppGraphRemoveNode(g, picks.Data[i]);
         }
-        ImNodes::ClearNodeSelection();
+        ImGui::CanvasClearSelection(cv);
       }
-      const int link_count = ImNodes::NumSelectedLinks();
-      if (link_count > 0)
+      const int sel_wire = ImGui::CanvasSelectedWire(cv);
+      if (sel_wire >= 0)
       {
-        ImVector<int> picks;
-        picks.resize(link_count);
-        ImNodes::GetSelectedLinks(picks.Data);
-        for (int i = 0; i < link_count; i++)
-          AppGraphEraseLink(g, picks.Data[i]);
-        ImNodes::ClearLinkSelection();
+        AppGraphEraseLink(g, sel_wire);
+        ImGui::CanvasClearWireSelection(cv);
       }
     }
 
-    // Fit all visible nodes by centering their bounding box (imnodes has no zoom -> pan only).
+    // Zoom-to-fit a model-space bounding box, capped at 1:1 -- framing must never blow small content up
+    // past its natural size (fit means "bring into view", not "magnify").
+    auto fit_rect = [&](ImVec2 mn, ImVec2 mx)
+    {
+      ImGui::CanvasFitRect(cv, mn, mx, 60.0f);
+      if (ImGui::CanvasGetZoom(cv) > 1.0f)
+      {
+        ImGui::CanvasSetZoom(cv, 1.0f, editor_min + editor_size * 0.5f);
+        ImGui::CanvasCenterOn(cv, (mn + mx) * 0.5f);
+      }
+    };
+
+    // Fit all visible nodes (model-space bounds; measured sizes with per-kind estimates before that).
     auto fit_all = [&]()
     {
       ImVec2 mn(FLT_MAX, FLT_MAX);
@@ -5434,26 +5379,25 @@ namespace ImGui
       bool any = false;
       for (int i = 0; i < g->Nodes.Size; i++)
       {
-        if (!show_live && g->Nodes.Data[i].IsLive)
+        const ImGuiAppNode* n = &g->Nodes.Data[i];
+        if (!show_live && n->IsLive)
           continue;
-        const int id = g->Nodes.Data[i].Id;
-        if (AppNodeHiddenByCollapse(g, id))
+        if (AppNodeHiddenByCollapse(g, n->Id))
           continue;
-        const ImVec2 p = ImNodes::GetNodeGridSpacePos(id);
-        const ImVec2 d = ImNodes::GetNodeDimensions(id);
+        const ImVec2 p = n->GridPos;
+        ImVec2 d;
+        if (!AppNodeModelSize(n->Id, &d))
+          d = AppLayoutNodeSize(g, n);
         mn.x = ImMin(mn.x, p.x); mn.y = ImMin(mn.y, p.y);
         mx.x = ImMax(mx.x, p.x + d.x); mx.y = ImMax(mx.y, p.y + d.y);
         any = true;
       }
       if (any)
-      {
-        const ImVec2 center((mn.x + mx.x) * 0.5f, (mn.y + mx.y) * 0.5f);
-        ImNodes::EditorContextResetPanning(ImVec2(editor_size.x * 0.5f - center.x, editor_size.y * 0.5f - center.y));
-      }
+        fit_rect(mn, mx);
       return any;
     };
 
-    // Fit a specific set of node ids by centering their grid-space bounding box.
+    // Fit a specific set of node ids.
     auto fit_ids = [&](const ImVector<int>& ids)
     {
       ImVec2 mn(FLT_MAX, FLT_MAX);
@@ -5464,17 +5408,16 @@ namespace ImGui
         const ImGuiAppNode* sn = AppGraphFindNode(g, ids.Data[i]);
         if (sn == nullptr || (!show_live && sn->IsLive) || AppNodeHiddenByCollapse(g, ids.Data[i]))
           continue;
-        const ImVec2 p = ImNodes::GetNodeGridSpacePos(ids.Data[i]);
-        const ImVec2 d = ImNodes::GetNodeDimensions(ids.Data[i]);
+        const ImVec2 p = sn->GridPos;
+        ImVec2 d;
+        if (!AppNodeModelSize(sn->Id, &d))
+          d = AppLayoutNodeSize(g, sn);
         mn.x = ImMin(mn.x, p.x); mn.y = ImMin(mn.y, p.y);
         mx.x = ImMax(mx.x, p.x + d.x); mx.y = ImMax(mx.y, p.y + d.y);
         any = true;
       }
       if (any)
-      {
-        const ImVec2 center((mn.x + mx.x) * 0.5f, (mn.y + mx.y) * 0.5f);
-        ImNodes::EditorContextResetPanning(ImVec2(editor_size.x * 0.5f - center.x, editor_size.y * 0.5f - center.y));
-      }
+        fit_rect(mn, mx);
       return any;
     };
 
@@ -5501,11 +5444,11 @@ namespace ImGui
     {
       if (ImGui::IsKeyPressed(ImGuiKey_F, false))
       {
-        if (!fit_ids(g->Selection) && ImNodes::NumSelectedNodes() > 0)
+        if (!fit_ids(g->Selection) && ImGui::CanvasNumSelectedNodes(cv) > 0)
         {
           int picked = 0;
-          ImNodes::GetSelectedNodes(&picked);
-          ImNodes::EditorContextMoveToNode(picked);
+          ImGui::CanvasGetSelectedNodes(cv, &picked, 1);
+          ImGui::CanvasCenterOn(cv, AppCanvasNodePos(picked) + ImGui::CanvasNodeSize(cv, picked) * 0.5f);
         }
       }
       if (ImGui::IsKeyPressed(ImGuiKey_Home, false))
@@ -5560,9 +5503,9 @@ namespace ImGui
       // Blender selects: A selects everything visible; Alt+A (or A with a selection) clears.
       if (ImGui::IsKeyPressed(ImGuiKey_A, false) && !ImGui::GetIO().KeyCtrl)
       {
-        if (ImGui::GetIO().KeyAlt || ImNodes::NumSelectedNodes() > 0)
+        if (ImGui::GetIO().KeyAlt || ImGui::CanvasNumSelectedNodes(cv) > 0)
         {
-          ImNodes::ClearNodeSelection();
+          ImGui::CanvasClearSelection(cv);
           g->Selection.clear();
         }
         else
@@ -5572,7 +5515,7 @@ namespace ImGui
             const ImGuiAppNode* n = &g->Nodes.Data[i];
             if ((!show_live && n->IsLive) || AppNodeHiddenByCollapse(g, n->Id))
               continue;
-            ImNodes::SelectNode(n->Id);
+            ImGui::CanvasSelectNode(cv, n->Id, true);
           }
         }
       }
@@ -5593,7 +5536,7 @@ namespace ImGui
             if (sn != nullptr && !sn->IsLive && sn->Kind != ImGuiAppNodeKind_Layer)
               sn->Hidden = true;
           }
-          ImNodes::ClearNodeSelection();
+          ImGui::CanvasClearSelection(cv);
           g->Selection.clear();
         }
       }
@@ -5985,9 +5928,7 @@ namespace ImGui
               *selected_node_id = n->Id;
             g->Selection.clear();
             g->Selection.push_back(n->Id);
-            ImNodes::ClearNodeSelection();
-            if (AppEditorNodeWasSubmitted(n->Id))
-              ImNodes::SelectNode(n->Id);
+            ImGui::CanvasSelectNode(cv, n->Id, false);
             fit_ids(g->Selection);
             ImGui::CloseCurrentPopup();
           }
@@ -6012,8 +5953,8 @@ namespace ImGui
         case 11: fit_all(); break;
         case 12: fit_ids(g->Selection); break;
         case 13: s_snap_grid = !s_snap_grid; break;
-        case 14: if (AppGraphCanUndo(g)) { AppGraphUndo(g); ImNodes::ClearNodeSelection(); } break;
-        case 15: if (AppGraphCanRedo(g)) { AppGraphRedo(g); ImNodes::ClearNodeSelection(); } break;
+        case 14: if (AppGraphCanUndo(g)) { AppGraphUndo(g); ImGui::CanvasClearSelection(cv); } break;
+        case 15: if (AppGraphCanRedo(g)) { AppGraphRedo(g); ImGui::CanvasClearSelection(cv); } break;
         case 16: AppGraphCopySelection(g, g->Selection); break;
         case 17: AppGraphPasteClipboard(g); break;
         case 18:
@@ -6080,7 +6021,7 @@ namespace ImGui
             if (sn != nullptr && !sn->IsLive && sn->Kind != ImGuiAppNodeKind_Layer)
               sn->Hidden = true;
           }
-          ImNodes::ClearNodeSelection();
+          ImGui::CanvasClearSelection(cv);
           g->Selection.clear();
           break;
         case 26:
@@ -6147,8 +6088,8 @@ namespace ImGui
           return;
         const ImU32 tint = AppGraphOriginColor(hn);
         const ImU32 accent = tint ? tint : (hn->Kind == ImGuiAppNodeKind_Layer ? AppLayerAccent(hn->LayerType) : AppKindColor(hn->Kind));
-        const ImVec2 p = ImNodes::GetNodeScreenSpacePos(node_id);
-        const ImVec2 d = ImNodes::GetNodeDimensions(node_id);
+        const ImVec2 p = ImGui::CanvasToScreen(cv, AppCanvasNodePos(node_id));
+        const ImVec2 d = ImGui::CanvasNodeSize(cv, node_id) * AppCanvasZoom();
         const float ex = em * 0.25f;
         ImGui::GetWindowDrawList()->AddRect(ImVec2(p.x - ex, p.y - ex), ImVec2(p.x + d.x + ex, p.y + d.y + ex),
                                             (accent & 0x00FFFFFF) | 0xE6000000, em * 0.4f, 0, 2.0f);
@@ -6179,8 +6120,8 @@ namespace ImGui
         const int sev = AppGraphNodeSeverity(g, s_editor_pool_ids.Data[i]);
         if (sev <= 0)
           continue;
-        const ImVec2 p = ImNodes::GetNodeScreenSpacePos(s_editor_pool_ids.Data[i]);
-        const ImVec2 d = ImNodes::GetNodeDimensions(s_editor_pool_ids.Data[i]);
+        const ImVec2 p = ImGui::CanvasToScreen(cv, AppCanvasNodePos(s_editor_pool_ids.Data[i]));
+        const ImVec2 d = ImGui::CanvasNodeSize(cv, s_editor_pool_ids.Data[i]) * AppCanvasZoom();
         const float r = em * 0.22f;
         const ImVec2 c(p.x + d.x - r - em * 0.3f, p.y + em * 0.55f);
         dl->AddCircleFilled(c, r, AppSeverityColor(sev));
@@ -6261,15 +6202,15 @@ namespace ImGui
 
       if (gizmo(ICON_FA_PLUS, "Add node (Space / RMB)", false))
       {
-        add_popup_grid = (ImVec2(editor_size.x * 0.5f, editor_size.y * 0.5f) - ImNodes::EditorContextGetPanning()) / AppCanvasZoom();
+        add_popup_grid = ImGui::CanvasFromScreen(cv, editor_min + editor_size * 0.5f);
         ImGui::OpenPopup("##AppGraphAdd");
       }
       if (gizmo(ICON_FA_CROSSHAIRS, "Frame selection (F)", false))
-        if (!fit_ids(g->Selection) && ImNodes::NumSelectedNodes() > 0)
+        if (!fit_ids(g->Selection) && ImGui::CanvasNumSelectedNodes(cv) > 0)
         {
           int picked = 0;
-          ImNodes::GetSelectedNodes(&picked);
-          ImNodes::EditorContextMoveToNode(picked);
+          ImGui::CanvasGetSelectedNodes(cv, &picked, 1);
+          ImGui::CanvasCenterOn(cv, AppCanvasNodePos(picked) + ImGui::CanvasNodeSize(cv, picked) * 0.5f);
         }
       if (gizmo(ICON_FA_EXPAND, "Fit all (Home)", false))
         fit_all();
@@ -6322,8 +6263,8 @@ namespace ImGui
     if (s_quick_insp && selected_node_id != nullptr && *selected_node_id >= 0 && AppEditorNodeWasSubmitted(*selected_node_id))
     {
       const float em_qi = ImGui::GetFontSize();
-      const ImVec2 np = ImNodes::GetNodeScreenSpacePos(*selected_node_id);
-      const ImVec2 nd = ImNodes::GetNodeDimensions(*selected_node_id);
+      const ImVec2 np = ImGui::CanvasToScreen(cv, AppCanvasNodePos(*selected_node_id));
+      const ImVec2 nd = ImGui::CanvasNodeSize(cv, *selected_node_id) * AppCanvasZoom();
       ImVec2 pos(np.x + nd.x + em_qi, np.y);
       pos.x = ImClamp(pos.x, editor_min.x, editor_min.x + editor_size.x - em_qi * 18.0f);
       pos.y = ImClamp(pos.y, editor_min.y, editor_min.y + editor_size.y - em_qi * 8.0f);
@@ -6387,16 +6328,22 @@ namespace ImGui
 
     // Pin-drag-to-create: dragging a wire from a pin and releasing on empty canvas opens a kind-filtered palette
     // (only node kinds that can legally connect to that pin) and, on pick, creates the node at the drop point and
-    // auto-wires it. IsLinkDropped reports the grabbed attribute; including_detached_links=false ignores re-drags.
+    // auto-wires it. A detach re-drag dropped on empty means "delete" and must not palette (s_drag_was_detach,
+    // set by the capture above when the detach event fired at grab time).
     static int    drop_src_attr = -1;
     static ImVec2 drop_grid(0.0f, 0.0f);
     {
-      int da = -1;
-      if (ImNodes::IsLinkDropped(&da, false) && da > 0)
+      int    da = -1;
+      ImVec2 dpos(0.0f, 0.0f);
+      if (ImGui::CanvasWireDropped(cv, &da, &dpos))
       {
-        drop_src_attr = da;
-        drop_grid = (ImGui::GetIO().MousePos - ImGui::GetItemRectMin() - ImNodes::EditorContextGetPanning()) / AppCanvasZoom();
-        ImGui::OpenPopup("##AppGraphDropCreate");
+        if (!s_drag_was_detach && da > 0)
+        {
+          drop_src_attr = da;
+          drop_grid = dpos;   // already model units
+          ImGui::OpenPopup("##AppGraphDropCreate");
+        }
+        s_drag_was_detach = false;
       }
     }
     if (ImGui::BeginPopup("##AppGraphDropCreate"))
@@ -6478,14 +6425,13 @@ namespace ImGui
       }
     }
 
-    // A scope mutation THIS frame (Tab/Esc/double-click/breadcrumb/palette, all handled above) leaves imnodes
-    // holding pool-INDEX selection into a pool the next submission reshuffles -- drop it before the sync below
-    // can read a stale index as the wrong node. The top-of-frame latch covers changes made during the sync.
+    // A scope mutation THIS frame (Tab/Esc/double-click/breadcrumb/palette, all handled above): selection
+    // does not survive scope transitions by design -- drop it before the sync below re-applies the survivor.
+    // The top-of-frame latch covers changes made during the sync.
     if (g->ViewScope.Size * 100000 + (AppScopeCurrent(g) + 1) != s_scope_sig)
-      ImNodes::ClearNodeSelection();
+      ImGui::CanvasClearSelection(cv);
 
-    // Cross-view selection sync (Theme C). Valid here: NumSelectedNodes asserts CurrentScope==None, satisfied
-    // after EndNodeEditor. Order: dangle guard -> canvas read-back -> tree apply + reveal.
+    // Cross-view selection sync (Theme C). Order: dangle guard -> canvas read-back -> tree apply + reveal.
     if (selected_node_id != nullptr)
     {
       static int applied_sel = -1;
@@ -6497,10 +6443,10 @@ namespace ImGui
       // 2) Canvas -> tree read-back: a single canvas selection writes itself to *selected_node_id (closes the
       //    one-way gap). A multi-select leaves *selected_node_id unchanged (single-select model).
       bool canvas_originated = false;
-      if (ImNodes::NumSelectedNodes() == 1)
+      if (ImGui::CanvasNumSelectedNodes(cv) == 1)
       {
         int picked = -1;
-        ImNodes::GetSelectedNodes(&picked);
+        ImGui::CanvasGetSelectedNodes(cv, &picked, 1);
         if (picked != *selected_node_id) { *selected_node_id = picked; canvas_originated = true; }
       }
 
@@ -6532,13 +6478,12 @@ namespace ImGui
         const bool submitted = tn != nullptr && !(!show_live && tn->IsLive) && !AppNodeHiddenByCollapse(g, *selected_node_id);
         if (submitted && !canvas_originated)
         {
-          ImNodes::ClearNodeSelection();
-          ImNodes::SelectNode(*selected_node_id);
+          ImGui::CanvasSelectNode(cv, *selected_node_id, false);
           // Reveal with the MINIMAL pan: nudge the view just enough to bring the node inside a margin.
-          // MoveToNode centers the node -- an outliner click that yanks the camera to center reads as
-          // broken focus-jumping; a node already in view must not move the camera at all.
-          const ImVec2 p = ImNodes::GetNodeScreenSpacePos(*selected_node_id);
-          const ImVec2 d = ImNodes::GetNodeDimensions(*selected_node_id);
+          // Centering the node -- an outliner click that yanks the camera to center reads as broken
+          // focus-jumping; a node already in view must not move the camera at all.
+          const ImVec2 p = ImGui::CanvasToScreen(cv, AppCanvasNodePos(*selected_node_id));
+          const ImVec2 d = ImGui::CanvasNodeSize(cv, *selected_node_id) * AppCanvasZoom();
           const float  margin = ImGui::GetFontSize() * 2.0f;
           const ImVec2 vmin(editor_min.x + margin, editor_min.y + margin);
           const ImVec2 vmax(editor_min.x + editor_size.x - margin, editor_min.y + editor_size.y - margin);
@@ -6548,20 +6493,20 @@ namespace ImGui
           if      (p.y < vmin.y)       delta.y = vmin.y - p.y;
           else if (p.y + d.y > vmax.y) delta.y = vmax.y - (p.y + d.y);
           if (delta.x != 0.0f || delta.y != 0.0f)
-            ImNodes::EditorContextResetPanning(ImNodes::EditorContextGetPanning() + delta);
+            ImGui::CanvasSetPan(cv, ImGui::CanvasGetPan(cv) + delta);
         }
         if (!scope_revealing)
           applied_sel = *selected_node_id;
       }
 
-      // 4) Mirror the canvas multi-selection (imnodes box-select / Ctrl-click) into g->Selection, so the outliner
-      //    highlight, F-fit, and Ctrl+C all see the rubber-banded set -- not just the single primary node. Only
-      //    when the canvas actually has a selection, so a tree-driven multi-select survives an empty canvas.
-      const int multi = ImNodes::NumSelectedNodes();
+      // 4) Mirror the canvas multi-selection (Ctrl-click / A) into g->Selection, so the outliner highlight,
+      //    F-fit, and Ctrl+C all see the whole set -- not just the single primary node. Only when the canvas
+      //    actually has a selection, so a tree-driven multi-select survives an empty canvas.
+      const int multi = ImGui::CanvasNumSelectedNodes(cv);
       if (multi > 0)
       {
         g->Selection.resize(multi);
-        ImNodes::GetSelectedNodes(g->Selection.Data);
+        ImGui::CanvasGetSelectedNodes(cv, g->Selection.Data, multi);
       }
     }
 
@@ -6573,11 +6518,11 @@ namespace ImGui
       if (ImGui::IsKeyPressed(ImGuiKey_C, false))
       {
         ImVector<int> roots;
-        const int sel_count = ImNodes::NumSelectedNodes();
+        const int sel_count = ImGui::CanvasNumSelectedNodes(cv);
         if (sel_count > 0)
         {
           roots.resize(sel_count);
-          ImNodes::GetSelectedNodes(roots.Data);
+          ImGui::CanvasGetSelectedNodes(cv, roots.Data, sel_count);
         }
         else if (selected_node_id != nullptr && *selected_node_id >= 0)
         {
@@ -6607,12 +6552,12 @@ namespace ImGui
       if (redo && AppGraphCanRedo(g))
       {
         AppGraphRedo(g);
-        ImNodes::ClearNodeSelection();
+        ImGui::CanvasClearSelection(cv);
       }
       else if (undo && AppGraphCanUndo(g))
       {
         AppGraphUndo(g);
-        ImNodes::ClearNodeSelection();
+        ImGui::CanvasClearSelection(cv);
       }
     }
   }

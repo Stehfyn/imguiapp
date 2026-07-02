@@ -36,6 +36,8 @@ should be a plain-scalar aggregate. Codegen (later steps) emits exactly such agg
 #include <string_view>                    // reflect member/type names
 #include <type_traits>                    // dispatch traits
 
+struct ImGuiCanvasState;                  // canvas engine state (imgui_applayer_canvas.h), opaque here
+
 //-----------------------------------------------------------------------------
 // [SECTION] Reflection field helpers (VisitAppFields, DrawAppField, EditAppField)
 //-----------------------------------------------------------------------------
@@ -645,6 +647,10 @@ namespace ImGui
     float Zoom;      // canvas zoom, wheel-driven, [0.3, 2.5]; authored positions stay zoom-independent
   };
   IMGUI_API ImGuiAppGraphViewState* AppGraphViewState();
+
+  // The editor's canvas-engine state (single editor instance; see imgui_applayer_canvas.h). Exposed so
+  // hosts and tests can query geometry (CanvasNodePos/CanvasNodeSize/CanvasToScreen) or drive the camera.
+  IMGUI_API ::ImGuiCanvasState* AppGraphEditorCanvas();
 
   // Cached validation, keyed by AppGraphSignature (+ bindings): cheap enough to query every frame, so
   // problems can render ambiently where they live (canvas severity dot, outliner underline, inspector
