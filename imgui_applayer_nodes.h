@@ -595,6 +595,19 @@ namespace ImGui
   IMGUI_API int                 AppGraphHoveredNode(ImGuiAppHoverSource* out_source);   // -1 = none; out_source may be null
   IMGUI_API int                 AppGraphHoveredLink(ImGuiAppHoverSource* out_source);
 
+  // Host verbs surfaced in the canvas command palette (workbench W2: the palette is the completeness proof --
+  // one searchable surface reaching editor AND document verbs). The host registers its commands each frame
+  // before ShowAppGraphEditor (pointers must outlive the frame); a picked command is reported back through
+  // AppGraphConsumeHostCommand -- the edit-intent idiom, one-frame latency, the editor never calls the host.
+  struct ImGuiAppGraphHostCmd
+  {
+    const char* Label;      // e.g. "File: Save graph"
+    const char* Shortcut;   // displayed dim + right-aligned; "" = none
+    int         Id;         // host-defined, returned by AppGraphConsumeHostCommand
+  };
+  IMGUI_API void                AppGraphSetHostCommands(const ImGuiAppGraphHostCmd* cmds, int count);
+  IMGUI_API int                 AppGraphConsumeHostCommand();   // picked host cmd id since last call, or -1
+
   // Canvas view settings: snap-to-grid + the overlays popover's toggles. Presentation-only, never model state.
   // Exposed (stable pointer, single editor instance) so the host can persist them across sessions.
   struct ImGuiAppGraphViewState

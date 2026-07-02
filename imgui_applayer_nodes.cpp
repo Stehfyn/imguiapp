@@ -2534,6 +2534,26 @@ namespace ImGui
     return &s_view;
   }
 
+  namespace
+  {
+    const ImGuiAppGraphHostCmd* g_host_cmds = nullptr;   // registered per frame; pointers owned by the host
+    int                         g_host_cmd_count = 0;
+    int                         g_host_cmd_picked = -1;
+  }
+
+  void AppGraphSetHostCommands(const ImGuiAppGraphHostCmd* cmds, int count)
+  {
+    g_host_cmds = cmds;
+    g_host_cmd_count = cmds != nullptr ? count : 0;
+  }
+
+  int AppGraphConsumeHostCommand()
+  {
+    const int picked = g_host_cmd_picked;
+    g_host_cmd_picked = -1;
+    return picked;
+  }
+
   void AppGraphHoverNode(int node_id, ImGuiAppHoverSource source)
   {
     AppHoverRotate();
@@ -5186,7 +5206,9 @@ namespace ImGui
       ImGui::EndPopup();
     }
 
-    // Command palette (Space): a searchable list of canvas operators, Blender-style. Runs the operator directly.
+    // Command palette (Space): THE searchable verb surface, Blender operator search + VS feature search. The
+    // registry below is the completeness audit -- editor verbs with their shortcuts (recognition trains
+    // recall), the host's document verbs (via AppGraphSetHostCommands), and go-to-node over the graph itself.
     if (ImGui::BeginPopup("##cmdpalette"))
     {
       static ImGuiTextFilter pf;
@@ -5195,25 +5217,98 @@ namespace ImGui
         pf.Clear();
         ImGui::SetKeyboardFocusHere();
       }
-      ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16.0f);
+      ImGui::SetNextItemWidth(ImGui::GetFontSize() * 19.0f);
       pf.Draw("##cmdsearch");
       ImGui::Separator();
 
-      struct Cmd { const char* Label; int Id; };
+      // One palette row: full-width selectable + the shortcut drawn dim at the right edge over it.
+      auto cmd_row = [](const char* label, const char* shortcut) -> bool
+      {
+        const ImVec2 rp = ImGui::GetCursorScreenPos();
+        const bool clicked = ImGui::Selectable(label);
+        if (shortcut != nullptr && shortcut[0])
+        {
+          const float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+          ImGui::GetWindowDrawList()->AddText(ImVec2(right - ImGui::CalcTextSize(shortcut).x, rp.y),
+                                              ImGui::GetColorU32(ImGuiCol_TextDisabled), shortcut);
+        }
+        return clicked;
+      };
+
+      struct Cmd { const char* Label; const char* Shortcut; int Id; };
       static const Cmd cmds[] =
       {
-        { "Add: Control", 0 }, { "Add: Struct", 1 }, { "Add: Window", 2 }, { "Add: Sidebar", 3 },
-        { "Add: Custom Layer", 4 },
-        { "Layout: Tidy", 10 }, { "View: Fit all", 11 }, { "View: Fit selection", 12 }, { "Toggle: Snap to grid", 13 },
-        { "Edit: Undo", 14 }, { "Edit: Redo", 15 }, { "Edit: Copy", 16 }, { "Edit: Paste", 17 },
-        { "Edit: Duplicate", 18 }, { "Edit: Delete selection", 19 },
-        { "Groups: Collapse all", 20 }, { "Groups: Expand all", 21 }, { "Import: Paste C++ struct(s)", 22 },
-        { "Scope: Enter selection (Tab)", 23 }, { "Scope: Up one level (Esc)", 24 },
+        { "Add: Control", "", 0 }, { "Add: Struct", "", 1 }, { "Add: Window", "", 2 }, { "Add: Sidebar", "", 3 },
+        { "Add: Custom Layer", "", 4 },
+        { "Layout: Tidy", "L", 10 }, { "View: Fit all", "Home", 11 }, { "View: Frame selection", "F", 12 },
+        { "Toggle: Snap to grid", "G", 13 },
+        { "View: Hide selection", "H", 25 }, { "View: Show all hidden", "Alt+H", 26 },
+        { "Overlays: Grid", "", 27 }, { "Overlays: Phase bands", "", 28 },
+        { "Overlays: Group frames", "", 29 }, { "Overlays: Minimap", "", 30 },
+        { "Edit: Undo", "Ctrl+Z", 14 }, { "Edit: Redo", "Ctrl+Y", 15 },
+        { "Edit: Copy", "Ctrl+C", 16 }, { "Edit: Paste", "Ctrl+V", 17 },
+        { "Edit: Duplicate", "Ctrl+D", 18 }, { "Edit: Delete selection", "Del", 19 },
+        { "Edit: Rename selection", "F2", 31 },
+        { "Order: Send to back", "[", 32 }, { "Order: Bring to front", "]", 33 },
+        { "Groups: Collapse all", "", 20 }, { "Groups: Expand all", "", 21 }, { "Import: Paste C++ struct(s)", "", 22 },
+        { "Scope: Enter selection", "Tab", 23 }, { "Scope: Up one level", "Esc", 24 },
+        { "Help: Shortcut card", "F1", 34 },
       };
       int run = -1;
       for (int i = 0; i < IM_ARRAYSIZE(cmds); i++)
-        if (pf.PassFilter(cmds[i].Label) && ImGui::Selectable(cmds[i].Label))
+        if (pf.PassFilter(cmds[i].Label) && cmd_row(cmds[i].Label, cmds[i].Shortcut))
           run = cmds[i].Id;
+
+      // Host document verbs (save/generate/panels...), same rows, host-owned meaning. Picking one is recorded
+      // for AppGraphConsumeHostCommand -- the editor never acts on the host's behalf.
+      if (g_host_cmd_count > 0)
+      {
+        bool any_host = false;
+        for (int i = 0; i < g_host_cmd_count; i++)
+          any_host = any_host || pf.PassFilter(g_host_cmds[i].Label);
+        if (any_host)
+          ImGui::Separator();
+        for (int i = 0; i < g_host_cmd_count; i++)
+          if (pf.PassFilter(g_host_cmds[i].Label) && cmd_row(g_host_cmds[i].Label, g_host_cmds[i].Shortcut))
+          {
+            g_host_cmd_picked = g_host_cmds[i].Id;
+            ImGui::CloseCurrentPopup();
+          }
+      }
+
+      // Go to node: the palette searches the MODEL too (VS Ctrl+T symbol search). Only while filtering --
+      // an unfiltered dump of every node would bury the verbs.
+      if (pf.IsActive())
+      {
+        bool goto_header = false;
+        int shown = 0;
+        for (int i = 0; i < g->Nodes.Size && shown < 8; i++)
+        {
+          const ImGuiAppNode* n = &g->Nodes.Data[i];
+          if ((!show_live && n->IsLive) || n->Hidden || !n->Draft.Name[0] || !pf.PassFilter(n->Draft.Name))
+            continue;
+          if (!goto_header)
+          {
+            ImGui::Separator();
+            goto_header = true;
+          }
+          char row[IM_LABEL_SIZE + 24];
+          ImFormatString(row, IM_ARRAYSIZE(row), "Go to: %s###goto%d", n->Draft.Name, n->Id);
+          if (cmd_row(row, n->IsLive ? "live" : ""))
+          {
+            if (selected_node_id != nullptr)
+              *selected_node_id = n->Id;
+            g->Selection.clear();
+            g->Selection.push_back(n->Id);
+            ImNodes::ClearNodeSelection();
+            if (AppEditorNodeWasSubmitted(n->Id))
+              ImNodes::SelectNode(n->Id);
+            fit_ids(g->Selection);
+            ImGui::CloseCurrentPopup();
+          }
+          shown++;
+        }
+      }
 
       if (run >= 0)
       {
@@ -5293,6 +5388,53 @@ namespace ImGui
               *selected_node_id = exited;
           }
           break;
+        case 25:
+          for (int i = 0; i < g->Selection.Size; i++)
+          {
+            ImGuiAppNode* sn = AppGraphFindNode(g, g->Selection.Data[i]);
+            if (sn != nullptr && !sn->IsLive && sn->Kind != ImGuiAppNodeKind_Layer)
+              sn->Hidden = true;
+          }
+          ImNodes::ClearNodeSelection();
+          g->Selection.clear();
+          break;
+        case 26:
+          for (int i = 0; i < g->Nodes.Size; i++)
+            g->Nodes.Data[i].Hidden = false;
+          break;
+        case 27: AppGraphViewState()->OvGrid = !AppGraphViewState()->OvGrid; break;
+        case 28: AppGraphViewState()->OvBands = !AppGraphViewState()->OvBands; break;
+        case 29: AppGraphViewState()->OvFrames = !AppGraphViewState()->OvFrames; break;
+        case 30: AppGraphViewState()->OvMinimap = !AppGraphViewState()->OvMinimap; break;
+        case 31:
+          if (selected_node_id != nullptr && *selected_node_id >= 0)
+          {
+            const ImGuiAppNode* sel = AppGraphFindNodeConst(g, *selected_node_id);
+            if (sel != nullptr && !sel->IsLive && (sel->Kind != ImGuiAppNodeKind_Layer || sel->LayerType == ImGuiAppLayerType_Custom))
+              g->EditingNodeId = sel->Id;
+          }
+          break;
+        case 32: case 33:
+        {
+          // Same restack the [ / ] keys perform (see the z-order shortcut block).
+          const bool to_front = run == 33;
+          if (g->Selection.Size > 0)
+          {
+            ImVector<ImGuiAppNode> reordered;
+            reordered.reserve(g->Nodes.Size);
+            for (int pass = 0; pass < 2; pass++)
+              for (int i = 0; i < g->Nodes.Size; i++)
+              {
+                const bool in_sel = AppIdInSet(g->Selection, g->Nodes.Data[i].Id);
+                if ((pass == 0) == (to_front ? !in_sel : in_sel))
+                  reordered.push_back(g->Nodes.Data[i]);
+              }
+            g->Nodes.Size = 0;            // abandon the old elements (inner buffers now live in `reordered`)
+            g->Nodes.swap(reordered);
+          }
+          break;
+        }
+        case 34: s_help = !s_help; break;
         default: break;
         }
         if (added != nullptr)

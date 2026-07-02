@@ -324,6 +324,22 @@ namespace
     ComposerPanel_Output,
   };
 
+  // Document verbs the Composer registers into the canvas command palette (AppGraphSetHostCommands). The
+  // toolbar consumes the pick -- it already owns every one of these intents.
+  enum ComposerHostCmd_
+  {
+    ComposerHostCmd_Save = 1,
+    ComposerHostCmd_Load,
+    ComposerHostCmd_Generate,
+    ComposerHostCmd_CopyCode,
+    ComposerHostCmd_Diff,
+    ComposerHostCmd_PanelCode,
+    ComposerHostCmd_PanelProject,
+    ComposerHostCmd_PanelPreview,
+    ComposerHostCmd_PanelOutput,
+    ComposerHostCmd_ToggleLive,
+  };
+
   struct GraphDocData
   {
     ImGuiAppGraph   Graph;
@@ -542,6 +558,8 @@ namespace
     bool Diff;          // diff current graph's codegen vs the saved-on-disk graph -> clipboard
     bool HistoryGotoSet; // history dropdown picked a step
     int  HistoryGotoIdx;
+    bool CopyCode;       // Generate menu: copy the generated C++ to the clipboard
+    int  RevealPanel;    // ComposerPanel_* intent from a palette pick (0 = none)
   };
   struct ToolbarControl : ImGuiAppControl<ToolbarData, ToolbarTempData>
   {
@@ -602,6 +620,18 @@ namespace
       {
         ImGui::AppGraphHistoryGoto(&doc->Graph, temp_data->HistoryGotoIdx);
       }
+      if (temp_data->CopyCode)
+      {
+        ImGuiTextBuffer full;
+        ImGui::GenerateAppGraphCode(&doc->Graph, &full);
+        ImGui::SetClipboardText(full.c_str());
+        ImFormatString(doc->WriteMsg, IM_ARRAYSIZE(doc->WriteMsg), "generated C++ -> clipboard");
+        DocLog(doc, 0, "copied generated C++ -> clipboard");
+      }
+      if (temp_data->RevealPanel != ComposerPanel_None)
+      {
+        doc->RevealPanel = temp_data->RevealPanel;
+      }
       if (temp_data->Diff)
       {
         ImGuiAppGraph saved;
@@ -654,6 +684,22 @@ namespace
         else
           ImGui::SetItemTooltip("Graph changed -- write whole-graph C++ -> %s", doc->HeaderPath);
 
+        // -- Generate's verb family behind a split half (VS split-button): the primary click writes the
+        //    header; the chevron holds the siblings (copy / diff). Diff lost its peer-button seat -- it is
+        //    a Generate-family member, not a document verb.
+        ImGui::SameLine(0.0f, 1.0f);
+        if (ImGui::Button(ICON_FA_CHEVRON_DOWN "##genmenu"))
+          ImGui::OpenPopup("##generate_family");
+        ImGui::SetItemTooltip("More generate actions");
+        if (ImGui::BeginPopup("##generate_family"))
+        {
+          if (ImGui::MenuItem(ICON_FA_COPY "  Copy generated C++ to clipboard"))
+            temp_data->CopyCode = true;
+          if (ImGui::MenuItem(ICON_FA_CODE_COMPARE "  Diff vs saved graph -> clipboard"))
+            temp_data->Diff = true;
+          ImGui::EndPopup();
+        }
+
         EditorToolSep(em);
         // Ctrl+S is document-global (VS convention): captured here because the toolbar renders every frame.
         temp_data->Save = ImGui::Button(ICON_FA_FLOPPY_DISK "  Save")
@@ -662,9 +708,6 @@ namespace
         ImGui::SameLine();
         temp_data->Load = ImGui::Button(ICON_FA_FOLDER_OPEN "  Load");
         ImGui::SetItemTooltip("Load graph <- %s", doc->GraphPath);
-        ImGui::SameLine();
-        temp_data->Diff = ImGui::Button(ICON_FA_CODE_COMPARE "  Diff");
-        ImGui::SetItemTooltip("Diff generated C++ vs the saved graph -> clipboard");
 
         EditorToolSep(em);
         // Undo/redo carry the NAME of the step they would take (VS "Undo Typing"); the clock opens the whole
@@ -736,6 +779,23 @@ namespace
         if (show_live)
           ImGui::PopStyleColor();
         ImGui::SetItemTooltip("Show / hide read-only nodes mirrored from the running app");
+
+        // Palette pick from last frame's canvas (one-frame latency idiom): the palette lists the document
+        // verbs, this toolbar owns their intents -- fold the pick into the same temp flags the buttons set.
+        switch (ImGui::AppGraphConsumeHostCommand())
+        {
+        case ComposerHostCmd_Save:         temp_data->Save = true; break;
+        case ComposerHostCmd_Load:         temp_data->Load = true; break;
+        case ComposerHostCmd_Generate:     temp_data->WriteHeader = true; break;
+        case ComposerHostCmd_CopyCode:     temp_data->CopyCode = true; break;
+        case ComposerHostCmd_Diff:         temp_data->Diff = true; break;
+        case ComposerHostCmd_PanelCode:    temp_data->RevealPanel = ComposerPanel_Code; break;
+        case ComposerHostCmd_PanelProject: temp_data->RevealPanel = ComposerPanel_Project; break;
+        case ComposerHostCmd_PanelPreview: temp_data->RevealPanel = ComposerPanel_Preview; break;
+        case ComposerHostCmd_PanelOutput:  temp_data->RevealPanel = ComposerPanel_Output; break;
+        case ComposerHostCmd_ToggleLive:   temp_data->ToggleLive = true; break;
+        default: break;
+        }
       }
       ImGui::EndChild();
     }
@@ -1214,6 +1274,23 @@ namespace
 
         if (ImGui::BeginChild("##NodeGraph", ImVec2(col_w, canvas_h), ImGuiChildFlags_Borders))
         {
+          // Document verbs in the canvas palette (workbench W2): the editor lists them, the pick comes back
+          // through AppGraphConsumeHostCommand (the toolbar consumes it -- it already owns these intents).
+          static const ImGui::ImGuiAppGraphHostCmd host_cmds[] =
+          {
+            { "File: Save graph", "Ctrl+S", ComposerHostCmd_Save },
+            { "File: Load graph", "", ComposerHostCmd_Load },
+            { "File: Generate C++ header", "", ComposerHostCmd_Generate },
+            { "File: Copy generated C++", "", ComposerHostCmd_CopyCode },
+            { "File: Diff vs saved -> clipboard", "", ComposerHostCmd_Diff },
+            { "Panel: Code", "", ComposerHostCmd_PanelCode },
+            { "Panel: Project", "", ComposerHostCmd_PanelProject },
+            { "Panel: Preview", "", ComposerHostCmd_PanelPreview },
+            { "Panel: Output", "", ComposerHostCmd_PanelOutput },
+            { "View: Toggle live mirror", "", ComposerHostCmd_ToggleLive },
+          };
+          ImGui::AppGraphSetHostCommands(host_cmds, IM_ARRAYSIZE(host_cmds));
+
           ImGui::ShowAppGraphEditor(app, graph, &selection, doc->ShowLive);
 
           // Transport overlay (bottom-center of the canvas): the run-time controls float on the viewport,
