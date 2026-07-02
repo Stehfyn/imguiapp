@@ -215,30 +215,39 @@ namespace ImGui
     const ImU32 kBlBorder    = IM_COL32(  0,   0,   0,  60);  // faint outline
     const ImU32 kBlText      = IM_COL32(229, 229, 229, 255);
 
-    // The chrome's push-stack styling, stated in the same desc vocabulary authored compositions use -- one
-    // definition form for "what style applies here", whether the author is a graph node or the composer itself.
     // Rounding is size-relative (GetFrameHeight * kBlRounding), so the var descs are materialized per scope.
     const float kBlRounding = 0.28f;
+  }
 
-    const ImGuiAppColorModDesc kBlComboColors[] =    // dropdown fields (AppBlEnum, struct picker): field + popup + rows
+  // The chrome's push-stack styling, stated in the same desc vocabulary authored compositions use -- one
+  // definition form for "what style applies here", whether the author is a graph node or the composer
+  // itself. Exposed read-write: the project inspector's Theme section edits these live.
+  ImGuiAppChromeTheme* AppGraphChromeTheme()
+  {
+    static ImGuiAppChromeTheme t =
     {
-      ImGuiAppColorModDesc(ImGuiCol_FrameBg,        kBlFill),
-      ImGuiAppColorModDesc(ImGuiCol_FrameBgHovered, kBlFillHover),
-      ImGuiAppColorModDesc(ImGuiCol_FrameBgActive,  kBlFillHover),
-      ImGuiAppColorModDesc(ImGuiCol_Text,           kBlText),
-      ImGuiAppColorModDesc(ImGuiCol_PopupBg,        kBlFillEdit),
-      ImGuiAppColorModDesc(ImGuiCol_Header,         kBlFillHover),
-      ImGuiAppColorModDesc(ImGuiCol_HeaderHovered,  kBlFillHover),
-      ImGuiAppColorModDesc(ImGuiCol_Border,         kBlBorder),
+      {   // dropdown fields (AppBlEnum, struct picker): field + popup + rows
+        ImGuiAppColorModDesc(ImGuiCol_FrameBg,        kBlFill),
+        ImGuiAppColorModDesc(ImGuiCol_FrameBgHovered, kBlFillHover),
+        ImGuiAppColorModDesc(ImGuiCol_FrameBgActive,  kBlFillHover),
+        ImGuiAppColorModDesc(ImGuiCol_Text,           kBlText),
+        ImGuiAppColorModDesc(ImGuiCol_PopupBg,        kBlFillEdit),
+        ImGuiAppColorModDesc(ImGuiCol_Header,         kBlFillHover),
+        ImGuiAppColorModDesc(ImGuiCol_HeaderHovered,  kBlFillHover),
+        ImGuiAppColorModDesc(ImGuiCol_Border,         kBlBorder),
+      },
+      {   // in-place editors (InputText/InputInt): transparent frame over the self-drawn bg
+        ImGuiAppColorModDesc(ImGuiCol_FrameBg,        0),
+        ImGuiAppColorModDesc(ImGuiCol_FrameBgHovered, 0),
+        ImGuiAppColorModDesc(ImGuiCol_FrameBgActive,  0),
+        ImGuiAppColorModDesc(ImGuiCol_Text,           kBlText),
+      },
     };
+    return &t;
+  }
 
-    const ImGuiAppColorModDesc kBlEditColors[] =     // in-place editors (InputText/InputInt): transparent frame over the self-drawn bg
-    {
-      ImGuiAppColorModDesc(ImGuiCol_FrameBg,        0),
-      ImGuiAppColorModDesc(ImGuiCol_FrameBgHovered, 0),
-      ImGuiAppColorModDesc(ImGuiCol_FrameBgActive,  0),
-      ImGuiAppColorModDesc(ImGuiCol_Text,           kBlText),
-    };
+  namespace
+  {
 
     // Single text/number-edit focus across the whole UI (one at a time), plus the per-active-id drag scratch.
     ImGuiID g_bl_editing = 0;
@@ -273,6 +282,92 @@ namespace ImGui
       ImGui::PopStyleVar(s.Vars);
     if (s.Colors > 0)
       ImGui::PopStyleColor(s.Colors);
+  }
+
+  // Flat kebab (vertical ⋮): three dots over a hover disc -- the section-menu affordance (Unity's component
+  // menu). Same family as AppRowDeleteButton: manual glyph, no system-button chrome.
+  static bool AppRowKebabButton(const char* str_id)
+  {
+    const float sz = ImGui::GetFrameHeight();
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImGui::SetNextItemAllowOverlap();
+    const bool clicked = ImGui::InvisibleButton(str_id, ImVec2(sz, sz));
+    const bool hovered = ImGui::IsItemHovered();
+    const bool held = ImGui::IsItemActive();
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 c(pos.x + sz * 0.5f, pos.y + sz * 0.5f);
+    if (hovered || held)
+      dl->AddCircleFilled(c, sz * 0.5f, ImGui::GetColorU32(held ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered));
+    const ImU32 col = ImGui::GetColorU32(ImGuiCol_Text, (hovered || held) ? 1.0f : 0.55f);
+    const float r = ImMax(1.0f, sz * 0.055f);
+    const float step = sz * 0.20f;
+    for (int i = -1; i <= 1; i++)
+      dl->AddCircleFilled(ImVec2(c.x, c.y + step * (float)i), r, col);
+    if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    return clicked;
+  }
+
+  // One inspector section header (workbench §5.1 -- the Unity/UE component anatomy): collapse triangle + icon
+  // + label on a flat Bl fill, an optional enable checkbox, an optional kebab whose click the caller answers
+  // with its own popup (pass null to omit either). Open state lives in the window's state storage (session-
+  // lived, shared per panel so every node of a kind keeps the user's section folds). Returns true while open.
+  bool AppInspectorSection(const char* str_id, const char* icon, const char* label, bool* enabled, bool* kebab_clicked)
+  {
+    const float h = ImGui::GetFrameHeight();
+    const float em = ImGui::GetFontSize();
+    ImGuiStorage* st = ImGui::GetStateStorage();
+    const ImGuiID open_id = ImGui::GetID(str_id);
+    bool open = st->GetInt(open_id, 1) != 0;
+
+    const float avail = ImGui::GetContentRegionAvail().x;
+    const ImVec2 mn = ImGui::GetCursorScreenPos();
+    const ImVec2 mx(mn.x + avail, mn.y + h);
+
+    ImGui::PushID(str_id);
+    ImGui::SetNextItemAllowOverlap();
+    if (ImGui::InvisibleButton("##hdr", ImVec2(avail, h)))
+    {
+      open = !open;
+      st->SetInt(open_id, open ? 1 : 0);
+    }
+    const bool hov = ImGui::IsItemHovered();
+    const ImVec2 after = ImGui::GetCursorScreenPos();   // restored below: the right-cluster items move the cursor
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(mn, mx, hov ? kBlFillHover : kBlFill, h * 0.22f);
+    const ImVec2 tc(mn.x + em * 0.55f, (mn.y + mx.y) * 0.5f);
+    const float a = em * 0.24f;
+    const ImU32 tri = ImGui::GetColorU32(ImGuiCol_Text, 0.7f);
+    if (open)
+      dl->AddTriangleFilled(ImVec2(tc.x - a, tc.y - a * 0.55f), ImVec2(tc.x + a, tc.y - a * 0.55f), ImVec2(tc.x, tc.y + a * 0.8f), tri);
+    else
+      dl->AddTriangleFilled(ImVec2(tc.x - a * 0.55f, tc.y - a), ImVec2(tc.x - a * 0.55f, tc.y + a), ImVec2(tc.x + a * 0.8f, tc.y), tri);
+    char text[96];
+    ImFormatString(text, IM_ARRAYSIZE(text), "%s%s%s", icon ? icon : "", icon ? "  " : "", label);
+    dl->AddText(ImVec2(mn.x + em * 1.3f, mn.y + (h - ImGui::GetTextLineHeight()) * 0.5f), ImGui::GetColorU32(ImGuiCol_Text), text);
+
+    // Right cluster, rightmost first; real items submitted after the header button, so they win its overlap.
+    float rx = mx.x;
+    if (kebab_clicked != nullptr)
+    {
+      rx -= h;
+      ImGui::SetCursorScreenPos(ImVec2(rx, mn.y));
+      *kebab_clicked = AppRowKebabButton("##kebab");
+    }
+    if (enabled != nullptr)
+    {
+      rx -= h + em * 0.15f;
+      ImGui::SetCursorScreenPos(ImVec2(rx, mn.y));
+      ImGui::Checkbox("##sec_on", enabled);
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("enable/disable this whole section");
+    }
+    ImGui::SetCursorScreenPos(after);
+    ImGui::PopID();
+    if (open)
+      ImGui::Spacing();
+    return open;
   }
 
   // Rounded fill + faint outline; returns the rounding so an in-place editor can match it.
@@ -442,7 +537,7 @@ namespace ImGui
       AppBlFieldBg(dl, mn, mx, true, true);
       ImGui::SetCursorScreenPos(mn);
       ImGui::SetNextItemWidth(width);
-      const AppBlStyleScope sc = AppBlPushStyle(kBlEditColors, IM_ARRAYSIZE(kBlEditColors), false);
+      const AppBlStyleScope sc = AppBlPushStyle(AppGraphChromeTheme()->Edit, IM_ARRAYSIZE(AppGraphChromeTheme()->Edit), false);
       if (g_bl_focus_pending) { ImGui::SetKeyboardFocusHere(); g_bl_focus_pending = false; }
       ImGui::PushID(id);
       changed = ImGui::InputText("##e", buf, buf_size, ImGuiInputTextFlags_AutoSelectAll);
@@ -473,7 +568,7 @@ namespace ImGui
     // (flat dark rounded field, dark popup, hover-highlighted rows) so it matches the other Bl widgets.
     bool changed = false;
 
-    const AppBlStyleScope sc = AppBlPushStyle(kBlComboColors, IM_ARRAYSIZE(kBlComboColors), true);
+    const AppBlStyleScope sc = AppBlPushStyle(AppGraphChromeTheme()->Combo, IM_ARRAYSIZE(AppGraphChromeTheme()->Combo), true);
 
     ImGui::SetNextItemWidth(width);
     ImGui::PushID(str_id);
@@ -511,7 +606,7 @@ namespace ImGui
       AppBlFieldBg(dl, mn, mx, true, true);
       ImGui::SetCursorScreenPos(mn);
       ImGui::SetNextItemWidth(width);
-      const AppBlStyleScope sc = AppBlPushStyle(kBlEditColors, IM_ARRAYSIZE(kBlEditColors), false);
+      const AppBlStyleScope sc = AppBlPushStyle(AppGraphChromeTheme()->Edit, IM_ARRAYSIZE(AppGraphChromeTheme()->Edit), false);
       if (g_bl_focus_pending) { ImGui::SetKeyboardFocusHere(); g_bl_focus_pending = false; }
       ImGui::PushID(id);
       changed = ImGui::InputInt("##e", v, 0, 0, ImGuiInputTextFlags_AutoSelectAll);
@@ -594,7 +689,7 @@ namespace ImGui
       ImGui::SameLine();
       // Same widget family as AppBlEnum -> the same chrome scope (unifies the previously narrower push set:
       // this picker now also gets the faint border, active-frame fill, selected-row header, and popup rounding).
-      const AppBlStyleScope sc = AppBlPushStyle(kBlComboColors, IM_ARRAYSIZE(kBlComboColors), true);
+      const AppBlStyleScope sc = AppBlPushStyle(AppGraphChromeTheme()->Combo, IM_ARRAYSIZE(AppGraphChromeTheme()->Combo), true);
       ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8.0f);
       if (ImGui::BeginCombo("##stype", f->StructType[0] ? f->StructType : "<struct>", ImGuiComboFlags_NoArrowButton))
       {
@@ -3256,10 +3351,100 @@ namespace ImGui
     ImGui::TextDisabled("dock: %s  size: %.0f", kAppDockDirNames[cur], n->DockSize);
   }
 
+  // Resolve a live mirror node back to the runtime object it reflects (the inverse of BuildAppLiveGraph's
+  // keying: windows by label hash, sidebars by label hash + 1, controls by PersistData id).
+  static ImGuiAppItemBase* AppGraphFindLiveItem(ImGuiApp* app, const ImGuiAppNode* n)
+  {
+    if (app == nullptr || n == nullptr || !n->IsLive)
+      return nullptr;
+    if (n->Kind == ImGuiAppNodeKind_Window)
+    {
+      for (int i = 0; i < app->Windows.Size; i++)
+        if (AppConstantHash(app->Windows.Data[i]->Label[0] ? app->Windows.Data[i]->Label : "Window") == n->LiveKey)
+          return app->Windows.Data[i];
+    }
+    else if (n->Kind == ImGuiAppNodeKind_Sidebar)
+    {
+      for (int i = 0; i < app->Sidebars.Size; i++)
+        if (AppConstantHash(app->Sidebars.Data[i]->Label[0] ? app->Sidebars.Data[i]->Label : "Sidebar") + 1u == n->LiveKey)
+          return app->Sidebars.Data[i];
+    }
+    else if (n->Kind == ImGuiAppNodeKind_Control)
+    {
+      ImGuiAppControlBase* found = nullptr;
+      ImGui::ForEachAppControl(app, [&](ImGuiAppControlBase* ctrl, ImGuiAppWindowBase*)
+      {
+        if (found == nullptr && ctrl->GetControlDataID() == n->LiveKey)
+          found = ctrl;
+      });
+      return found;
+    }
+    return nullptr;
+  }
+
+  // Style section (workbench §5.1): the desc rows under a component header whose enable checkbox masters
+  // every row's Active flag and whose kebab holds section-granular reuse -- copy / paste / reset. The
+  // section clipboard is session-lived, value-typed (the descs are plain data).
+  namespace
+  {
+    ImVector<ImGuiAppStyleModDesc> g_style_clip_mods;
+    ImVector<ImGuiAppColorModDesc> g_style_clip_cols;
+    bool                           g_style_clip_has = false;
+  }
+
+  static void AppNodeStyleSection(ImGuiAppNode* n)
+  {
+    const int total = n->StyleMods.Size + n->ColorMods.Size;
+    bool any_active = false;
+    for (int i = 0; i < n->StyleMods.Size && !any_active; i++) any_active = n->StyleMods.Data[i].Active;
+    for (int i = 0; i < n->ColorMods.Size && !any_active; i++) any_active = n->ColorMods.Data[i].Active;
+
+    bool enable = any_active;
+    bool kebab = false;
+    const bool open = AppInspectorSection("##sec_style", ICON_FA_PALETTE, "Style", total > 0 ? &enable : nullptr, &kebab);
+    if (total > 0 && enable != any_active)
+    {
+      for (int i = 0; i < n->StyleMods.Size; i++) n->StyleMods.Data[i].Active = enable;
+      for (int i = 0; i < n->ColorMods.Size; i++) n->ColorMods.Data[i].Active = enable;
+    }
+    if (kebab)
+      ImGui::OpenPopup("##style_section_menu");
+    if (ImGui::BeginPopup("##style_section_menu"))
+    {
+      if (ImGui::MenuItem("Copy section", nullptr, false, total > 0))
+      {
+        g_style_clip_mods = n->StyleMods;
+        g_style_clip_cols = n->ColorMods;
+        g_style_clip_has = true;
+      }
+      if (ImGui::MenuItem("Paste section", nullptr, false, g_style_clip_has))
+      {
+        n->StyleMods = g_style_clip_mods;
+        n->ColorMods = g_style_clip_cols;
+      }
+      ImGui::Separator();
+      if (ImGui::MenuItem("Reset (clear all)", nullptr, false, total > 0))
+      {
+        n->StyleMods.clear();
+        n->ColorMods.clear();
+      }
+      ImGui::EndPopup();
+    }
+    if (open)
+      EditAppNodeStyleMods(n);
+  }
+
   // Roomy inspector for the selected node's authored data -- the same edits available cramped inside the node
-  // body, surfaced in a dedicated panel. Dispatches by kind: Control -> name + Persist/Temp fields; Window/Sidebar
-  // -> flags/dock/placement; Layer -> type (+ command defs). Live mirror nodes are read-only.
+  // body, surfaced in a dedicated panel as component SECTIONS (workbench §5.1). Dispatches by kind. Live
+  // mirror nodes are read-only, except style Active flags, which write through to the running item when the
+  // host passes its mirrored app (§3.5: the one sanctioned live mutation -- it round-trips through the mirror
+  // next frame, so model and runtime cannot desync).
   void EditAppNodeInspector(ImGuiAppGraph* g, int node_id)
+  {
+    EditAppNodeInspectorEx(g, node_id, nullptr);
+  }
+
+  void EditAppNodeInspectorEx(ImGuiAppGraph* g, int node_id, ImGuiApp* live_app)
   {
     IM_ASSERT(g != nullptr);
 
@@ -3296,7 +3481,46 @@ namespace ImGui
         DrawAppWindowNodeProps(n);
       else if (n->Kind == ImGuiAppNodeKind_Control && n->DataTypeName[0])
         ImGui::TextDisabled("data: %s", n->DataTypeName);
-      if (n->StyleMods.Size > 0 || n->ColorMods.Size > 0)
+
+      // Live style: values are the mirror's echo, but the Active flags write THROUGH to the running item --
+      // flip a checkbox, watch the app restyle, no regeneration. Falls back to the plain echo when the host
+      // didn't pass its mirrored app (or the item vanished between frames).
+      ImGuiAppItemBase* item = AppGraphFindLiveItem(live_app, n);
+      if (item != nullptr && (item->StyleMods.Size > 0 || item->ColorMods.Size > 0))
+      {
+        if (AppInspectorSection("##sec_style_live", ICON_FA_PALETTE, "Style (live)", nullptr, nullptr))
+        {
+          for (int i = 0; i < item->StyleMods.Size; i++)
+          {
+            ImGuiAppStyleModDesc* sm = &item->StyleMods.Data[i];
+            ImGui::PushID(4000 + i);
+            ImGui::Checkbox("##on", &sm->Active);
+            if (ImGui::IsItemHovered())
+              ImGui::SetTooltip("live toggle: pushed (or not) starting next frame");
+            ImGui::SameLine();
+            const ImGuiStyleVarInfo* info = ImGui::GetStyleVarInfo(sm->Var);
+            if (info->Count == 2)
+              ImGui::TextDisabled("%s = %.2f, %.2f", AppStyleVarShortName(sm->Var), sm->Value.x, sm->Value.y);
+            else
+              ImGui::TextDisabled("%s = %.2f", AppStyleVarShortName(sm->Var), sm->Value.x);
+            ImGui::PopID();
+          }
+          for (int i = 0; i < item->ColorMods.Size; i++)
+          {
+            ImGuiAppColorModDesc* cm = &item->ColorMods.Data[i];
+            ImGui::PushID(4500 + i);
+            ImGui::Checkbox("##on", &cm->Active);
+            if (ImGui::IsItemHovered())
+              ImGui::SetTooltip("live toggle: pushed (or not) starting next frame");
+            ImGui::SameLine();
+            ImGui::ColorButton("##swatch", ImGui::ColorConvertU32ToFloat4(cm->Value), ImGuiColorEditFlags_NoTooltip, ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()));
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", ImGui::GetStyleColorName(cm->Col));
+            ImGui::PopID();
+          }
+        }
+      }
+      else if (n->StyleMods.Size > 0 || n->ColorMods.Size > 0)
       {
         ImGui::SeparatorText("style");
         DrawAppNodeStyleMods(n);
@@ -3319,21 +3543,24 @@ namespace ImGui
         ImGui::TextDisabled("Builtin control: %s", n->DataTypeName[0] ? n->DataTypeName : n->TypeName);
       else
       {
-        EditAppNodeDraftFields(&n->Draft);     // Persist + Temp field lists
-        ImGui::SeparatorText("events");
-        EditAppControlEvents(g, n);            // temp-vs-last-temp reactions (see ImGuiAppEventDesc)
+        if (AppInspectorSection("##sec_fields", ICON_FA_TABLE_LIST, "Fields", nullptr, nullptr))
+          EditAppNodeDraftFields(&n->Draft);   // Persist + Temp field lists
+        if (AppInspectorSection("##sec_events", ICON_FA_BOLT, "Events", nullptr, nullptr))
+          EditAppControlEvents(g, n);          // temp-vs-last-temp reactions (see ImGuiAppEventDesc)
       }
-      ImGui::SeparatorText("style");
-      EditAppNodeStyleMods(n);                 // style-var overrides applied around the control's render
+      AppNodeStyleSection(n);                  // style-var/color overrides applied around the control's render
       break;
     case ImGuiAppNodeKind_Window:
+      AppNodeStyleSection(n);                  // style overrides applied around the window's Begin/End
+      break;
     case ImGuiAppNodeKind_Sidebar:
-      EditAppWindowNodeProps(n);               // sidebar dock direction / size
-      ImGui::SeparatorText("style");
-      EditAppNodeStyleMods(n);                 // style-var overrides applied around the window's Begin/End
+      if (AppInspectorSection("##sec_dock", ICON_FA_THUMBTACK, "Dock", nullptr, nullptr))
+        EditAppWindowNodeProps(n);             // dock direction / size
+      AppNodeStyleSection(n);
       break;
     case ImGuiAppNodeKind_Struct:
-      EditAppFieldList("fields", &n->Draft.PersistFields, g);
+      if (AppInspectorSection("##sec_fields", ICON_FA_TABLE_LIST, "Fields", nullptr, nullptr))
+        EditAppFieldList("fields", &n->Draft.PersistFields, g);
       break;
     case ImGuiAppNodeKind_Field:
     {

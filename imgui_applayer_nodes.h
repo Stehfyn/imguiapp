@@ -534,6 +534,12 @@ namespace ImGui
   // Roomy inspector for one node's authored data (name, Persist/Temp fields, window/sidebar props). Live nodes
   // are read-only. node_id < 0 -> a "select a node" hint. Edits mutate the graph in place.
   IMGUI_API void                EditAppNodeInspector(ImGuiAppGraph* g, int node_id);
+  IMGUI_API void                EditAppNodeInspectorEx(ImGuiAppGraph* g, int node_id, ImGuiApp* live_app);   // + live style write-back (see workbench §3.5)
+
+  // Inspector section header (workbench §5.1, the Unity/UE component anatomy): collapse triangle + icon +
+  // label, optional enable checkbox, optional kebab whose click the caller answers with its own popup.
+  // Open state is session-lived per window. Shared with hosts so panel and project inspectors match.
+  IMGUI_API bool                AppInspectorSection(const char* str_id, const char* icon, const char* label, bool* enabled, bool* kebab_clicked);
 
   // Origin breadcrumb for a selected node: "sel: MainWindow > Mixer [design]" / "[live]" / "[promoted]" /
   // "sel: -" when id < 0 or unknown. char[] out, no references; encapsulates the containment-parent walk.
@@ -607,6 +613,16 @@ namespace ImGui
   };
   IMGUI_API void                AppGraphSetHostCommands(const ImGuiAppGraphHostCmd* cmds, int count);
   IMGUI_API int                 AppGraphConsumeHostCommand();   // picked host cmd id since last call, or -1
+
+  // The composer chrome's own push-stack palette, stated in desc terms and exposed read-write (stable
+  // pointer): the project inspector's Theme section edits it live -- the composer styles itself with the
+  // machinery it teaches. Col slots are semantic and fixed; Value/Active are the editable half.
+  struct ImGuiAppChromeTheme
+  {
+    ImGuiAppColorModDesc Combo[8];   // dropdown fields (enum combos, struct picker): field + popup + rows
+    ImGuiAppColorModDesc Edit[4];    // in-place editors (InputText/InputInt): transparent frame over the drawn bg
+  };
+  IMGUI_API ImGuiAppChromeTheme*    AppGraphChromeTheme();
 
   // Canvas view settings: snap-to-grid + the overlays popover's toggles. Presentation-only, never model state.
   // Exposed (stable pointer, single editor instance) so the host can persist them across sessions.

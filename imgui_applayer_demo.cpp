@@ -1053,6 +1053,108 @@ namespace
     bool  AckReveal;           // the bottom tab bar consumed the one-shot RevealPanel intent this frame
     bool  ClearLog;            // Output tab: clear the document log
   };
+
+  // Project-level inspector (workbench §5.3): the empty selection shows the DOCUMENT -- the altitude above
+  // any node, in the same section grammar the node inspector speaks. The Theme section edits the composer
+  // chrome's own desc tables live: the editor wears the machinery it teaches.
+  static void ShowComposerProjectInspector(GraphDocData* doc, ImGuiAppGraph* graph, EditorBodyTempData* temp_data)
+  {
+    const float em = ImGui::GetFontSize();
+    const float label_w = em * 5.5f;
+
+    if (ImGui::AppInspectorSection("##psec_doc", ICON_FA_FILE_LINES, "Document", nullptr, nullptr))
+    {
+      const bool fresh = doc->WrittenSig != 0 && doc->WrittenSig == ImGui::AppGraphSignature(graph);
+      ImGui::TextDisabled("graph");
+      ImGui::SameLine(label_w);
+      ImGui::TextUnformatted(doc->GraphPath);
+      ImGui::TextDisabled("header");
+      ImGui::SameLine(label_w);
+      ImGui::TextUnformatted(doc->HeaderPath);
+      ImGui::SameLine();
+      ImGui::TextColored(fresh ? ImVec4(0.45f, 0.85f, 0.45f, 1.0f) : ImVec4(0.90f, 0.75f, 0.35f, 1.0f),
+                         fresh ? ICON_FA_CHECK : ICON_FA_TRIANGLE_EXCLAMATION);
+      ImGui::SetItemTooltip(fresh ? "header matches the graph" : "graph changed since the last Generate");
+      int design = 0, live = 0;
+      for (int i = 0; i < graph->Nodes.Size; i++)
+        (graph->Nodes.Data[i].IsLive ? live : design)++;
+      ImGui::TextDisabled("nodes");
+      ImGui::SameLine(label_w);
+      if (live > 0)
+        ImGui::Text("%d design   %d live", design, live);
+      else
+        ImGui::Text("%d design", design);
+      ImGui::TextDisabled("wiring");
+      ImGui::SameLine(label_w);
+      ImGui::Text("%d links   %d bindings", graph->Links.Size, graph->Bindings.Size);
+      ImGui::TextDisabled("signature");
+      ImGui::SameLine(label_w);
+      ImGui::Text("%08X", ImGui::AppGraphSignature(graph));
+      ImGui::Spacing();
+    }
+
+    if (ImGui::AppInspectorSection("##psec_val", ICON_FA_TRIANGLE_EXCLAMATION, "Validation", nullptr, nullptr))
+    {
+      const ImVector<ImGui::ImGuiAppGraphIssue>* issues = ImGui::AppGraphIssuesCached(graph);
+      int nerr = 0, nwarn = 0;
+      for (int i = 0; i < issues->Size; i++)
+        (issues->Data[i].Severity >= 2 ? nerr : nwarn)++;
+      if (nerr + nwarn == 0)
+        ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f), ICON_FA_CHECK "  No configuration problems.");
+      else
+      {
+        ImGui::TextColored(nerr > 0 ? ImVec4(0.92f, 0.45f, 0.45f, 1.0f) : ImVec4(0.92f, 0.80f, 0.40f, 1.0f),
+                           "%d error(s), %d warning(s)", nerr, nwarn);
+        if (ImGui::SmallButton("Open Output"))
+          temp_data->OpenOutput = true;
+      }
+      ImGui::Spacing();
+    }
+
+    if (ImGui::AppInspectorSection("##psec_theme", ICON_FA_PALETTE, "Composer theme", nullptr, nullptr))
+    {
+      // The chrome's push-stack palette as editable desc rows -- the same row anatomy authored nodes use.
+      ImGui::ImGuiAppChromeTheme* theme = ImGui::AppGraphChromeTheme();
+      auto theme_rows = [](const char* caption, ImGuiAppColorModDesc* descs, int count)
+      {
+        ImGui::TextDisabled("%s", caption);
+        for (int i = 0; i < count; i++)
+        {
+          ImGui::PushID(caption);
+          ImGui::PushID(i);
+          ImGui::Checkbox("##on", &descs[i].Active);
+          ImGui::SameLine();
+          ImVec4 c4 = ImGui::ColorConvertU32ToFloat4(descs[i].Value);
+          if (ImGui::ColorEdit4("##v", &c4.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaPreviewHalf))
+            descs[i].Value = ImGui::ColorConvertFloat4ToU32(c4);
+          ImGui::SameLine();
+          ImGui::TextDisabled("%s", ImGui::GetStyleColorName(descs[i].Col));
+          ImGui::PopID();
+          ImGui::PopID();
+        }
+      };
+      theme_rows("dropdown fields", theme->Combo, IM_ARRAYSIZE(theme->Combo));
+      theme_rows("in-place editors", theme->Edit, IM_ARRAYSIZE(theme->Edit));
+      ImGui::Spacing();
+    }
+
+    if (ImGui::AppInspectorSection("##psec_prefabs", ICON_FA_CUBES, "Prefabs", nullptr, nullptr))
+    {
+      if (ImGui::AppGraphPrefabCount() == 0)
+        ImGui::TextDisabled("Save a selection as a prefab from the canvas context menu.");
+      for (int i = 0; i < ImGui::AppGraphPrefabCount(); i++)
+      {
+        ImGui::PushID(i);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(ImGui::AppGraphPrefabName(i));
+        ImGui::SameLine(ImGui::GetContentRegionMax().x - em * 4.0f);
+        if (ImGui::SmallButton("Stamp"))
+          ImGui::AppGraphInstantiatePrefab(graph, i, ImVec2(140.0f, 140.0f));
+        ImGui::SetItemTooltip("Instantiate this prefab on the canvas (fresh ids, selected)");
+        ImGui::PopID();
+      }
+    }
+  }
   struct EditorBodyControl : ImGuiAppControl<EditorBodyData, EditorBodyTempData>
   {
     virtual void OnInitialize(ImGuiApp* app, EditorBodyData* data) const override final
@@ -1570,14 +1672,13 @@ namespace
         ImGui::Separator();
         if (selection < 0)
         {
-          ImGui::TextDisabled("Select a node.");
-          ImGui::Spacing();
-          ImGui::TextDisabled("The canvas, outliner, code lines and");
-          ImGui::TextDisabled("problem rows all select into here.");
+          // Nothing selected = the DOCUMENT is selected (workbench §5.3): paths, freshness, validation,
+          // the composer's own theme, and the prefab library -- the altitude above any node.
+          ShowComposerProjectInspector(doc, graph, temp_data);
         }
         else
         {
-          ImGui::EditAppNodeInspector(graph, selection);
+          ImGui::EditAppNodeInspectorEx(graph, selection, doc->Mirror);
           if (data->HasNodeCode)
           {
             ImGui::SeparatorText("Generated C++");
