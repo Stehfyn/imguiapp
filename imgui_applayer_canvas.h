@@ -26,6 +26,16 @@ struct ImGuiCanvasStyle
   ImU32 PinData;           // circle pins (data edges)
   ImU32 PinContainment;    // square pins (containment edges)
   ImU32 PinHovered;
+  ImU32 MiniMapBg;
+  ImU32 MiniMapBgHovered;
+  ImU32 MiniMapOutline;
+  ImU32 MiniMapNodeBg;
+  ImU32 MiniMapNodeBgHovered;
+  ImU32 MiniMapNodeBgSelected;
+  ImU32 MiniMapNodeOutline;
+  ImU32 MiniMapLink;
+  ImU32 MiniMapCanvas;         // the current-view rect inside the map
+  ImU32 MiniMapCanvasOutline;
 
   // Metrics in MODEL units (the engine zooms them; hosts never pre-scale).
   float GridSpacing;

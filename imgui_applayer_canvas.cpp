@@ -121,13 +121,14 @@ struct ImGuiCanvasState
   bool   EditFocusPending;
   int    LastEditingNodeId;    // focus-once tracking across frames
 
-  // Minimap (the rect hugs the mapped content's aspect within the max fraction box)
+  // Minimap
   bool   MiniMapReq;
   float  MiniMapFraction;
-  ImVec2 MiniRectMin;          // last drawn rect (screen); the FSM keeps out of it
+  ImVec2 MiniRectMin;          // background rect incl. padding ring (screen); the FSM keeps out of it
   ImVec2 MiniRectMax;
-  ImVec2 MiniModelMin;         // the model extents that rect maps (content + viewport union)
-  ImVec2 MiniModelMax;
+  ImVec2 MiniContentMin;       // content rect origin (screen); the mapping's anchor
+  ImVec2 MiniModelMin;         // content bounds min (model); the mapping's other anchor
+  float  MiniScale;            // model units -> minimap pixels
 
   // Latched events (valid from CanvasEnd until the next CanvasBegin)
   bool   NodeDblClickReq;
@@ -167,6 +168,16 @@ struct ImGuiCanvasState
     Style.PinData         = IM_COL32(120, 170, 230, 255);
     Style.PinContainment  = IM_COL32(230, 170, 110, 255);
     Style.PinHovered      = IM_COL32(250, 250, 252, 255);
+    Style.MiniMapBg              = IM_COL32(25, 25, 25, 150);
+    Style.MiniMapBgHovered       = IM_COL32(25, 25, 25, 200);
+    Style.MiniMapOutline         = IM_COL32(150, 150, 150, 100);
+    Style.MiniMapNodeBg          = IM_COL32(200, 200, 200, 100);
+    Style.MiniMapNodeBgHovered   = IM_COL32(200, 200, 200, 255);
+    Style.MiniMapNodeBgSelected  = IM_COL32(200, 200, 240, 255);
+    Style.MiniMapNodeOutline     = IM_COL32(200, 200, 200, 100);
+    Style.MiniMapLink            = IM_COL32(160, 165, 175, 200);
+    Style.MiniMapCanvas          = IM_COL32(200, 200, 200, 25);
+    Style.MiniMapCanvasOutline   = IM_COL32(200, 200, 200, 200);
     Style.GridSpacing     = 24.0f;
     Style.NodeRounding    = 4.0f;
     Style.NodePadding     = ImVec2(8.0f, 6.0f);
@@ -201,7 +212,8 @@ struct ImGuiCanvasState
     MiniMapReq = false;
     MiniMapFraction = 0.2f;
     MiniRectMin = MiniRectMax = ImVec2(0.0f, 0.0f);
-    MiniModelMin = MiniModelMax = ImVec2(0.0f, 0.0f);
+    MiniContentMin = MiniModelMin = ImVec2(0.0f, 0.0f);
+    MiniScale = 0.0f;
     NodeDblClickReq = false; NodeDblClickId = -1;
     MenuNodeReq = MenuWireReq = MenuEmptyReq = false;
     MenuNodeId = MenuWireId = -1;
@@ -423,19 +435,17 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
   const ImVec2 mouse = io.MousePos;
 
   // The minimap owns its rect: while the mouse is over it, holding LMB continuously recenters the
-  // camera on the mapped point. The canvas FSM stays out.
+  // camera on the mapped point (mini -> model: (v - content_min) / scaling + bounds_min). The
+  // canvas FSM stays out.
   const bool in_minimap = mouse.x >= c->MiniRectMin.x && mouse.x < c->MiniRectMax.x
                        && mouse.y >= c->MiniRectMin.y && mouse.y < c->MiniRectMax.y;
   if (in_minimap && c->Interaction == ImGuiCanvasInteraction_None)
   {
     c->HoveredNode = -1;
-    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-    if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && canvas_item_hovered)
+    if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && canvas_item_hovered && c->MiniScale > 0.0f)
     {
-      const ImVec2 t((mouse.x - c->MiniRectMin.x) / ImMax(1.0f, c->MiniRectMax.x - c->MiniRectMin.x),
-                     (mouse.y - c->MiniRectMin.y) / ImMax(1.0f, c->MiniRectMax.y - c->MiniRectMin.y));
-      ImGui::CanvasCenterOn(c, ImVec2(c->MiniModelMin.x + t.x * (c->MiniModelMax.x - c->MiniModelMin.x),
-                                      c->MiniModelMin.y + t.y * (c->MiniModelMax.y - c->MiniModelMin.y)));
+      const ImVec2 target = (mouse - c->MiniContentMin) / c->MiniScale + c->MiniModelMin;
+      ImGui::CanvasCenterOn(c, target);
     }
     return;
   }
@@ -1038,11 +1048,12 @@ namespace ImGui
       }
     }
 
-    // Minimap: the mapping covers the NODE CONTENT bounds only -- never the viewport -- so the
-    // nodes always fill the map at the content's own aspect ratio (fitted inside the max fraction
-    // box). The current view is drawn THROUGH that same mapping as a translucent rect, clipped to
-    // the map when it extends past the content. Holding LMB over the map continuously recenters
-    // the camera. The rect + extents are remembered so the next frame's FSM can invert the mapping.
+    // Minimap. The mapping covers the node content bounds (the viewport when the canvas is empty);
+    // the inset is the content aspect fitted into max_size = canvas * fraction, placed bottom-right
+    // behind an offset + padding ring. Everything below draws through one mapping:
+    //   mini = (model - bounds_min) * scaling + content_min
+    // The current view is a translucent rect through that mapping, clipped to the map. Holding LMB
+    // over the map continuously recenters the camera (the FSM inverts the mapping next frame).
     bool minimap_drawn = false;
     if (c->MiniMapReq)
     {
@@ -1057,51 +1068,60 @@ namespace ImGui
         bmin = ImMin(bmin, n->Pos);
         bmax = ImMax(bmax, n->Pos + n->Size);
       }
-      if (bmin.x <= bmax.x)
+      if (bmin.x > bmax.x)
       {
-        // Fit the CONTENT aspect into max_size = canvas * fraction.
-        const ImVec2 span(ImMax(1.0f, bmax.x - bmin.x), ImMax(1.0f, bmax.y - bmin.y));
-        const ImVec2 max_size(c->CanvasSize.x * c->MiniMapFraction, c->CanvasSize.y * c->MiniMapFraction);
-        const float  content_aspect = span.x / span.y;
+        // No nodes: map the current viewport so the map still frames something sensible.
+        bmin = CanvasFromScreen(c, c->Origin);
+        bmax = CanvasFromScreen(c, c->Origin + c->CanvasSize);
+      }
+      {
+        const ImVec2 border(8.0f, 8.0f);
+        const ImVec2 offset(4.0f, 4.0f);
+        const ImVec2 max_size = ImFloor(c->CanvasSize * c->MiniMapFraction - border * 2.0f);
+        const ImVec2 content_size(ImMax(1.0f, ImFloor(bmax.x - bmin.x)), ImMax(1.0f, ImFloor(bmax.y - bmin.y)));
         const float  max_aspect = max_size.x / ImMax(1.0f, max_size.y);
-        const ImVec2 rect_sz = content_aspect > max_aspect
-                             ? ImVec2(max_size.x, max_size.x / content_aspect)
-                             : ImVec2(max_size.y * content_aspect, max_size.y);
-        const float  s = rect_sz.x / span.x;   // MiniMapScaling
-        const ImVec2 rmax(c->Origin.x + c->CanvasSize.x - 12.0f, c->Origin.y + c->CanvasSize.y - 12.0f);
-        const ImVec2 rmin(rmax.x - rect_sz.x, rmax.y - rect_sz.y);
+        const float  content_aspect = content_size.x / content_size.y;
+        const ImVec2 mini_size = ImFloor(content_aspect > max_aspect
+                                       ? ImVec2(max_size.x, max_size.x / content_aspect)
+                                       : ImVec2(max_size.y * content_aspect, max_size.y));
+        const float  scaling = mini_size.x / content_size.x;
+        const ImVec2 pos = ImFloor(c->Origin + c->CanvasSize - offset - border - mini_size);
+        const ImVec2 rmin = pos - border;
+        const ImVec2 rmax = pos + mini_size + border;
         c->MiniRectMin = rmin;
         c->MiniRectMax = rmax;
+        c->MiniContentMin = pos;
         c->MiniModelMin = bmin;
-        c->MiniModelMax = bmax;
+        c->MiniScale = scaling;
         minimap_drawn = true;
         auto to_mini = [&](ImVec2 m) {
-          return ImVec2(rmin.x + (m.x - bmin.x) * s, rmin.y + (m.y - bmin.y) * s);
+          return ImVec2(pos.x + (m.x - bmin.x) * scaling, pos.y + (m.y - bmin.y) * scaling);
         };
 
         const bool map_hovered = mouse.x >= rmin.x && mouse.x < rmax.x && mouse.y >= rmin.y && mouse.y < rmax.y;
-        c->DrawList->AddRectFilled(rmin, rmax, map_hovered ? IM_COL32(30, 31, 35, 235) : IM_COL32(20, 21, 24, 235), 4.0f);
-        c->DrawList->AddRect(rmin, rmax, IM_COL32(90, 92, 100, 180), 4.0f);
+        c->DrawList->AddRectFilled(rmin, rmax, map_hovered ? c->Style.MiniMapBgHovered : c->Style.MiniMapBg);
+        c->DrawList->AddRect(rmin, rmax, c->Style.MiniMapOutline);
         c->DrawList->PushClipRect(rmin, rmax, true);
 
-        // Links: beziers with thickness scaled by the map scaling.
+        // Links first, under the nodes. Control points at 0.25 x length out of the Out pin.
         for (int i = 0; i < c->Wires.Size; i++)
         {
           const ImGuiCanvasPinRec* pa = CanvasFindPin(c, c->Wires.Data[i].PinA);
           const ImGuiCanvasPinRec* pb = CanvasFindPin(c, c->Wires.Data[i].PinB);
           if (pa == nullptr || pb == nullptr)
             continue;
-          const ImVec2 a = to_mini(pa->Anchor);
-          const ImVec2 b = to_mini(pb->Anchor);
-          const float dx = ImMax(4.0f, ImFabs(b.x - a.x) * 0.5f);
-          const ImVec2 c0(a.x + (pa->Kind == ImGuiCanvasPin_In ? -dx : dx), a.y);
-          const ImVec2 c1(b.x + (pb->Kind == ImGuiCanvasPin_In ? -dx : dx), b.y);
-          c->DrawList->AddBezierCubic(a, c0, c1, b, IM_COL32(150, 154, 165, 140),
-                                      ImMax(1.0f, c->Style.WireThickness * s));
+          ImVec2 a = to_mini(pa->Anchor);
+          ImVec2 b = to_mini(pb->Anchor);
+          if (pa->Kind == ImGuiCanvasPin_In)   // orient start at the Out end
+            ImSwap(a, b);
+          const float  len = ImSqrt(ImLengthSqr(b - a));
+          const ImVec2 ctrl(0.25f * len, 0.0f);
+          c->DrawList->AddBezierCubic(a, a + ctrl, b - ctrl, b, c->Style.MiniMapLink,
+                                      c->Style.WireThickness * scaling);
         }
 
-        // Nodes: filled + outlined, state-colored (hovered-in-map beats selected beats default),
-        // rounding scaled by the map scaling.
+        // Nodes: filled + outlined; hovered-in-map beats selected beats default. Rounding floors
+        // to whole pixels.
         for (int i = 0; i < c->Nodes.Size; i++)
         {
           const ImGuiCanvasNodeRec* n = &c->Nodes.Data[i];
@@ -1109,28 +1129,30 @@ namespace ImGui
             continue;
           const ImVec2 nm = to_mini(n->Pos);
           const ImVec2 nx = to_mini(n->Pos + n->Size);
-          const bool over = map_hovered && mouse.x >= nm.x && mouse.x < nx.x && mouse.y >= nm.y && mouse.y < nx.y;
-          const ImU32 base = n->TitleColor != 0 ? (n->TitleColor & 0x00FFFFFF) | 0xB4000000 : IM_COL32(150, 152, 160, 180);
-          const ImU32 fill = over ? IM_COL32(235, 236, 240, 220)
-                           : CanvasIsSelected(c, n->Id) ? c->Style.WireSelected
-                           : base;
-          const float rounding = ImFloor(c->Style.NodeRounding * s);
+          const bool over = c->Interaction == ImGuiCanvasInteraction_None
+                         && mouse.x >= nm.x && mouse.x < nx.x && mouse.y >= nm.y && mouse.y < nx.y;
+          const ImU32 fill = over ? c->Style.MiniMapNodeBgHovered
+                           : CanvasIsSelected(c, n->Id) ? c->Style.MiniMapNodeBgSelected
+                           : c->Style.MiniMapNodeBg;
+          const float rounding = ImFloor(c->Style.NodeRounding * scaling);
           c->DrawList->AddRectFilled(nm, nx, fill, rounding);
-          c->DrawList->AddRect(nm, nx, IM_COL32(20, 20, 22, 200), rounding);
+          c->DrawList->AddRect(nm, nx, c->Style.MiniMapNodeOutline, rounding);
         }
 
-        // Current view: faint fill + outline through the SAME mapping; the clip rect crops it when
-        // the camera sees more than the content.
+        // Current view rect through the same mapping.
         const ImVec2 vmn = to_mini(CanvasFromScreen(c, c->Origin));
         const ImVec2 vmx = to_mini(CanvasFromScreen(c, c->Origin + c->CanvasSize));
-        c->DrawList->AddRectFilled(vmn, vmx, IM_COL32(200, 200, 200, 25));
-        c->DrawList->AddRect(vmn, vmx, IM_COL32(235, 236, 240, 200));
+        c->DrawList->AddRectFilled(vmn, vmx, c->Style.MiniMapCanvas);
+        c->DrawList->AddRect(vmn, vmx, c->Style.MiniMapCanvasOutline);
 
         c->DrawList->PopClipRect();
       }
     }
     if (!minimap_drawn)
+    {
       c->MiniRectMin = c->MiniRectMax = ImVec2(0.0f, 0.0f);
+      c->MiniScale = 0.0f;
+    }
 
     EndChild();
     PopStyleColor();
