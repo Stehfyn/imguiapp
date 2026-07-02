@@ -619,6 +619,10 @@ namespace ImGui
   // next submission (one-shot; same palette as RMB / Space / the + gizmo).
   IMGUI_API void                AppGraphRequestAddPalette();
 
+  // One-shot: frame the whole graph on the editor's next submission (hosts call it after seeding or loading a
+  // document -- the first view must never open on clipped, off-camera content).
+  IMGUI_API void                AppGraphRequestFitAll();
+
   // The composer chrome's own push-stack palette, stated in desc terms and exposed read-write (stable
   // pointer): the project inspector's Theme section edits it live -- the composer styles itself with the
   // machinery it teaches. Col slots are semantic and fixed; Value/Active are the editable half.

@@ -498,7 +498,9 @@ namespace
       if (data->Graph.Nodes.empty())
       {
         SeedAppGraph(&data->Graph);
+        ImGui::AppGraphAutoLayout(&data->Graph, false);   // a seeded document must open TIDY, not with stale template positions
       }
+      ImGui::AppGraphRequestFitAll();    // and FRAMED -- the first view never opens on clipped, off-camera content
     }
     virtual void OnUpdate(float dt, GraphDocData* data, const GraphDocTempData*, const GraphDocTempData*) const override final
     {
@@ -597,6 +599,7 @@ namespace
       {
         ImGui::LoadAppGraph(doc->GraphPath, &doc->Graph);
         ImGui::AppGraphEnsureFoundation(&doc->Graph);   // the frame's phases anchor the root, always
+        ImGui::AppGraphRequestFitAll();                 // frame what was loaded
         DocLog(doc, 0, "loaded graph <- %s", doc->GraphPath);
       }
       if (temp_data->WriteHeader)
@@ -1323,6 +1326,7 @@ namespace
       {
         ImGui::LoadAppGraph(doc->GraphPath, &doc->Graph);
         ImGui::AppGraphEnsureFoundation(&doc->Graph);
+        ImGui::AppGraphRequestFitAll();
         DocLog(doc, 0, "loaded graph <- %s (Project)", doc->GraphPath);
       }
       data->ProjRescan -= dt;

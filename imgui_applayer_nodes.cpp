@@ -2736,6 +2736,13 @@ namespace ImGui
 
   void AppGraphRequestAddPalette() { g_add_palette_request = true; }
 
+  namespace
+  {
+    bool g_fit_all_request = false;   // one-shot, consumed by ShowAppGraphEditor (a frame after nodes measure)
+  }
+
+  void AppGraphRequestFitAll() { g_fit_all_request = true; }
+
   void AppGraphHoverNode(int node_id, ImGuiAppHoverSource source)
   {
     AppHoverRotate();
@@ -5369,6 +5376,19 @@ namespace ImGui
       fit_all();
 
     // Navigation: F frames the selection's bounding box (all selected nodes); Home fits all nodes.
+    // Host fit request (seed/load): defer one frame so fresh nodes have measured -- centering on estimate
+    // rects would frame the wrong extents.
+    {
+      static int s_fit_all_countdown = 0;
+      if (g_fit_all_request)
+      {
+        g_fit_all_request = false;
+        s_fit_all_countdown = 2;
+      }
+      if (s_fit_all_countdown > 0 && --s_fit_all_countdown == 0)
+        fit_all();
+    }
+
     if (!ImGui::GetIO().WantTextInput && ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows))
     {
       if (ImGui::IsKeyPressed(ImGuiKey_F, false))
@@ -6092,7 +6112,7 @@ namespace ImGui
           ImStrncpy(s_status_hint, "drag  move     click  select (Ctrl multi)     Tab  enter scope     dbl-click  rename     RMB  menu", IM_ARRAYSIZE(s_status_hint));
       }
       else
-        ImStrncpy(s_status_hint, "RMB  add     Space  palette     MMB-drag  pan     F  frame     F1  help", IM_ARRAYSIZE(s_status_hint));
+        ImStrncpy(s_status_hint, "drag  pan     wheel  zoom     RMB  add     Space  palette     F  frame     F1  help", IM_ARRAYSIZE(s_status_hint));
     }
 
     // Viewport gizmo cluster (top-right overlay column): the VIEW verbs live on the viewport itself --
