@@ -35,11 +35,31 @@ struct ImGuiCanvasNodeRec
   int    LastFrame;        // ImGui frame count of the last submission (cull/hit bookkeeping)
 };
 
+struct ImGuiCanvasPinRec
+{
+  int    Id;
+  int    NodeId;
+  int    Kind;             // ImGuiCanvasPin_In / _Out
+  int    Shape;            // circle (data) / square (containment)
+  ImVec2 Anchor;           // MODEL units: pin center at the node edge, row-centered
+  int    LastFrame;
+  int    WiredCount;       // wires touching this pin THIS frame (filled pin glyph)
+};
+
+struct ImGuiCanvasWireRec  // per-frame submission (rebuilt every frame, like nodes' order)
+{
+  int   Id;
+  int   PinA;
+  int   PinB;
+  ImU32 Color;             // 0 = style
+};
+
 enum ImGuiCanvasInteraction_
 {
   ImGuiCanvasInteraction_None = 0,
   ImGuiCanvasInteraction_Pan,
   ImGuiCanvasInteraction_DragNodes,
+  ImGuiCanvasInteraction_DragWire,      // from FromPin; release on a pin = created, on empty = dropped
   ImGuiCanvasInteraction_MenuPending,   // RMB down, not yet travelled: release = menu, travel = pan
 };
 
@@ -58,9 +78,19 @@ struct ImGuiCanvasState
   ImVector<int>                SubmitOrder;    // last frame's submission order (z-order; hit-test walks it backward)
   ImVector<int>                SubmitOrderNow; // rebuilt during the current frame
 
+  // Pins + wires
+  ImVector<ImGuiCanvasPinRec> Pins;
+  ImGuiStorage                PinIdx;          // id -> index + 1
+  ImVector<ImGuiCanvasWireRec> Wires;          // rebuilt per frame between CanvasBegin/End
+  ImVector<ImGuiCanvasWireRec> WiresPrev;      // last frame's wires: press decisions run at CanvasBegin
+  ImVector<int>               CurNodePins;     // pin indices submitted inside the current node (anchor.x resolves at EndNode)
+
   // Selection + hover
   ImVector<int> Selection;
   int           HoveredNode;                   // resolved against current camera + model geometry
+  int           HoveredPin;                    // resolved in CanvasEnd (needs this frame's wires/pins); -1 = none
+  int           HoveredWire;
+  int           SelectedWire;                  // single wire selection (click); -1 = none
 
   // Per-frame canvas geometry
   ImVec2      Origin;         // canvas child top-left (screen)
@@ -81,10 +111,15 @@ struct ImGuiCanvasState
   ImVec2 GestureStartPan;
   ImVector<ImVec2> DragStartPos;               // model pos of each selected node at drag start
   ImVector<int>    DragNodes;
+  int    DragWireFromPin;                      // DragWire: the fixed end
 
   // Latched events (valid from CanvasEnd until the next CanvasBegin)
   bool   MenuNodeReq;   int    MenuNodeId;
+  bool   MenuWireReq;   int    MenuWireId;
   bool   MenuEmptyReq;  ImVec2 MenuEmptyModel;
+  bool   WireCreatedReq;  int  CreatedPinA, CreatedPinB;
+  bool   WireDroppedReq;  int  DroppedFromPin; ImVec2 DroppedModel;
+  bool   WireDetachedReq; int  DetachedWireId, DetachedGrabbedPin;
 
   ImGuiCanvasState()
   {
@@ -123,7 +158,7 @@ struct ImGuiCanvasState
 
     Pan = ImVec2(0.0f, 0.0f);
     Zoom = 1.0f;
-    HoveredNode = -1;
+    HoveredNode = HoveredPin = HoveredWire = SelectedWire = -1;
     Origin = CanvasSize = ImVec2(0.0f, 0.0f);
     DrawList = nullptr;
     InsideCanvas = false;
@@ -133,9 +168,13 @@ struct ImGuiCanvasState
     NextTitleColor = 0;
     Interaction = ImGuiCanvasInteraction_None;
     GestureStartMouse = GestureStartPan = ImVec2(0.0f, 0.0f);
-    MenuNodeReq = MenuEmptyReq = false;
-    MenuNodeId = -1;
+    DragWireFromPin = -1;
+    MenuNodeReq = MenuWireReq = MenuEmptyReq = false;
+    MenuNodeId = MenuWireId = -1;
     MenuEmptyModel = ImVec2(0.0f, 0.0f);
+    WireCreatedReq = WireDroppedReq = WireDetachedReq = false;
+    CreatedPinA = CreatedPinB = DroppedFromPin = DetachedWireId = DetachedGrabbedPin = -1;
+    DroppedModel = ImVec2(0.0f, 0.0f);
   }
 };
 
@@ -143,6 +182,57 @@ static ImGuiCanvasNodeRec* CanvasFindNode(ImGuiCanvasState* c, int node_id)
 {
   const int idx = c->NodeIdx.GetInt((ImGuiID)node_id, 0) - 1;
   return idx >= 0 ? &c->Nodes.Data[idx] : nullptr;
+}
+
+static ImGuiCanvasPinRec* CanvasFindPin(ImGuiCanvasState* c, int pin_id)
+{
+  const int idx = c->PinIdx.GetInt((ImGuiID)pin_id, 0) - 1;
+  return idx >= 0 ? &c->Pins.Data[idx] : nullptr;
+}
+
+static ImGuiCanvasPinRec* CanvasFindOrCreatePin(ImGuiCanvasState* c, int pin_id)
+{
+  if (ImGuiCanvasPinRec* p = CanvasFindPin(c, pin_id))
+    return p;
+  ImGuiCanvasPinRec rec;
+  memset(&rec, 0, sizeof(rec));
+  rec.Id = pin_id;
+  rec.LastFrame = -1;
+  c->Pins.push_back(rec);
+  c->PinIdx.SetInt((ImGuiID)pin_id, c->Pins.Size);
+  return &c->Pins.back();
+}
+
+// Wire bezier controls: horizontal tangents leaving each pin toward its natural side (out -> +x, in -> -x).
+static void CanvasWireControls(const ImGuiCanvasState* c, ImVec2 a, int kind_a, ImVec2 b, int kind_b, ImVec2* c0, ImVec2* c1)
+{
+  const float dx = ImMax(50.0f * c->Zoom, ImFabs(b.x - a.x) * 0.5f);
+  *c0 = ImVec2(a.x + (kind_a == ImGui::ImGuiCanvasPin_In ? -dx : dx), a.y);
+  *c1 = ImVec2(b.x + (kind_b == ImGui::ImGuiCanvasPin_In ? -dx : dx), b.y);
+}
+
+static float CanvasWireDistanceSq(ImVec2 p, ImVec2 a, ImVec2 c0, ImVec2 c1, ImVec2 b)
+{
+  float best = FLT_MAX;
+  ImVec2 prev = a;
+  const int segs = 24;
+  for (int i = 1; i <= segs; i++)
+  {
+    const float t = (float)i / (float)segs;
+    const float u = 1.0f - t;
+    const ImVec2 pt(u * u * u * a.x + 3.0f * u * u * t * c0.x + 3.0f * u * t * t * c1.x + t * t * t * b.x,
+                    u * u * u * a.y + 3.0f * u * u * t * c0.y + 3.0f * u * t * t * c1.y + t * t * t * b.y);
+    // point-to-segment
+    const ImVec2 ab = pt - prev;
+    const float len2 = ab.x * ab.x + ab.y * ab.y;
+    float tt = len2 > 0.0f ? ((p.x - prev.x) * ab.x + (p.y - prev.y) * ab.y) / len2 : 0.0f;
+    tt = ImClamp(tt, 0.0f, 1.0f);
+    const ImVec2 q(prev.x + ab.x * tt, prev.y + ab.y * tt);
+    const float d2 = (p.x - q.x) * (p.x - q.x) + (p.y - q.y) * (p.y - q.y);
+    best = ImMin(best, d2);
+    prev = pt;
+  }
+  return best;
 }
 
 static ImGuiCanvasNodeRec* CanvasFindOrCreateNode(ImGuiCanvasState* c, int node_id)
@@ -274,12 +364,48 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
     ImGui::CanvasSetZoom(c, c->Zoom * ImPow(1.15f, io.MouseWheel), mouse);
   }
 
-  // LMB press on the canvas catch-all: node -> select (+drag), empty -> pan (per policy).
+  // LMB press on the canvas catch-all, in hit priority: pin -> wire -> node -> empty. Pin and wire
+  // hover come from the last CanvasEnd resolution (screen-invariant latch, the standard imgui idiom).
   if (canvas_item_activated && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
   {
     c->GestureStartMouse = mouse;
     c->GestureStartPan = c->Pan;
-    if (c->HoveredNode >= 0)
+    if (c->HoveredPin >= 0)
+    {
+      c->Interaction = ImGuiCanvasInteraction_DragWire;
+      c->DragWireFromPin = c->HoveredPin;
+    }
+    else if (c->HoveredWire >= 0)
+    {
+      // Grab a wire near an endpoint to DETACH it (the drag continues from the surviving end); a
+      // click that never travels SELECTS the wire (handled at release below).
+      c->SelectedWire = c->HoveredWire;
+      for (int i = 0; i < c->WiresPrev.Size; i++)
+        if (c->WiresPrev.Data[i].Id == c->HoveredWire)
+        {
+          const ImGuiCanvasPinRec* pa = CanvasFindPin(c, c->WiresPrev.Data[i].PinA);
+          const ImGuiCanvasPinRec* pb = CanvasFindPin(c, c->WiresPrev.Data[i].PinB);
+          if (pa != nullptr && pb != nullptr)
+          {
+            const ImVec2 sa = ImGui::CanvasToScreen(c, pa->Anchor);
+            const ImVec2 sb = ImGui::CanvasToScreen(c, pb->Anchor);
+            const float da = (mouse.x - sa.x) * (mouse.x - sa.x) + (mouse.y - sa.y) * (mouse.y - sa.y);
+            const float db = (mouse.x - sb.x) * (mouse.x - sb.x) + (mouse.y - sb.y) * (mouse.y - sb.y);
+            const float grab = c->Style.PinHoverRadius * c->Zoom * 3.0f;
+            if (ImMin(da, db) <= grab * grab)
+            {
+              const bool grab_a = da <= db;
+              c->WireDetachedReq = true;
+              c->DetachedWireId = c->WiresPrev.Data[i].Id;
+              c->DetachedGrabbedPin = grab_a ? pa->Id : pb->Id;
+              c->Interaction = ImGuiCanvasInteraction_DragWire;
+              c->DragWireFromPin = grab_a ? pb->Id : pa->Id;   // drag continues from the SURVIVING end
+            }
+          }
+          break;
+        }
+    }
+    else if (c->HoveredNode >= 0)
     {
       if (io.KeyCtrl)
       {
@@ -344,6 +470,39 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
     }
     break;
 
+  case ImGuiCanvasInteraction_DragWire:
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+    {
+      // Release: over a pin (other than the origin) = created; over anything else = dropped at the
+      // model position (the host opens its filtered add-palette there).
+      if (c->HoveredPin >= 0 && c->HoveredPin != c->DragWireFromPin)
+      {
+        c->WireCreatedReq = true;
+        // Normalize to (out, in) when the kinds disagree, so hosts get a stable orientation.
+        const ImGuiCanvasPinRec* pf = CanvasFindPin(c, c->DragWireFromPin);
+        const ImGuiCanvasPinRec* pt = CanvasFindPin(c, c->HoveredPin);
+        if (pf != nullptr && pt != nullptr && pf->Kind == ImGui::ImGuiCanvasPin_In && pt->Kind == ImGui::ImGuiCanvasPin_Out)
+        {
+          c->CreatedPinA = pt->Id;
+          c->CreatedPinB = pf->Id;
+        }
+        else
+        {
+          c->CreatedPinA = c->DragWireFromPin;
+          c->CreatedPinB = c->HoveredPin;
+        }
+      }
+      else
+      {
+        c->WireDroppedReq = true;
+        c->DroppedFromPin = c->DragWireFromPin;
+        c->DroppedModel = ImGui::CanvasFromScreen(c, mouse);
+      }
+      c->DragWireFromPin = -1;
+      c->Interaction = ImGuiCanvasInteraction_None;
+    }
+    break;
+
   case ImGuiCanvasInteraction_MenuPending:
     if (c->IO.RmbPans && ImGui::IsMouseDown(ImGuiMouseButton_Right))
     {
@@ -356,8 +515,9 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
       const ImVec2 travel = mouse - c->GestureStartMouse;
       if (travel.x * travel.x + travel.y * travel.y <= 9.0f)
       {
-        if (c->HoveredNode >= 0) { c->MenuNodeReq = true; c->MenuNodeId = c->HoveredNode; }
-        else                     { c->MenuEmptyReq = true; c->MenuEmptyModel = ImGui::CanvasFromScreen(c, mouse); }
+        if (c->HoveredNode >= 0)      { c->MenuNodeReq = true; c->MenuNodeId = c->HoveredNode; }
+        else if (c->HoveredWire >= 0) { c->MenuWireReq = true; c->MenuWireId = c->HoveredWire; }
+        else                          { c->MenuEmptyReq = true; c->MenuEmptyModel = ImGui::CanvasFromScreen(c, mouse); }
       }
       c->Interaction = ImGuiCanvasInteraction_None;
     }
@@ -384,7 +544,11 @@ namespace ImGui
     c->InsideCanvas = true;
 
     // Latched events die at the next frame's begin.
-    c->MenuNodeReq = c->MenuEmptyReq = false;
+    c->MenuNodeReq = c->MenuWireReq = c->MenuEmptyReq = false;
+    c->WireCreatedReq = c->WireDroppedReq = c->WireDetachedReq = false;
+    c->Wires.resize(0);
+    for (int i = 0; i < c->Pins.Size; i++)
+      c->Pins.Data[i].WiredCount = 0;
 
     PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     PushStyleColor(ImGuiCol_ChildBg, c->Style.GridBg);
@@ -393,7 +557,7 @@ namespace ImGui
     c->Origin = GetCursorScreenPos();
     c->CanvasSize = GetWindowSize();
     c->DrawList = GetWindowDrawList();
-    c->Splitter.Split(c->DrawList, 2);
+    c->Splitter.Split(c->DrawList, 3);   // 0 = grid + wires, 1 = node plates, 2 = node content
     c->Splitter.SetCurrentChannel(c->DrawList, 0);
 
     // Grid: model spacing x zoom, offset by pan -- all current-frame values, nothing cached.
@@ -448,10 +612,11 @@ namespace ImGui
     c->CurNode = c->NodeIdx.GetInt((ImGuiID)node_id, 0) - 1;
     c->SubmitOrderNow.push_back(node_id);
     c->CurNodeScreen = CanvasToScreen(c, n->Pos);
+    c->CurNodePins.resize(0);
 
     // Content renders in the FG channel, under the zoomed font + zoom-scaled layout metrics -- the
     // engine owns the scaling so hosts submit plain widgets (docs/phase-coherence.md rule 1).
-    c->Splitter.SetCurrentChannel(c->DrawList, 1);
+    c->Splitter.SetCurrentChannel(c->DrawList, 2);
     const float z = c->Zoom;
     const ImGuiStyle& gs = GetStyle();
     PushStyleVar(ImGuiStyleVar_FramePadding,     ImVec2(gs.FramePadding.x * z, gs.FramePadding.y * z));
@@ -485,13 +650,21 @@ namespace ImGui
     n->Size.x = (content_px.x + c->Style.NodePadding.x * z * 2.0f) / z;
     n->Size.y = (content_px.y + c->Style.NodePadding.y * z * 2.0f + title_h) / z;
 
-    // Plate + title into the BG channel, under the content just submitted.
+    // Pin anchors resolve NOW, with the final node width known: In pins sit on the left edge, Out
+    // pins on the right, each at its submitted row's vertical center -- model units, this frame.
+    for (int i = 0; i < c->CurNodePins.Size; i++)
+    {
+      ImGuiCanvasPinRec* p = &c->Pins.Data[c->CurNodePins.Data[i]];
+      p->Anchor.x = p->Kind == ImGuiCanvasPin_In ? n->Pos.x : n->Pos.x + n->Size.x;
+    }
+
+    // Plate + title into the plate channel, under the content just submitted.
     const ImVec2 mn = c->CurNodeScreen;
     const ImVec2 mx = mn + n->Size * z;
     const bool hovered = c->HoveredNode == n->Id;
     const bool selected = CanvasIsSelected(c, n->Id);
     const float rounding = c->Style.NodeRounding * z;
-    c->Splitter.SetCurrentChannel(c->DrawList, 0);
+    c->Splitter.SetCurrentChannel(c->DrawList, 1);
     c->DrawList->AddRectFilled(mn, mx, selected ? c->Style.NodeBgSelected : hovered ? c->Style.NodeBgHovered : c->Style.NodeBg, rounding);
     if (title_h > 0.0f)
     {
@@ -503,12 +676,61 @@ namespace ImGui
     }
     c->DrawList->AddRect(mn, mx, selected ? IM_COL32(230, 200, 120, 255) : c->Style.NodeOutline, rounding, 0,
                          ImMax(1.0f, c->Style.NodeBorder * z));
-    c->Splitter.SetCurrentChannel(c->DrawList, 1);
+    c->Splitter.SetCurrentChannel(c->DrawList, 2);
 
     PopID();
     PopFont();
     PopStyleVar(5);
     c->CurNode = -1;
+  }
+
+  // Pin submission (inside a node): Begin marks the row start, End records the row's vertical
+  // center in MODEL units; the horizontal edge resolves in CanvasEndNode once the width is known.
+  static int   s_cur_pin = -1;
+  static float s_cur_pin_y0 = 0.0f;
+
+  void CanvasBeginPin(ImGuiCanvasState* c, int pin_id, int kind, int shape)
+  {
+    IM_ASSERT(c->InsideCanvas && c->CurNode >= 0 && s_cur_pin == -1);
+    ImGuiCanvasPinRec* p = CanvasFindOrCreatePin(c, pin_id);
+    p->NodeId = c->Nodes.Data[c->CurNode].Id;
+    p->Kind = kind;
+    p->Shape = shape;
+    p->LastFrame = GetFrameCount();
+    s_cur_pin = c->PinIdx.GetInt((ImGuiID)pin_id, 0) - 1;
+    s_cur_pin_y0 = GetCursorScreenPos().y;
+  }
+
+  void CanvasEndPin(ImGuiCanvasState* c)
+  {
+    IM_ASSERT(c->InsideCanvas && s_cur_pin >= 0);
+    ImGuiCanvasPinRec* p = &c->Pins.Data[s_cur_pin];
+    float y1 = GetCursorScreenPos().y;
+    if (y1 <= s_cur_pin_y0)
+      y1 = s_cur_pin_y0 + GetTextLineHeight();
+    const float yc = (s_cur_pin_y0 + y1 - GetStyle().ItemSpacing.y) * 0.5f;   // row center, minus the trailing spacing
+    p->Anchor.y = (yc - c->Origin.y - c->Pan.y) / c->Zoom;                    // screen -> model, this frame's camera
+    c->CurNodePins.push_back(s_cur_pin);
+    s_cur_pin = -1;
+  }
+
+  void CanvasWire(ImGuiCanvasState* c, int wire_id, int pin_a, int pin_b, ImU32 color)
+  {
+    IM_ASSERT(c->InsideCanvas);
+    ImGuiCanvasWireRec rec;
+    rec.Id = wire_id;
+    rec.PinA = pin_a;
+    rec.PinB = pin_b;
+    rec.Color = color;
+    c->Wires.push_back(rec);
+    if (ImGuiCanvasPinRec* pa = CanvasFindPin(c, pin_a)) pa->WiredCount++;
+    if (ImGuiCanvasPinRec* pb = CanvasFindPin(c, pin_b)) pb->WiredCount++;
+  }
+
+  ImVec2 CanvasPinPos(const ImGuiCanvasState* c, int pin_id)
+  {
+    const ImGuiCanvasPinRec* p = CanvasFindPin(const_cast<ImGuiCanvasState*>(c), pin_id);
+    return p != nullptr ? p->Anchor : ImVec2(0.0f, 0.0f);
   }
 
 //-----------------------------------------------------------------------------
@@ -517,9 +739,127 @@ namespace ImGui
 
   void CanvasEnd(ImGuiCanvasState* c)
   {
-    IM_ASSERT(c->InsideCanvas && c->CurNode == -1);
+    IM_ASSERT(c->InsideCanvas && c->CurNode == -1 && s_cur_pin == -1);
+    const float  z = c->Zoom;
+    const ImVec2 mouse = GetIO().MousePos;
+    const int    frame = GetFrameCount();
+
+    // Hover resolution against THIS frame's geometry (pins beat nodes beat wires; wires only reachable
+    // where nothing else is). Feeds this frame's own draw colors and the next frame's press decisions.
+    c->HoveredPin = -1;
+    {
+      float best = c->Style.PinHoverRadius * z;
+      best *= best;
+      for (int i = 0; i < c->Pins.Size; i++)
+      {
+        const ImGuiCanvasPinRec* p = &c->Pins.Data[i];
+        if (p->LastFrame != frame)
+          continue;
+        const ImVec2 s = CanvasToScreen(c, p->Anchor);
+        const float d2 = (mouse.x - s.x) * (mouse.x - s.x) + (mouse.y - s.y) * (mouse.y - s.y);
+        if (d2 <= best)
+        {
+          best = d2;
+          c->HoveredPin = p->Id;
+        }
+      }
+    }
+    c->HoveredWire = -1;
+    if (c->HoveredPin == -1 && c->HoveredNode == -1)
+    {
+      float reach = ImMax(6.0f, c->Style.WireThickness * z * 2.0f);
+      reach *= reach;
+      float best = reach;
+      for (int i = 0; i < c->Wires.Size; i++)
+      {
+        const ImGuiCanvasPinRec* pa = CanvasFindPin(c, c->Wires.Data[i].PinA);
+        const ImGuiCanvasPinRec* pb = CanvasFindPin(c, c->Wires.Data[i].PinB);
+        if (pa == nullptr || pb == nullptr)
+          continue;
+        const ImVec2 a = CanvasToScreen(c, pa->Anchor);
+        const ImVec2 b = CanvasToScreen(c, pb->Anchor);
+        ImVec2 c0, c1;
+        CanvasWireControls(c, a, pa->Kind, b, pb->Kind, &c0, &c1);
+        const float d2 = CanvasWireDistanceSq(mouse, a, c0, c1, b);
+        if (d2 <= best)
+        {
+          best = d2;
+          c->HoveredWire = c->Wires.Data[i].Id;
+        }
+      }
+    }
+
+    // Wires draw UNDER the node plates (channel 0, above the grid emitted earlier in the same channel).
+    c->Splitter.SetCurrentChannel(c->DrawList, 0);
+    for (int i = 0; i < c->Wires.Size; i++)
+    {
+      const ImGuiCanvasWireRec* w = &c->Wires.Data[i];
+      const ImGuiCanvasPinRec* pa = CanvasFindPin(c, w->PinA);
+      const ImGuiCanvasPinRec* pb = CanvasFindPin(c, w->PinB);
+      if (pa == nullptr || pb == nullptr)
+        continue;
+      const ImVec2 a = CanvasToScreen(c, pa->Anchor);
+      const ImVec2 b = CanvasToScreen(c, pb->Anchor);
+      ImVec2 c0, c1;
+      CanvasWireControls(c, a, pa->Kind, b, pb->Kind, &c0, &c1);
+      const bool hov = w->Id == c->HoveredWire;
+      const bool sel = w->Id == c->SelectedWire;
+      const ImU32 col = sel ? c->Style.WireSelected : hov ? c->Style.WireHovered : (w->Color != 0 ? w->Color : c->Style.Wire);
+      c->DrawList->AddBezierCubic(a, c0, c1, b, col, ImMax(1.0f, c->Style.WireThickness * z * (hov || sel ? 1.4f : 1.0f)));
+    }
+
     c->Splitter.Merge(c->DrawList);
     c->SubmitOrder = c->SubmitOrderNow;   // this frame's z-order becomes the hit-test order
+    c->WiresPrev = c->Wires;              // press decisions at the next CanvasBegin walk these
+
+    // Pins draw over everything on the canvas (they are the interaction affordance), post-merge.
+    for (int i = 0; i < c->Pins.Size; i++)
+    {
+      const ImGuiCanvasPinRec* p = &c->Pins.Data[i];
+      if (p->LastFrame != frame)
+        continue;
+      const ImVec2 s = CanvasToScreen(c, p->Anchor);
+      const bool hov = p->Id == c->HoveredPin;
+      const ImU32 col = hov ? c->Style.PinHovered
+                      : p->Shape == ImGuiCanvasPinShape_Square ? c->Style.PinContainment : c->Style.PinData;
+      const float r = c->Style.PinRadius * z * (hov ? 1.35f : 1.0f);
+      if (p->Shape == ImGuiCanvasPinShape_Square)
+      {
+        const ImVec2 h(r, r);
+        if (p->WiredCount > 0)
+          c->DrawList->AddRectFilled(s - h, s + h, col, r * 0.3f);
+        else
+          c->DrawList->AddRect(s - h, s + h, col, r * 0.3f, 0, ImMax(1.0f, 1.5f * z));
+      }
+      else
+      {
+        if (p->WiredCount > 0)
+          c->DrawList->AddCircleFilled(s, r, col);
+        else
+          c->DrawList->AddCircle(s, r, col, 0, ImMax(1.0f, 1.5f * z));
+      }
+    }
+
+    // Pending wire while dragging one: origin pin -> mouse (or the snap target pin).
+    if (c->Interaction == ImGuiCanvasInteraction_DragWire)
+    {
+      if (const ImGuiCanvasPinRec* pf = CanvasFindPin(c, c->DragWireFromPin))
+      {
+        const ImVec2 a = CanvasToScreen(c, pf->Anchor);
+        ImVec2 b = mouse;
+        int kind_b = pf->Kind == ImGuiCanvasPin_In ? ImGuiCanvasPin_Out : ImGuiCanvasPin_In;
+        if (c->HoveredPin >= 0 && c->HoveredPin != c->DragWireFromPin)
+          if (const ImGuiCanvasPinRec* pt = CanvasFindPin(c, c->HoveredPin))
+          {
+            b = CanvasToScreen(c, pt->Anchor);
+            kind_b = pt->Kind;
+          }
+        ImVec2 c0, c1;
+        CanvasWireControls(c, a, pf->Kind, b, kind_b, &c0, &c1);
+        c->DrawList->AddBezierCubic(a, c0, c1, b, c->Style.WireHovered, ImMax(1.0f, c->Style.WireThickness * z));
+      }
+    }
+
     EndChild();
     PopStyleColor();
     PopStyleVar();
@@ -567,14 +907,53 @@ namespace ImGui
   void CanvasClearSelection(ImGuiCanvasState* c) { c->Selection.resize(0); }
 
   int CanvasHoveredNode(const ImGuiCanvasState* c) { return c->HoveredNode; }
-  int CanvasHoveredWire(const ImGuiCanvasState* c) { IM_UNUSED(c); return -1; }   // C2
-  int CanvasHoveredPin(const ImGuiCanvasState* c)  { IM_UNUSED(c); return -1; }   // C2
+  int CanvasHoveredWire(const ImGuiCanvasState* c) { return c->HoveredWire; }
+  int CanvasHoveredPin(const ImGuiCanvasState* c)  { return c->HoveredPin; }
+  int CanvasSelectedWire(const ImGuiCanvasState* c) { return c->SelectedWire; }
+  void CanvasClearWireSelection(ImGuiCanvasState* c) { c->SelectedWire = -1; }
+
+  bool CanvasWireCreated(const ImGuiCanvasState* c, int* out_pin_a, int* out_pin_b)
+  {
+    if (c->WireCreatedReq)
+    {
+      if (out_pin_a != nullptr) *out_pin_a = c->CreatedPinA;
+      if (out_pin_b != nullptr) *out_pin_b = c->CreatedPinB;
+    }
+    return c->WireCreatedReq;
+  }
+
+  bool CanvasWireDropped(const ImGuiCanvasState* c, int* out_from_pin, ImVec2* out_model_pos)
+  {
+    if (c->WireDroppedReq)
+    {
+      if (out_from_pin != nullptr) *out_from_pin = c->DroppedFromPin;
+      if (out_model_pos != nullptr) *out_model_pos = c->DroppedModel;
+    }
+    return c->WireDroppedReq;
+  }
+
+  bool CanvasWireDetached(const ImGuiCanvasState* c, int* out_wire_id, int* out_grabbed_end_pin)
+  {
+    if (c->WireDetachedReq)
+    {
+      if (out_wire_id != nullptr) *out_wire_id = c->DetachedWireId;
+      if (out_grabbed_end_pin != nullptr) *out_grabbed_end_pin = c->DetachedGrabbedPin;
+    }
+    return c->WireDetachedReq;
+  }
 
   bool CanvasMenuRequestNode(const ImGuiCanvasState* c, int* out_node_id)
   {
     if (c->MenuNodeReq && out_node_id != nullptr)
       *out_node_id = c->MenuNodeId;
     return c->MenuNodeReq;
+  }
+
+  bool CanvasMenuRequestWire(const ImGuiCanvasState* c, int* out_wire_id)
+  {
+    if (c->MenuWireReq && out_wire_id != nullptr)
+      *out_wire_id = c->MenuWireId;
+    return c->MenuWireReq;
   }
 
   bool CanvasMenuRequestEmpty(const ImGuiCanvasState* c, ImVec2* out_model_pos)

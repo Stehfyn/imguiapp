@@ -109,6 +109,8 @@ namespace ImGui
   IMGUI_API int    CanvasHoveredNode(const ImGuiCanvasState* c);                  // -1 = none (valid after CanvasEnd)
   IMGUI_API int    CanvasHoveredWire(const ImGuiCanvasState* c);
   IMGUI_API int    CanvasHoveredPin(const ImGuiCanvasState* c);
+  IMGUI_API int    CanvasSelectedWire(const ImGuiCanvasState* c);                 // single click-selected wire; -1 = none
+  IMGUI_API void   CanvasClearWireSelection(ImGuiCanvasState* c);
 
   // ---- events (latched by CanvasEnd; valid until the next CanvasBegin) ---------------------------
   IMGUI_API bool   CanvasWireCreated(const ImGuiCanvasState* c, int* out_pin_a, int* out_pin_b);   // drag completed pin->pin (snap or release)
