@@ -89,11 +89,12 @@ namespace ImGui
   IMGUI_API void   CanvasFitNodes(ImGuiCanvasState* c, const int* node_ids, int count, float margin_px);
   IMGUI_API void   CanvasFitAll(ImGuiCanvasState* c, float margin_px);                       // over nodes submitted last frame
 
-  // Minimap (imnodes-style): call between CanvasBegin/CanvasEnd; drawn by CanvasEnd as a
-  // bottom-right inset that hugs the mapped content's aspect within size_fraction of the canvas.
-  // Maps the union of node content and the current viewport (the view outline is always inside),
-  // draws node plates + bezier links; holding LMB over it continuously recenters the camera on the
-  // point under the cursor. Its rect is excluded from the canvas FSM.
+  // Minimap, matched to imnodes' MiniMap: call between CanvasBegin/CanvasEnd; drawn by CanvasEnd as
+  // a bottom-right inset fitted to the NODE CONTENT's aspect within size_fraction of the canvas --
+  // the content always fills the map. Node plates are state-colored (map-hover / selected / default)
+  // with scaled rounding, links are scaled beziers, and the current view is a translucent canvas
+  // rect through the same mapping (clipped when the camera sees more than the content). Holding LMB
+  // over the map continuously recenters the camera. Its rect is excluded from the canvas FSM.
   IMGUI_API void   CanvasMiniMap(ImGuiCanvasState* c, float size_fraction);
 
   // ---- nodes (geometry in MODEL units, always) --------------------------------------------------

@@ -263,9 +263,7 @@ namespace
   };
 
   // Seed a fresh graph. The graph IS the app: the collective of layer/window/control nodes composes it,
-  // so there is no "App" container node. Only the foundation is seeded -- a fresh document is the four
-  // guaranteed phases and nothing else; windows and controls are authored, not presumed (a default
-  // "MainWindow"/"NewControl" pair read as content the user never asked for).
+  // so there is no "App" container node. A fresh document is the four guaranteed phases and nothing else.
   void SeedAppGraph(ImGuiAppGraph* graph)
   {
     // The authored foundation is guaranteed here: the four layers are the frame's phases and anchor the canvas

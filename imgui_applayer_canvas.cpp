@@ -1039,10 +1039,12 @@ namespace ImGui
       }
     }
 
-    // Minimap, imnodes-style: the rect hugs the mapped content's aspect within the max fraction box
-    // (bottom-right inset), and the mapping is the union of the node content and the CURRENT viewport
-    // so the view outline is always visible inside it. Drawn from THIS frame's model geometry; the
-    // rect + extents are remembered so the next frame's FSM can invert them (click/drag recenters).
+    // Minimap, matched to imnodes' MiniMap (CalcMiniMapLayout/MiniMapUpdate): the mapping covers the
+    // NODE CONTENT bounds only -- never the viewport -- so the nodes always fill the map at the
+    // content's own aspect ratio (fitted inside the max fraction box). The current view is drawn
+    // THROUGH that same mapping as a translucent canvas rect, clipped to the map when it extends
+    // past the content. Holding LMB over the map continuously recenters the camera (no hysteresis).
+    // The rect + extents are remembered so the next frame's FSM can invert the mapping.
     bool minimap_drawn = false;
     if (c->MiniMapReq)
     {
@@ -1059,14 +1061,15 @@ namespace ImGui
       }
       if (bmin.x <= bmax.x)
       {
-        // Include the current viewport in the mapped extents so the view box is always visible.
-        bmin = ImMin(bmin, CanvasFromScreen(c, c->Origin));
-        bmax = ImMax(bmax, CanvasFromScreen(c, c->Origin + c->CanvasSize));
+        // imnodes CalcMiniMapLayout: fit the CONTENT aspect into max_size = canvas * fraction.
         const ImVec2 span(ImMax(1.0f, bmax.x - bmin.x), ImMax(1.0f, bmax.y - bmin.y));
-        const float  max_w = c->CanvasSize.x * c->MiniMapFraction;
-        const float  max_h = c->CanvasSize.y * c->MiniMapFraction;
-        const float  s = ImMin(max_w / span.x, max_h / span.y);
-        const ImVec2 rect_sz(span.x * s, span.y * s);
+        const ImVec2 max_size(c->CanvasSize.x * c->MiniMapFraction, c->CanvasSize.y * c->MiniMapFraction);
+        const float  content_aspect = span.x / span.y;
+        const float  max_aspect = max_size.x / ImMax(1.0f, max_size.y);
+        const ImVec2 rect_sz = content_aspect > max_aspect
+                             ? ImVec2(max_size.x, max_size.x / content_aspect)
+                             : ImVec2(max_size.y * content_aspect, max_size.y);
+        const float  s = rect_sz.x / span.x;   // MiniMapScaling
         const ImVec2 rmax(c->Origin.x + c->CanvasSize.x - 12.0f, c->Origin.y + c->CanvasSize.y - 12.0f);
         const ImVec2 rmin(rmax.x - rect_sz.x, rmax.y - rect_sz.y);
         c->MiniRectMin = rmin;
@@ -1078,10 +1081,12 @@ namespace ImGui
           return ImVec2(rmin.x + (m.x - bmin.x) * s, rmin.y + (m.y - bmin.y) * s);
         };
 
-        c->DrawList->AddRectFilled(rmin, rmax, IM_COL32(20, 21, 24, 235), 4.0f);
+        const bool map_hovered = mouse.x >= rmin.x && mouse.x < rmax.x && mouse.y >= rmin.y && mouse.y < rmax.y;
+        c->DrawList->AddRectFilled(rmin, rmax, map_hovered ? IM_COL32(30, 31, 35, 235) : IM_COL32(20, 21, 24, 235), 4.0f);
         c->DrawList->AddRect(rmin, rmax, IM_COL32(90, 92, 100, 180), 4.0f);
+        c->DrawList->PushClipRect(rmin, rmax, true);
 
-        // Links as scaled beziers (same read as the canvas, imnodes-style).
+        // Links: scaled beziers, thickness scaled by the minimap scaling (imnodes MiniMapDrawLink).
         for (int i = 0; i < c->Wires.Size; i++)
         {
           const ImGuiCanvasPinRec* pa = CanvasFindPin(c, c->Wires.Data[i].PinA);
@@ -1090,24 +1095,40 @@ namespace ImGui
             continue;
           const ImVec2 a = to_mini(pa->Anchor);
           const ImVec2 b = to_mini(pb->Anchor);
-          const float dx = ImMax(6.0f, ImFabs(b.x - a.x) * 0.5f);
+          const float dx = ImMax(4.0f, ImFabs(b.x - a.x) * 0.5f);
           const ImVec2 c0(a.x + (pa->Kind == ImGuiCanvasPin_In ? -dx : dx), a.y);
           const ImVec2 c1(b.x + (pb->Kind == ImGuiCanvasPin_In ? -dx : dx), b.y);
-          c->DrawList->AddBezierCubic(a, c0, c1, b, IM_COL32(150, 154, 165, 110), 1.0f);
+          c->DrawList->AddBezierCubic(a, c0, c1, b, IM_COL32(150, 154, 165, 140),
+                                      ImMax(1.0f, c->Style.WireThickness * s));
         }
 
+        // Nodes: filled + outlined, state-colored (imnodes MiniMapDrawNode -- hovered-in-map beats
+        // selected beats default), rounding scaled by the map scaling.
         for (int i = 0; i < c->Nodes.Size; i++)
         {
           const ImGuiCanvasNodeRec* n = &c->Nodes.Data[i];
           if (n->LastFrame != mm_frame)
             continue;
-          c->DrawList->AddRectFilled(to_mini(n->Pos), to_mini(n->Pos + n->Size),
-                                     n->TitleColor != 0 ? (n->TitleColor & 0x00FFFFFF) | 0xB4000000 : IM_COL32(150, 152, 160, 180), 2.0f);
+          const ImVec2 nm = to_mini(n->Pos);
+          const ImVec2 nx = to_mini(n->Pos + n->Size);
+          const bool over = map_hovered && mouse.x >= nm.x && mouse.x < nx.x && mouse.y >= nm.y && mouse.y < nx.y;
+          const ImU32 base = n->TitleColor != 0 ? (n->TitleColor & 0x00FFFFFF) | 0xB4000000 : IM_COL32(150, 152, 160, 180);
+          const ImU32 fill = over ? IM_COL32(235, 236, 240, 220)
+                           : CanvasIsSelected(c, n->Id) ? c->Style.WireSelected
+                           : base;
+          const float rounding = ImFloor(c->Style.NodeRounding * s);
+          c->DrawList->AddRectFilled(nm, nx, fill, rounding);
+          c->DrawList->AddRect(nm, nx, IM_COL32(20, 20, 22, 200), rounding);
         }
 
-        // Current view outline (the canvas rect, imnodes' MiniMapCanvas).
-        c->DrawList->AddRect(to_mini(CanvasFromScreen(c, c->Origin)), to_mini(CanvasFromScreen(c, c->Origin + c->CanvasSize)),
-                             IM_COL32(235, 236, 240, 200), 2.0f);
+        // Current view (imnodes MiniMapCanvas): faint fill + outline through the SAME mapping; the
+        // clip rect crops it when the camera sees more than the content.
+        const ImVec2 vmn = to_mini(CanvasFromScreen(c, c->Origin));
+        const ImVec2 vmx = to_mini(CanvasFromScreen(c, c->Origin + c->CanvasSize));
+        c->DrawList->AddRectFilled(vmn, vmx, IM_COL32(200, 200, 200, 25));
+        c->DrawList->AddRect(vmn, vmx, IM_COL32(235, 236, 240, 200));
+
+        c->DrawList->PopClipRect();
       }
     }
     if (!minimap_drawn)
