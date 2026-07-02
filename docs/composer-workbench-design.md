@@ -72,9 +72,10 @@ three memories (splitter floats in doc data, one-shot `WantOutputTab` flag, `Cod
 "open"). Replace with one contract every panel signs:
 
 - Identity: stable id, icon, display name.
-- State: open/closed, size, last-active tab — **persisted in imgui .ini** via the settings handler
-  that is currently a stub (`AppWindowLayerSettingsHandler_*` bodies are empty — this is the
-  concrete gap; layout amnesia across sessions is the single most un-workbench behavior we ship).
+- State: open/closed, size, last-active tab — **persisted across sessions**. *(Landed as a sidecar
+  `imguix_composer_layout.ini` rather than an imgui settings handler: the Composer initializes
+  mid-frame-loop, after imgui has already loaded its ini, and late-registered handlers never see
+  their sections. The `AppWindowLayerSettingsHandler_*` stubs remain a framework-level question.)*
 - Intent API: `RevealPanel(id, payload)` — generalizes the `WantOutputTab` one-shot into the one
   way any subsystem summons any panel (Output click, palette "Show X", future deep links).
   *Pillars: consistency, ease of use. CDoN: viscosity down (no re-opening ritual), premature

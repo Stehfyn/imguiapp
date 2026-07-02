@@ -313,6 +313,17 @@ namespace
 
   // PersistData is value-initialized by PushAppControl<>, then seeded in GraphDocControl::OnInitialize -- no
   // member initializers here (defaults belong to OnInitialize, not the declaration).
+  // Bottom-bar panel identities, for the one-shot reveal intent (any subsystem summons any panel; the tab bar
+  // consumes the intent by SetSelected-ing the named tab and opening the bar if collapsed).
+  enum ComposerPanel_
+  {
+    ComposerPanel_None = 0,
+    ComposerPanel_Code,
+    ComposerPanel_Project,
+    ComposerPanel_Preview,
+    ComposerPanel_Output,
+  };
+
   struct GraphDocData
   {
     ImGuiAppGraph   Graph;
@@ -328,8 +339,10 @@ namespace
     // Output panel: a running document log (actions, refused links, file IO) beside the validation issues.
     struct DocLogLine { int Severity; char Text[184]; };
     ImVector<DocLogLine> Log;         // newest last; capped in DocLog()
-    bool            WantOutputTab;    // one-shot: reveal + select the Output tab (viewport chip click)
+    int             RevealPanel;      // one-shot ComposerPanel_*: reveal + select that bottom tab (0 = none)
     int             LinkErrSeqSeen;   // last Graph.LastLinkErrSeq folded into the log
+    ImGuiID         LayoutSavedHash;  // hash of the last-persisted layout fields (change detection)
+    float           LayoutSaveT;      // debounce: seconds until the next layout-save check
     ImGuiApp*       Mirror;           // app reflected into the live graph (set after push; see ShowAppLayerDemo)
     ImGuiAppStateHistory MirrorHistory;   // the mirrored app's recorded state ring (time travel)
     bool            TimeScrub;        // true: freeze the mirror at TimeScrubIndex instead of recording
@@ -341,6 +354,85 @@ namespace
   static GraphDocData* GetGraphDoc(ImGuiApp* app)
   {
     return static_cast<GraphDocData*>(app->Data.GetVoidPtr(ImGuiType<GraphDocData>::ID));
+  }
+
+  //-----------------------------------------------------------------------------
+  // Workspace layout persistence (workbench design W1). A sidecar key=value file rather than an imgui
+  // .ini settings handler: the Composer initializes mid-frame-loop, AFTER imgui has already loaded its ini,
+  // and handlers registered late never see their sections. The sidecar has no such timing trap.
+  //-----------------------------------------------------------------------------
+
+  static const char* kComposerLayoutPath = "imguix_composer_layout.ini";
+
+  // The persisted fields, packed for hashing (change detection) and IO in one place.
+  struct ComposerLayoutFields
+  {
+    float TreeW, InspW, CodeH;
+    bool  ShowLive;
+    ImGui::ImGuiAppGraphViewState View;
+  };
+  static ComposerLayoutFields ComposerLayoutCapture(const GraphDocData* doc)
+  {
+    ComposerLayoutFields f;
+    memset(&f, 0, sizeof(f));   // padding participates in the hash -- keep it deterministic
+    f.TreeW = doc->TreeW; f.InspW = doc->InspW; f.CodeH = doc->CodeH;
+    f.ShowLive = doc->ShowLive;
+    f.View = *ImGui::AppGraphViewState();
+    return f;
+  }
+
+  static void ComposerLayoutLoad(GraphDocData* doc)
+  {
+    size_t size = 0;
+    char* text = (char*)ImFileLoadToMemory(kComposerLayoutPath, "rb", &size, 1);
+    if (text == nullptr)
+      return;
+    ImGui::ImGuiAppGraphViewState* view = ImGui::AppGraphViewState();
+    for (char* p = text; *p; )
+    {
+      char* eol = p;
+      while (*eol != 0 && *eol != '\n') eol++;
+      const char saved = *eol;
+      *eol = 0;
+      float fv = 0.0f; int iv = 0;
+      if      (sscanf(p, "TreeW=%f", &fv) == 1)     doc->TreeW = fv;
+      else if (sscanf(p, "InspW=%f", &fv) == 1)     doc->InspW = fv;
+      else if (sscanf(p, "CodeH=%f", &fv) == 1)     doc->CodeH = fv;
+      else if (sscanf(p, "ShowLive=%d", &iv) == 1)  doc->ShowLive = iv != 0;
+      else if (sscanf(p, "Snap=%d", &iv) == 1)      view->SnapGrid = iv != 0;
+      else if (sscanf(p, "OvGrid=%d", &iv) == 1)    view->OvGrid = iv != 0;
+      else if (sscanf(p, "OvBands=%d", &iv) == 1)   view->OvBands = iv != 0;
+      else if (sscanf(p, "OvFrames=%d", &iv) == 1)  view->OvFrames = iv != 0;
+      else if (sscanf(p, "OvMinimap=%d", &iv) == 1) view->OvMinimap = iv != 0;
+      if (saved == 0) break;
+      p = eol + 1;
+    }
+    IM_FREE(text);
+    const ComposerLayoutFields f = ComposerLayoutCapture(doc);
+    doc->LayoutSavedHash = ImHashData(&f, sizeof(f));
+  }
+
+  // Debounced write-on-change: at most one disk check per second, skipped mid-gesture so a drag lands once.
+  static void ComposerLayoutSaveIfChanged(GraphDocData* doc, float dt)
+  {
+    doc->LayoutSaveT -= dt;
+    if (doc->LayoutSaveT > 0.0f || ImGui::IsMouseDown(ImGuiMouseButton_Left))
+      return;
+    doc->LayoutSaveT = 1.0f;
+    const ComposerLayoutFields f = ComposerLayoutCapture(doc);
+    const ImGuiID h = ImHashData(&f, sizeof(f));
+    if (h == doc->LayoutSavedHash)
+      return;
+    if (ImFileHandle fh = ImFileOpen(kComposerLayoutPath, "wt"))
+    {
+      ImGuiTextBuffer buf;
+      buf.appendf("TreeW=%g\nInspW=%g\nCodeH=%g\nShowLive=%d\n", f.TreeW, f.InspW, f.CodeH, f.ShowLive ? 1 : 0);
+      buf.appendf("Snap=%d\nOvGrid=%d\nOvBands=%d\nOvFrames=%d\nOvMinimap=%d\n",
+                  f.View.SnapGrid ? 1 : 0, f.View.OvGrid ? 1 : 0, f.View.OvBands ? 1 : 0, f.View.OvFrames ? 1 : 0, f.View.OvMinimap ? 1 : 0);
+      ImFileWrite(buf.c_str(), sizeof(char), (ImU64)buf.size(), fh);
+      ImFileClose(fh);
+      doc->LayoutSavedHash = h;
+    }
   }
 
   // Append one line to the document log (Output panel). Severity: 0 info, 1 warning, 2 error. Called from
@@ -370,13 +462,16 @@ namespace
       data->InspW       = 0.0f;          // 0 -> EditorBody picks a default on first layout
       data->WriteMsg[0] = 0;
       data->WrittenSig  = 0;
-      data->WantOutputTab = false;
+      data->RevealPanel = ComposerPanel_None;
       data->LinkErrSeqSeen = 0;
+      data->LayoutSavedHash = 0;
+      data->LayoutSaveT = 0.0f;
       data->Mirror      = nullptr;       // set after push by ShowAppLayerDemo
       data->TimeScrub   = false;
       data->TimeScrubIndex = 0;
       ImStrncpy(data->GraphPath,  "imguix_node_graph.txt",      sizeof(data->GraphPath));
       ImStrncpy(data->HeaderPath, "imguix_generated_control.h", sizeof(data->HeaderPath));
+      ComposerLayoutLoad(data);          // workspace layout survives sessions (workbench W1)
       if (data->Graph.Nodes.empty())
       {
         SeedAppGraph(&data->Graph);
@@ -384,7 +479,8 @@ namespace
     }
     virtual void OnUpdate(float dt, GraphDocData* data, const GraphDocTempData*, const GraphDocTempData*) const override final
     {
-      IM_UNUSED(dt);
+      ComposerLayoutSaveIfChanged(data, dt);
+
       // Reconcile-before-report: build the live mirror first so every panel reads the reconciled graph this frame.
       if (data->Mirror != nullptr)
       {
@@ -444,6 +540,8 @@ namespace
     bool Undo;          // undo / redo edit-intents (applied in OnUpdate)
     bool Redo;
     bool Diff;          // diff current graph's codegen vs the saved-on-disk graph -> clipboard
+    bool HistoryGotoSet; // history dropdown picked a step
+    int  HistoryGotoIdx;
   };
   struct ToolbarControl : ImGuiAppControl<ToolbarData, ToolbarTempData>
   {
@@ -500,6 +598,10 @@ namespace
       {
         ImGui::AppGraphRedo(&doc->Graph);
       }
+      if (temp_data->HistoryGotoSet)
+      {
+        ImGui::AppGraphHistoryGoto(&doc->Graph, temp_data->HistoryGotoIdx);
+      }
       if (temp_data->Diff)
       {
         ImGuiAppGraph saved;
@@ -553,8 +655,10 @@ namespace
           ImGui::SetItemTooltip("Graph changed -- write whole-graph C++ -> %s", doc->HeaderPath);
 
         EditorToolSep(em);
-        temp_data->Save = ImGui::Button(ICON_FA_FLOPPY_DISK "  Save");
-        ImGui::SetItemTooltip("Save graph -> %s", doc->GraphPath);
+        // Ctrl+S is document-global (VS convention): captured here because the toolbar renders every frame.
+        temp_data->Save = ImGui::Button(ICON_FA_FLOPPY_DISK "  Save")
+                       || (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false));
+        ImGui::SetItemTooltip("Save graph -> %s (Ctrl+S)", doc->GraphPath);
         ImGui::SameLine();
         temp_data->Load = ImGui::Button(ICON_FA_FOLDER_OPEN "  Load");
         ImGui::SetItemTooltip("Load graph <- %s", doc->GraphPath);
@@ -563,15 +667,49 @@ namespace
         ImGui::SetItemTooltip("Diff generated C++ vs the saved graph -> clipboard");
 
         EditorToolSep(em);
+        // Undo/redo carry the NAME of the step they would take (VS "Undo Typing"); the clock opens the whole
+        // named history -- click any step to jump (AppGraphHistoryGoto). Render only records the pick.
+        const int hist_count  = ImGui::AppGraphHistoryCount(&doc->Graph);
+        const int hist_cursor = ImGui::AppGraphHistoryCursor(&doc->Graph);
         ImGui::BeginDisabled(!ImGui::AppGraphCanUndo(&doc->Graph));
         temp_data->Undo = ImGui::Button(ICON_FA_ARROW_ROTATE_LEFT "##undo");
         ImGui::EndDisabled();
-        ImGui::SetItemTooltip("Undo (Ctrl+Z)");
+        if (hist_cursor > 0)
+          ImGui::SetItemTooltip("Undo %s (Ctrl+Z)", ImGui::AppGraphHistoryLabel(&doc->Graph, hist_cursor));
+        else
+          ImGui::SetItemTooltip("Undo (Ctrl+Z)");
         ImGui::SameLine();
         ImGui::BeginDisabled(!ImGui::AppGraphCanRedo(&doc->Graph));
         temp_data->Redo = ImGui::Button(ICON_FA_ARROW_ROTATE_RIGHT "##redo");
         ImGui::EndDisabled();
-        ImGui::SetItemTooltip("Redo (Ctrl+Y)");
+        if (hist_cursor >= 0 && hist_cursor + 1 < hist_count)
+          ImGui::SetItemTooltip("Redo %s (Ctrl+Y)", ImGui::AppGraphHistoryLabel(&doc->Graph, hist_cursor + 1));
+        else
+          ImGui::SetItemTooltip("Redo (Ctrl+Y)");
+        ImGui::SameLine();
+        temp_data->HistoryGotoSet = false;
+        temp_data->HistoryGotoIdx = -1;
+        ImGui::BeginDisabled(hist_count <= 1);
+        if (ImGui::Button(ICON_FA_CLOCK_ROTATE_LEFT "##history"))
+          ImGui::OpenPopup("##edit_history");
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltip("Edit history (%d steps) -- click a step to jump", hist_count);
+        if (ImGui::BeginPopup("##edit_history"))
+        {
+          // Newest first; the cursor row is the state the canvas shows right now.
+          for (int i = hist_count - 1; i >= 0; i--)
+          {
+            char row[128];
+            ImFormatString(row, IM_ARRAYSIZE(row), "%s %s###h%d", i == hist_cursor ? ICON_FA_CARET_RIGHT : " ",
+                           ImGui::AppGraphHistoryLabel(&doc->Graph, i), i);
+            if (ImGui::Selectable(row, i == hist_cursor) && i != hist_cursor)
+            {
+              temp_data->HistoryGotoSet = true;
+              temp_data->HistoryGotoIdx = i;
+            }
+          }
+          ImGui::EndPopup();
+        }
 
         // -- Right cluster: panel toggles. Width measured so it hugs the edge. Run controls (App time)
         //    live on the viewport's transport overlay; the health chip lives on the viewport status strip.
@@ -852,7 +990,7 @@ namespace
     float BodyMaxX;            // body row right edge (screen) -- the inspector width derives from it
     bool  ProjLoadGraph;       // Project tab: load the graph file
     bool  OpenOutput;          // viewport status strip clicked -> reveal + select the Output tab
-    bool  AckOutputTab;        // the Output tab consumed its one-shot select this frame
+    bool  AckReveal;           // the bottom tab bar consumed the one-shot RevealPanel intent this frame
     bool  ClearLog;            // Output tab: clear the document log
   };
   struct EditorBodyControl : ImGuiAppControl<EditorBodyData, EditorBodyTempData>
@@ -911,17 +1049,14 @@ namespace
           doc->InspW = temp_data->BodyMaxX - temp_data->MouseX;
       }
 
-      // Output panel intents (viewport status strip + the tab itself).
+      // Panel reveal intents (viewport status strip today; palette/status-bar zones join via the same door).
+      // Revealing a bottom tab opens the bar if collapsed -- an intent that lands on a closed panel is a bug.
       if (temp_data->OpenOutput)
-      {
-        if (doc->CodeH <= 0.0f)
-          doc->CodeH = ImGui::GetFontSize() * 12.0f;
-        doc->WantOutputTab = true;
-      }
-      if (temp_data->AckOutputTab)
-      {
-        doc->WantOutputTab = false;
-      }
+        doc->RevealPanel = ComposerPanel_Output;
+      if (doc->RevealPanel != ComposerPanel_None && doc->CodeH <= 0.0f)
+        doc->CodeH = ImGui::GetFontSize() * 12.0f;
+      if (temp_data->AckReveal)
+        doc->RevealPanel = ComposerPanel_None;
       if (temp_data->ClearLog)
       {
         doc->Log.resize(0);
@@ -1184,7 +1319,7 @@ namespace
               // Code: the whole generated program, source-mapped -- the selection's lines highlight and
               // scroll into view, hover brushes both ways, clicking a line selects the node. Scopes are
               // TABS (the idiom this panel already speaks), so the focused view is its own tab below.
-              if (ImGui::BeginTabItem("Code"))
+              if (ImGui::BeginTabItem("Code", nullptr, doc->RevealPanel == ComposerPanel_Code ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
               {
                 ImGui::AlignTextToFramePadding();
                 ImGui::TextDisabled("Whole program");
@@ -1213,7 +1348,7 @@ namespace
               }
               // Project: the document's files on disk (Unity/UE "Project" scoped to what the Composer
               // produces): the graph file, the generated header (freshness-chipped), and the WAL logs.
-              if (ImGui::BeginTabItem("Project"))
+              if (ImGui::BeginTabItem("Project", nullptr, doc->RevealPanel == ComposerPanel_Project ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
               {
                 temp_data->ProjLoadGraph = false;
                 if (data->ProjFiles.Size == 0)
@@ -1265,21 +1400,21 @@ namespace
                 ImGui::EndTabItem();
               }
               // Preview ("Play"): render the selected control's fields as a live mock UI.
-              if (ImGui::BeginTabItem("Preview"))
+              if (ImGui::BeginTabItem("Preview", nullptr, doc->RevealPanel == ComposerPanel_Preview ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
               {
                 ImGui::AppGraphRenderMockPanel(graph, selection);
                 ImGui::EndTabItem();
               }
               // Output: validation issues (clickable, brushing) + the running document log -- config errors
               // AND a debugging trail in one stream. The tab label carries the issue count; the viewport
-              // status strip's click lands here (one-shot SetSelected via doc->WantOutputTab).
+              // status strip's click lands here (one-shot SetSelected via doc->RevealPanel).
               char output_label[32];
               if (data->Issues.Size > 0)
                 ImFormatString(output_label, IM_ARRAYSIZE(output_label), "Output (%d)###output", data->Issues.Size);
               else
                 ImStrncpy(output_label, "Output###output", IM_ARRAYSIZE(output_label));
-              temp_data->AckOutputTab = doc->WantOutputTab;   // consume the one-shot select
-              if (ImGui::BeginTabItem(output_label, nullptr, doc->WantOutputTab ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
+              temp_data->AckReveal = doc->RevealPanel != ComposerPanel_None;   // consume the one-shot select
+              if (ImGui::BeginTabItem(output_label, nullptr, doc->RevealPanel == ComposerPanel_Output ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
               {
                 if (data->Issues.Size == 0)
                 {

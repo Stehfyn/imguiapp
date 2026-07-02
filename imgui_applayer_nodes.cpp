@@ -2528,6 +2528,12 @@ namespace ImGui
     s_hover_frame = fc;
   }
 
+  ImGuiAppGraphViewState* AppGraphViewState()
+  {
+    static ImGuiAppGraphViewState s_view = { false, true, true, true, true };   // snap off; overlays on
+    return &s_view;
+  }
+
   void AppGraphHoverNode(int node_id, ImGuiAppHoverSource source)
   {
     AppHoverRotate();
@@ -4005,9 +4011,10 @@ namespace ImGui
     IM_ASSERT(g != nullptr);
     IM_UNUSED(app);
 
-    // Snap-to-grid: toggled by the G key (latched here, applied to the imnodes style for this frame). When on,
-    // imnodes snaps node origins to the grid as they're dragged.
-    static bool s_snap_grid = false;
+    // Snap-to-grid: toggled by the G key (latched in the shared view state, applied to the imnodes style for
+    // this frame). When on, imnodes snaps node origins to the grid as they're dragged. View state lives behind
+    // AppGraphViewState() so the host can persist it across sessions.
+    bool& s_snap_grid = AppGraphViewState()->SnapGrid;
     static bool s_help = false;       // F1 shortcut cheat-sheet overlay
     if (s_snap_grid)
       ImNodes::GetStyle().Flags |= ImNodesStyleFlags_GridSnapping;
@@ -4015,8 +4022,11 @@ namespace ImGui
       ImNodes::GetStyle().Flags &= ~ImNodesStyleFlags_GridSnapping;
 
     // Canvas overlay toggles, driven from the gizmo cluster's popover (Blender's overlays popover): each is
-    // presentation-only and never touches the model.
-    static bool s_ov_grid = true, s_ov_bands = true, s_ov_frames = true, s_ov_minimap = true;
+    // presentation-only and never touches the model. Same persistable view state as snap.
+    bool& s_ov_grid = AppGraphViewState()->OvGrid;
+    bool& s_ov_bands = AppGraphViewState()->OvBands;
+    bool& s_ov_frames = AppGraphViewState()->OvFrames;
+    bool& s_ov_minimap = AppGraphViewState()->OvMinimap;
     if (s_ov_grid)
       ImNodes::GetStyle().Flags |= (ImNodesStyleFlags_GridLines | ImNodesStyleFlags_GridLinesPrimary);
     else
@@ -4812,6 +4822,15 @@ namespace ImGui
       if (ImGui::IsKeyPressed(ImGuiKey_Space, false))
         ImGui::OpenPopup("##cmdpalette");   // Blender-style operator search
 
+      // F2 renames the primary SELECTION inline (the same editor the title double-click opens). Acts on
+      // selection, never hover -- hover is for brushing. Live mirrors and core layers keep their names.
+      if (ImGui::IsKeyPressed(ImGuiKey_F2, false) && selected_node_id != nullptr && *selected_node_id >= 0)
+      {
+        const ImGuiAppNode* sel = AppGraphFindNodeConst(g, *selected_node_id);
+        if (sel != nullptr && !sel->IsLive && (sel->Kind != ImGuiAppNodeKind_Layer || sel->LayerType == ImGuiAppLayerType_Custom))
+          g->EditingNodeId = sel->Id;
+      }
+
       // Drill-down (Blender node-group semantics): Tab enters the selected node's composition scope; Tab with
       // nothing enterable -- or Esc -- goes up one level, reselecting the scope just left. The reveal/fit runs
       // next frame once the newly scoped nodes have been submitted.
@@ -5452,9 +5471,10 @@ namespace ImGui
         "A        select all / none    H     hide sel (Alt+H show)",
         "L        tidy layout          G     snap-to-grid",
         "[ / ]   send back / front     arrows nudge (Shift x10)",
-        "Del      delete                F2*   rename (in tree)",
+        "Del      delete                F2    rename selection",
         "Ctrl+Z / Ctrl+Y   undo / redo",
         "Ctrl+C / Ctrl+V   copy / paste subtree",
+        "Ctrl+D   duplicate selection   Ctrl+S save graph",
         "drag pin -> empty   new node       drag link end   rewire",
         "wheel over field    scrub value",
         "click group chip     collapse      drag chip           move group",
@@ -5680,6 +5700,14 @@ namespace ImGui
       }
       if (ImGui::IsKeyPressed(ImGuiKey_V, false) && AppGraphClipboardHasData())
         AppGraphPasteClipboard(g);
+      // Ctrl+D duplicates the selection in place (the palette's Edit: Duplicate, on the keyboard).
+      if (ImGui::IsKeyPressed(ImGuiKey_D, false) && g->Selection.Size > 0)
+      {
+        ImVector<int> sel = g->Selection;   // copy: duplication mutates g->Nodes (and may grow Selection)
+        for (int i = 0; i < sel.Size; i++)
+          if (const ImGuiAppNode* sn = AppGraphFindNode(g, sel.Data[i]))
+            AppGraphDuplicateNode(g, sn);
+      }
     }
 
     // Undo/redo: capture this frame's settled mutations, then honor Ctrl+Z / Ctrl+(Shift+)Z / Ctrl+Y.
@@ -8052,6 +8080,7 @@ namespace ImGui
     struct AppUndoHistory
     {
       ImVector<char*>      Snaps;     // owned snapshot strings, oldest..newest
+      ImVector<char*>      Labels;    // owned operation names, parallel to Snaps (derived by diffing)
       int                  Cursor;    // index of the snapshot matching the live graph (-1 = empty)
       const ImGuiAppGraph* Owner;     // identity guard
       ImGuiID              LiveHash;  // hash of Snaps[Cursor], for cheap change detection
@@ -8078,23 +8107,138 @@ namespace ImGui
   {
     for (int i = 0; i < g_app_undo.Snaps.Size; i++)
       IM_FREE(g_app_undo.Snaps.Data[i]);
+    for (int i = 0; i < g_app_undo.Labels.Size; i++)
+      IM_FREE(g_app_undo.Labels.Data[i]);
     g_app_undo.Snaps.clear();
+    g_app_undo.Labels.clear();
     g_app_undo.Cursor = -1;
   }
 
-  // Drop the redo tail, append a new snapshot, and cap total depth from the front.
-  static void AppUndoPush(char* snap)
+  static char* AppUndoStrdup(const char* s)
+  {
+    const size_t n = strlen(s);
+    char* d = (char*)IM_ALLOC(n + 1);
+    memcpy(d, s, n + 1);
+    return d;
+  }
+
+  // Name the operation that turned `prev` into `now` (VS "Undo Typing" / Blender's named history). Derived by
+  // structural diff -- the checkpoint model detects settled changes rather than instrumenting call sites, so
+  // the name must come from the states themselves. Precedence: structure > wiring > content > movement.
+  static void AppUndoDeriveLabel(const ImGuiAppGraph* prev, const ImGuiAppGraph* now, char* out, size_t out_size)
+  {
+    // Node-set diff by id.
+    const ImGuiAppNode* added = nullptr;   int n_added = 0;
+    const ImGuiAppNode* removed = nullptr; int n_removed = 0;
+    for (int i = 0; i < now->Nodes.Size; i++)
+      if (AppGraphFindNodeConst(prev, now->Nodes.Data[i].Id) == nullptr) { added = &now->Nodes.Data[i]; n_added++; }
+    for (int i = 0; i < prev->Nodes.Size; i++)
+      if (AppGraphFindNodeConst(now, prev->Nodes.Data[i].Id) == nullptr) { removed = &prev->Nodes.Data[i]; n_removed++; }
+
+    if (n_added > 0 && n_removed == 0)
+    {
+      if (n_added == 1) ImFormatString(out, out_size, "Add %s", added->Draft.Name[0] ? added->Draft.Name : "node");
+      else              ImFormatString(out, out_size, "Add %d nodes", n_added);
+      return;
+    }
+    if (n_removed > 0 && n_added == 0)
+    {
+      if (n_removed == 1) ImFormatString(out, out_size, "Delete %s", removed->Draft.Name[0] ? removed->Draft.Name : "node");
+      else                ImFormatString(out, out_size, "Delete %d nodes", n_removed);
+      return;
+    }
+    if (n_added > 0 && n_removed > 0)
+    {
+      ImFormatString(out, out_size, "Edit %d nodes", n_added + n_removed);
+      return;
+    }
+
+    // Wiring: link-set diff by id.
+    int links_added = 0, links_removed = 0;
+    for (int i = 0; i < now->Links.Size; i++)
+    {
+      bool found = false;
+      for (int j = 0; j < prev->Links.Size && !found; j++) found = prev->Links.Data[j].Id == now->Links.Data[i].Id;
+      if (!found) links_added++;
+    }
+    for (int i = 0; i < prev->Links.Size; i++)
+    {
+      bool found = false;
+      for (int j = 0; j < now->Links.Size && !found; j++) found = now->Links.Data[j].Id == prev->Links.Data[i].Id;
+      if (!found) links_removed++;
+    }
+    if (links_added + links_removed > 0)
+    {
+      ImStrncpy(out, links_added > 0 && links_removed == 0 ? "Connect" : links_removed > 0 && links_added == 0 ? "Disconnect" : "Rewire", out_size);
+      return;
+    }
+
+    // Content: per-node record compare (position excluded); movement tracked separately.
+    const ImGuiAppNode* changed = nullptr; int n_changed = 0;
+    const ImGuiAppNode* moved = nullptr;   int n_moved = 0;
+    const ImGuiAppNode* renamed_now = nullptr; const ImGuiAppNode* renamed_prev = nullptr;
+    ImGuiTextBuffer rec_a, rec_b;
+    for (int i = 0; i < now->Nodes.Size; i++)
+    {
+      const ImGuiAppNode* a = AppGraphFindNodeConst(prev, now->Nodes.Data[i].Id);
+      const ImGuiAppNode* b = &now->Nodes.Data[i];
+      if (a == nullptr)
+        continue;
+      if (a->GridPos.x != b->GridPos.x || a->GridPos.y != b->GridPos.y) { moved = b; n_moved++; }
+      rec_a.clear(); rec_b.clear();
+      ImGuiAppNode ap = *a, bp = *b;                       // shallow copy is fine: emit reads only
+      ap.GridPos = bp.GridPos = ImVec2(0.0f, 0.0f);        // neutralize the Pos= line
+      AppEmitNodeRecord(&rec_a, &ap);
+      AppEmitNodeRecord(&rec_b, &bp);
+      if (strcmp(rec_a.c_str(), rec_b.c_str()) != 0)
+      {
+        changed = b; n_changed++;
+        if (strcmp(a->Draft.Name, b->Draft.Name) != 0) { renamed_prev = a; renamed_now = b; }
+      }
+    }
+    if (n_changed == 1)
+    {
+      const char* name = changed->Draft.Name[0] ? changed->Draft.Name : "node";
+      if (renamed_now != nullptr)
+        ImFormatString(out, out_size, "Rename %s \xE2\x86\x92 %s", renamed_prev->Draft.Name, renamed_now->Draft.Name);
+      else if (changed->StyleMods.Size != AppGraphFindNodeConst(prev, changed->Id)->StyleMods.Size
+            || changed->ColorMods.Size != AppGraphFindNodeConst(prev, changed->Id)->ColorMods.Size
+            || memcmp(changed->StyleMods.Data, AppGraphFindNodeConst(prev, changed->Id)->StyleMods.Data, (size_t)changed->StyleMods.Size * sizeof(ImGuiAppStyleModDesc)) != 0
+            || memcmp(changed->ColorMods.Data, AppGraphFindNodeConst(prev, changed->Id)->ColorMods.Data, (size_t)changed->ColorMods.Size * sizeof(ImGuiAppColorModDesc)) != 0)
+        ImFormatString(out, out_size, "Style %s", name);
+      else if (changed->Events.Size != AppGraphFindNodeConst(prev, changed->Id)->Events.Size)
+        ImFormatString(out, out_size, "Events %s", name);
+      else
+        ImFormatString(out, out_size, "Edit %s", name);
+      return;
+    }
+    if (n_changed > 1) { ImFormatString(out, out_size, "Edit %d nodes", n_changed); return; }
+
+    if (n_moved == 1) { ImFormatString(out, out_size, "Move %s", moved->Draft.Name[0] ? moved->Draft.Name : "node"); return; }
+    if (n_moved > 1)  { ImFormatString(out, out_size, "Move %d nodes", n_moved); return; }
+
+    if (now->Bindings.Size != prev->Bindings.Size) { ImStrncpy(out, "Bind fields", out_size); return; }
+    ImStrncpy(out, "Edit", out_size);
+  }
+
+  // Drop the redo tail, append a new snapshot + its label, and cap total depth from the front.
+  static void AppUndoPush(char* snap, const char* label)
   {
     while (g_app_undo.Snaps.Size - 1 > g_app_undo.Cursor)
     {
       IM_FREE(g_app_undo.Snaps.Data[g_app_undo.Snaps.Size - 1]);
+      IM_FREE(g_app_undo.Labels.Data[g_app_undo.Labels.Size - 1]);
       g_app_undo.Snaps.pop_back();
+      g_app_undo.Labels.pop_back();
     }
     g_app_undo.Snaps.push_back(snap);
+    g_app_undo.Labels.push_back(AppUndoStrdup(label));
     if (g_app_undo.Snaps.Size > kAppUndoCap)
     {
       IM_FREE(g_app_undo.Snaps.Data[0]);
+      IM_FREE(g_app_undo.Labels.Data[0]);
       g_app_undo.Snaps.erase(g_app_undo.Snaps.Data);
+      g_app_undo.Labels.erase(g_app_undo.Labels.Data);
     }
     g_app_undo.Cursor = g_app_undo.Snaps.Size - 1;
     g_app_undo.LiveHash = ImHashStr(snap);
@@ -8120,7 +8264,7 @@ namespace ImGui
     {
       AppUndoClear();
       g_app_undo.Owner = g;
-      AppUndoPush(AppUndoSnapshot(g));
+      AppUndoPush(AppUndoSnapshot(g), "Open");
       return;
     }
     // Coalesce: don't snapshot mid-drag or mid-edit -- wait for the gesture to settle so one action == one step.
@@ -8132,7 +8276,20 @@ namespace ImGui
       IM_FREE(snap);
       return;
     }
-    AppUndoPush(snap);
+
+    // Name the step: deserialize the snapshot the live graph just diverged from, diff against the live graph.
+    char label[96];
+    ImStrncpy(label, "Edit", IM_ARRAYSIZE(label));
+    if (g_app_undo.Cursor >= 0)
+    {
+      char* prev_text = AppUndoStrdup(g_app_undo.Snaps.Data[g_app_undo.Cursor]);   // deserialize mutates in place
+      ImGuiAppGraph prev;
+      AppGraphDeserialize(&prev, prev_text);
+      IM_FREE(prev_text);
+      AppUndoDeriveLabel(&prev, g, label, IM_ARRAYSIZE(label));
+      prev.Nodes.clear_destruct();   // scratch graph owns its nodes' inner vectors; ImVector never destructs elements
+    }
+    AppUndoPush(snap, label);
   }
 
   bool AppGraphCanUndo(const ImGuiAppGraph* g) { return g_app_undo.Owner == g && g_app_undo.Cursor > 0; }
@@ -8152,6 +8309,13 @@ namespace ImGui
 
   int AppGraphHistoryCount(const ImGuiAppGraph* g) { return g_app_undo.Owner == g ? g_app_undo.Snaps.Size : 0; }
   int AppGraphHistoryCursor(const ImGuiAppGraph* g) { return g_app_undo.Owner == g ? g_app_undo.Cursor : -1; }
+
+  const char* AppGraphHistoryLabel(const ImGuiAppGraph* g, int index)
+  {
+    if (g_app_undo.Owner != g || index < 0 || index >= g_app_undo.Labels.Size)
+      return "";
+    return g_app_undo.Labels.Data[index];
+  }
 
   void AppGraphHistoryGoto(ImGuiAppGraph* g, int index)
   {

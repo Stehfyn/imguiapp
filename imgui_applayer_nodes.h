@@ -595,6 +595,18 @@ namespace ImGui
   IMGUI_API int                 AppGraphHoveredNode(ImGuiAppHoverSource* out_source);   // -1 = none; out_source may be null
   IMGUI_API int                 AppGraphHoveredLink(ImGuiAppHoverSource* out_source);
 
+  // Canvas view settings: snap-to-grid + the overlays popover's toggles. Presentation-only, never model state.
+  // Exposed (stable pointer, single editor instance) so the host can persist them across sessions.
+  struct ImGuiAppGraphViewState
+  {
+    bool SnapGrid;
+    bool OvGrid;
+    bool OvBands;
+    bool OvFrames;
+    bool OvMinimap;
+  };
+  IMGUI_API ImGuiAppGraphViewState* AppGraphViewState();
+
   // Cached validation, keyed by AppGraphSignature (+ bindings): cheap enough to query every frame, so
   // problems can render ambiently where they live (canvas severity dot, outliner underline, inspector
   // header) instead of only in a list. Worst per-node severity: 0 = clean, 1 = warning, 2 = error.
@@ -667,6 +679,7 @@ namespace ImGui
   IMGUI_API int                 AppGraphHistoryCount(const ImGuiAppGraph* g);
   IMGUI_API int                 AppGraphHistoryCursor(const ImGuiAppGraph* g);
   IMGUI_API void                AppGraphHistoryGoto(ImGuiAppGraph* g, int index);
+  IMGUI_API const char*         AppGraphHistoryLabel(const ImGuiAppGraph* g, int index);   // derived operation name ("Add Mixer", "Rename A -> B"); "" if unknown
 
   // Prefabs: reusable named subtrees. SavePrefab serializes the roots' containment subtrees under a name
   // (replacing one of the same name); Instantiate stamps a saved prefab into g with fresh ids at `origin` and
