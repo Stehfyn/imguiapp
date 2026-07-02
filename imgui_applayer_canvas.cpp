@@ -125,10 +125,13 @@ struct ImGuiCanvasState
   // Minimap
   bool   MiniMapReq;
   float  MiniMapFraction;
-  ImVec2 MiniRectMin;          // last drawn rect (screen); the FSM keeps out of it
+  ImVec2 MiniRectMin;          // fixed inset rect (screen); the FSM keeps out of it
   ImVec2 MiniRectMax;
-  ImVec2 MiniModelMin;         // the model extents that rect mapped (for click-to-jump)
-  ImVec2 MiniModelMax;
+  ImVec2 MiniOriginScreen;     // screen point MiniModelAtOrigin maps to (content letterboxed in the rect)
+  ImVec2 MiniModelAtOrigin;
+  float  MiniScale;            // model units -> minimap pixels
+  bool   MiniDragging;         // view-box thumb drag in progress (survives leaving the rect)
+  ImVec2 MiniGrabDelta;        // model offset between the grab point and the view center at press
 
   // Latched events (valid from CanvasEnd until the next CanvasBegin)
   bool   NodeDblClickReq;
@@ -199,8 +202,13 @@ struct ImGuiCanvasState
     DragWireFromPin = -1;
     EditBuf = nullptr; EditBufSize = 0; EditFlag = nullptr; EditNodeIdx = -1; EditFocusPending = false;
     LastEditingNodeId = -1;
-    MiniMapReq = false; MiniMapFraction = 0.2f;
-    MiniRectMin = MiniRectMax = MiniModelMin = MiniModelMax = ImVec2(0.0f, 0.0f);
+    MiniMapReq = false;
+    MiniMapFraction = 0.2f;
+    MiniRectMin = MiniRectMax = ImVec2(0.0f, 0.0f);
+    MiniOriginScreen = MiniModelAtOrigin = ImVec2(0.0f, 0.0f);
+    MiniScale = 0.0f;
+    MiniDragging = false;
+    MiniGrabDelta = ImVec2(0.0f, 0.0f);
     NodeDblClickReq = false; NodeDblClickId = -1;
     MenuNodeReq = MenuWireReq = MenuEmptyReq = false;
     MenuNodeId = MenuWireId = -1;
@@ -421,20 +429,40 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
   ImGuiIO& io = ImGui::GetIO();
   const ImVec2 mouse = io.MousePos;
 
-  // The minimap owns its rect: gestures there recenter the camera (handled where it draws) and the
-  // canvas FSM stays out.
+  // The minimap owns its rect: the view box drags like a scrollbar thumb (no jump), a press outside
+  // the thumb jumps there and keeps dragging. The canvas FSM stays out. An active thumb drag keeps
+  // control even when the mouse leaves the rect (scrollbar semantics).
   const bool in_minimap = mouse.x >= c->MiniRectMin.x && mouse.x < c->MiniRectMax.x
                        && mouse.y >= c->MiniRectMin.y && mouse.y < c->MiniRectMax.y;
+  const float mini_s = ImMax(c->MiniScale, 1e-6f);
+  if (c->MiniDragging)
+  {
+    if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
+    {
+      const ImVec2 pt = c->MiniModelAtOrigin + (mouse - c->MiniOriginScreen) / mini_s;
+      ImGui::CanvasCenterOn(c, pt - c->MiniGrabDelta);
+      ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+      c->HoveredNode = -1;
+      return;
+    }
+    c->MiniDragging = false;
+  }
   if (in_minimap && c->Interaction == ImGuiCanvasInteraction_None)
   {
     c->HoveredNode = -1;
-    if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && canvas_item_hovered)
+    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    if (canvas_item_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
     {
-      // Click/drag-to-jump: map the minimap point back to model space and center there.
-      const ImVec2 t((mouse.x - c->MiniRectMin.x) / ImMax(1.0f, c->MiniRectMax.x - c->MiniRectMin.x),
-                     (mouse.y - c->MiniRectMin.y) / ImMax(1.0f, c->MiniRectMax.y - c->MiniRectMin.y));
-      ImGui::CanvasCenterOn(c, ImVec2(c->MiniModelMin.x + t.x * (c->MiniModelMax.x - c->MiniModelMin.x),
-                                      c->MiniModelMin.y + t.y * (c->MiniModelMax.y - c->MiniModelMin.y)));
+      const ImVec2 pt = c->MiniModelAtOrigin + (mouse - c->MiniOriginScreen) / mini_s;
+      const ImVec2 view_center = ImGui::CanvasFromScreen(c, c->Origin + c->CanvasSize * 0.5f);
+      // Thumb test against the mapped view box (what the user sees as the draggable rectangle).
+      const ImVec2 vb_mn = c->MiniOriginScreen + (ImGui::CanvasFromScreen(c, c->Origin) - c->MiniModelAtOrigin) * mini_s;
+      const ImVec2 vb_mx = c->MiniOriginScreen + (ImGui::CanvasFromScreen(c, c->Origin + c->CanvasSize) - c->MiniModelAtOrigin) * mini_s;
+      const bool in_thumb = mouse.x >= vb_mn.x && mouse.x < vb_mx.x && mouse.y >= vb_mn.y && mouse.y < vb_mx.y;
+      c->MiniGrabDelta = in_thumb ? pt - view_center : ImVec2(0.0f, 0.0f);
+      c->MiniDragging = true;
+      if (!in_thumb)
+        ImGui::CanvasCenterOn(c, pt);
     }
     return;
   }
@@ -1037,9 +1065,12 @@ namespace ImGui
       }
     }
 
-    // Minimap: bottom-right inset, drawn from THIS frame's model geometry (node rects + camera
-    // viewport), aspect-preserving. Its screen rect is remembered so the next frame's FSM stays out
-    // and click-to-jump can invert the mapping.
+    // Minimap: FIXED-size bottom-right inset (stable footprint -- a frame that resizes with the
+    // content reads as jitter), drawn from THIS frame's model geometry. The CONTENT alone sets the
+    // mapping and letterboxes centered inside the frame, so nodes always fill the map; the camera's
+    // view box is a scrollbar thumb clipped to the frame. The rect + mapping are remembered so the
+    // next frame's FSM can invert them (thumb drag / jump).
+    bool minimap_drawn = false;
     if (c->MiniMapReq)
     {
       c->MiniMapReq = false;
@@ -1055,44 +1086,74 @@ namespace ImGui
       }
       if (bmin.x <= bmax.x)
       {
-        // Include the current viewport in the mapped extents so the view box is always visible.
-        bmin = ImMin(bmin, CanvasFromScreen(c, c->Origin));
-        bmax = ImMax(bmax, CanvasFromScreen(c, c->Origin + c->CanvasSize));
-        const ImVec2 span(ImMax(1.0f, bmax.x - bmin.x), ImMax(1.0f, bmax.y - bmin.y));
-        const float  max_w = c->CanvasSize.x * c->MiniMapFraction;
-        const float  max_h = c->CanvasSize.y * c->MiniMapFraction;
-        const float  s = ImMin(max_w / span.x, max_h / span.y);
-        const ImVec2 rect_sz(span.x * s, span.y * s);
+        // Breathing room around the content in model units, then a fixed frame in screen units.
+        const ImVec2 raw_span(ImMax(1.0f, bmax.x - bmin.x), ImMax(1.0f, bmax.y - bmin.y));
+        bmin -= raw_span * 0.04f;
+        bmax += raw_span * 0.04f;
+        const ImVec2 span = bmax - bmin;
         const ImVec2 rmax(c->Origin.x + c->CanvasSize.x - 12.0f, c->Origin.y + c->CanvasSize.y - 12.0f);
-        const ImVec2 rmin(rmax.x - rect_sz.x, rmax.y - rect_sz.y);
+        const ImVec2 rmin(rmax.x - ImMax(64.0f, c->CanvasSize.x * c->MiniMapFraction),
+                          rmax.y - ImMax(48.0f, c->CanvasSize.y * c->MiniMapFraction));
+        const float pad = 5.0f;
+        const float s = ImMin(((rmax.x - rmin.x) - pad * 2.0f) / span.x,
+                              ((rmax.y - rmin.y) - pad * 2.0f) / span.y);
+        const ImVec2 content_px = span * s;
+        const ImVec2 origin = ImVec2((rmin.x + rmax.x - content_px.x) * 0.5f,
+                                     (rmin.y + rmax.y - content_px.y) * 0.5f);   // centered letterbox
         c->MiniRectMin = rmin;
         c->MiniRectMax = rmax;
-        c->MiniModelMin = bmin;
-        c->MiniModelMax = bmax;
+        c->MiniOriginScreen = origin;
+        c->MiniModelAtOrigin = bmin;
+        c->MiniScale = s;
+        minimap_drawn = true;
         auto to_mini = [&](ImVec2 m) {
-          return ImVec2(rmin.x + (m.x - bmin.x) * s, rmin.y + (m.y - bmin.y) * s);
+          return ImVec2(origin.x + (m.x - bmin.x) * s, origin.y + (m.y - bmin.y) * s);
         };
-        c->DrawList->AddRectFilled(rmin, rmax, IM_COL32(20, 21, 24, 235), 4.0f);
-        c->DrawList->AddRect(rmin, rmax, IM_COL32(90, 92, 100, 180), 4.0f);
+
+        const bool mini_hot = c->MiniDragging
+                           || (mouse.x >= rmin.x && mouse.x < rmax.x && mouse.y >= rmin.y && mouse.y < rmax.y);
+        c->DrawList->AddRectFilled(rmin, rmax, IM_COL32(20, 21, 24, 240), 4.0f);
+        c->DrawList->PushClipRect(rmin, rmax, true);
+
+        // Wires as faint straight lines: composition reads at a glance without bezier noise.
+        for (int i = 0; i < c->Wires.Size; i++)
+        {
+          const ImGuiCanvasPinRec* pa = CanvasFindPin(c, c->Wires.Data[i].PinA);
+          const ImGuiCanvasPinRec* pb = CanvasFindPin(c, c->Wires.Data[i].PinB);
+          if (pa != nullptr && pb != nullptr)
+            c->DrawList->AddLine(to_mini(pa->Anchor), to_mini(pb->Anchor), IM_COL32(150, 154, 165, 80), 1.0f);
+        }
+
+        // Node plates: title-color tinted, never smaller than a visible speck; selection pops.
         for (int i = 0; i < c->Nodes.Size; i++)
         {
           const ImGuiCanvasNodeRec* n = &c->Nodes.Data[i];
           if (n->LastFrame != mm_frame)
             continue;
-          c->DrawList->AddRectFilled(to_mini(n->Pos), to_mini(n->Pos + n->Size),
-                                     n->TitleColor != 0 ? (n->TitleColor & 0x00FFFFFF) | 0xB4000000 : IM_COL32(150, 152, 160, 180), 2.0f);
+          ImVec2 nm = to_mini(n->Pos);
+          ImVec2 nx = to_mini(n->Pos + n->Size);
+          if (nx.x - nm.x < 3.0f) nx.x = nm.x + 3.0f;
+          if (nx.y - nm.y < 3.0f) nx.y = nm.y + 3.0f;
+          const ImU32 fill = n->TitleColor != 0 ? (n->TitleColor & 0x00FFFFFF) | 0xC8000000 : IM_COL32(150, 152, 160, 200);
+          c->DrawList->AddRectFilled(nm, nx, fill, 1.5f);
+          if (CanvasIsSelected(c, n->Id))
+            c->DrawList->AddRect(nm, nx, c->Style.WireSelected, 1.5f, 0, 1.5f);
         }
-        c->DrawList->AddRect(to_mini(CanvasFromScreen(c, c->Origin)), to_mini(CanvasFromScreen(c, c->Origin + c->CanvasSize)),
-                             IM_COL32(235, 236, 240, 200), 2.0f);
-      }
-      else
-      {
-        c->MiniRectMin = c->MiniRectMax = ImVec2(0.0f, 0.0f);
+
+        // View box: the draggable thumb -- faint fill so it reads as a handle, clipped to the frame.
+        const ImVec2 vb_mn = to_mini(CanvasFromScreen(c, c->Origin));
+        const ImVec2 vb_mx = to_mini(CanvasFromScreen(c, c->Origin + c->CanvasSize));
+        c->DrawList->AddRectFilled(vb_mn, vb_mx, IM_COL32(235, 236, 240, mini_hot ? 26 : 14), 2.0f);
+        c->DrawList->AddRect(vb_mn, vb_mx, IM_COL32(235, 236, 240, mini_hot ? 235 : 170), 2.0f, 0, mini_hot ? 1.5f : 1.0f);
+
+        c->DrawList->PopClipRect();
+        c->DrawList->AddRect(rmin, rmax, mini_hot ? IM_COL32(150, 154, 165, 235) : IM_COL32(90, 92, 100, 180), 4.0f);
       }
     }
-    else
+    if (!minimap_drawn)
     {
       c->MiniRectMin = c->MiniRectMax = ImVec2(0.0f, 0.0f);
+      c->MiniDragging = false;
     }
 
     EndChild();

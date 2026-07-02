@@ -89,9 +89,11 @@ namespace ImGui
   IMGUI_API void   CanvasFitNodes(ImGuiCanvasState* c, const int* node_ids, int count, float margin_px);
   IMGUI_API void   CanvasFitAll(ImGuiCanvasState* c, float margin_px);                       // over nodes submitted last frame
 
-  // Minimap: call between CanvasBegin/CanvasEnd; drawn by CanvasEnd in the given corner at
-  // size_fraction of the canvas. Click/drag inside it recenters the camera; its rect is excluded
-  // from the canvas FSM.
+  // Minimap: call between CanvasBegin/CanvasEnd; drawn by CanvasEnd as a FIXED-size bottom-right
+  // inset (size_fraction of the canvas) with the content letterboxed inside -- stable frame, nodes
+  // always fill it. Shows node plates (title-tinted, selection outlined), wires as faint lines, and
+  // the camera as a view-box thumb: drag the thumb to pan (scrollbar semantics, no jump), click
+  // outside it to jump there. Its rect is excluded from the canvas FSM.
   IMGUI_API void   CanvasMiniMap(ImGuiCanvasState* c, float size_fraction);
 
   // ---- nodes (geometry in MODEL units, always) --------------------------------------------------
