@@ -4333,6 +4333,14 @@ namespace ImGui
     ImGuiAppNodeKind pending_build_kind = ImGuiAppNodeKind_COUNT;   // COUNT = none
     int              pending_build_owner = -1;
 
+    // Panning without the middle mouse button: LMB-drag on empty canvas PANS (three-button emulation with an
+    // always-true modifier -- the box selector loses its LMB binding; Ctrl+click multi-select and A/select-all
+    // remain), and RMB-drag pans too (UE's binding; a short RMB CLICK still opens the context menus via the
+    // release-with-no-drag trigger after EndNodeEditor). Node and pin drags are unaffected.
+    static const bool s_lmb_pans = true;
+    ImNodes::GetIO().AltMouseButton = ImGuiMouseButton_Right;
+    ImNodes::GetIO().EmulateThreeButtonMouse.Modifier = &s_lmb_pans;
+
     ImNodes::BeginNodeEditor();
     // Link editing: drag a wire's endpoint off a pin to detach + rewire it; snap-create completes a wire when its
     // free end hovers a compatible pin. Both apply to every attribute submitted this frame.
@@ -4527,13 +4535,15 @@ namespace ImGui
 
       // Input-side ports first (left). For a control, the "persist"/"temp" tie pins are NOT drawn here -- they are
       // drawn at their own body rows below (so an exploded PersistData/TempData wire enters lower than "deps").
+      // Containment reads as a DAG, parent -> child, left -> right: the child's "parent" pin RECEIVES on the
+      // left (ChildOut is model-outgoing but visually an input), the parent's "children" pin EMITS on the right.
       for (int p = 0; p < n->Ports.Size; p++)
       {
         ImGuiAppNodePort* port = &n->Ports.Data[p];
         const bool is_tie_pin = n->Kind == ImGuiAppNodeKind_Control && (strcmp(port->Name, "persist") == 0 || strcmp(port->Name, "temp") == 0);
         if (is_tie_pin)
           continue;
-        if (port->Kind != ImGuiAppPortKind_DataIn && port->Kind != ImGuiAppPortKind_ChildIn)
+        if (port->Kind != ImGuiAppPortKind_DataIn && port->Kind != ImGuiAppPortKind_ChildOut)
           continue;
         ImNodes::PushColorStyle(ImNodesCol_Pin, AppPinColor(port->Kind));
         ImNodes::BeginInputAttribute(port->Id);
@@ -4743,11 +4753,12 @@ namespace ImGui
       ImGui::PopID();
       ImNodes::EndStaticAttribute();
 
-      // Output-side ports (right).
+      // Output-side ports (right). The parent's "children" pin sits here so containment wires leave the
+      // parent's right edge and land on the child's left -- the tree read (see the input loop's note).
       for (int p = 0; p < n->Ports.Size; p++)
       {
         ImGuiAppNodePort* port = &n->Ports.Data[p];
-        if (port->Kind != ImGuiAppPortKind_DataOut && port->Kind != ImGuiAppPortKind_ChildOut)
+        if (port->Kind != ImGuiAppPortKind_DataOut && port->Kind != ImGuiAppPortKind_ChildIn)
           continue;
         ImNodes::PushColorStyle(ImNodesCol_Pin, AppPinColor(port->Kind));
         ImNodes::BeginOutputAttribute(port->Id);
@@ -4937,7 +4948,10 @@ namespace ImGui
         g->ViewScope.push_back(dn->Id);
     }
 
-    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+    // RMB now also PANS (drag). The menus open on RMB RELEASE with no meaningful drag (UE's disambiguation):
+    // MouseDragMaxDistanceSqr is the whole gesture's travel, so a pan can end over a node without menuing it.
+    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseReleased(ImGuiMouseButton_Right)
+        && ImGui::GetIO().MouseDragMaxDistanceSqr[ImGuiMouseButton_Right] < 9.0f)
     {
       if (over_node)
       {
@@ -5777,7 +5791,7 @@ namespace ImGui
       const ImVec2 col_c(editor_min.x + editor_size.x - em * 1.2f, editor_min.y + em * 1.2f);
       dl->AddRectFilled(ImVec2(col_c.x - r - em * 0.25f, col_c.y - r - em * 0.25f),
                         ImVec2(col_c.x + r + em * 0.25f, col_c.y + (count - 1) * step + r + em * 0.25f),
-                        IM_COL32(24, 25, 28, 215), r + em * 0.25f);
+                        IM_COL32(24, 25, 28, 252), r + em * 0.25f);
 
       float gy = col_c.y;
       const ImU32 dim = ImGui::GetColorU32(ImGuiCol_Text, 0.55f);
@@ -5791,7 +5805,7 @@ namespace ImGui
         const bool clicked = AppTreeRowIcon(icon, c, r, on ? lit : dim);
         const ImVec2 m = ImGui::GetIO().MousePos;
         const float dx = m.x - c.x, dy = m.y - c.y;
-        if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && dx * dx + dy * dy <= r * r)
+        if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && dx * dx + dy * dy <= r * r)
           ImGui::SetTooltip("%s", tip);
         return clicked;
       };
@@ -5847,7 +5861,8 @@ namespace ImGui
         "drag pin -> empty   new node       drag link end   rewire",
         "wheel over field    scrub value",
         "click group chip     collapse      drag chip           move group",
-        "right-click          context menu  middle-drag         pan",
+        "drag empty canvas    pan (also right-drag / Alt-drag)",
+        "right-click          context menu",
         "F1       toggle this help",
       };
       const float em = ImGui::GetFontSize();
@@ -6021,15 +6036,21 @@ namespace ImGui
         {
           ImNodes::ClearNodeSelection();
           ImNodes::SelectNode(*selected_node_id);
-          // Pan to the node ONLY when it's off-screen. Yanking the viewport on every outliner click (even for a
-          // node already in view) reads as jarring "focus jumping"; reveal it only when it isn't already visible.
+          // Reveal with the MINIMAL pan: nudge the view just enough to bring the node inside a margin.
+          // MoveToNode centers the node -- an outliner click that yanks the camera to center reads as
+          // broken focus-jumping; a node already in view must not move the camera at all.
           const ImVec2 p = ImNodes::GetNodeScreenSpacePos(*selected_node_id);
           const ImVec2 d = ImNodes::GetNodeDimensions(*selected_node_id);
-          const ImVec2 c(p.x + d.x * 0.5f, p.y + d.y * 0.5f);
-          const bool on_screen = c.x >= editor_min.x && c.x <= editor_min.x + editor_size.x
-                              && c.y >= editor_min.y && c.y <= editor_min.y + editor_size.y;
-          if (!on_screen)
-            ImNodes::EditorContextMoveToNode(*selected_node_id);
+          const float  margin = ImGui::GetFontSize() * 2.0f;
+          const ImVec2 vmin(editor_min.x + margin, editor_min.y + margin);
+          const ImVec2 vmax(editor_min.x + editor_size.x - margin, editor_min.y + editor_size.y - margin);
+          ImVec2 delta(0.0f, 0.0f);
+          if      (p.x < vmin.x)       delta.x = vmin.x - p.x;
+          else if (p.x + d.x > vmax.x) delta.x = vmax.x - (p.x + d.x);
+          if      (p.y < vmin.y)       delta.y = vmin.y - p.y;
+          else if (p.y + d.y > vmax.y) delta.y = vmax.y - (p.y + d.y);
+          if (delta.x != 0.0f || delta.y != 0.0f)
+            ImNodes::EditorContextResetPanning(ImNodes::EditorContextGetPanning() + delta);
         }
         if (!scope_revealing)
           applied_sel = *selected_node_id;
@@ -9380,10 +9401,12 @@ namespace ImGui
     // AllowWhenBlockedByActiveItem: the icon overlays the row's TreeNode item, and the mouse press makes
     // that item active BEFORE this hit-test runs -- plain IsWindowHovered() is false on exactly the click
     // frame (hover highlight worked, clicks never landed). See AppPtInRectHovered.
+    // ChildWindows: the canvas gizmo column overlays imnodes' INNER child window -- without the flag the
+    // hover test asks about the outer window, is always false there, and every gizmo is dead chrome.
     const ImVec2 m = ImGui::GetIO().MousePos;
     const float dx = m.x - center.x;
     const float dy = m.y - center.y;
-    const bool hov = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && (dx * dx + dy * dy) <= r * r;
+    const bool hov = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && (dx * dx + dy * dy) <= r * r;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     if (hov)
     {

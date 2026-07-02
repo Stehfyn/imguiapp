@@ -1424,7 +1424,7 @@ namespace
             const ImVec2 s_max(s_min.x + hw + lw + em * 0.8f, s_min.y + h);
 
             ImDrawList* sdl = ImGui::GetWindowDrawList();
-            sdl->AddRectFilled(s_min, s_max, IM_COL32(24, 25, 28, 215), em * 0.35f);
+            sdl->AddRectFilled(s_min, s_max, IM_COL32(24, 25, 28, 252), em * 0.35f);
             const ImU32 health_col = nerr > 0 ? IM_COL32(230, 115, 108, 255) : nwarn > 0 ? IM_COL32(230, 191, 89, 255) : IM_COL32(128, 191, 128, 255);
             sdl->AddText(ImVec2(s_min.x + em * 0.4f, s_min.y + em * 0.25f), health_col, health);
             if (last_log[0])
@@ -1442,8 +1442,10 @@ namespace
 
           temp_data->ToggleScrub = false;
           temp_data->ScrubIdxSet = false;
+          // Transport only appears with the live mirror VISIBLE: scrubbing an app you cannot see is a dead
+          // control, and a floating clock icon that does nothing reads as broken chrome.
           const int app_frames = doc->MirrorHistory.Count;
-          if (app_frames > 1 || doc->TimeScrub)
+          if (doc->ShowLive && (app_frames > 1 || doc->TimeScrub))
           {
             const ImGuiStyle& tstyle  = ImGui::GetStyle();
             const char*       t_lbl   = doc->TimeScrub ? ICON_FA_CLOCK "  App time###apptime" : ICON_FA_CLOCK "###apptime";
@@ -1454,7 +1456,7 @@ namespace
             const ImVec2      t_pos(c_min.x + (c_size.x - t_w) * 0.5f, c_min.y + c_size.y - ImGui::GetFrameHeight() - em * 0.7f);
             ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(t_pos.x - em * 0.4f, t_pos.y - em * 0.25f),
                                                       ImVec2(t_pos.x + t_w + em * 0.4f, t_pos.y + ImGui::GetFrameHeight() + em * 0.25f),
-                                                      IM_COL32(24, 25, 28, 215), em * 0.5f);
+                                                      IM_COL32(24, 25, 28, 252), em * 0.5f);
             ImGui::SetCursorScreenPos(t_pos);
             if (doc->TimeScrub)
               ImGui::PushStyleColor(ImGuiCol_Button, tstyle.Colors[ImGuiCol_ButtonActive]);
