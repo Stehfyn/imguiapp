@@ -599,6 +599,10 @@ namespace
   // [SECTION] Composer toolbar (flow-ordered: compose -> iterate -> persist -> produce | observe)
   //-----------------------------------------------------------------------------
 
+  // DECLARED dependency on GraphDocData (not just a stashed pointer): the framework orders updates producer-
+  // first, the live mirror shows the edge (the Composer's own composition becomes auditable in itself), and a
+  // phase audit can walk declared deps mechanically instead of grepping for hidden reads. The mutable Doc
+  // pointer remains ONLY for the write half (the documented edit-intent escape hatch until command payloads).
   struct ToolbarData
   {
     GraphDocData* Doc;
@@ -623,14 +627,14 @@ namespace
     bool MirrorSourceSet; // observe cluster picked a mirror perspective
     int  MirrorSource;   // 0 = sample app, 1 = the Composer itself
   };
-  struct ToolbarControl : ImGuiAppControl<ToolbarData, ToolbarTempData>
+  struct ToolbarControl : ImGuiAppControl<ToolbarData, ToolbarTempData, GraphDocData>
   {
-    virtual void OnInitialize(ImGuiApp* app, ToolbarData* data) const override final
+    virtual void OnInitialize(ImGuiApp* app, ToolbarData* data, const GraphDocData*) const override final
     {
-      data->Doc = GetGraphDoc(app);
+      data->Doc = GetGraphDoc(app);   // write half only (escape hatch); reads flow through the declared dep
     }
 
-    virtual void OnUpdate(float dt, ToolbarData* data, const ToolbarTempData* temp_data, const ToolbarTempData* last_temp_data) const override final
+    virtual void OnUpdate(float dt, ToolbarData* data, const ToolbarTempData* temp_data, const ToolbarTempData* last_temp_data, const GraphDocData*) const override final
     {
       IM_UNUSED(dt);
       GraphDocData* doc = data->Doc;
@@ -724,7 +728,7 @@ namespace
       }
     }
 
-    virtual void OnRender(const ToolbarData* data, ToolbarTempData* temp_data) const override final
+    virtual void OnRender(const ToolbarData* data, ToolbarTempData* temp_data, const GraphDocData*) const override final
     {
       GraphDocData*     doc       = data->Doc;
       const float       em        = ImGui::GetFontSize();
@@ -948,14 +952,14 @@ namespace
     char Msg[64];                       // transient write/diff confirmation (doc->WriteMsg snapshot)
   };
   struct StatusStripTempData {};   // empty by design: the strip is read-only display, it captures no input
-  struct StatusStripControl : ImGuiAppControl<StatusStripData, StatusStripTempData>
+  struct StatusStripControl : ImGuiAppControl<StatusStripData, StatusStripTempData, GraphDocData>
   {
-    virtual void OnInitialize(ImGuiApp* app, StatusStripData* data) const override final
+    virtual void OnInitialize(ImGuiApp* app, StatusStripData* data, const GraphDocData*) const override final
     {
-      data->Doc = GetGraphDoc(app);
+      data->Doc = GetGraphDoc(app);   // declared dep = ordering + audit edge; pointer = the write escape hatch
     }
 
-    virtual void OnUpdate(float dt, StatusStripData* data, const StatusStripTempData*, const StatusStripTempData*) const override final
+    virtual void OnUpdate(float dt, StatusStripData* data, const StatusStripTempData*, const StatusStripTempData*, const GraphDocData*) const override final
     {
       IM_UNUSED(dt);
       const GraphDocData* doc = data->Doc;
@@ -1002,7 +1006,7 @@ namespace
       ImStrncpy(data->Msg, doc->WriteMsg, IM_ARRAYSIZE(data->Msg));
     }
 
-    virtual void OnRender(const StatusStripData* data, StatusStripTempData*) const override final
+    virtual void OnRender(const StatusStripData* data, StatusStripTempData*, const GraphDocData*) const override final
     {
       const float       em    = ImGui::GetFontSize();
       const ImGuiStyle& style = ImGui::GetStyle();
@@ -1302,11 +1306,11 @@ namespace
       }
     }
   }
-  struct EditorBodyControl : ImGuiAppControl<EditorBodyData, EditorBodyTempData>
+  struct EditorBodyControl : ImGuiAppControl<EditorBodyData, EditorBodyTempData, GraphDocData>
   {
-    virtual void OnInitialize(ImGuiApp* app, EditorBodyData* data) const override final
+    virtual void OnInitialize(ImGuiApp* app, EditorBodyData* data, const GraphDocData*) const override final
     {
-      data->Doc = GetGraphDoc(app);
+      data->Doc = GetGraphDoc(app);   // declared dep = ordering + audit edge; pointer = the write escape hatch
       data->CodeSig = 0;
       data->CodeSel = -2;   // "never generated" (a real empty selection is -1)
       data->InspDragging = false;
@@ -1315,7 +1319,7 @@ namespace
       data->HasDiff = false;
     }
 
-    virtual void OnUpdate(float dt, EditorBodyData* data, const EditorBodyTempData* temp_data, const EditorBodyTempData* last_temp_data) const override final
+    virtual void OnUpdate(float dt, EditorBodyData* data, const EditorBodyTempData* temp_data, const EditorBodyTempData* last_temp_data, const GraphDocData*) const override final
     {
       GraphDocData* doc = data->Doc;
 
@@ -1493,7 +1497,7 @@ namespace
       }
     }
 
-    virtual void OnRender(const EditorBodyData* data, EditorBodyTempData* temp_data) const override final
+    virtual void OnRender(const EditorBodyData* data, EditorBodyTempData* temp_data, const GraphDocData*) const override final
     {
       GraphDocData* doc = data->Doc;
       temp_data->StampPrefab = -1;   // TempData zero-init would read as prefab INDEX 0 -- "none" must be explicit

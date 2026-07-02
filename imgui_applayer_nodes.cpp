@@ -4207,9 +4207,11 @@ namespace ImGui
 
   // Dashed cubic arrow (execution-flow rail between sequence members). Sampled by hand: ImDrawList has no dashed
   // primitive, and a solid bezier would read as a data wire. Horizontal tangents match the link style.
-  static void AppDrawDashedArrow(ImDrawList* dl, ImVec2 p0, ImVec2 p1, ImU32 col)
+  // `scale` tracks the canvas zoom: endpoint arrowheads, stroke and the tangent minimum are canvas content and
+  // must scale with the geometry they decorate (fixed-pixel endpoint marks read as misplaced under zoom).
+  static void AppDrawDashedArrow(ImDrawList* dl, ImVec2 p0, ImVec2 p1, ImU32 col, float scale)
   {
-    const float dx = ImMax(48.0f, ImAbs(p1.x - p0.x) * 0.5f);
+    const float dx = ImMax(48.0f * scale, ImAbs(p1.x - p0.x) * 0.5f);
     const ImVec2 c0(p0.x + dx, p0.y);
     const ImVec2 c1(p1.x - dx, p1.y);
     const int segs = 26;
@@ -4222,7 +4224,7 @@ namespace ImGui
       const ImVec2 pt(u * u * u * p0.x + 3.0f * u * u * t * c0.x + 3.0f * u * t * t * c1.x + t * t * t * p1.x,
                       u * u * u * p0.y + 3.0f * u * u * t * c0.y + 3.0f * u * t * t * c1.y + t * t * t * p1.y);
       if (i & 1)
-        dl->AddLine(prev, pt, col, 2.0f);
+        dl->AddLine(prev, pt, col, ImMax(1.0f, 2.0f * scale));
       if (i == segs)
         tang = pt - prev;
       prev = pt;
@@ -4232,7 +4234,7 @@ namespace ImGui
     {
       const ImVec2 d(tang.x / len, tang.y / len);
       const ImVec2 nrm(-d.y, d.x);
-      const float a = 6.0f;
+      const float a = 6.0f * scale;
       dl->AddTriangleFilled(p1, ImVec2(p1.x - d.x * a * 1.6f + nrm.x * a, p1.y - d.y * a * 1.6f + nrm.y * a),
                                 ImVec2(p1.x - d.x * a * 1.6f - nrm.x * a, p1.y - d.y * a * 1.6f - nrm.y * a), col);
     }
@@ -4370,7 +4372,7 @@ namespace ImGui
         ImVec2 ap, ad, bp, bd;
         geom(prev, &ap, &ad);
         geom(seq.Data[i], &bp, &bd);
-        AppDrawDashedArrow(dl, ImVec2(ap.x + ad.x, ap.y + ad.y * 0.5f), ImVec2(bp.x, bp.y + bd.y * 0.5f), flow);
+        AppDrawDashedArrow(dl, ImVec2(ap.x + ad.x, ap.y + ad.y * 0.5f), ImVec2(bp.x, bp.y + bd.y * 0.5f), flow, z);
       }
       prev = seq.Data[i];
     }
