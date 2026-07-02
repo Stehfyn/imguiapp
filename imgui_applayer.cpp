@@ -1,3 +1,16 @@
+// ImGuiAppLayer core: the frame pipeline (ingest -> command -> publish -> render), typed app
+// composition (layers / windows / sidebars / controls), and the state discipline that makes apps
+// snapshottable, replayable, and phase-coherent (see docs/phase-coherence.md).
+//
+// Index of this file (search for "[SECTION]"):
+// [SECTION] Assert forensics (symbolized backtrace + WAL sink)
+// [SECTION] App shell + core phase layers (Task, Command, Status)
+// [SECTION] Style/color mod runtime (desc apply; workbench style system)
+// [SECTION] Window layer (windows, sidebars, hosted controls, .ini handler)
+// [SECTION] Write-ahead log (ImGuiAppWAL)
+// [SECTION] State snapshots + input record/replay (time travel)
+// [SECTION] App bring-up (InitializeApp / UpdateApp / RenderApp / storage)
+
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "imgui_applayer.h"
 #include "imgui_internal.h"
@@ -18,7 +31,7 @@
 #endif
 
 //-----------------------------------------------------------------------------
-// Assert forensics: symbolized backtrace + WAL sink. See imguix_imconfig.h for the IM_ASSERT routing.
+// [SECTION] Assert forensics (symbolized backtrace + WAL sink). See imguix_imconfig.h for IM_ASSERT routing.
 //-----------------------------------------------------------------------------
 
 static ImGuiAppWAL* g_app_assert_wal = nullptr;
@@ -204,6 +217,10 @@ void ImGuiApp::DrawFrame(ImGuiApp* app)
     ImGui::RenderApp(app);
 }
 
+//-----------------------------------------------------------------------------
+// [SECTION] App shell + core phase layers (Task, Command, Status)
+//-----------------------------------------------------------------------------
+
 void ImGuiAppTaskLayer::OnAttach(ImGuiApp* app) const
 {
     IM_UNUSED(app);
@@ -356,6 +373,10 @@ namespace
   }
 }
 
+//-----------------------------------------------------------------------------
+// [SECTION] Style/color mod runtime (desc apply; workbench style system)
+//-----------------------------------------------------------------------------
+
 int ImGui::PushAppStyleMods(const ImGuiAppStyleModDesc* mods, int count)
 {
     int pushed = 0;
@@ -409,6 +430,10 @@ void ImGuiAppItemBase::OnStylePop(const ImGuiApp* app) const
     _StylePushCount = 0;
     _ColorPushCount = 0;
 }
+
+//-----------------------------------------------------------------------------
+// [SECTION] Window layer (windows, sidebars, hosted controls, .ini handler)
+//-----------------------------------------------------------------------------
 
 void ImGuiAppWindowLayer::OnAttach(ImGuiApp* app) const
 {
@@ -532,7 +557,9 @@ void ImGuiAppWindowLayer::OnRender(const ImGuiApp* app) const
 namespace ImGui
 {
   //-----------------------------------------------------------------------------
-  // Write-ahead log. The contract: a record is on disk BEFORE the operation it names runs, so a crash's
+  // [SECTION] Write-ahead log (ImGuiAppWAL)
+  //
+  // The contract: a record is on disk BEFORE the operation it names runs, so a crash's
   // forensics are one `tail` away -- the last line is the in-flight operation. fflush on every record is the
   // cost of that guarantee; Lifecycle level is cheap (composition changes only), Frame level is for hunts.
   //-----------------------------------------------------------------------------
@@ -642,6 +669,10 @@ namespace ImGui
       h->SlotSizes.clear();
       h->Frames.clear();
   }
+
+  //-----------------------------------------------------------------------------
+  // [SECTION] State snapshots + input record/replay (time travel)
+  //-----------------------------------------------------------------------------
 
   IMGUI_API bool AppStateSnapshot(ImGuiApp* app, ImGuiAppStateHistory* h)
   {
@@ -889,6 +920,10 @@ namespace ImGui
       app->StorageEntries.clear();
       app->Data.Clear();
   }
+
+  //-----------------------------------------------------------------------------
+  // [SECTION] App bring-up (InitializeApp / UpdateApp / RenderApp / storage)
+  //-----------------------------------------------------------------------------
 
   IMGUI_API void InitializeApp(ImGuiApp* app, const ImGuiAppConfig* config)
   {

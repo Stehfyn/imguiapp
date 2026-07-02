@@ -2,6 +2,16 @@
 // window layout: a single "ImGuiAppLayer Demo" window with collapsing-header sections that drive
 // a live ImGuiApp, pushing/popping the real layers, windows, sidebars and controls so each
 // framework feature (incl. the Breathing control and its Random Time dependency) is showcased.
+//
+// Index of this file (search for "[SECTION]"):
+// [SECTION] Sample controls (RandomTime, Breathing) -- the framework idioms, showcased
+// [SECTION] Composer document (GraphDocData) + workspace layout persistence
+// [SECTION] Composer toolbar (flow-ordered: compose -> iterate -> persist -> produce | observe)
+// [SECTION] Composer status strip (keymap hints + document facts)
+// [SECTION] Generated-code view (source-mapped, shared by every code surface)
+// [SECTION] Composer editor body (outliner | canvas + bottom console | inspector; project inspector)
+// [SECTION] Composer host window + demo menu
+// [SECTION] Demo bring-up (ShowAppLayerDemo: sample app + editor app composition)
 
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "imgui_applayer.h"
@@ -32,6 +42,10 @@ namespace
     ImVec2 text_pos = pos + ImVec2(offset, 0.0f) + (text_size * -0.5f);
     ImGui::GetWindowDrawList()->AddText(text_pos, ImGui::GetColorU32(ImGuiCol_Text), text);
   }
+
+  //-----------------------------------------------------------------------------
+  // [SECTION] Sample controls (RandomTime, Breathing) -- the framework idioms, showcased
+  //-----------------------------------------------------------------------------
 
   struct RandomTimeData
   {
@@ -313,6 +327,10 @@ namespace
 
   // PersistData is value-initialized by PushAppControl<>, then seeded in GraphDocControl::OnInitialize -- no
   // member initializers here (defaults belong to OnInitialize, not the declaration).
+  //-----------------------------------------------------------------------------
+  // [SECTION] Composer document (GraphDocData) + workspace layout persistence
+  //-----------------------------------------------------------------------------
+
   // Bottom-bar panel identities, for the one-shot reveal intent (any subsystem summons any panel; the tab bar
   // consumes the intent by SetSelected-ing the named tab and opening the bar if collapsed).
   enum ComposerPanel_
@@ -350,6 +368,13 @@ namespace
     float           InspW;            // right-side Inspector column width (0 -> default on first use)
     char            WriteMsg[64];     // transient "wrote header" confirmation
     ImGuiID         WrittenSig;       // AppGraphSignature at the last header write (0 = never) -> Generate state
+
+    // Frame-published document facts (single producer: GraphDocControl::OnUpdate derives these once per
+    // frame; every panel READS them -- re-deriving in a render path risks a phase mismatch, see
+    // docs/phase-coherence.md).
+    ImGuiID         FrameSig;         // this frame's AppGraphSignature
+    int             NumErrors;        // cached-validation counts
+    int             NumWarnings;
     char            GraphPath[256];
     char            HeaderPath[256];
     // Output panel: a running document log (actions, refused links, file IO) beside the validation issues.
@@ -482,6 +507,9 @@ namespace
       data->InspW       = 0.0f;          // 0 -> EditorBody picks a default on first layout
       data->WriteMsg[0] = 0;
       data->WrittenSig  = 0;
+      data->FrameSig    = 0;
+      data->NumErrors   = 0;
+      data->NumWarnings = 0;
       data->RevealPanel = ComposerPanel_None;
       data->LinkErrSeqSeen = 0;
       data->LayoutSavedHash = 0;
@@ -516,6 +544,18 @@ namespace
       if (data->Mirror != nullptr)
       {
         ImGui::BuildAppLiveGraph(data->Mirror, &data->Graph);
+      }
+
+      // Publish this frame's derived document facts ONCE (single producer; phase-coherence rule 3): the
+      // graph signature and issue counts every panel reads. GraphDoc updates first (push order), so all
+      // consumers see the same values in the same frame.
+      data->FrameSig = ImGui::AppGraphSignature(&data->Graph);
+      {
+        const ImVector<ImGui::ImGuiAppGraphIssue>* issues = ImGui::AppGraphIssuesCached(&data->Graph);
+        data->NumErrors = 0;
+        data->NumWarnings = 0;
+        for (int i = 0; i < issues->Size; i++)
+          (issues->Data[i].Severity >= 2 ? data->NumErrors : data->NumWarnings)++;
       }
 
       // Fold refused-link reasons into the document log: the status bar shows them for three seconds, the
@@ -555,6 +595,10 @@ namespace
 
   // Each panel caches the shared doc's true (non-const) pointer from app storage in OnInitialize -- the
   // BreathingControlDemo::data->app convention. No control receives the doc as a const dependency to cast away.
+  //-----------------------------------------------------------------------------
+  // [SECTION] Composer toolbar (flow-ordered: compose -> iterate -> persist -> produce | observe)
+  //-----------------------------------------------------------------------------
+
   struct ToolbarData
   {
     GraphDocData* Doc;
@@ -611,7 +655,7 @@ namespace
           ImFileWrite(full.c_str(), sizeof(char), (ImU64)full.size(), fh);
           ImFileClose(fh);
           ImFormatString(doc->WriteMsg, IM_ARRAYSIZE(doc->WriteMsg), "wrote %s", doc->HeaderPath);
-          doc->WrittenSig = ImGui::AppGraphSignature(&doc->Graph);   // Generate button reads fresh vs stale off this
+          doc->WrittenSig = doc->FrameSig;   // Generate button reads fresh vs stale off this (frame-published fact)
           DocLog(doc, 0, "generated C++ -> %s", doc->HeaderPath);
         }
         else
@@ -773,11 +817,9 @@ namespace
         //    the graph; amber = model changed since the last write; red = validation errors (writing stays
         //    allowed; the ambient marks say where to look). The chevron holds the family (copy / diff).
         cap_x[3] = ImGui::GetCursorPosX();
-        const ImVector<ImGui::ImGuiAppGraphIssue>* issues = ImGui::AppGraphIssuesCached(&doc->Graph);
-        int nerr = 0, nwarn = 0;
-        for (int i = 0; i < issues->Size; i++)
-          (issues->Data[i].Severity >= 2 ? nerr : nwarn)++;
-        const bool  fresh     = doc->WrittenSig != 0 && doc->WrittenSig == ImGui::AppGraphSignature(&doc->Graph);
+        // Frame-published facts (GraphDoc is the single producer; never re-derive in a render path).
+        const int   nerr  = doc->NumErrors;
+        const bool  fresh = doc->WrittenSig != 0 && doc->WrittenSig == doc->FrameSig;
         const char* gen_label = nerr > 0 ? ICON_FA_TRIANGLE_EXCLAMATION "  Generate" : fresh ? ICON_FA_CHECK "  Generated" : ICON_FA_FILE_EXPORT "  Generate";
         ImGui::PushStyleColor(ImGuiCol_Button, nerr > 0 ? ImVec4(0.55f, 0.21f, 0.18f, 1.0f)
                                              : fresh    ? ImVec4(0.16f, 0.38f, 0.22f, 1.0f)
@@ -888,6 +930,10 @@ namespace
     }
   };
 
+  //-----------------------------------------------------------------------------
+  // [SECTION] Composer status strip (keymap hints + document facts)
+  //-----------------------------------------------------------------------------
+
   // The window's status bar (rendered LAST, at the bottom -- Blender's status bar): live keymap hints on
   // the left (composed by the editor, read via AppGraphStatusHint), document/selection facts on the right.
   // All right-side text is derived from the doc in OnUpdate and parked here; OnRender only lays out text.
@@ -984,6 +1030,10 @@ namespace
       ImGui::EndChild();
     }
   };
+
+  //-----------------------------------------------------------------------------
+  // [SECTION] Generated-code view (source-mapped, shared by every code surface)
+  //-----------------------------------------------------------------------------
 
   // The one generated-code view, used by every code tab (consistency: code reads identically wherever it
   // appears). Monospace, line-numbered gutter, clipped rendering. With a source map it also carries the
@@ -1089,6 +1139,10 @@ namespace
 
   // PersistData: durable state, mutated only in OnUpdate. CodeText/CodeName are the rendered output (Breathing's
   // timer_text pattern -- derived in OnUpdate, drawn from const data in OnRender).
+  //-----------------------------------------------------------------------------
+  // [SECTION] Composer editor body (outliner | canvas + bottom console | inspector; project inspector)
+  //-----------------------------------------------------------------------------
+
   struct EditorBodyData
   {
     GraphDocData*   Doc;                     // shared doc, cached non-const in OnInitialize
@@ -1159,7 +1213,7 @@ namespace
 
     if (ImGui::AppInspectorSection("##psec_doc", ICON_FA_FILE_LINES, "Document", nullptr, nullptr))
     {
-      const bool fresh = doc->WrittenSig != 0 && doc->WrittenSig == ImGui::AppGraphSignature(graph);
+      const bool fresh = doc->WrittenSig != 0 && doc->WrittenSig == doc->FrameSig;   // frame-published fact
       ImGui::TextDisabled("graph");
       ImGui::SameLine(label_w);
       ImGui::TextUnformatted(doc->GraphPath);
@@ -1184,16 +1238,13 @@ namespace
       ImGui::Text("%d links   %d bindings", graph->Links.Size, graph->Bindings.Size);
       ImGui::TextDisabled("signature");
       ImGui::SameLine(label_w);
-      ImGui::Text("%08X", ImGui::AppGraphSignature(graph));
+      ImGui::Text("%08X", doc->FrameSig);   // frame-published fact
       ImGui::Spacing();
     }
 
     if (ImGui::AppInspectorSection("##psec_val", ICON_FA_TRIANGLE_EXCLAMATION, "Validation", nullptr, nullptr))
     {
-      const ImVector<ImGui::ImGuiAppGraphIssue>* issues = ImGui::AppGraphIssuesCached(graph);
-      int nerr = 0, nwarn = 0;
-      for (int i = 0; i < issues->Size; i++)
-        (issues->Data[i].Severity >= 2 ? nerr : nwarn)++;
+      const int nerr = doc->NumErrors, nwarn = doc->NumWarnings;   // frame-published facts
       if (nerr + nwarn == 0)
         ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f), ICON_FA_CHECK "  No configuration problems.");
       else
@@ -1378,7 +1429,7 @@ namespace
         data->DiffMode = !data->DiffMode;
         data->CodeSig = 0;   // force the gated regen below to build (or drop) the diff buffer
       }
-      const ImGuiID gsig = ImGui::AppGraphSignature(&doc->Graph);
+      const ImGuiID gsig = doc->FrameSig;   // frame-published (GraphDoc updates first in push order)
       if (gsig != data->CodeSig || doc->Selection != data->CodeSel)   // inspector + code tab both feed off these
       {
         data->CodeSig = gsig;
@@ -1534,10 +1585,8 @@ namespace
           // counts from the cached validation plus the newest log line. Clicking it reveals + selects
           // Output (the toolbar's old check/warning chip lives here now, on the viewport it describes).
           {
-            const ImVector<ImGui::ImGuiAppGraphIssue>* issues = ImGui::AppGraphIssuesCached(graph);
-            int nerr = 0, nwarn = 0;
-            for (int i = 0; i < issues->Size; i++)
-              (issues->Data[i].Severity >= 2 ? nerr : nwarn)++;
+            // Frame-published facts (GraphDoc is the single producer).
+            const int nerr = doc->NumErrors, nwarn = doc->NumWarnings;
 
             char health[48];
             if (nerr + nwarn > 0)
@@ -1712,7 +1761,7 @@ namespace
                   ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthStretch, 0.15f);
                   ImGui::TableSetupColumn("##act", ImGuiTableColumnFlags_WidthStretch, 0.25f);
                   ImGui::TableHeadersRow();
-                  const bool fresh = doc->WrittenSig != 0 && doc->WrittenSig == ImGui::AppGraphSignature(&doc->Graph);
+                  const bool fresh = doc->WrittenSig != 0 && doc->WrittenSig == doc->FrameSig;   // frame-published fact
                   for (int i = 0; i < data->ProjFiles.Size; i++)
                   {
                     const EditorBodyData::ProjFile& f = data->ProjFiles.Data[i];
@@ -1904,6 +1953,10 @@ namespace
 
   // The host window: empty body; its hosted controls (toolbar, strip, body) fill it in push order. Label is
   // fixed (not the type-derived unique label) so the saved .ini dock binding + central-node dock still match.
+  //-----------------------------------------------------------------------------
+  // [SECTION] Composer host window + demo menu
+  //-----------------------------------------------------------------------------
+
   struct ComposerWindow : ImGuiAppWindow<ComposerWindow>
   {
     ComposerWindow()
@@ -2024,6 +2077,10 @@ namespace
 namespace ImGui
 {
   IMGUI_API void SetAppCodeFont(ImFont* font) { g_AppCodeFont = font; }
+
+  //-----------------------------------------------------------------------------
+  // [SECTION] Demo bring-up (ShowAppLayerDemo: sample app + editor app composition)
+  //-----------------------------------------------------------------------------
 
   IMGUI_API void ShowAppLayerDemo(bool* p_open)
   {

@@ -1,6 +1,27 @@
 // ImGuiAppLayer data-driven node tooling: imnodes scaffolding. Keeping imnodes confined to
 // this translation unit lets imgui_applayer_nodes.h stay free of the imnodes dependency, so
 // callers reflect over their data without pulling in the node-editor backend at the header level.
+//
+// Index of this file (search for "[SECTION]"):
+// [SECTION] Blender-style field widgets (node body)
+// [SECTION] Typed node graph: allocation, factory, lookup
+// [SECTION] Layer column packing + default node placement
+// [SECTION] Phase-coherent geometry cache                          <- read docs/phase-coherence.md first
+// [SECTION] Typed links: resolve / validate / capture
+// [SECTION] Per-edge field bindings editor
+// [SECTION] Hover sync (brushing across coordinated views) + cached validation
+// [SECTION] Inspector (component sections, style/color descs, project + multi-select)
+// [SECTION] Whole-graph editor render (canvas, decorations, gizmos, palette, keyboard)
+// [SECTION] Tidy tree layout (measured-size layered DAG)
+// [SECTION] Topological order + whole-graph codegen
+// [SECTION] Event expression checking (AppEventExprCheck)
+// [SECTION] Whole-graph persistence (SaveAppGraph / LoadAppGraph, legacy [Draft] ingest)
+// [SECTION] Round-trip: parse C++ struct blocks back into Struct nodes
+// [SECTION] Undo / redo (in-memory serialized snapshots, named steps)
+// [SECTION] Copy / paste (subtree clipboard with id remap)
+// [SECTION] Prefabs (named reusable subtrees)
+// [SECTION] Live mirror: reflect the running app's controls into the model
+// [SECTION] Scene-hierarchy tree (ECS-style outliner)
 
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "imgui_applayer_nodes.h"
@@ -1181,6 +1202,10 @@ namespace ImGui
     }
   }
 
+  //-----------------------------------------------------------------------------
+  // [SECTION] Layer column packing + default node placement
+  //-----------------------------------------------------------------------------
+
   static int AppGraphPlacementColumn(const ImGuiAppNode* n)
   {
     switch (n->Kind)
@@ -1220,6 +1245,10 @@ namespace ImGui
       return 1 + (int)n->LayerType;
     return 0;
   }
+
+  //-----------------------------------------------------------------------------
+  // [SECTION] Phase-coherent geometry cache (docs/phase-coherence.md)
+  //-----------------------------------------------------------------------------
 
   static bool AppEditorNodeWasSubmitted(int node_id);          // fwd (defined with the editor)
   static const ImGuiAppGraph* g_editor_pool_graph = nullptr;   // the graph whose ids the imnodes pool holds
@@ -3485,6 +3514,10 @@ namespace ImGui
     ImGui::TextDisabled("dock: %s  size: %.0f", kAppDockDirNames[cur], n->DockSize);
   }
 
+  //-----------------------------------------------------------------------------
+  // [SECTION] Inspector (component sections, style/color descs, project + multi-select)
+  //-----------------------------------------------------------------------------
+
   // Resolve a live mirror node back to the runtime object it reflects (the inverse of BuildAppLiveGraph's
   // keying: windows by label hash, sidebars by label hash + 1, controls by PersistData id).
   static ImGuiAppItemBase* AppGraphFindLiveItem(ImGuiApp* app, const ImGuiAppNode* n)
@@ -4015,6 +4048,10 @@ namespace ImGui
           AppGroupAccumulate(g, g->Nodes.Data[i].Id, show_live, mn, mx);
     }
   }
+
+  //-----------------------------------------------------------------------------
+  // [SECTION] Tidy tree layout (measured-size layered DAG)
+  //-----------------------------------------------------------------------------
 
   // Containment children in layout order (window -> hosted controls -> data structs -> fields).
   static void AppLayoutKids(const ImGuiAppGraph* g, const ImGuiAppNode* n, ImVector<int>* kids)
