@@ -318,7 +318,6 @@ namespace
     bool            ShowLive;         // show vs hide (never delete) live-mirror nodes
     float           TreeW;            // outliner width (0 -> default on first use)
     float           CodeH;            // code-inspector height, bottom split under the canvas (0 == collapsed)
-    bool            CodeNodeOnly;     // code view scope: false = whole app (selection highlighted), true = selected node only
     char            WriteMsg[64];     // transient "wrote header" confirmation
     ImGuiID         WrittenSig;       // AppGraphSignature at the last header write (0 = never) -> Generate state
     char            GraphPath[256];
@@ -345,7 +344,6 @@ namespace
       data->ShowLive    = true;
       data->TreeW       = 0.0f;          // 0 -> EditorBody picks a default on first layout
       data->CodeH       = 0.0f;          // collapsed
-      data->CodeNodeOnly = false;        // default scope: the whole program (visibility first)
       data->WriteMsg[0] = 0;
       data->WrittenSig  = 0;
       data->Mirror      = nullptr;       // set after push by ShowAppLayerDemo
@@ -407,8 +405,7 @@ namespace
     bool Load;
     bool WriteHeader;
     bool ToggleCode;
-    bool SetShowLive;   // "Show live mirror" checkbox changed this frame
-    bool ShowLive;      // its captured value
+    bool ToggleLive;    // Live-eye toggle clicked this frame (OnUpdate derives the new state)
     bool Undo;          // undo / redo edit-intents (applied in OnUpdate)
     bool Redo;
     bool OpenProblems;  // problems chip clicked -> reveal the code/problems panel
@@ -454,9 +451,9 @@ namespace
       {
         doc->CodeH = (doc->CodeH > 0.0f) ? 0.0f : ImGui::GetFontSize() * 12.0f;
       }
-      if (temp_data->SetShowLive)
+      if (temp_data->ToggleLive)
       {
-        doc->ShowLive = temp_data->ShowLive;
+        doc->ShowLive = !doc->ShowLive;
       }
       if (temp_data->Undo)
       {
@@ -567,13 +564,12 @@ namespace
         ImGui::SameLine();
 
         // Live-mirror visibility: a latched toggle, lit while the mirror is shown. Hiding never deletes.
+        // The render path records only the CLICK; OnUpdate derives the new state.
         if (show_live)
           ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonActive]);
-        const bool live_clicked = ImGui::Button(live_lbl);
+        temp_data->ToggleLive = ImGui::Button(live_lbl);
         if (show_live)
           ImGui::PopStyleColor();
-        temp_data->SetShowLive = live_clicked;
-        temp_data->ShowLive    = live_clicked ? !show_live : show_live;
         ImGui::SetItemTooltip("Show / hide read-only nodes mirrored from the running app");
       }
       ImGui::EndChild();
@@ -677,6 +673,108 @@ namespace
     }
   };
 
+  // The one generated-code view, used by every code tab (consistency: code reads identically wherever it
+  // appears). Monospace, line-numbered gutter, clipped rendering. With a source map it also carries the
+  // coordinated-view interactions: the selection's lines highlight + auto-scroll into view, a node hovered
+  // in any other view tints its lines, hovering a line brushes its node back out, clicking a line selects.
+  // Pure view: reads const data, records the click into *selection (the caller's intent capture).
+  static void ShowGeneratedCodeView(const char* str_id, const ImGuiTextBuffer& text, const ImVector<int>& lines,
+                                    const ImVector<ImGui::ImGuiAppCodeSpan>* spans, int* selection)
+  {
+    if (g_AppCodeFont)
+      ImGui::PushFont(g_AppCodeFont, 0.0f);
+    if (ImGui::BeginChild(str_id, ImVec2(-FLT_MIN, -FLT_MIN), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar))
+    {
+      const char* buf        = text.Buf.Data;
+      const int   text_len   = text.size();
+      const int   line_count = lines.Size;
+      const float line_h     = ImGui::GetTextLineHeight();
+
+      // Gutter sized to the widest line number (min 3 digits so short files don't jitter the layout).
+      int digits = 3;
+      for (int n = line_count; n >= 1000; n /= 10)
+        digits++;
+      const float gutter_w = ImGui::CalcTextSize("0").x * (float)digits;
+      const ImU32 gutter_col = ImGui::GetColorU32(ImGuiCol_TextDisabled, 0.75f);
+
+      ImGui::ImGuiAppHoverSource hsrc = ImGui::ImGuiAppHoverSource_None;
+      const int brushed_node = spans != nullptr ? ImGui::AppGraphHoveredNode(&hsrc) : -1;
+      const int sel = selection != nullptr ? *selection : -1;
+      auto span_owner = [&](int ln) -> int
+      {
+        if (spans == nullptr)
+          return -1;
+        for (int si = 0; si < spans->Size; si++)
+          if (ln >= spans->Data[si].LineBegin && ln < spans->Data[si].LineEnd)
+            return spans->Data[si].NodeId;
+        return -1;
+      };
+
+      // Focus: when the selection changes, scroll its first span into the top quarter. The latch is window
+      // view state (like the scroll position itself), so it lives in the window's state storage.
+      if (spans != nullptr && selection != nullptr)
+      {
+        const ImGuiID focus_key = ImGui::GetID("##codefocus");
+        ImGuiStorage* st = ImGui::GetStateStorage();
+        if (st->GetInt(focus_key, -123456) != sel)
+        {
+          st->SetInt(focus_key, sel);
+          for (int si = 0; si < spans->Size; si++)
+            if (spans->Data[si].NodeId == sel)
+            {
+              ImGui::SetScrollY(ImMax(0.0f, (float)spans->Data[si].LineBegin * line_h - ImGui::GetWindowHeight() * 0.25f));
+              break;
+            }
+        }
+      }
+
+      ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.0f));
+      ImGuiListClipper clipper;
+      clipper.Begin(line_count, line_h);
+      while (clipper.Step())
+      {
+        for (int ln = clipper.DisplayStart; ln < clipper.DisplayEnd; ln++)
+        {
+          const int   owner    = span_owner(ln);
+          const bool  hl_sel   = owner >= 0 && owner == sel;
+          const bool  hl_brush = owner >= 0 && owner == brushed_node;
+          const ImVec2 row_min = ImGui::GetCursorScreenPos();
+          ImDrawList*  dl      = ImGui::GetWindowDrawList();
+
+          if (hl_sel || hl_brush)
+          {
+            const ImVec2 row_max(row_min.x + ImGui::GetContentRegionAvail().x, row_min.y + line_h);
+            dl->AddRectFilled(row_min, row_max, hl_sel ? IM_COL32(220, 170, 90, 34) : IM_COL32(235, 235, 240, 16));
+            dl->AddRectFilled(row_min, ImVec2(row_min.x + 3.0f, row_max.y), hl_sel ? IM_COL32(220, 170, 90, 220) : IM_COL32(235, 235, 240, 90));
+          }
+
+          // Line number, right-aligned in the gutter; then the code text.
+          char num[16];
+          const int num_len = ImFormatString(num, IM_ARRAYSIZE(num), "%d", ln + 1);
+          dl->AddText(ImVec2(row_min.x + gutter_w - ImGui::CalcTextSize(num, num + num_len).x, row_min.y), gutter_col, num, num + num_len);
+
+          const char* b = buf + lines.Data[ln];
+          const char* e = (ln + 1 < line_count) ? buf + lines.Data[ln + 1] - 1 : buf + text_len;
+          while (e > b && (e[-1] == '\n' || e[-1] == '\r'))
+            e--;
+          ImGui::SetCursorScreenPos(ImVec2(row_min.x + gutter_w + ImGui::CalcTextSize("0").x, row_min.y));
+          ImGui::TextUnformatted(b, e);
+
+          if (owner >= 0 && ImGui::IsItemHovered())
+          {
+            ImGui::AppGraphHoverNode(owner, ImGui::ImGuiAppHoverSource_External);
+            if (selection != nullptr && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+              *selection = owner;   // click code -> select the node (flows into tree + canvas)
+          }
+        }
+      }
+      ImGui::PopStyleVar();
+    }
+    ImGui::EndChild();
+    if (g_AppCodeFont)
+      ImGui::PopFont();
+  }
+
   // PersistData: durable state, mutated only in OnUpdate. CodeText/CodeName are the rendered output (Breathing's
   // timer_text pattern -- derived in OnUpdate, drawn from const data in OnRender).
   struct EditorBodyData
@@ -684,13 +782,16 @@ namespace
     GraphDocData*   Doc;                     // shared doc, cached non-const in OnInitialize
     bool            TreeDragging;            // tree splitter drag FSM (advanced only in OnUpdate)
     float           TreeDragDX;              // grab offset within the grip, captured at drag start
-    ImGuiTextBuffer CodeText;                // the WHOLE app's generated C++ (always current while the panel is open)
+    ImGuiTextBuffer CodeText;                // the WHOLE app's generated C++ (kept current while the panel is open)
     ImVector<ImGui::ImGuiAppCodeSpan> CodeSpans;   // source map: node id -> line ranges in CodeText
     ImVector<int>   CodeLines;               // byte offset of each line start in CodeText (render index)
-    ImGuiTextBuffer CodeNodeText;            // the selected node's code (the focused "Node" scope)
+    ImGuiTextBuffer CodeNodeText;            // the selected node's code (the focused "Node" tab)
+    ImVector<int>   NodeLines;               // line starts in CodeNodeText
+    ImGuiID         CodeSig;                 // graph signature the buffers were generated from (regen gate)
+    int             CodeSel;                 // selection they were generated for (regen gate)
     bool            HasCode;                 // CodeText is non-empty
     bool            HasNodeCode;             // a node is selected and its code was generated
-    char            CodeName[IM_LABEL_SIZE]; // selected node's draft name (for the panel title)
+    char            CodeName[IM_LABEL_SIZE]; // selected node's draft name (the Node tab label)
     ImVector<ImGui::ImGuiAppGraphIssue> Issues;  // validation problems, recomputed while the panel is open
   };
   // TempData: raw input recorded by OnRender (the only place ImGui item geometry exists) and consumed by OnUpdate.
@@ -710,18 +811,17 @@ namespace
     bool  CodeSnapClosed;      // resolved code height collapsed below threshold while idle
     bool  SelectionChanged;    // tree/canvas changed the selection this frame
     int   Selection;           // the new selection
-    bool  ScrubSet;            // transport overlay: "App time" freeze toggled this frame
-    bool  Scrub;               // its captured value
+    bool  ToggleScrub;         // transport overlay: "App time" freeze button clicked (OnUpdate derives the new state)
     bool  ScrubIdxSet;         // transport overlay: frame scrubber moved this frame
     int   ScrubIdx;            // target app-state snapshot index
-    bool  CodeModeSet;         // code panel scope toggle clicked this frame
-    bool  CodeModeNodeOnly;    // its captured value
   };
   struct EditorBodyControl : ImGuiAppControl<EditorBodyData, EditorBodyTempData>
   {
     virtual void OnInitialize(ImGuiApp* app, EditorBodyData* data) const override final
     {
       data->Doc = GetGraphDoc(app);
+      data->CodeSig = 0;
+      data->CodeSel = -2;   // "never generated" (a real empty selection is -1)
     }
 
     virtual void OnUpdate(float dt, EditorBodyData* data, const EditorBodyTempData* temp_data, const EditorBodyTempData* last_temp_data) const override final
@@ -762,10 +862,11 @@ namespace
         doc->Selection = temp_data->Selection;
       }
 
-      // Transport overlay intents (App-time freeze + frame scrub over the mirror's state ring).
-      if (temp_data->ScrubSet)
+      // Transport overlay intents (App-time freeze + frame scrub over the mirror's state ring). The button
+      // records only the CLICK; deriving the next state is this function's job, not the render path's.
+      if (temp_data->ToggleScrub)
       {
-        doc->TimeScrub = temp_data->Scrub;
+        doc->TimeScrub = !doc->TimeScrub;
         if (doc->TimeScrub)
           doc->TimeScrubIndex = ImMax(0, doc->MirrorHistory.Count - 1);   // enter the timeline at "now"
       }
@@ -774,38 +875,42 @@ namespace
         doc->TimeScrubIndex = temp_data->ScrubIdx;
       }
 
-      // Code panel scope toggle intent (App = whole program w/ selection highlighted, Node = focused view).
-      if (temp_data->CodeModeSet)
+      // Regenerate the code buffers only when their inputs changed (graph signature or selection): derived
+      // state lives in PersistData, computed here, drawn from const data in OnRender. A closed panel keeps
+      // its stale buffers -- the signature gate makes them correct again the moment they are next needed.
+      const ImGuiID gsig = ImGui::AppGraphSignature(&doc->Graph);
+      if (doc->CodeH > 0.0f && (gsig != data->CodeSig || doc->Selection != data->CodeSel))
       {
-        doc->CodeNodeOnly = temp_data->CodeModeNodeOnly;
-      }
+        data->CodeSig = gsig;
+        data->CodeSel = doc->Selection;
 
-      // Regenerate the inspector text while the panel is open. The WHOLE program + its source map is always
-      // current (visibility: the panel never opens blank; the map drives highlight/scroll/click-to-select);
-      // the selected node's focused text is generated alongside for the Node scope.
-      data->CodeText.clear();
-      data->CodeSpans.resize(0);
-      data->CodeLines.resize(0);
-      data->CodeNodeText.clear();
-      data->HasCode = false;
-      data->HasNodeCode = false;
-      data->CodeName[0] = 0;
-      if (doc->CodeH > 0.0f)
-      {
+        auto index_lines = [](const ImGuiTextBuffer& text, ImVector<int>* lines)
+        {
+          lines->resize(0);
+          if (text.size() > 0)
+            lines->push_back(0);
+          const char* s = text.Buf.Data;
+          for (int i = 0; i < text.size(); i++)
+            if (s[i] == '\n' && i + 1 < text.size())
+              lines->push_back(i + 1);
+        };
+
+        data->CodeText.clear();
+        data->CodeSpans.resize(0);
         ImGui::GenerateAppGraphCodeEx(&doc->Graph, &data->CodeText, &data->CodeSpans);
         data->HasCode = data->CodeText.size() > 0;
-        data->CodeLines.push_back(0);
-        const char* s = data->CodeText.Buf.Data;
-        for (int i = 0; i < data->CodeText.size(); i++)
-          if (s[i] == '\n' && i + 1 < data->CodeText.size())
-            data->CodeLines.push_back(i + 1);
+        index_lines(data->CodeText, &data->CodeLines);
 
+        data->CodeNodeText.clear();
+        data->HasNodeCode = false;
+        data->CodeName[0] = 0;
         if (ImGuiAppNode* seln = doc->Selection >= 0 ? ImGui::AppGraphFindNode(&doc->Graph, doc->Selection) : nullptr)
         {
           ImGui::GenerateAppNodeCode(&doc->Graph, seln, &data->CodeNodeText);
           ImStrncpy(data->CodeName, seln->Draft.Name, sizeof(data->CodeName));
           data->HasNodeCode = data->CodeNodeText.size() > 0;
         }
+        index_lines(data->CodeNodeText, &data->NodeLines);
       }
 
       // Validation problems for the Problems tab (only while the panel is open -- it scans the whole graph).
@@ -878,7 +983,7 @@ namespace
           // the game-editor play bar. Freeze the MIRRORED app ("App time") and scrub its recorded state
           // ring -- the framework's state discipline makes ANY app scrubbable; this is that theorem as a
           // slider. Real ImGui items submitted after the editor, so they win hover over the canvas.
-          temp_data->ScrubSet    = false;
+          temp_data->ToggleScrub = false;
           temp_data->ScrubIdxSet = false;
           const int app_frames = doc->MirrorHistory.Count;
           if (app_frames > 1 || doc->TimeScrub)
@@ -896,11 +1001,7 @@ namespace
             ImGui::SetCursorScreenPos(t_pos);
             if (doc->TimeScrub)
               ImGui::PushStyleColor(ImGuiCol_Button, tstyle.Colors[ImGuiCol_ButtonActive]);
-            if (ImGui::Button(t_lbl))
-            {
-              temp_data->ScrubSet = true;
-              temp_data->Scrub    = !doc->TimeScrub;
-            }
+            temp_data->ToggleScrub = ImGui::Button(t_lbl);   // record the click; OnUpdate derives the new state
             if (doc->TimeScrub)
               ImGui::PopStyleColor();
             ImGui::SetItemTooltip("Freeze the running app and scrub its recorded state history (%d frames)", app_frames);
@@ -942,130 +1043,54 @@ namespace
                 ImGui::EditAppNodeInspector(graph, selection);   // edit the selected node's data (name / fields / props)
                 ImGui::EndTabItem();
               }
-              if (ImGui::BeginTabItem("Generated C++"))
+              // Code: the whole generated program, source-mapped -- the selection's lines highlight and
+              // scroll into view, hover brushes both ways, clicking a line selects the node. Scopes are
+              // TABS (the idiom this panel already speaks), so the focused view is its own tab below.
+              if (ImGui::BeginTabItem("Code"))
               {
                 ImGui::AlignTextToFramePadding();
-                // Scope: App = the whole generated program with the selection's lines highlighted (and
-                // click-to-select back into the graph); Node = just the selected node's contribution.
-                const bool node_scope = doc->CodeNodeOnly && data->HasNodeCode;
-                ImGui::AlignTextToFramePadding();
-                ImGui::TextDisabled(node_scope ? "Generated C++ - %s" : "Generated C++ - whole app%s", node_scope ? data->CodeName : "");
-                ImGui::SameLine();
-                {
-                  const bool want_node = doc->CodeNodeOnly;
-                  if (!want_node) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
-                  if (ImGui::Button("App")) { temp_data->CodeModeSet = true; temp_data->CodeModeNodeOnly = false; }
-                  if (!want_node) ImGui::PopStyleColor();
-                  ImGui::SetItemTooltip("Whole program; the selected node's lines are highlighted");
-                  ImGui::SameLine(0.0f, 2.0f);
-                  ImGui::BeginDisabled(!data->HasNodeCode);
-                  if (want_node) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
-                  if (ImGui::Button("Node")) { temp_data->CodeModeSet = true; temp_data->CodeModeNodeOnly = true; }
-                  if (want_node) ImGui::PopStyleColor();
-                  ImGui::EndDisabled();
-                  ImGui::SetItemTooltip("Only the selected node's contribution");
-                }
-                if (data->HasCode || data->HasNodeCode)
+                ImGui::TextDisabled("Whole program");
+                if (data->HasCode)
                 {
                   ImGui::SameLine();
                   if (ImGui::Button("Copy"))
                   {
-                    ImGui::SetClipboardText(node_scope ? data->CodeNodeText.c_str() : data->CodeText.c_str());
+                    ImGui::SetClipboardText(data->CodeText.c_str());
                   }
                 }
                 if (doc->WriteMsg[0])
                 {
                   ImGui::SameLine();
-                  ImGui::TextColored(ImVec4(0.45f,0.85f,0.45f,1.0f), "%s", doc->WriteMsg);
+                  ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f), "%s", doc->WriteMsg);
                 }
-
-                // Monospace so space-padded column alignment (e.g. the generated enum '=' column) lines up.
-                if (g_AppCodeFont)
-                {
-                  ImGui::PushFont(g_AppCodeFont, 0.0f);
-                }
-                if (node_scope)
-                {
-                  ImGui::InputTextMultiline("##code", data->CodeNodeText.Buf.Data, (size_t)data->CodeNodeText.Buf.Capacity, ImVec2(-FLT_MIN, -FLT_MIN), ImGuiInputTextFlags_ReadOnly);
-                }
-                else if (!data->HasCode)
+                if (!data->HasCode)
                 {
                   ImGui::TextDisabled("The graph generates no code yet -- add a window or a control.");
                 }
-                else if (ImGui::BeginChild("##codeall", ImVec2(-FLT_MIN, -FLT_MIN), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar))
+                else
                 {
-                  // Whole-program view over the source map: the selection's spans get an accent fill + gutter
-                  // bar; a node hovered in ANY view tints its lines (brushing); hovering a line reports its
-                  // node back; clicking a line selects the node on canvas + outliner. One model, four views.
-                  const char* buf = data->CodeText.Buf.Data;
-                  const int   text_len = data->CodeText.size();
-                  const int   line_count = data->CodeLines.Size;
-                  ImGui::ImGuiAppHoverSource hsrc = ImGui::ImGuiAppHoverSource_None;
-                  const int brushed_node = ImGui::AppGraphHoveredNode(&hsrc);
-                  auto span_owner = [&](int ln) -> int
-                  {
-                    for (int si = 0; si < data->CodeSpans.Size; si++)
-                      if (ln >= data->CodeSpans.Data[si].LineBegin && ln < data->CodeSpans.Data[si].LineEnd)
-                        return data->CodeSpans.Data[si].NodeId;
-                    return -1;
-                  };
-
-                  // Focus: when the selection changes, scroll its first span into view (top quarter).
-                  static int s_code_focus_last = -123456;
-                  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.0f));
-                  const float line_h = ImGui::GetTextLineHeight();
-                  if (selection != s_code_focus_last)
-                  {
-                    s_code_focus_last = selection;
-                    for (int si = 0; si < data->CodeSpans.Size; si++)
-                      if (data->CodeSpans.Data[si].NodeId == selection)
-                      {
-                        ImGui::SetScrollY(ImMax(0.0f, (float)data->CodeSpans.Data[si].LineBegin * line_h - ImGui::GetWindowHeight() * 0.25f));
-                        break;
-                      }
-                  }
-
-                  ImGuiListClipper clipper;
-                  clipper.Begin(line_count, line_h);
-                  while (clipper.Step())
-                  {
-                    for (int ln = clipper.DisplayStart; ln < clipper.DisplayEnd; ln++)
-                    {
-                      const int  owner    = span_owner(ln);
-                      const bool selected = owner >= 0 && owner == selection;
-                      const bool brushed  = owner >= 0 && owner == brushed_node;
-                      const char* b = buf + data->CodeLines.Data[ln];
-                      const char* e = (ln + 1 < line_count) ? buf + data->CodeLines.Data[ln + 1] - 1 : buf + text_len;
-                      while (e > b && (e[-1] == '\n' || e[-1] == '\r'))
-                        e--;
-                      if (selected || brushed)
-                      {
-                        const ImVec2 rmn = ImGui::GetCursorScreenPos();
-                        const ImVec2 rmx(rmn.x + ImGui::GetContentRegionAvail().x, rmn.y + line_h);
-                        ImDrawList* dl = ImGui::GetWindowDrawList();
-                        dl->AddRectFilled(rmn, rmx, selected ? IM_COL32(220, 170, 90, 34) : IM_COL32(235, 235, 240, 18));
-                        dl->AddRectFilled(rmn, ImVec2(rmn.x + 3.0f, rmx.y), selected ? IM_COL32(220, 170, 90, 220) : IM_COL32(235, 235, 240, 90));
-                      }
-                      ImGui::TextUnformatted(b, e);
-                      if (owner >= 0 && ImGui::IsItemHovered())
-                      {
-                        ImGui::AppGraphHoverNode(owner, ImGui::ImGuiAppHoverSource_External);
-                        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-                          selection = owner;   // click code -> select the node (flows into the tree + canvas)
-                      }
-                    }
-                  }
-                  ImGui::PopStyleVar();
-                }
-                if (!node_scope && data->HasCode)
-                {
-                  ImGui::EndChild();
-                }
-                if (g_AppCodeFont)
-                {
-                  ImGui::PopFont();
+                  ShowGeneratedCodeView("##codeall", data->CodeText, data->CodeLines, &data->CodeSpans, &selection);
                 }
                 ImGui::EndTabItem();
+              }
+              // The selected node's contribution, as its own named tab -- present exactly while a node with
+              // code is selected ("###nodecode" keeps the tab's identity stable across selection changes).
+              if (data->HasNodeCode)
+              {
+                char node_tab[IM_LABEL_SIZE + 16];
+                ImFormatString(node_tab, IM_ARRAYSIZE(node_tab), "%s###nodecode", data->CodeName);
+                if (ImGui::BeginTabItem(node_tab))
+                {
+                  ImGui::AlignTextToFramePadding();
+                  ImGui::TextDisabled("Selected node's contribution");
+                  ImGui::SameLine();
+                  if (ImGui::Button("Copy"))
+                  {
+                    ImGui::SetClipboardText(data->CodeNodeText.c_str());
+                  }
+                  ShowGeneratedCodeView("##codenode", data->CodeNodeText, data->NodeLines, nullptr, nullptr);
+                  ImGui::EndTabItem();
+                }
               }
               // Preview ("Play"): render the selected control's fields as a live mock UI.
               if (ImGui::BeginTabItem("Preview"))
