@@ -1204,6 +1204,14 @@ namespace ImGui
   static const float kAppGraphLayerNodeWidth = 520.0f;
   static const float kAppGraphLayerRowH = 145.0f;
 
+  // Uniform layer-column CONTENT width in model units, constrained TOGETHER: the widest layer's measured
+  // content raises it for everyone (floor = kAppGraphLayerNodeWidth), so the column renders flush at any
+  // zoom -- never per-node ragged, never a fixed pixel width that ignores the zoom. Recomputed each editor
+  // frame from last frame's measurements.
+  static float g_app_layer_uniform_w = kAppGraphLayerNodeWidth;
+
+  static float AppCanvasZoom();   // fwd (defined with the view state)
+
   static int AppGraphPlacementRowHint(const ImGuiAppNode* n)
   {
     if (n->Kind == ImGuiAppNodeKind_App)
@@ -1213,16 +1221,52 @@ namespace ImGui
     return 0;
   }
 
+  static bool AppEditorNodeWasSubmitted(int node_id);          // fwd (defined with the editor)
+  static const ImGuiAppGraph* g_editor_pool_graph = nullptr;   // the graph whose ids the imnodes pool holds
+
+  // A node's footprint in MODEL units: last frame's measurement when it has been on the canvas, a per-kind
+  // estimate before that. Placement and tidy both size against THIS -- fixed fantasy row heights are what made
+  // the old layout pile tall nodes onto each other. The pool-graph guard matters: a DIFFERENT graph's node ids
+  // (tests, tools) can collide numerically with the editor pool, and imnodes asserts on a stale id.
+  static ImVec2 AppLayoutNodeSize(const ImGuiAppGraph* g, const ImGuiAppNode* n)
+  {
+    if (g == g_editor_pool_graph && AppEditorNodeWasSubmitted(n->Id))
+    {
+      const ImVec2 d = ImNodes::GetNodeDimensions(n->Id) / AppCanvasZoom();
+      if (d.x > 1.0f && d.y > 1.0f)
+        return d;
+    }
+    switch (n->Kind)
+    {
+    case ImGuiAppNodeKind_Layer:   return ImVec2(kAppGraphLayerNodeWidth, kAppGraphLayerRowH);
+    case ImGuiAppNodeKind_Window:
+    case ImGuiAppNodeKind_Sidebar: return ImVec2(260.0f, 120.0f);
+    case ImGuiAppNodeKind_Control: return ImVec2(400.0f, 320.0f);
+    case ImGuiAppNodeKind_Struct:  return ImVec2(300.0f, 150.0f);
+    case ImGuiAppNodeKind_Field:   return ImVec2(250.0f, 85.0f);
+    default:                       return ImVec2(300.0f, 140.0f);
+    }
+  }
+
+  // The x where free-standing (non-layer) content begins: right of the layer pipeline column + its frame gutter.
+  static float AppLayoutContentX0()
+  {
+    return kAppGraphX0 + g_app_layer_uniform_w + 170.0f;
+  }
+
   static bool AppGraphPlacementOccupied(const ImGuiAppGraph* g, const ImGuiAppNode* self, const ImVec2& pos)
   {
-    const float min_dx = 230.0f;
-    const float min_dy = 125.0f;
+    const float margin = 28.0f;
+    const ImVec2 ss = AppLayoutNodeSize(g, self);
     for (int i = 0; i < g->Nodes.Size; i++)
     {
       const ImGuiAppNode* other = &g->Nodes.Data[i];
       if (other == self || !other->HasGridPos)
         continue;
-      if (ImAbs(other->GridPos.x - pos.x) < min_dx && ImAbs(other->GridPos.y - pos.y) < min_dy)
+      const ImVec2 so = AppLayoutNodeSize(g, other);
+      const bool x_over = pos.x < other->GridPos.x + so.x + margin && pos.x + ss.x + margin > other->GridPos.x;
+      const bool y_over = pos.y < other->GridPos.y + so.y + margin && pos.y + ss.y + margin > other->GridPos.y;
+      if (x_over && y_over)
         return true;
     }
     return false;
@@ -1230,22 +1274,32 @@ namespace ImGui
 
   static ImVec2 AppGraphFindOpenPlacement(const ImGuiAppGraph* g, const ImGuiAppNode* n, const ImVec2& preferred, bool has_preferred)
   {
-    const float col_w = 600.0f;
-    const float row_h = kAppGraphLayerRowH;
-
     ImVec2 start = preferred;
     if (!has_preferred)
     {
-      start.x = kAppGraphX0 + AppGraphPlacementColumn(n) * col_w;
-      start.y = kAppGraphY0 + AppGraphPlacementRowHint(n) * row_h;
+      // Default columns mirror the tidy DAG's reading order: [layer stack] | windows | controls | structs |
+      // fields -- a fresh node lands where the tree layout would want it, not on top of the pipeline box.
+      if (n->Kind == ImGuiAppNodeKind_Layer || n->Kind == ImGuiAppNodeKind_App)
+      {
+        start = ImVec2(kAppGraphX0, kAppGraphY0 + AppGraphPlacementRowHint(n) * kAppGraphLayerRowH);
+      }
+      else
+      {
+        const int col = (n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar) ? 0
+                      : (n->Kind == ImGuiAppNodeKind_Control) ? 1
+                      : (n->Kind == ImGuiAppNodeKind_Struct) ? 2 : 3;
+        start = ImVec2(AppLayoutContentX0() + (float)col * 480.0f, kAppGraphY0);
+      }
     }
 
-    // Search down first: columns remain meaningful, and extra nodes under the same role stay grouped.
+    // March DOWN in real-size steps until the measured footprint fits (columns stay meaningful; the fallback
+    // half-column shift keeps a pathological pile from stacking forever).
+    const float step = ImMax(60.0f, AppLayoutNodeSize(g, n).y * 0.5f);
     for (int pass = 0; pass < 2; pass++)
     {
-      for (int row = 0; row < 64; row++)
+      for (int row = 0; row < 96; row++)
       {
-        const ImVec2 pos = ImVec2(start.x + pass * col_w * 0.5f, start.y + row * row_h);
+        const ImVec2 pos = ImVec2(start.x + (float)pass * 240.0f, start.y + (float)row * step);
         if (!AppGraphPlacementOccupied(g, n, pos))
           return pos;
       }
@@ -3864,71 +3918,89 @@ namespace ImGui
     }
   }
 
-  // Tidy tree layout. Walk one containment subtree left-to-right by depth (window -> hosted controls -> data
-  // structs -> fields), stacking siblings vertically and centering each parent on its children's span. Returns
-  // the y the node was placed at. Uses a single running cursor so separate roots never overlap.
-  static float AppLayoutWalk(ImGuiAppGraph* g, int id, int depth, float base_x, float* cursor_y)
+  // Containment children in layout order (window -> hosted controls -> data structs -> fields).
+  static void AppLayoutKids(const ImGuiAppGraph* g, const ImGuiAppNode* n, ImVector<int>* kids)
   {
-    ImGuiAppNode* n = AppGraphFindNode(g, id);
-    if (n == nullptr)
-      return *cursor_y;
-
-    ImVector<int> kids;
+    kids->clear();
     if (n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar)
     {
       for (int i = 0; i < g->Nodes.Size; i++)
-        if (g->Nodes.Data[i].Kind == ImGuiAppNodeKind_Control && AppGraphParentOf(g, g->Nodes.Data[i].Id) == id)
-          kids.push_back(g->Nodes.Data[i].Id);
+        if (g->Nodes.Data[i].Kind == ImGuiAppNodeKind_Control && AppGraphParentOf(g, g->Nodes.Data[i].Id) == n->Id)
+          kids->push_back(g->Nodes.Data[i].Id);
     }
     else if (n->Kind == ImGuiAppNodeKind_Control)
     {
-      if (n->PersistStructId >= 0) kids.push_back(n->PersistStructId);
-      if (n->TempStructId >= 0)    kids.push_back(n->TempStructId);
+      if (n->PersistStructId >= 0) kids->push_back(n->PersistStructId);
+      if (n->TempStructId >= 0)    kids->push_back(n->TempStructId);
     }
     else if (n->Kind == ImGuiAppNodeKind_Struct)
     {
       for (int i = 0; i < g->Nodes.Size; i++)
-        if (g->Nodes.Data[i].Kind == ImGuiAppNodeKind_Field && AppGraphParentOf(g, g->Nodes.Data[i].Id) == id)
-          kids.push_back(g->Nodes.Data[i].Id);
+        if (g->Nodes.Data[i].Kind == ImGuiAppNodeKind_Field && AppGraphParentOf(g, g->Nodes.Data[i].Id) == n->Id)
+          kids->push_back(g->Nodes.Data[i].Id);
     }
+  }
 
-    const float col_w = 320.0f;
-    const float x = base_x + (float)depth * col_w;
-    const float row_h = (n->Kind == ImGuiAppNodeKind_Field) ? 78.0f : 134.0f;
+  static const int kAppLayoutMaxDepth = 12;
 
+  // Pass 1: per-depth column widths from MEASURED node sizes (the widest node in a depth sets its column).
+  static void AppLayoutMeasure(const ImGuiAppGraph* g, int id, int depth, float* max_w)
+  {
+    const ImGuiAppNode* n = AppGraphFindNodeConst(g, id);
+    if (n == nullptr)
+      return;
+    const int d = ImMin(depth, kAppLayoutMaxDepth - 1);
+    max_w[d] = ImMax(max_w[d], AppLayoutNodeSize(g, n).x);
+    ImVector<int> kids;
+    AppLayoutKids(g, n, &kids);
+    for (int k = 0; k < kids.Size; k++)
+      AppLayoutMeasure(g, kids.Data[k], depth + 1, max_w);
+  }
+
+  // Pass 2: layered tree placement with MEASURED sizes -- siblings stack by their real heights, parents center
+  // on their children's span, and every depth keeps its own cursor so no column can ever overlap itself.
+  // Returns the placed node's vertical CENTER.
+  static float AppLayoutPlace(ImGuiAppGraph* g, int id, int depth, const float* col_x, float* col_cur)
+  {
+    ImGuiAppNode* n = AppGraphFindNode(g, id);
+    if (n == nullptr)
+      return col_cur[0];
+    const int d = ImMin(depth, kAppLayoutMaxDepth - 1);
+    const ImVec2 sz = AppLayoutNodeSize(g, n);
+    const float kGapY = 46.0f;
+
+    ImVector<int> kids;
+    AppLayoutKids(g, n, &kids);
+    float y;
     if (kids.Size == 0)
     {
-      const float y = *cursor_y;
-      n->GridPos = ImVec2(x, y);
-      n->HasGridPos = true;
-      n->_NeedsPlace = true;
-      *cursor_y = y + row_h;
-      return y;
+      y = col_cur[d];
     }
-
-    float first = 0.0f;
-    float last = 0.0f;
-    for (int k = 0; k < kids.Size; k++)
+    else
     {
-      const float cy = AppLayoutWalk(g, kids.Data[k], depth + 1, base_x, cursor_y);
-      if (k == 0)
-        first = cy;
-      last = cy;
+      float c_first = 0.0f, c_last = 0.0f;
+      for (int k = 0; k < kids.Size; k++)
+      {
+        const float c = AppLayoutPlace(g, kids.Data[k], depth + 1, col_x, col_cur);
+        if (k == 0) c_first = c;
+        c_last = c;
+      }
+      n = AppGraphFindNode(g, id);   // recursion only repositions (never adds), but re-find to be safe
+      y = ImMax((c_first + c_last) * 0.5f - sz.y * 0.5f, col_cur[d]);
     }
-    n = AppGraphFindNode(g, id);   // recursion only repositions (never adds), but re-find to be safe
-    const float y = (first + last) * 0.5f;
-    n->GridPos = ImVec2(x, y);
+    n->GridPos = ImVec2(col_x[d], y);
     n->HasGridPos = true;
     n->_NeedsPlace = true;
-    return y;
+    col_cur[d] = y + sz.y + kGapY;
+    return y + sz.y * 0.5f;
   }
 
   void AppGraphAutoLayout(ImGuiAppGraph* g, bool show_live)
   {
     IM_ASSERT(g != nullptr);
 
-    float cursor_y = 60.0f;
-    const float base_x = 60.0f;
+    // Layout roots (containment tree tops in the current scope).
+    ImVector<int> roots;
     for (int i = 0; i < g->Nodes.Size; i++)
     {
       const ImGuiAppNode* n = &g->Nodes.Data[i];
@@ -3958,7 +4030,35 @@ namespace ImGui
       if (!is_root && AppScopeCurrent(g) >= 0 && AppScopeParentOf(g, n->Id) == AppScopeCurrent(g))
         is_root = true;
       if (is_root)
-        AppLayoutWalk(g, n->Id, 0, base_x, &cursor_y);
+        roots.push_back(n->Id);
+    }
+
+    // Column x-offsets from MEASURED widths (pass 1), shared across all roots so the depth columns line up
+    // graph-wide; the trees themselves start clear of the layer pipeline column at the root scope.
+    float max_w[kAppLayoutMaxDepth] = {};
+    for (int r = 0; r < roots.Size; r++)
+      AppLayoutMeasure(g, roots.Data[r], 0, max_w);
+
+    const float kGapX = 100.0f;
+    const bool  scoped = AppScopeCurrent(g) >= 0;
+    float col_x[kAppLayoutMaxDepth];
+    col_x[0] = scoped ? 80.0f : AppLayoutContentX0();
+    for (int d = 1; d < kAppLayoutMaxDepth; d++)
+      col_x[d] = col_x[d - 1] + (max_w[d - 1] > 0.0f ? max_w[d - 1] + kGapX : 0.0f);
+
+    // Place each root's tree (pass 2); between roots every column cursor advances past the deepest one so
+    // group frames of adjacent trees can never interleave.
+    float col_cur[kAppLayoutMaxDepth];
+    for (int d = 0; d < kAppLayoutMaxDepth; d++)
+      col_cur[d] = scoped ? 60.0f : kAppGraphY0;
+    for (int r = 0; r < roots.Size; r++)
+    {
+      AppLayoutPlace(g, roots.Data[r], 0, col_x, col_cur);
+      float deepest = 0.0f;
+      for (int d = 0; d < kAppLayoutMaxDepth; d++)
+        deepest = ImMax(deepest, col_cur[d]);
+      for (int d = 0; d < kAppLayoutMaxDepth; d++)
+        col_cur[d] = deepest + 34.0f;
     }
   }
 
@@ -4400,6 +4500,22 @@ namespace ImGui
       }
     }
 
+    // Uniform layer width: take the widest layer's CONTENT (last frame's measurement, model units) so every
+    // layer node renders at the same width this frame (see g_app_layer_uniform_w).
+    {
+      const float z = AppCanvasZoom();
+      const float pad2 = ImNodes::GetStyle().NodePadding.x * 2.0f;   // base padding (pre zoom-scale below)
+      float w = kAppGraphLayerNodeWidth;
+      for (int i = 0; i < g->Nodes.Size; i++)
+      {
+        const ImGuiAppNode* n = &g->Nodes.Data[i];
+        if (n->Kind != ImGuiAppNodeKind_Layer || (!show_live && n->IsLive) || !AppEditorNodeWasSubmitted(n->Id))
+          continue;
+        w = ImMax(w, ImNodes::GetNodeDimensions(n->Id).x / z - pad2);
+      }
+      g_app_layer_uniform_w = w;
+    }
+
     // Scale the pixel-flavored ImNodes style scalars for this frame (grid, pins, links, node padding), and
     // render our node content under a zoomed font below -- geometric zoom without forking imnodes.
     const ImNodesStyle style_backup = ImNodes::GetStyle();
@@ -4585,6 +4701,7 @@ namespace ImGui
     static ImVector<int> s_editor_prev_pool_ids;
     s_editor_prev_pool_ids.swap(s_editor_pool_ids);
     s_editor_pool_ids.resize(0);
+    g_editor_pool_graph = g;   // measurement guard: pool ids only mean anything for THIS graph (see AppLayoutNodeSize)
     for (int i = 0; i < g->Nodes.Size; i++)
     {
       ImGuiAppNode* n = &g->Nodes.Data[i];
@@ -4795,9 +4912,9 @@ namespace ImGui
         }
         if (lt == ImGuiAppLayerType_Command)
           EditAppNodeCommands(n, false);   // list the commands (the "+ Command" adder lives in the build row above)
-        // Uniform layer-column width is a MODEL-unit constant -- scale it like everything else in the node
-        // body, or layer nodes keep their 1:1 pixel width at any zoom and dwarf the scaled content.
-        ImGui::Dummy(ImVec2(kAppGraphLayerNodeWidth * AppCanvasZoom(), 1.0f));
+        // Uniform layer-column width: every layer stretches to the SAME shared width (widest content wins,
+        // model units x zoom) -- flush column at any zoom, never per-node ragged, never fixed pixels.
+        ImGui::Dummy(ImVec2(g_app_layer_uniform_w * AppCanvasZoom(), 1.0f));
       }
       else if (n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar)
       {
