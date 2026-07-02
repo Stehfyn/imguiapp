@@ -4795,7 +4795,9 @@ namespace ImGui
         }
         if (lt == ImGuiAppLayerType_Command)
           EditAppNodeCommands(n, false);   // list the commands (the "+ Command" adder lives in the build row above)
-        ImGui::Dummy(ImVec2(kAppGraphLayerNodeWidth, 1.0f));
+        // Uniform layer-column width is a MODEL-unit constant -- scale it like everything else in the node
+        // body, or layer nodes keep their 1:1 pixel width at any zoom and dwarf the scaled content.
+        ImGui::Dummy(ImVec2(kAppGraphLayerNodeWidth * AppCanvasZoom(), 1.0f));
       }
       else if (n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar)
       {
