@@ -263,26 +263,15 @@ namespace
   };
 
   // Seed a fresh graph. The graph IS the app: the collective of layer/window/control nodes composes it,
-  // so there is no "App" container node. Seed one window + one control to show the two pillars at once.
+  // so there is no "App" container node. Only the foundation is seeded -- a fresh document is the four
+  // guaranteed phases and nothing else; windows and controls are authored, not presumed (a default
+  // "MainWindow"/"NewControl" pair read as content the user never asked for).
   void SeedAppGraph(ImGuiAppGraph* graph)
   {
     // The authored foundation is guaranteed here: the four layers are the frame's phases and anchor the canvas
     // root whether or not a live mirror exists. The mirror upserts ONTO them (BuildAppLiveGraph skips live
     // layers that have a design twin), so there are never design/live duplicates of a phase.
     ImGui::AppGraphEnsureFoundation(graph);
-
-    // Explicit positions clear to the RIGHT of the layer master column + its pipeline group box (the column
-    // packs at x ~110..630 and the box adds padding), so the default window + control never occlude the layer
-    // stack. Set HasGridPos so it sticks.
-    ImGuiAppNode* win  = ImGui::AppGraphAddNode(graph, ImGuiAppNodeKind_Window,  "MainWindow");
-    win->GridPos = ImVec2(760.0f, 96.0f);
-    win->HasGridPos = true;
-    win->_NeedsPlace = true;
-
-    ImGuiAppNode* ctrl = ImGui::AppGraphAddNode(graph, ImGuiAppNodeKind_Control, "NewControl");
-    ctrl->GridPos = ImVec2(760.0f, 320.0f);
-    ctrl->HasGridPos = true;
-    ctrl->_NeedsPlace = true;
   }
 
   // "+ Add node" palette: layers, windows, sidebars, controls -- the pieces that compose the app. Builtin
