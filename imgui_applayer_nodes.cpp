@@ -2675,6 +2675,13 @@ namespace ImGui
     return picked;
   }
 
+  namespace
+  {
+    bool g_add_palette_request = false;   // one-shot, consumed by ShowAppGraphEditor
+  }
+
+  void AppGraphRequestAddPalette() { g_add_palette_request = true; }
+
   void AppGraphHoverNode(int node_id, ImGuiAppHoverSource source)
   {
     AppHoverRotate();
@@ -4401,7 +4408,19 @@ namespace ImGui
     }
 
     ImNodes::BeginNodeEditor();
-    ImGui::PushFont(nullptr, ImGui::GetFontSize() * AppCanvasZoom());   // node content tracks the canvas scale
+    // Node content tracks the canvas scale: the FONT alone is not enough -- imgui's pixel-flavored layout
+    // metrics (paddings, spacings, rounding) must scale with it or node internals lay out with unscaled
+    // chrome around scaled text and every body renders subtly (or grossly) wrong at zoom != 1.
+    {
+      const float z = AppCanvasZoom();
+      const ImGuiStyle& gs = ImGui::GetStyle();
+      ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,     ImVec2(gs.FramePadding.x * z, gs.FramePadding.y * z));
+      ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,      ImVec2(gs.ItemSpacing.x * z, gs.ItemSpacing.y * z));
+      ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(gs.ItemInnerSpacing.x * z, gs.ItemInnerSpacing.y * z));
+      ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing,    gs.IndentSpacing * z);
+      ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,    gs.FrameRounding * z);
+      ImGui::PushFont(nullptr, ImGui::GetFontSize() * z);
+    }
     // Link editing: drag a wire's endpoint off a pin to detach + rewire it; snap-create completes a wire when its
     // free end hovers a compatible pin. Both apply to every attribute submitted this frame.
     ImNodes::PushAttributeFlag(ImNodesAttributeFlags_EnableLinkDetachWithDragClick);
@@ -4862,6 +4881,7 @@ namespace ImGui
     if (s_ov_minimap)
       ImNodes::MiniMap(0.2f, ImNodesMiniMapLocation_BottomRight);
     ImGui::PopFont();                                      // zoomed node-content font (pushed after BeginNodeEditor)
+    ImGui::PopStyleVar(5);                                 // zoomed node-content layout metrics
     ImNodes::EndNodeEditor();
     ImNodes::GetStyle() = style_backup;                    // restore the zoom-scaled style scalars
     const ImVec2 editor_size = ImGui::GetItemRectSize();   // captured before later items, for fit-all centering
@@ -5009,6 +5029,15 @@ namespace ImGui
       const ImGuiAppNode* dn = AppGraphFindNodeConst(g, hovered_node);
       if (dn != nullptr && AppScopeCanEnter(dn) && (dn->Kind == ImGuiAppNodeKind_Layer || dn->IsLive))
         g->ViewScope.push_back(dn->Id);
+    }
+
+    // Host "Add" entry point (the toolbar's compose verb): open the same add palette the RMB / Space / +
+    // gizmo roads reach, at the canvas center.
+    if (g_add_palette_request)
+    {
+      g_add_palette_request = false;
+      add_popup_grid = (ImVec2(editor_size.x * 0.5f, editor_size.y * 0.5f) - ImNodes::EditorContextGetPanning()) / AppCanvasZoom();
+      ImGui::OpenPopup("##AppGraphAdd");
     }
 
     // Wheel zoom about the cursor: over empty canvas plain, anywhere with Ctrl. A plain wheel over a node is

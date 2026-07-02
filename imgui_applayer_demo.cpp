@@ -561,6 +561,7 @@ namespace
     int  HistoryGotoIdx;
     bool CopyCode;       // Generate menu: copy the generated C++ to the clipboard
     int  RevealPanel;    // ComposerPanel_* intent from a palette pick (0 = none)
+    bool AddNode;        // toolbar "+ Add" -> open the canvas add palette (the loop's entry point)
   };
   struct ToolbarControl : ImGuiAppControl<ToolbarData, ToolbarTempData>
   {
@@ -633,6 +634,10 @@ namespace
       {
         doc->RevealPanel = temp_data->RevealPanel;
       }
+      if (temp_data->AddNode)
+      {
+        ImGui::AppGraphRequestAddPalette();
+      }
       if (temp_data->Diff)
       {
         ImGuiAppGraph saved;
@@ -665,54 +670,21 @@ namespace
       // viewport's gizmo cluster, not here.
       if (ImGui::BeginChild("##Toolbar", ImVec2(0.0f, 0.0f), ImGuiChildFlags_FrameStyle | ImGuiChildFlags_AutoResizeY))
       {
-        // -- Generate: green check = header on disk matches the graph; amber = model changed since the last
-        //    write; red = validation errors (writing stays allowed; the ambient marks say where to look).
-        const ImVector<ImGui::ImGuiAppGraphIssue>* issues = ImGui::AppGraphIssuesCached(&doc->Graph);
-        int nerr = 0, nwarn = 0;
-        for (int i = 0; i < issues->Size; i++)
-          (issues->Data[i].Severity >= 2 ? nerr : nwarn)++;
-        const bool  fresh     = doc->WrittenSig != 0 && doc->WrittenSig == ImGui::AppGraphSignature(&doc->Graph);
-        const char* gen_label = nerr > 0 ? ICON_FA_TRIANGLE_EXCLAMATION "  Generate" : fresh ? ICON_FA_CHECK "  Generated" : ICON_FA_FILE_EXPORT "  Generate";
-        ImGui::PushStyleColor(ImGuiCol_Button, nerr > 0 ? ImVec4(0.55f, 0.21f, 0.18f, 1.0f)
-                                             : fresh    ? ImVec4(0.16f, 0.38f, 0.22f, 1.0f)
-                                                        : ImVec4(0.52f, 0.39f, 0.14f, 1.0f));
-        temp_data->WriteHeader = ImGui::Button(gen_label);
-        ImGui::PopStyleColor();
-        if (nerr > 0)
-          ImGui::SetItemTooltip("%d error(s) in the graph -- writes anyway; see the Problems chip", nerr);
-        else if (fresh)
-          ImGui::SetItemTooltip("%s matches the graph -- click to rewrite", doc->HeaderPath);
-        else
-          ImGui::SetItemTooltip("Graph changed -- write whole-graph C++ -> %s", doc->HeaderPath);
+        // FLOW-ORDERED toolbar (usability findings #2): one left-to-right eye walk per authoring loop --
+        // compose (Add) -> iterate (undo/redo/history) -> persist (Save) -> produce (Generate, whose health
+        // state doubles as "how did my loop go"). Panel/observe toggles stay right-aligned. The dim caption
+        // row underneath names the phases (recognition of the flow without a tutorial).
+        float cap_x[4] = { 0, 0, 0, 0 };
 
-        // -- Generate's verb family behind a split half (VS split-button): the primary click writes the
-        //    header; the chevron holds the siblings (copy / diff). Diff lost its peer-button seat -- it is
-        //    a Generate-family member, not a document verb.
-        ImGui::SameLine(0.0f, 1.0f);
-        if (ImGui::Button(ICON_FA_CHEVRON_DOWN "##genmenu"))
-          ImGui::OpenPopup("##generate_family");
-        ImGui::SetItemTooltip("More generate actions");
-        if (ImGui::BeginPopup("##generate_family"))
-        {
-          if (ImGui::MenuItem(ICON_FA_COPY "  Copy generated C++ to clipboard"))
-            temp_data->CopyCode = true;
-          if (ImGui::MenuItem(ICON_FA_CODE_COMPARE "  Diff vs saved graph -> clipboard"))
-            temp_data->Diff = true;
-          ImGui::EndPopup();
-        }
+        // -- compose: the loop's entry point (same palette as RMB / Space / the + gizmo).
+        cap_x[0] = ImGui::GetCursorPosX();
+        temp_data->AddNode = ImGui::Button(ICON_FA_PLUS "  Add");
+        ImGui::SetItemTooltip("Add a node (Space / right-click canvas)");
 
         EditorToolSep(em);
-        // Ctrl+S is document-global (VS convention): captured here because the toolbar renders every frame.
-        temp_data->Save = ImGui::Button(ICON_FA_FLOPPY_DISK "  Save")
-                       || (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false));
-        ImGui::SetItemTooltip("Save graph -> %s (Ctrl+S)", doc->GraphPath);
-        ImGui::SameLine();
-        temp_data->Load = ImGui::Button(ICON_FA_FOLDER_OPEN "  Load");
-        ImGui::SetItemTooltip("Load graph <- %s", doc->GraphPath);
-
-        EditorToolSep(em);
-        // Undo/redo carry the NAME of the step they would take (VS "Undo Typing"); the clock opens the whole
-        // named history -- click any step to jump (AppGraphHistoryGoto). Render only records the pick.
+        // -- iterate: undo/redo carry the NAME of the step they would take (VS "Undo Typing"); the clock
+        //    opens the whole named history -- click any step to jump. Render only records the pick.
+        cap_x[1] = ImGui::GetCursorPosX();
         const int hist_count  = ImGui::AppGraphHistoryCount(&doc->Graph);
         const int hist_cursor = ImGui::AppGraphHistoryCursor(&doc->Graph);
         ImGui::BeginDisabled(!ImGui::AppGraphCanUndo(&doc->Graph));
@@ -752,6 +724,59 @@ namespace
               temp_data->HistoryGotoIdx = i;
             }
           }
+          ImGui::EndPopup();
+        }
+
+        EditorToolSep(em);
+        // -- persist: Save leads; Load is its split-half sibling (one top-level file verb, VS split-button).
+        //    Ctrl+S is document-global, captured here because the toolbar renders every frame.
+        cap_x[2] = ImGui::GetCursorPosX();
+        temp_data->Save = ImGui::Button(ICON_FA_FLOPPY_DISK "  Save")
+                       || (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false));
+        ImGui::SetItemTooltip("Save graph -> %s (Ctrl+S)", doc->GraphPath);
+        ImGui::SameLine(0.0f, 1.0f);
+        if (ImGui::Button(ICON_FA_CHEVRON_DOWN "##savemenu"))
+          ImGui::OpenPopup("##save_family");
+        ImGui::SetItemTooltip("More file actions");
+        if (ImGui::BeginPopup("##save_family"))
+        {
+          if (ImGui::MenuItem(ICON_FA_FOLDER_OPEN "  Load graph"))
+            temp_data->Load = true;
+          ImGui::EndPopup();
+        }
+
+        EditorToolSep(em);
+        // -- produce: Generate ends the walk (it is the loop's OUTPUT). Green check = header on disk matches
+        //    the graph; amber = model changed since the last write; red = validation errors (writing stays
+        //    allowed; the ambient marks say where to look). The chevron holds the family (copy / diff).
+        cap_x[3] = ImGui::GetCursorPosX();
+        const ImVector<ImGui::ImGuiAppGraphIssue>* issues = ImGui::AppGraphIssuesCached(&doc->Graph);
+        int nerr = 0, nwarn = 0;
+        for (int i = 0; i < issues->Size; i++)
+          (issues->Data[i].Severity >= 2 ? nerr : nwarn)++;
+        const bool  fresh     = doc->WrittenSig != 0 && doc->WrittenSig == ImGui::AppGraphSignature(&doc->Graph);
+        const char* gen_label = nerr > 0 ? ICON_FA_TRIANGLE_EXCLAMATION "  Generate" : fresh ? ICON_FA_CHECK "  Generated" : ICON_FA_FILE_EXPORT "  Generate";
+        ImGui::PushStyleColor(ImGuiCol_Button, nerr > 0 ? ImVec4(0.55f, 0.21f, 0.18f, 1.0f)
+                                             : fresh    ? ImVec4(0.16f, 0.38f, 0.22f, 1.0f)
+                                                        : ImVec4(0.52f, 0.39f, 0.14f, 1.0f));
+        temp_data->WriteHeader = ImGui::Button(gen_label);
+        ImGui::PopStyleColor();
+        if (nerr > 0)
+          ImGui::SetItemTooltip("%d error(s) in the graph -- writes anyway; see Output", nerr);
+        else if (fresh)
+          ImGui::SetItemTooltip("%s matches the graph -- click to rewrite", doc->HeaderPath);
+        else
+          ImGui::SetItemTooltip("Graph changed -- write whole-graph C++ -> %s", doc->HeaderPath);
+        ImGui::SameLine(0.0f, 1.0f);
+        if (ImGui::Button(ICON_FA_CHEVRON_DOWN "##genmenu"))
+          ImGui::OpenPopup("##generate_family");
+        ImGui::SetItemTooltip("More generate actions");
+        if (ImGui::BeginPopup("##generate_family"))
+        {
+          if (ImGui::MenuItem(ICON_FA_COPY "  Copy generated C++ to clipboard"))
+            temp_data->CopyCode = true;
+          if (ImGui::MenuItem(ICON_FA_CODE_COMPARE "  Diff vs saved graph -> clipboard"))
+            temp_data->Diff = true;
           ImGui::EndPopup();
         }
 
@@ -796,6 +821,21 @@ namespace
         case ComposerHostCmd_PanelOutput:  temp_data->RevealPanel = ComposerPanel_Output; break;
         case ComposerHostCmd_ToggleLive:   temp_data->ToggleLive = true; break;
         default: break;
+        }
+
+        // Phase captions: a dim small-type row naming the flow under each cluster. Teaches "what do I do
+        // first / next" by recognition; costs one text row.
+        {
+          static const char* caps[4] = { "compose", "iterate", "persist", "produce" };
+          ImGui::PushFont(nullptr, ImGui::GetFontSize() * 0.78f);
+          ImGui::SetCursorPosX(cap_x[0]);
+          ImGui::TextDisabled("%s", caps[0]);
+          for (int i = 1; i < 4; i++)
+          {
+            ImGui::SameLine(cap_x[i]);
+            ImGui::TextDisabled("%s", caps[i]);
+          }
+          ImGui::PopFont();
         }
       }
       ImGui::EndChild();

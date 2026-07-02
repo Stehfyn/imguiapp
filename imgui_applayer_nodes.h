@@ -614,6 +614,10 @@ namespace ImGui
   IMGUI_API void                AppGraphSetHostCommands(const ImGuiAppGraphHostCmd* cmds, int count);
   IMGUI_API int                 AppGraphConsumeHostCommand();   // picked host cmd id since last call, or -1
 
+  // Host toolbars' "compose" entry point: opens the add-node palette at the canvas center on the editor's
+  // next submission (one-shot; same palette as RMB / Space / the + gizmo).
+  IMGUI_API void                AppGraphRequestAddPalette();
+
   // The composer chrome's own push-stack palette, stated in desc terms and exposed read-write (stable
   // pointer): the project inspector's Theme section edits it live -- the composer styles itself with the
   // machinery it teaches. Col slots are semantic and fixed; Value/Active are the editable half.
