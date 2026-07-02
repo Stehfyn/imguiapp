@@ -63,9 +63,8 @@ namespace ImGui
   {
     IM_ASSERT(c != nullptr && name != nullptr && editing_node_id != nullptr);
 
-    // Click on the title band enters rename (list-view rename). Hit-test against last frame's
-    // geometry (model units x this frame's camera -- zoom-safe); the band is the frame-height strip
-    // at the node's top edge, matching what CanvasEndNode draws.
+    // Title-band click enters rename. Hit-test last frame's geometry (model units x this frame's
+    // camera); the band is the frame-height strip at the node's top edge, matching CanvasEndNode.
     if (*editing_node_id != id && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
     {
       const ImVec2 mn = ImGui::CanvasToScreen(c, ImGui::CanvasNodePos(c, id));
@@ -117,9 +116,7 @@ namespace ImGui
       fields->erase(fields->Data + index);
   }
 
-  // Compact row-delete button: an X drawn from two strokes over a hover/active disc, instead of a
-  // SmallButton literally labeled "X" (which read as a stray glyph and crowded the row). Square and
-  // sized to the row's frame height so it lines up with the adjacent InputText/Combo. Returns true on click.
+  // Frame-height square so it aligns with the adjacent InputText/Combo. Returns true on click.
   static bool AppRowDeleteButton(const char* str_id)
   {
     const float sz = ImGui::GetFrameHeight();
@@ -134,7 +131,6 @@ namespace ImGui
     if (hovered || held)
       dl->AddCircleFilled(center, sz * 0.5f, ImGui::GetColorU32(held ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered));
 
-    // Brighten the cross on hover so it reads as "active delete"; dim at rest so the row isn't noisy.
     const ImU32 cross = ImGui::GetColorU32(ImGuiCol_Text, (hovered || held) ? 1.0f : 0.55f);
     const float arm = sz * 0.22f;
     const float th = ImMax(1.0f, IM_ROUND(sz * 0.09f));
@@ -143,8 +139,6 @@ namespace ImGui
     return clicked;
   }
 
-  // Compact reorder button: a self-drawn triangle (up or down) over a hover/active disc, square and row-height.
-  // `enabled` dims the glyph and swallows the click at a list end -- no greyed-out ImGui::ArrowButton chrome.
   static bool AppRowReorderButton(const char* str_id, bool up, bool enabled)
   {
     const float sz = ImGui::GetFrameHeight();
@@ -171,25 +165,22 @@ namespace ImGui
 
   //-----------------------------------------------------------------------------
   // [SECTION] Blender-style field widgets (node body)
-  // Flat, rounded, hover-lit fields. Text: left-aligned, click to edit in place. Enum: centered value with
-  // prev/next step arrows on hover + a dropdown. Int: centered value, horizontal drag to scrub (Shift = fine),
-  // click to type, arrows to step. Self-drawn so the node body reads like Blender's property editor.
+  // Text: click to edit in place. Enum: hover step arrows + dropdown. Int: drag to scrub (Shift = fine),
+  // click to type, arrows to step.
   //-----------------------------------------------------------------------------
   namespace
   {
     const ImU32 kBlFill      = IM_COL32( 88,  88,  88, 255);  // field at rest
-    const ImU32 kBlFillHover = IM_COL32(112, 112, 112, 255);  // hover
+    const ImU32 kBlFillHover = IM_COL32(112, 112, 112, 255);
     const ImU32 kBlFillEdit  = IM_COL32( 46,  46,  46, 255);  // recessed while typing
     const ImU32 kBlBorder    = IM_COL32(  0,   0,   0,  60);  // faint outline
     const ImU32 kBlText      = IM_COL32(229, 229, 229, 255);
 
-    // Rounding is size-relative (GetFrameHeight * kBlRounding), so the var descs are materialized per scope.
+    // Applied as GetFrameHeight * kBlRounding, materialized per scope.
     const float kBlRounding = 0.28f;
   }
 
-  // The chrome's push-stack styling, stated in the same desc vocabulary authored compositions use -- one
-  // definition form for "what style applies here", whether the author is a graph node or the composer
-  // itself. Exposed read-write: the project inspector's Theme section edits these live.
+  // Read-write: the project inspector's Theme section edits these live.
   ImGuiAppChromeTheme* AppGraphChromeTheme()
   {
     static ImGuiAppChromeTheme t =
@@ -217,7 +208,7 @@ namespace ImGui
   namespace
   {
 
-    // Single text/number-edit focus across the whole UI (one at a time), plus the per-active-id drag scratch.
+    // One text/number-edit focus across the whole UI at a time, plus per-active-id drag scratch.
     ImGuiID g_bl_editing = 0;
     bool    g_bl_focus_pending = false;
     ImGuiID g_bl_drag_id = 0;
@@ -226,9 +217,8 @@ namespace ImGui
     bool    g_bl_dragged = false;
   }
 
-  // Apply one chrome scope: a color desc table + the size-relative rounding vars. Returns the pushed counts;
-  // pop with AppBlPopStyle. The PopupRounding entry's Active flag gates the popup half of the scope -- the desc
-  // vocabulary's on/off switch doing chrome duty.
+  // Returns the pushed counts; pop with AppBlPopStyle. The PopupRounding desc's Active flag gates the
+  // popup half of the scope.
   struct AppBlStyleScope { int Colors; int Vars; };
   static AppBlStyleScope AppBlPushStyle(const ImGuiAppColorModDesc* cols, int ncols, bool with_popup)
   {
@@ -252,8 +242,6 @@ namespace ImGui
       ImGui::PopStyleColor(s.Colors);
   }
 
-  // Flat kebab (vertical ⋮): three dots over a hover disc -- the section-menu affordance (Unity's component
-  // menu). Same family as AppRowDeleteButton: manual glyph, no system-button chrome.
   static bool AppRowKebabButton(const char* str_id)
   {
     const float sz = ImGui::GetFrameHeight();
@@ -276,10 +264,9 @@ namespace ImGui
     return clicked;
   }
 
-  // One inspector section header (workbench §5.1 -- the Unity/UE component anatomy): collapse triangle + icon
-  // + label on a flat Bl fill, an optional enable checkbox, an optional kebab whose click the caller answers
-  // with its own popup (pass null to omit either). Open state lives in the window's state storage (session-
-  // lived, shared per panel so every node of a kind keeps the user's section folds). Returns true while open.
+  // Inspector section header. Optional enable checkbox and kebab (pass null to omit); the caller answers
+  // the kebab click with its own popup. Open state lives in the window's state storage (session-lived,
+  // shared per panel). Returns true while open.
   bool AppInspectorSection(const char* str_id, const char* icon, const char* label, bool* enabled, bool* kebab_clicked)
   {
     const float h = ImGui::GetFrameHeight();
@@ -347,8 +334,6 @@ namespace ImGui
     return r;
   }
 
-  // Flat rounded "add" pill: a self-drawn + glyph and label on a hover-lit rounded fill. Replaces ImGui::SmallButton
-  // for the "Add field"/"Add binding" affordances so they read as soft pills, not raised system buttons.
   static bool AppBlAddPill(const char* str_id, const char* label)
   {
     const float h = ImGui::GetFrameHeight();
@@ -381,16 +366,13 @@ namespace ImGui
     return clicked;
   }
 
-  // Flat square toggle chip: accent-filled when on, recessed when off, with a centered label. Self-drawn so the
-  // kind-filter chips read as flat swatches instead of raised ImGui::SmallButtons. Returns true on click.
-  // True if the mouse is over [mn,mx] within the current (hovered) window. Manual hit-test used by the flat chips
-  // so they CANNOT be blocked by an overlapping ImGui item (the cause of the dead outliner-header buttons).
+  // True if the mouse is over [mn,mx] within the current window. Manual hit-test so the flat chips
+  // cannot be blocked by an overlapping ImGui item.
   static bool AppPtInRectHovered(ImVec2 mn, ImVec2 mx)
   {
-    // AllowWhenBlockedByActiveItem: a mouse PRESS makes the item under the cursor active before this runs,
-    // and plain IsWindowHovered() reports false while any item is active -- which is exactly the click frame.
-    // Without the flag every one of these flat buttons dies when it overlaps an activatable item (tree row,
-    // focused InputText). Stray clicks can't leak in: IsMouseClicked is only true on the press frame itself.
+    // AllowWhenBlockedByActiveItem: a press makes the item under the cursor active before this runs, and
+    // plain IsWindowHovered() reports false while any item is active -- exactly the click frame. Stray
+    // clicks can't leak in: IsMouseClicked is only true on the press frame itself.
     const ImVec2 m = ImGui::GetIO().MousePos;
     return ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && m.x >= mn.x && m.x < mx.x && m.y >= mn.y && m.y < mx.y;
   }
@@ -419,8 +401,6 @@ namespace ImGui
     return hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
   }
 
-  // Wider toggle pill carrying an icon + a count (the outliner kind filters). Accent-filled when on; dimmed when
-  // the count is zero and the filter is off. Returns true on click. Manual hit-test (overlap-proof).
   static bool AppBlFilterChip(const char* str_id, const char* icon, int count, bool on, ImU32 accent)
   {
     IM_UNUSED(str_id);
@@ -458,7 +438,6 @@ namespace ImGui
     dl->PopClipRect();
   }
 
-  // Left/right triangles centered in the arrow_w-wide strips at each edge (drawn only on hover).
   static void AppBlStepArrows(ImDrawList* dl, ImVec2 mn, ImVec2 mx, float arrow_w)
   {
     const float cy = (mn.y + mx.y) * 0.5f;
@@ -468,8 +447,6 @@ namespace ImGui
     dl->AddTriangleFilled(ImVec2(rx - a, cy - a), ImVec2(rx - a, cy + a), ImVec2(rx + a, cy), kBlText);
   }
 
-  // Blender-style disclosure triangle: right-pointing when collapsed, down-pointing when expanded. Returns true
-  // on click. Used to expand a struct into its field nodes / collapse them back -- no "button", just the triangle.
   static bool AppBlDisclosure(const char* str_id, bool expanded)
   {
     const float sz = ImGui::GetFrameHeight() * 0.8f;
@@ -490,7 +467,6 @@ namespace ImGui
     return clicked;
   }
 
-  // Flat rounded text field: left-aligned at rest, click to edit in place.
   static bool AppBlInputText(const char* str_id, char* buf, size_t buf_size, float width)
   {
     const float h = ImGui::GetFrameHeight();
@@ -527,13 +503,10 @@ namespace ImGui
     return changed;
   }
 
-  // Flat rounded enum: centered value, hover shows L/R step arrows (click edges to step), click center for dropdown.
   static bool AppBlEnum(const char* str_id, float width, int* v, const char* (*name_of)(int), int count)
   {
-    // Built on ImGui::BeginCombo (not a raw OpenPopup): a popup opened inside a canvas node
-    // mis-anchors and lets the click fall through to the node/window drag. BeginCombo's popup is managed by
-    // ImGui and behaves -- it's the same path the layer-type combo uses. Styled with the Blender field palette
-    // (flat dark rounded field, dark popup, hover-highlighted rows) so it matches the other Bl widgets.
+    // Built on ImGui::BeginCombo, not a raw OpenPopup: a popup opened inside a canvas node mis-anchors
+    // and lets the click fall through to the node/window drag.
     bool changed = false;
 
     const AppBlStyleScope sc = AppBlPushStyle(AppGraphChromeTheme()->Combo, IM_ARRAYSIZE(AppGraphChromeTheme()->Combo), true);
@@ -546,7 +519,7 @@ namespace ImGui
         if (ImGui::Selectable(name_of(i), i == *v)) { *v = i; changed = true; }
       ImGui::EndCombo();
     }
-    // Hover-scrub: roll the mouse wheel over the (closed) combo to step the value without opening it.
+    // Wheel over the closed combo steps the value.
     const float wheel = ImGui::GetIO().MouseWheel;
     if (wheel != 0.0f && count > 0 && ImGui::IsItemHovered())
     {
@@ -559,7 +532,6 @@ namespace ImGui
     return changed;
   }
 
-  // Flat rounded int: drag horizontally to scrub (Shift = fine), click edges to step, click center to type.
   static bool AppBlDragInt(const char* str_id, float width, int* v, int vmin, int vmax)
   {
     const float h = ImGui::GetFrameHeight();
@@ -621,7 +593,6 @@ namespace ImGui
       g_bl_drag_id = 0;
     }
 
-    // Hover-scrub: roll the wheel over the field to step the value (Shift = x10).
     const float wheel = ImGui::GetIO().MouseWheel;
     if (wheel != 0.0f && hovered && !active)
     {
@@ -634,8 +605,7 @@ namespace ImGui
     return changed;
   }
 
-  // Type selector for one field (Bl enum + String size / Struct picker). Caller positions the cursor; name is
-  // edited elsewhere. `g` populates the struct picker. Shared by the field-list rows and the Field node body.
+  // Caller positions the cursor; name is edited elsewhere. `g` populates the struct picker.
   static void EditAppFieldTypeControls(ImGuiAppFieldDesc* f, float type_w, const ImGuiAppGraph* g)
   {
     int t = (int)f->Type;
@@ -655,8 +625,6 @@ namespace ImGui
     else if (f->Type == ImGuiAppFieldType_Struct)
     {
       ImGui::SameLine();
-      // Same widget family as AppBlEnum -> the same chrome scope (unifies the previously narrower push set:
-      // this picker now also gets the faint border, active-frame fill, selected-row header, and popup rounding).
       const AppBlStyleScope sc = AppBlPushStyle(AppGraphChromeTheme()->Combo, IM_ARRAYSIZE(AppGraphChromeTheme()->Combo), true);
       ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8.0f);
       if (ImGui::BeginCombo("##stype", f->StructType[0] ? f->StructType : "<struct>", ImGuiComboFlags_NoArrowButton))
@@ -682,8 +650,7 @@ namespace ImGui
     }
   }
 
-  // Shared field-list editor used for both the persist and temp sets. `g` (optional) populates the struct-type
-  // picker for ImGuiAppFieldType_Struct fields with the graph's Struct node names.
+  // `g` (optional) populates the struct-type picker with the graph's Struct node names.
   static void EditAppFieldList(const char* list_label, ImVector<ImGuiAppFieldDesc>* fields, const ImGuiAppGraph* g = nullptr)
   {
     // TextDisabled (not SeparatorText) as the section label: a separator fills the content-region
@@ -702,7 +669,7 @@ namespace ImGui
       ImGui::SameLine();
       EditAppFieldTypeControls(f, em * 5.0f, g);
 
-      // Reorder: move this field up / down (swap with its neighbor). Member order == generated struct layout.
+      // Member order == generated struct layout.
       ImGui::SameLine();
       if (AppRowReorderButton("##up", true, i > 0))
       {
@@ -864,7 +831,6 @@ namespace ImGui
     return true;
   }
 
-  // Append one draft as a "[Draft]" section to buf. Shared by the single- and multi-draft savers.
   static void AppNodeWriteDraft(ImGuiTextBuffer* buf, const ImGuiAppNodeDraft* draft)
   {
     buf->appendf("[Draft]\n");
@@ -1027,7 +993,6 @@ namespace ImGui
     dst[n] = 0;
   }
 
-  // Emit a single struct member declaration for a drafted field.
   static void AppEmitFieldDecl(ImGuiTextBuffer* out, const ImGuiAppFieldDesc* f)
   {
     char name[IM_LABEL_SIZE];
@@ -1054,20 +1019,18 @@ namespace ImGui
     char base[IM_LABEL_SIZE];
     AppSanitizeIdentifier(base, IM_ARRAYSIZE(base), draft->Name);
 
-    // Persisted data aggregate (<Name>Data).
     out->appendf("struct %sData\n{\n", base);
     for (int i = 0; i < draft->PersistFields.Size; i++)
       AppEmitFieldDecl(out, &draft->PersistFields.Data[i]);
     out->appendf("};\n\n");
 
-    // Per-frame data aggregate (<Name>TempData).
     out->appendf("struct %sTempData\n{\n", base);
     for (int i = 0; i < draft->TempFields.Size; i++)
       AppEmitFieldDecl(out, &draft->TempFields.Data[i]);
     out->appendf("};\n\n");
 
-    // Control skeleton. Dependencies (extra ImGuiAppControl<> template args) would be derived from
-    // incoming graph links once nodes map to drafted types; a single draft emits none.
+    // Dependencies (extra ImGuiAppControl<> template args) derive from incoming graph links; a single
+    // draft emits none.
     out->appendf("struct %s : ImGuiAppControl<%sData, %sTempData>\n{\n", base, base, base);
     out->appendf("  virtual void OnInitialize(ImGuiApp* app, %sData* data) const override final\n", base);
     out->appendf("  {\n    IM_UNUSED(app); IM_UNUSED(data);\n    // TODO: initialize persistent data\n  }\n\n");
@@ -1081,8 +1044,8 @@ namespace ImGui
   // [SECTION] Typed node graph: allocation, factory, lookup
   //-----------------------------------------------------------------------------
 
-  // ConstantHash mirror of ImGuiStatic::_ConstantHash (imgui_applayer.h) so a design port can carry the
-  // exact runtime data-flow key ImGuiType<PersistData>::ID. Identifiers are ASCII, so char signedness is moot.
+  // Mirror of ImGuiStatic::_ConstantHash (imgui_applayer.h): a design port must carry the exact runtime
+  // data-flow key ImGuiType<PersistData>::ID.
   static ImGuiID AppConstantHash(const char* s)
   {
     return *s ? (ImGuiID)(unsigned char)*s + 33u * AppConstantHash(s + 1) : 5381u;
@@ -1170,18 +1133,15 @@ namespace ImGui
     }
   }
 
-  // Origin of the layer master column. The pipeline group box extends LEFT of the first node by the numbered
-  // rail gutter + padding and ABOVE it by the header chip, so the origin must leave that room -- at 40,40 the
-  // box started at negative canvas coordinates and clipped under the outliner edge.
+  // Origin of the layer master column: must leave room LEFT of the first node for the numbered rail
+  // gutter + padding and ABOVE it for the header chip, or the pipeline group box goes negative and clips.
   static const float kAppGraphX0 = 110.0f;
   static const float kAppGraphY0 = 96.0f;
   static const float kAppGraphLayerNodeWidth = 520.0f;
   static const float kAppGraphLayerRowH = 145.0f;
 
-  // Uniform layer-column CONTENT width in model units, constrained TOGETHER: the widest layer's measured
-  // content raises it for everyone (floor = kAppGraphLayerNodeWidth), so the column renders flush at any
-  // zoom -- never per-node ragged, never a fixed pixel width that ignores the zoom. Recomputed each editor
-  // frame from last frame's measurements.
+  // Uniform layer-column CONTENT width in model units: the widest layer's measured content raises it for
+  // everyone (floor = kAppGraphLayerNodeWidth). Recomputed each editor frame from last frame's measurements.
   static float g_app_layer_uniform_w = kAppGraphLayerNodeWidth;
 
   static float AppCanvasZoom();   // fwd (defined with the view state)
@@ -1202,9 +1162,8 @@ namespace ImGui
   static bool AppEditorNodeWasSubmitted(int node_id);          // fwd (defined with the editor)
   static const ImGuiAppGraph* g_editor_pool_graph = nullptr;   // the graph whose ids the editor canvas holds
 
-  // The Composer's single canvas instance (the engine stores node geometry in MODEL units and
-  // measures it the same frame it renders; see
-  // imgui_applayer_canvas.h). Created on first use.
+  // The Composer's single canvas instance, created on first use. The engine stores node geometry in
+  // MODEL units and measures it the same frame it renders (imgui_applayer_canvas.h).
   static ImGuiCanvasState* g_app_canvas = nullptr;
 
   static ImGuiCanvasState* AppEditorCanvas()
@@ -1230,9 +1189,8 @@ namespace ImGui
   }
 
   // A node's footprint in MODEL units: last frame's measurement when it has been on the canvas, a per-kind
-  // estimate before that. Placement and tidy both size against THIS -- fixed per-kind row heights made
-  // the old layout pile tall nodes onto each other. The pool-graph guard matters: a DIFFERENT graph's node ids
-  // (tests, tools) can collide numerically with the editor canvas's, returning another graph's geometry.
+  // estimate before that. Pool-graph guard: a DIFFERENT graph's node ids (tests, tools) can collide
+  // numerically with the editor canvas's, returning another graph's geometry.
   static ImVec2 AppLayoutNodeSize(const ImGuiAppGraph* g, const ImGuiAppNode* n)
   {
     if (g == g_editor_pool_graph)   // the engine's sizes are keyed by THIS graph's ids
@@ -1282,8 +1240,7 @@ namespace ImGui
     ImVec2 start = preferred;
     if (!has_preferred)
     {
-      // Default columns mirror the tidy DAG's reading order: [layer stack] | windows | controls | structs |
-      // fields -- a fresh node lands where the tree layout would want it, not on top of the pipeline box.
+      // Default columns follow the tidy DAG's reading order: [layer stack] | windows | controls | structs | fields.
       if (n->Kind == ImGuiAppNodeKind_Layer || n->Kind == ImGuiAppNodeKind_App)
       {
         start = ImVec2(kAppGraphX0, kAppGraphY0 + AppGraphPlacementRowHint(n) * kAppGraphLayerRowH);
@@ -1297,8 +1254,8 @@ namespace ImGui
       }
     }
 
-    // March DOWN in real-size steps until the measured footprint fits (columns stay meaningful; the fallback
-    // half-column shift keeps a pathological pile from stacking forever).
+    // March down in real-size steps until the measured footprint fits; the second-pass half-column
+    // shift keeps a pathological pile from stacking forever.
     const float step = ImMax(60.0f, AppLayoutNodeSize(g, n).y * 0.5f);
     for (int pass = 0; pass < 2; pass++)
     {
@@ -1358,12 +1315,10 @@ namespace ImGui
     const float x = kAppGraphX0;
     const float gap = 12.0f;
 
-    // Default placement: pack the stack tight -- each fresh node sits directly below the previous one,
-    // separated by exactly `gap`, using actual node heights (not a fixed row pitch that left big holes).
-    // The engine reports a node's height as 0 until it has been submitted once, so AppGraphLayerNodeHeight
-    // falls back to kAppGraphLayerRowH on the first frame. Only FINALIZE (HasGridPos) once every fresh
-    // node's height is real; otherwise keep the placement provisional and re-pack next frame with true
-    // heights -- finalizing early would freeze the fallback pitch and leave the holes we're removing.
+    // Pack the stack tight using actual node heights. The engine reports 0 height until a node has been
+    // submitted once (AppGraphLayerNodeHeight falls back to kAppGraphLayerRowH), so only FINALIZE
+    // (HasGridPos) once every fresh node's height is real; until then keep placement provisional and
+    // re-pack next frame.
     bool all_heights_known = true;
     for (int i = 0; i < ids.Size; i++)
     {
@@ -1487,9 +1442,8 @@ namespace ImGui
   static void AppGraphPlaceNode(ImGuiAppGraph* g, ImGuiAppNode* n, const ImVec2* preferred)
   {
     n->GridPos = AppGraphFindOpenPlacement(g, n, preferred ? *preferred : ImVec2(0.0f, 0.0f), preferred != nullptr);
-    // Layer nodes live in the tight-packed master column -- leave them UN-finalized so AppGraphConstrainLayerColumn
-    // owns their Y (each layer packed directly below the previous by real height). Finalizing here froze the 145px
-    // grid pitch FindOpenPlacement uses, which left big holes between layers ("not packed").
+    // Layer nodes live in the tight-packed master column -- leave them UN-finalized so
+    // AppGraphConstrainLayerColumn owns their Y.
     n->HasGridPos = (n->Kind != ImGuiAppNodeKind_Layer);
     n->_NeedsPlace = true;
   }
@@ -1824,9 +1778,8 @@ namespace ImGui
     }
   }
 
-  // A Control HAS two structs (PersistData, TempData). Explode one OUT of the control as a standalone Struct node
-  // (named <Control>Data / <Control>TempData) holding that list, tied via a data edge. The control's inline list
-  // is cleared (the struct owns it). "Things that have structs explode the structs from themselves."
+  // Explode one of a Control's two structs OUT as a standalone Struct node (named <Control>Data /
+  // <Control>TempData), tied via a data edge. The control's inline list is cleared (the struct owns it).
   static void AppGraphExplodeControlData(ImGuiAppGraph* g, ImGuiAppNode* c, bool temp)
   {
     if (c == nullptr || c->Kind != ImGuiAppNodeKind_Control || c->IsLive || c->IsBuiltin)
@@ -2184,10 +2137,9 @@ namespace ImGui
   //-----------------------------------------------------------------------------
   // Authored events (the temp ^ last_temp idiom, made first-class)
   //
-  // The framework's per-frame contract: OnRender records raw input into TempData (zeroed every frame), then
-  // OnUpdate receives that TempData AND last frame's, so user code identifies what HAPPENED by comparing them --
-  // `temp_data->hovered ^ last_temp_data->hovered` in the Breathing demo, `temp_data->generate` in RandomTime.
-  // An ImGuiAppEventDesc authors one such comparison plus its reaction; codegen emits the guarded block verbatim.
+  // Per-frame contract: OnRender records raw input into TempData (zeroed every frame); OnUpdate receives
+  // that TempData AND last frame's, and user code identifies what happened by comparing them. An
+  // ImGuiAppEventDesc authors one such comparison plus its reaction; codegen emits the guarded block verbatim.
   //-----------------------------------------------------------------------------
 
   static const char* AppEventEdgeName(int e)
@@ -2223,9 +2175,8 @@ namespace ImGui
     return -1;
   }
 
-  // Events editor: one row per event -- "when <TempField> <edge> -> <action>" plus the action's parameters.
-  // Lives on the Control node body and in the inspector; events watch TempData, so the add pill needs a Temp
-  // field to exist first (that ordering IS the idiom: capture in OnRender, then react in OnUpdate).
+  // One row per event: "when <TempField> <edge> -> <action>" plus the action's parameters. Events watch
+  // TempData, so the add pill needs a Temp field to exist first.
   static void EditAppControlEvents(ImGuiAppGraph* g, ImGuiAppNode* n)
   {
     IM_ASSERT(g != nullptr && n != nullptr);
@@ -2263,7 +2214,6 @@ namespace ImGui
       ImGui::SameLine();
       AppBlEnum("##act", em * 7.0f, &ev->Action, AppEventActionName, ImGuiAppEventAction_COUNT);
 
-      // Action parameters, indented under the trigger row.
       ImGui::Dummy(ImVec2(em * 1.6f, 0.0f));
       ImGui::SameLine();
       if (ev->Action == ImGuiAppEventAction_SetField)
@@ -2284,8 +2234,7 @@ namespace ImGui
         ImGui::SameLine();
         AppBlInputText("##expr", ev->Expr, IM_ARRAYSIZE(ev->Expr), em * 10.0f);
 
-        // Type-check the expression live -- verbatim emission means a bad expr surfaces at compile
-        // time otherwise, far from where it was typed.
+        // Type-check live: emission is verbatim, so a bad expr otherwise surfaces at compile time.
         char eerr[192];
         if (!AppEventExprCheck(g, n, ev, eerr, IM_ARRAYSIZE(eerr)))
         {
@@ -2402,9 +2351,8 @@ namespace ImGui
   static bool AppPortIsOutput(ImGuiAppPortKind k) { return k == ImGuiAppPortKind_DataOut || k == ImGuiAppPortKind_ChildOut; }
   static bool AppPortIsInput(ImGuiAppPortKind k)  { return k == ImGuiAppPortKind_DataIn  || k == ImGuiAppPortKind_ChildIn; }
 
-  // Does control 'from' reach control 'to' along existing data edges (producer -> consumer)? Used to reject a
-  // new edge that would close a cycle. Bounded by Nodes.Size iterations (no recursion / visited set needed for
-  // small graphs; we cap to avoid pathological loops if the model is ever inconsistent).
+  // Does 'from' reach 'to' along existing data edges (producer -> consumer)? Used to reject a new edge
+  // that would close a cycle. Iteration capped in case the model is ever inconsistent.
   static bool AppGraphDataReaches(const ImGuiAppGraph* g, int from_node, int to_node)
   {
     if (from_node == to_node)
@@ -2517,8 +2465,7 @@ namespace ImGui
     return AppGraphResolveLink(g, start_port, end_port, &s, &d, &k, err, err_size);
   }
 
-  // Programmatically connect two ports (pin-drag-to-create auto-wire). Validates + orders via the same resolver
-  // as interactive linking; returns true if a link was added.
+  // Programmatic connect via the same resolver as interactive linking; returns true if a link was added.
   static bool AppGraphTryConnect(ImGuiAppGraph* g, int port_a, int port_b)
   {
     int s = 0, d = 0; ImGuiAppEdgeKind k = ImGuiAppEdgeKind_Data;
@@ -2598,9 +2545,8 @@ namespace ImGui
       }
       else
       {
-        // The reason is otherwise discarded. Drive the demo's fade off the rejection branch, NOT the function's
-        // `changed` return (also true on link destroy below), and bump the seq so identical back-to-back
-        // rejections still re-fire the toast.
+        // Drive the toast off the rejection branch, NOT the `changed` return (also true on link destroy);
+        // bump the seq so identical back-to-back rejections still re-fire it.
         ImStrncpy(g->LastLinkErr, err, IM_ARRAYSIZE(g->LastLinkErr));
         g->LastLinkErrSeq++;
       }
@@ -2678,9 +2624,8 @@ namespace ImGui
   //-----------------------------------------------------------------------------
   // [SECTION] Hover sync (brushing across coordinated views) + cached validation
   //-----------------------------------------------------------------------------
-  // The Composer's panels are projections of one model; brushing (hover in one view highlights the same
-  // datum in all views) is what makes them read as one instrument. Writers report this frame; readers see
-  // last frame's report -- the same one-frame-latency idiom the node title hover uses.
+  // Brushing: hover in one view highlights the same datum in all views. Writers report this frame;
+  // readers see last frame's report (one-frame latency, same idiom as the node title hover).
 
   struct AppHoverState { int NodeId; int LinkId; ImGuiAppHoverSource NodeSrc; ImGuiAppHoverSource LinkSrc; };
   static AppHoverState s_hover_cur   = { -1, -1, ImGuiAppHoverSource_None, ImGuiAppHoverSource_None };
@@ -2704,8 +2649,7 @@ namespace ImGui
     return &s_view;
   }
 
-  // Canvas camera + node geometry, straight from the engine (model units everywhere; the camera is
-  // the engine's one transform).
+  // Engine passthroughs: model units everywhere; the camera is the engine's one transform.
   static float AppCanvasZoom()
   {
     return ImGui::CanvasGetZoom(AppEditorCanvas());
@@ -2821,7 +2765,7 @@ namespace ImGui
     return s_issues_severity.GetInt((ImGuiID)node_id, 0);
   }
 
-  // Shared severity accents: same glyph + hue in canvas, outliner, and inspector (consistency dimension).
+  // Shared severity accents: same hue in canvas, outliner, and inspector.
   static ImU32 AppSeverityColor(int severity)
   {
     return severity >= 2 ? IM_COL32(224, 92, 82, 255) : IM_COL32(222, 168, 62, 255);
@@ -2864,8 +2808,8 @@ namespace ImGui
         || t == ImGuiAppLayerType_Status || t == ImGuiAppLayerType_Window;
   }
 
-  // One identity per layer kind: an icon, a one-line orchestration role, and an accent color -- shared by the
-  // canvas node header, body, and the pipeline group box so a layer reads the same everywhere.
+  // One identity per layer kind (icon, role line, accent), shared by the canvas node header, body, and
+  // the pipeline group box.
   static const char* AppLayerIcon(ImGuiAppLayerType t)
   {
     switch (t)
@@ -2980,16 +2924,13 @@ namespace ImGui
     return IM_COL32(ImMin(r, 255), ImMin(g, 255), ImMin(b, 255), 255);
   }
 
-  // A node's title-bar tint (per-node color rides the engine's CanvasNextNodeTitle). Live/promoted nodes
-  // use their origin color (state cue); every other (design) node gets a muted kind-colored header,
-  // Blender-style, so node category reads at a glance. Selection legibility stays engine-side (outline).
+  // Title-bar tint (rides the engine's CanvasNextNodeTitle). Live/promoted nodes use their origin color;
+  // other design nodes get a muted kind-colored header. Selection legibility stays engine-side (outline).
   static ImU32 AppNodeTitleColor(const ImGuiAppNode* n)
   {
     ImU32 base = AppGraphOriginColor(n);
     if (base == 0)
     {
-      // Layers carry a per-type accent (they orchestrate the app, so their category must read instantly); every
-      // other design node uses its kind color. Both muted to a header tone.
       const ImU32 raw = (n->Kind == ImGuiAppNodeKind_Layer) ? AppLayerAccent(n->LayerType) : AppKindColor(n->Kind);
       base = AppScaleRGB(raw, 0.52f);
     }
@@ -3094,10 +3035,8 @@ namespace ImGui
     dl->AddRectFilled(bb_min, bb_max, fill, rounding);
     dl->AddRect(bb_min, bb_max, outline, rounding, 0, 1.5f);
 
-    // Phase bands: a faint accent-tinted strip behind each layer (Unity flowchart's colored lifecycle sections).
-    // A band spans its WHOLE row -- rail badge through node edge -- so badge + node read as one phase section
-    // (a band starting after the rail left orphaned slivers in the gutter; one ending at the box border ran
-    // band-over-grid through the empty right margin).
+    // Phase bands: a faint accent-tinted strip behind each layer, spanning the WHOLE row -- rail badge
+    // through node edge -- so badge + node read as one phase section.
     const float band_x0 = bb_min.x + pad * 0.4f;
     const float band_x1 = bb_max.x - pad;
     for (int i = 0; i < rows.Size; i++)
@@ -3106,8 +3045,7 @@ namespace ImGui
       dl->AddRectFilled(ImVec2(band_x0, rows.Data[i].Top - 2.0f), ImVec2(band_x1, rows.Data[i].Bot + 2.0f), band, 3.0f);
     }
 
-    // Execution-order rail: a vertical flow spine through numbered circles at each layer's center, accent-filled
-    // (Unity's Script Execution Order numbering + the lifecycle flowchart's top-down arrows, combined).
+    // Execution-order rail: a vertical flow spine through numbered accent-filled circles at each layer's center.
     const float rail_cx = bb_min.x + rail_w * 0.55f;
     const float r = em * 0.62f;
     if (rows.Size > 1)
@@ -3135,8 +3073,6 @@ namespace ImGui
       dl->AddText(ImVec2(rail_cx - ns.x * 0.5f, cy - ns.y * 0.5f), IM_COL32(20, 20, 22, 255), num);
     }
 
-    // Header chip: icon + "App Layers", nothing else -- the rail's numbered circles and arrowheads already
-    // say "execution order, top to bottom"; spelling it out added noise, not information.
     const char* title = ICON_FA_LAYER_GROUP "  App Layers";
     const ImVec2 text_size = ImGui::CalcTextSize(title);
     const ImVec2 title_min = ImVec2(bb_min.x + pad, bb_min.y);
@@ -3171,12 +3107,11 @@ namespace ImGui
         drag_start_mouse_y = ImGui::GetIO().MousePos.y;
         drag_start_node_y = AppCanvasNodePos(n->Id).y;   // model units, like the clamps below
 
-        // Capture the immediate neighbor edges by POSITION (no stack-index detection -- that misfired and
-        // left a boundary node unclamped, letting the master constrain cascade-push the whole box). The
-        // dragged node may approach but not overlap either neighbor, so the constrain never shoves the stack.
+        // Capture the immediate neighbor edges by POSITION at grab time. The dragged node may approach
+        // but not overlap either neighbor, so the constrain never shoves the stack.
         //   - nearest node ABOVE  -> bottom of dragged stays >  that node's bottom  (min_y)
         //   - nearest node BELOW  -> bottom of dragged stays <  that node's top     (max_y)
-        // A missing neighbor leaves the bound at +/-inf (top node free upward, bottom node free downward).
+        // A missing neighbor leaves the bound at +/-inf.
         drag_clamp_max_y = FLT_MAX;
         drag_clamp_min_y = -FLT_MAX;
         const float self_h = AppGraphLayerNodeHeight(n->Id);
@@ -3195,9 +3130,8 @@ namespace ImGui
           if (o->GridPos.y > drag_start_node_y && o->GridPos.y < below_y)
             below_y = o->GridPos.y;
         }
-        // Use the SAME inter-node gap the master constrain enforces (12px). A tighter clamp (e.g. 1px)
-        // lets the dragged node enter the constrain's gap zone, so the constrain shoves the whole stack
-        // to restore its 12px spacing -- which looked like "the box moves with the drag".
+        // Must equal the inter-node gap the master constrain enforces: a tighter clamp lets the dragged
+        // node enter the constrain's gap zone, and the constrain shoves the whole stack to restore spacing.
         const float gap = 12.0f;
         if (above_y != -FLT_MAX) drag_clamp_min_y = above_bottom + gap;
         if (below_y != FLT_MAX)  drag_clamp_max_y = below_y - self_h - gap;
@@ -3344,7 +3278,7 @@ namespace ImGui
         ImGui::DragFloat2("##val", &sm->Value.x, 0.05f, 0.0f, 0.0f, "%.2f");
       else
         ImGui::DragFloat("##val", &sm->Value.x, 0.05f, 0.0f, 0.0f, "%.2f");
-      // Row reset (UE/Blender right-click-revert): back to the CURRENT style's value for this var.
+      // Right-click revert: back to the CURRENT style's value for this var.
       if (ImGui::BeginPopupContextItem("##rowreset"))
       {
         if (ImGui::MenuItem("Reset to current style value"))
@@ -3509,9 +3443,8 @@ namespace ImGui
     return nullptr;
   }
 
-  // Style section (workbench §5.1): the desc rows under a component header whose enable checkbox masters
-  // every row's Active flag and whose kebab holds section-granular reuse -- copy / paste / reset. The
-  // section clipboard is session-lived, value-typed (the descs are plain data).
+  // Style section: desc rows under a component header whose enable checkbox masters every row's Active
+  // flag and whose kebab holds copy / paste / reset. The section clipboard is session-lived, value-typed.
   namespace
   {
     ImVector<ImGuiAppStyleModDesc> g_style_clip_mods;
@@ -3561,8 +3494,8 @@ namespace ImGui
       EditAppNodeStyleMods(n);
   }
 
-  // Multi-selection inspector (workbench §5.1): intersection editing -- today, the Style section across every
-  // selected DESIGN node: master enable over all their descs, paste the section clipboard to all, clear all.
+  // Multi-selection inspector: the Style section across every selected DESIGN node -- master enable over
+  // all their descs, paste the section clipboard to all, clear all.
   void EditAppNodesInspectorMulti(ImGuiAppGraph* g)
   {
     IM_ASSERT(g != nullptr);
@@ -3625,11 +3558,10 @@ namespace ImGui
             ImGui::TextDisabled("%s  --  %d style, %d color", n->Draft.Name[0] ? n->Draft.Name : "(unnamed)", n->StyleMods.Size, n->ColorMods.Size);
   }
 
-  // Roomy inspector for the selected node's authored data -- the same edits available cramped inside the node
-  // body, surfaced in a dedicated panel as component SECTIONS (workbench §5.1). Dispatches by kind. Live
-  // mirror nodes are read-only, except style Active flags, which write through to the running item when the
-  // host passes its mirrored app (§3.5: the one sanctioned live mutation -- it round-trips through the mirror
-  // next frame, so model and runtime cannot desync).
+  // Inspector for the selected node's authored data, as component sections; dispatches by kind. Live
+  // mirror nodes are read-only except style Active flags, which write through to the running item when
+  // the host passes its mirrored app (the one sanctioned live mutation -- it round-trips through the
+  // mirror next frame, so model and runtime cannot desync).
   void EditAppNodeInspector(ImGuiAppGraph* g, int node_id)
   {
     EditAppNodeInspectorEx(g, node_id, nullptr);
@@ -3952,9 +3884,8 @@ namespace ImGui
       AppGraphReparent(g, added->Id, top);
   }
 
-  // True if this node should NOT be submitted to the canvas: it sits outside the current drill-down scope, or it
-  // is explicitly hidden (outliner eye / isolate), or an ancestor group is collapsed, or an ancestor is hidden.
-  // Name kept for its many call sites.
+  // True if this node should NOT be submitted to the canvas: outside the current drill-down scope,
+  // explicitly hidden (outliner eye / isolate), or an ancestor group is collapsed or hidden.
   static bool AppNodeHiddenByCollapse(const ImGuiAppGraph* g, int id)
   {
     const ImGuiAppNode* self = AppGraphFindNodeConst(g, id);
@@ -4370,10 +4301,9 @@ namespace ImGui
   }
   static const ImU32 kAppPinTie = IM_COL32(140, 200, 140, 255);
 
-  // Blender-style editor path while drilled in: "App > WindowLayer > Mixer" chips at the canvas top-left.
-  // Clicking a segment jumps back to that depth (selecting the scope just exited); the tail chip is the current
-  // scope. A caption underneath states the scope's per-frame contract. Draw-list + invisible buttons, the same
-  // overlay pattern as the group chips.
+  // Editor path while drilled in: "App > WindowLayer > Mixer" chips at the canvas top-left. Clicking a
+  // segment jumps back to that depth (selecting the scope just exited); the tail chip is the current
+  // scope. A caption underneath states the scope's per-frame contract.
   static void AppDrawScopeBreadcrumb(ImGuiAppGraph* g, int* selected_node_id, ImVec2 editor_min)
   {
     if (g->ViewScope.Size == 0)
@@ -4451,8 +4381,8 @@ namespace ImGui
     }
   }
 
-  // Centered call-to-action inside an empty scope: name what executes here and offer the contextual first build
-  // step -- the scoped counterpart of the root "Scaffold foundation" panel.
+  // Centered call-to-action inside an empty scope: name what executes here and offer the contextual
+  // first build step.
   static void AppDrawScopeEmptyCTA(ImGuiAppGraph* g, bool show_live, ImVec2 editor_min, ImVec2 editor_size)
   {
     const int top = AppScopeCurrent(g);
@@ -4534,8 +4464,8 @@ namespace ImGui
     static bool s_quick_insp = false; // N: floating quick inspector beside the selection
     ImGui::CanvasGetStyle(cv)->GridSnap = s_snap_grid;
 
-    // Canvas overlay toggles, driven from the gizmo cluster's popover (Blender's overlays popover): each is
-    // presentation-only and never touches the model. Same persistable view state as snap.
+    // Canvas overlay toggles, driven from the gizmo cluster's popover: each is presentation-only and
+    // never touches the model. Same persistable view state as snap.
     bool& s_ov_grid = AppGraphViewState()->OvGrid;
     bool& s_ov_bands = AppGraphViewState()->OvBands;
     bool& s_ov_frames = AppGraphViewState()->OvFrames;
@@ -4585,9 +4515,8 @@ namespace ImGui
     }
 
     // Drive the layer vertical drag BEFORE submission so the clamped position lands in THIS frame's
-    // placement (the handler sets _NeedsPlace). Running it after EndNodeEditor lagged a frame, letting a
-    // fast drag render one unclamped frame before snapping back. Hover state is from last frame -- fine.
-    // Root scope only: inside a drill-down scope the layer column is not on the canvas.
+    // placement (after EndNodeEditor it lags a frame). Hover state is from last frame -- fine. Root scope
+    // only: inside a drill-down scope the layer column is not on the canvas.
     int dragged_layer_id = 0;
     ImVec2 dragged_layer_pos(0.0f, 0.0f);
     if (at_root)
@@ -4648,7 +4577,7 @@ namespace ImGui
 
     // Semantic group frames: a translucent labeled box around each containment group, same background
     // channel as the pipeline box -- the grid can never cut through a frame or its caption chip, and
-    // nodes render on top of their frame (Blender order).
+    // nodes render on top of their frame.
     // Passes are depth-ordered: windows/sidebars behind, control data clusters, then structs in front.
     if (s_ov_frames)
     {
@@ -4991,8 +4920,7 @@ namespace ImGui
           ImGui::TextDisabled(ICON_FA_CIRCLE_INFO "  publishes the app's status");
         }
 
-        // The four core phases are what they are -- no type picker (they were never interchangeable; the old
-        // combo implied otherwise). A custom layer states the subclass it will generate.
+        // Core phases have no type picker; a custom layer states the subclass it will generate.
         if (!n->IsLive && lt == ImGuiAppLayerType_Custom)
         {
           char base[IM_LABEL_SIZE];
@@ -5020,8 +4948,8 @@ namespace ImGui
       }
       else if (n->Kind == ImGuiAppNodeKind_Struct)
       {
-        // A pure data struct: its field list IS the struct body (list 0). A Blender-style disclosure triangle
-        // expands it into Field nodes / collapses them back (only shown when there's something to toggle).
+        // A pure data struct: its field list IS the struct body (list 0). The disclosure triangle expands
+        // it into Field nodes / collapses them back (only shown when there's something to toggle).
         const int exploded = AppGraphFieldNodeCount(g, n->Id, 0);
         if (exploded > 0 || n->Draft.PersistFields.Size > 0)
         {
@@ -5191,9 +5119,8 @@ namespace ImGui
         moved_layer_pos = pos;
       }
       n->GridPos = pos;
-      // Don't finalize layer nodes here: the tight-packer (AppGraphConstrainLayerColumn, below) sets HasGridPos
-      // once their real heights are known. Force-finalizing every frame defeated the packer's deferred-finalize
-      // and froze the fallback-height (145px) gaps -- the master column stopped re-packing tight.
+      // Don't finalize layer nodes here: the tight-packer (AppGraphConstrainLayerColumn, below) sets
+      // HasGridPos once their real heights are known.
       if (n->Kind != ImGuiAppNodeKind_Layer)
         n->HasGridPos = true;
     }
@@ -5216,9 +5143,8 @@ namespace ImGui
     AppGraphViewState()->Zoom = ImGui::CanvasGetZoom(cv);   // mirror the live camera into the saved view state
     AppDrawScopeBreadcrumb(g, selected_node_id, editor_min);
 
-    // In-widget node palette: right-click the canvas to add any node kind. The graph is the app, so every
-    // pillar -- layers, windows, sidebars, controls -- is created here, inside the editor itself. Hover and
-    // menu requests come latched from CanvasEnd (the engine's RMB short-click already disambiguated pan).
+    // In-widget node palette: right-click the canvas to add any node kind. Hover and menu requests come
+    // latched from CanvasEnd (the engine's RMB short-click already disambiguated pan).
     static ImVec2 add_popup_grid = ImVec2(0.0f, 0.0f);
     static int    ctx_node_id = -1;
     static int    ctx_link_id = -1;
@@ -5777,9 +5703,8 @@ namespace ImGui
       ImGui::EndPopup();
     }
 
-    // Command palette (Space): THE searchable verb surface, Blender operator search + VS feature search. The
-    // registry below is the completeness audit -- editor verbs with their shortcuts (recognition trains
-    // recall), the host's document verbs (via AppGraphSetHostCommands), and go-to-node over the graph itself.
+    // Command palette (Space): editor verbs with their shortcuts, the host's document verbs (via
+    // AppGraphSetHostCommands), and go-to-node over the graph itself.
     if (ImGui::BeginPopup("##cmdpalette"))
     {
       static ImGuiTextFilter pf;
@@ -5849,8 +5774,8 @@ namespace ImGui
           }
       }
 
-      // Go to node: the palette searches the MODEL too (VS Ctrl+T symbol search). Only while filtering --
-      // an unfiltered dump of every node would bury the verbs.
+      // Go to node: the palette searches the MODEL too. Only while filtering -- an unfiltered dump of
+      // every node would bury the verbs.
       if (pf.IsActive())
       {
         bool goto_header = false;
@@ -6055,8 +5980,7 @@ namespace ImGui
           }
     }
 
-    // Ambient problem marks: a severity dot on the node's title bar, where the problem lives -- the
-    // Problems list stays the index, the mark removes the navigation step.
+    // Ambient problem marks: a severity dot on the node's title bar, where the problem lives.
     {
       const float em = ImGui::GetFontSize();
       ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -6074,10 +5998,9 @@ namespace ImGui
       }
     }
 
-    // Status hint (Blender-style keymap hints): what the mouse does RIGHT NOW given the hover target.
-    // Composed here (only the editor knows the hover target), rendered by the host's status bar via
-    // AppGraphStatusHint -- the game-editor pattern: hints live under the viewport, never over it.
-    // Transient feedback (refused links) overrides for three seconds.
+    // Status hint: what the mouse does RIGHT NOW given the hover target. Composed here (only the editor
+    // knows the hover target), rendered by the host's status bar via AppGraphStatusHint. Transient
+    // feedback (refused links) overrides for three seconds.
     {
       static int    s_err_seq_seen = 0;
       static double s_err_time = -1000.0;
@@ -6109,10 +6032,9 @@ namespace ImGui
         ImStrncpy(s_status_hint, "drag  pan     wheel  zoom     RMB  add     Space  palette     F  frame     F1  help", IM_ARRAYSIZE(s_status_hint));
     }
 
-    // Viewport gizmo cluster (top-right overlay column): the VIEW verbs live on the viewport itself --
-    // Blender's gizmo column / UE's viewport toolbar. Document verbs (save, generate, undo) belong to the
-    // host toolbar; nothing here mutates the model except Tidy, which is a layout op. Draw-list buttons:
-    // hit-tests follow the overlay rule (AllowWhenBlockedByActiveItem, see AppTreeRowIcon).
+    // Viewport gizmo cluster (top-right overlay column): VIEW verbs only; document verbs belong to the
+    // host toolbar. Nothing here mutates the model except Tidy. Draw-list buttons: hit-tests follow the
+    // overlay rule (AllowWhenBlockedByActiveItem, see AppTreeRowIcon).
     {
       const float em = ImGui::GetFontSize();
       const float r = em * 0.72f;
@@ -6175,8 +6097,8 @@ namespace ImGui
         ImGui::MenuItem("Minimap", nullptr, &s_ov_minimap);
         ImGui::EndPopup();
       }
-      // View scope as an explicit MODE (UE/Unity viewport-perspective idiom): whole app, or drilled into one
-      // composition. Same state Tab/Esc/breadcrumb navigate -- this names it and lists the destinations.
+      // View scope as an explicit mode: whole app, or drilled into one composition. Same state
+      // Tab/Esc/breadcrumb navigate.
       if (gizmo(ICON_FA_LAYER_GROUP, g->ViewScope.Size > 0 ? "View scope (drilled in)" : "View scope: whole app", g->ViewScope.Size > 0))
         ImGui::OpenPopup("##ViewScopeMode");
       if (ImGui::BeginPopup("##ViewScopeMode"))
@@ -6202,9 +6124,8 @@ namespace ImGui
       dl->PopClipRect();
     }
 
-    // Shortcut cheat-sheet (F1): a translucent reference card in the canvas corner.
-    // Quick inspector (Blender's N panel): a floating, self-sized inspector beside the primary selection --
-    // the cross-screen trip to the inspector column, removed. Follows the selection; N (or its X) closes it.
+    // Quick inspector (N): a floating, self-sized inspector beside the primary selection. Follows the
+    // selection; N (or its X) closes it.
     if (s_quick_insp && selected_node_id != nullptr && *selected_node_id >= 0 && AppEditorNodeWasSubmitted(*selected_node_id))
     {
       const float em_qi = ImGui::GetFontSize();
@@ -6376,7 +6297,7 @@ namespace ImGui
     if (g->ViewScope.Size * 100000 + (AppScopeCurrent(g) + 1) != s_scope_sig)
       ImGui::CanvasClearSelection(cv);
 
-    // Cross-view selection sync (Theme C). Order: dangle guard -> canvas read-back -> tree apply + reveal.
+    // Cross-view selection sync. Order: dangle guard -> canvas read-back -> tree apply + reveal.
     if (selected_node_id != nullptr)
     {
       static int applied_sel = -1;
@@ -6425,8 +6346,7 @@ namespace ImGui
         {
           ImGui::CanvasSelectNode(cv, *selected_node_id, false);
           // Reveal with the MINIMAL pan: nudge the view just enough to bring the node inside a margin.
-          // Centering the node -- an outliner click that yanks the camera to center reads as broken
-          // focus-jumping; a node already in view must not move the camera at all.
+          // A node already in view must not move the camera at all.
           const ImVec2 p = ImGui::CanvasToScreen(cv, AppCanvasNodePos(*selected_node_id));
           const ImVec2 d = ImGui::CanvasNodeSize(cv, *selected_node_id) * AppCanvasZoom();
           const float  margin = ImGui::GetFontSize() * 2.0f;
@@ -6887,8 +6807,8 @@ namespace ImGui
       AppSanitizeIdentifier(out, out_size, n->Draft.Name);
   }
 
-  // Persist-field type of a named field in a draft, or -1 if absent. Used to gate binding emission on a
-  // matching field type (design section 5: drop a binding whose endpoints disagree on type).
+  // Persist-field type of a named field in a draft, or -1 if absent. Gates binding emission: a binding
+  // whose endpoints disagree on type is dropped.
   static int AppDraftFieldType(const ImGuiAppNodeDraft* d, const char* name)
   {
     for (int i = 0; i < d->PersistFields.Size; i++)
@@ -6897,8 +6817,7 @@ namespace ImGui
     return -1;
   }
 
-  // Emit the OnUpdate guard for one authored event -- the exact comparison vocabulary the demos write by hand
-  // (Breathing: `temp_data->hovered ^ last_temp_data->hovered`; RandomTime: `temp_data->generate`).
+  // Emit the OnUpdate guard for one authored event.
   static void AppEmitEventGuard(ImGuiTextBuffer* out, const ImGuiAppEventDesc* ev, bool is_bool, const char* fld)
   {
     switch (ev->Edge)
@@ -7820,8 +7739,8 @@ namespace ImGui
         out->appendf("    // TODO: choose a destination field for %s->%s\n", sparam, fld);
     }
 
-    // Authored events. OnRender recorded temp_data; compare against last frame's to identify what HAPPENED,
-    // then mutate persistent state -- OnUpdate is the sole mutator (the Breathing demo's `^` idiom, generated).
+    // Authored events. OnRender recorded temp_data; compare against last frame's to identify what
+    // happened, then mutate persistent state -- OnUpdate is the sole mutator.
     if (n->Events.Size > 0)
     {
       out->appendf("\n    // events: identify what happened by comparing this frame's TempData with last frame's\n");
@@ -8900,9 +8819,9 @@ namespace ImGui
     return d;
   }
 
-  // Name the operation that turned `prev` into `now` (VS "Undo Typing" / Blender's named history). Derived by
-  // structural diff -- the checkpoint model detects settled changes rather than instrumenting call sites, so
-  // the name must come from the states themselves. Precedence: structure > wiring > content > movement.
+  // Name the operation that turned `prev` into `now`. Derived by structural diff -- the checkpoint model
+  // detects settled changes rather than instrumenting call sites, so the name must come from the states
+  // themselves. Precedence: structure > wiring > content > movement.
   static void AppUndoDeriveLabel(const ImGuiAppGraph* prev, const ImGuiAppGraph* now, char* out, size_t out_size)
   {
     // Node-set diff by id.
@@ -9163,9 +9082,8 @@ namespace ImGui
     return g_app_clip != nullptr;
   }
 
-  // Serialize the roots' subtrees (skipping layers/live nodes, which can't be pasted) into the clipboard.
-  // Serialize the roots' containment subtrees + their internal links/bindings to a heap string (caller frees),
-  // or null if nothing serializable. Shared by clipboard copy and prefab save.
+  // Serialize the roots' containment subtrees + their internal links/bindings (skipping layers/live
+  // nodes) to a heap string (caller frees), or null if nothing serializable.
   static char* AppGraphSerializeSubsetString(const ImGuiAppGraph* g, const ImVector<int>& roots)
   {
     ImVector<int> ids;
@@ -9362,9 +9280,9 @@ namespace ImGui
   //-----------------------------------------------------------------------------
   // [SECTION] Live mirror: reflect the running app's controls into the model
   //-----------------------------------------------------------------------------
-  // Memory discipline (this is what corrupted the heap last time, now fixed): snapshot the running controls
-  // into plain value records BEFORE mutating the graph; capture every node/port id by VALUE right after a node
-  // is created; never dereference a node pointer across another AppGraph* call that can reallocate g->Nodes.
+  // Memory discipline: snapshot the running controls into plain value records BEFORE mutating the graph;
+  // capture every node/port id by VALUE right after a node is created; never dereference a node pointer
+  // across another AppGraph* call that can reallocate g->Nodes.
 
   // One desired live entry, snapshotted from the running app BEFORE any graph mutation.
   struct AppLiveWant
@@ -9815,7 +9733,7 @@ namespace ImGui
       return;
     if (n->IsLive)
     {
-      // Four-roads parity with the canvas menu: live rows offer the same Promote the canvas offers.
+      // Live rows offer the same Promote the canvas menu offers.
       ImGui::TextDisabled("live (read-only)");
       if (n->Kind == ImGuiAppNodeKind_Control)
       {
@@ -10057,7 +9975,7 @@ namespace ImGui
 
     if (open)
     {
-      // Indent guide: a faint vertical line down the children's left edge (IDE/Blender outliner style).
+      // Indent guide: a faint vertical line down the children's left edge.
       const float guide_x = ImGui::GetCursorScreenPos().x + ImGui::GetStyle().IndentSpacing * 0.5f;
       const float guide_y0 = ImGui::GetCursorScreenPos().y - ImGui::GetStyle().ItemSpacing.y * 0.5f;
 
@@ -10098,7 +10016,7 @@ namespace ImGui
   void ShowAppGraphTree(const ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, bool show_live)
   {
     IM_ASSERT(g != nullptr);
-    IM_UNUSED(app);   // the graph already mirrors the live app, so it is the single outliner source (#16)
+    IM_UNUSED(app);   // the graph already mirrors the live app, so it is the single outliner source
 
     static int  s_rename = -1;
     static bool s_rename_focus = false;
@@ -10229,7 +10147,7 @@ namespace ImGui
     else
     {
       // Browse hierarchy: DESIGN roots first, then a dim band, then LIVE mirror roots -- two populations
-      // must not read as one list (usability findings #4; the eye toggle already governs the live half).
+      // must not read as one list.
       bool live_band_drawn = false;
       for (int pass = 0; pass < 2; pass++)
         for (int i = 0; i < g->Nodes.Size; i++)

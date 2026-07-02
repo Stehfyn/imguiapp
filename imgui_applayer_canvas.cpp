@@ -1,10 +1,7 @@
-// ImGuiAppLayer canvas engine: canvas child + native camera (pan/zoom) + grid + nodes with
-// same-frame model-unit measurement + pins/wires + selection + drag + minimap + event latches.
-// Design: docs/canvas-engine-design.md. Coherence rules: docs/phase-coherence.md.
-//
-// The core invariant: node geometry is STORED in model units; the camera is applied exactly once,
-// at draw/hit-test time, always with THIS frame's values. Sizes are measured in the same frame and
-// same zoom they were rendered with, so the model value is exact.
+// ImGuiAppLayer canvas engine. Invariant: node geometry is STORED in model units; the camera is
+// applied exactly once, at draw/hit-test time, always with THIS frame's values; sizes are measured
+// the same frame and same zoom they rendered with. docs/canvas-engine-design.md,
+// docs/phase-coherence.md.
 //
 // Index of this file (search for "[SECTION]"):
 // [SECTION] State
@@ -46,7 +43,7 @@ struct ImGuiCanvasPinRec
   int    WiredCount;       // wires touching this pin THIS frame (filled pin glyph)
 };
 
-struct ImGuiCanvasWireRec  // per-frame submission (rebuilt every frame, like nodes' order)
+struct ImGuiCanvasWireRec  // per-frame submission, rebuilt every frame
 {
   int   Id;
   int   PinA;
@@ -96,7 +93,7 @@ struct ImGuiCanvasState
   ImVec2      Origin;         // canvas child top-left (screen)
   ImVec2      CanvasSize;
   ImDrawList* DrawList;
-  ImDrawListSplitter Splitter;                 // ch0 = grid + node plates, ch1 = node content
+  ImDrawListSplitter Splitter;                 // ch0 = grid + wires, ch1 = node plates, ch2 = node content
   bool        InsideCanvas;
 
   // Node submission scratch
@@ -382,9 +379,8 @@ namespace ImGui
 // [SECTION] Frame begin: input FSM (pan / drag / zoom / menu)
 //-----------------------------------------------------------------------------
 
-// Top-most node under a screen point, walking last frame's submission order backward (later = on
-// top -- z-order IS submission order, exactly like the draw). Model positions are current, sizes
-// are last frame's MODEL measurement: zoom-invariant, so a zoom change never mis-hits.
+// Top-most node under a screen point: walks last frame's submission order backward (z-order IS
+// submission order). Positions are current, sizes are last frame's MODEL measurement (zoom-invariant).
 static int CanvasHitNode(const ImGuiCanvasState* c, ImVec2 screen)
 {
   for (int i = c->SubmitOrder.Size - 1; i >= 0; i--)
@@ -434,9 +430,7 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
   ImGuiIO& io = ImGui::GetIO();
   const ImVec2 mouse = io.MousePos;
 
-  // The minimap owns its rect: while the mouse is over it, holding LMB continuously recenters the
-  // camera on the mapped point (mini -> model: (v - content_min) / scaling + bounds_min). The
-  // canvas FSM stays out.
+  // The minimap owns its rect: LMB held over it recenters the camera; the canvas FSM stays out.
   const bool in_minimap = mouse.x >= c->MiniRectMin.x && mouse.x < c->MiniRectMax.x
                        && mouse.y >= c->MiniRectMin.y && mouse.y < c->MiniRectMax.y;
   if (in_minimap && c->Interaction == ImGuiCanvasInteraction_None)
@@ -450,18 +444,18 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
     return;
   }
 
-  // Hover resolution: current camera x current model. Valid for this whole frame.
+  // Hover: current camera x current model, valid for this whole frame.
   c->HoveredNode = canvas_item_hovered || c->Interaction != ImGuiCanvasInteraction_None ? CanvasHitNode(c, mouse) : -1;
 
-  // Double-click on a node: reported, not interpreted -- the host decides (rename vs drill-down).
+  // Double-click is reported, not interpreted; the host decides.
   if (c->HoveredNode >= 0 && canvas_item_hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
   {
     c->NodeDblClickReq = true;
     c->NodeDblClickId = c->HoveredNode;
   }
 
-  // Wheel zoom, cursor-anchored: empty canvas plain; Ctrl anywhere over the canvas (node widgets
-  // keep the plain wheel for their own behaviors, e.g. value scrubbing).
+  // Wheel zoom, cursor-anchored: plain wheel on empty canvas only; Ctrl+wheel anywhere over the
+  // canvas (node widgets keep the plain wheel).
   if (c->IO.WheelZooms && io.MouseWheel != 0.0f
       && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows)
       && (io.KeyCtrl || (canvas_item_hovered && c->HoveredNode == -1)))
@@ -469,8 +463,8 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
     ImGui::CanvasSetZoom(c, c->Zoom * ImPow(1.15f, io.MouseWheel), mouse);
   }
 
-  // LMB press on the canvas catch-all, in hit priority: pin -> wire -> node -> empty. Pin and wire
-  // hover come from the last CanvasEnd resolution (screen-invariant latch, the standard imgui idiom).
+  // LMB press hit priority: pin -> wire -> node -> empty. Pin and wire hover come from the last
+  // CanvasEnd resolution.
   if (canvas_item_activated && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
   {
     c->GestureStartMouse = mouse;
@@ -482,8 +476,8 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
     }
     else if (c->HoveredWire >= 0)
     {
-      // Grab a wire near an endpoint to DETACH it (the drag continues from the surviving end); a
-      // click that never travels SELECTS the wire (handled at release below).
+      // Grab near an endpoint DETACHES the wire (drag continues from the surviving end); a click
+      // that never travels SELECTS it.
       c->SelectedWire = c->HoveredWire;
       for (int i = 0; i < c->WiresPrev.Size; i++)
         if (c->WiresPrev.Data[i].Id == c->HoveredWire)
@@ -535,8 +529,7 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
     }
     else
     {
-      // Click on empty canvas deselects; Ctrl preserves the set so an additive gesture that misses
-      // a node does not wipe it.
+      // Click on empty canvas deselects; Ctrl preserves the selection.
       if (!io.KeyCtrl)
         c->Selection.resize(0);
       c->SelectedWire = -1;
@@ -585,12 +578,11 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
   case ImGuiCanvasInteraction_DragWire:
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
     {
-      // Release: over a pin (other than the origin) = created; over anything else = dropped at the
-      // model position (the host opens its filtered add-palette there).
+      // Release over a pin (other than the origin) = created; anything else = dropped at the model position.
       if (c->HoveredPin >= 0 && c->HoveredPin != c->DragWireFromPin)
       {
         c->WireCreatedReq = true;
-        // Normalize to (out, in) when the kinds disagree, so hosts get a stable orientation.
+        // Normalize to (out, in) when the kinds disagree: hosts get a stable orientation.
         const ImGuiCanvasPinRec* pf = CanvasFindPin(c, c->DragWireFromPin);
         const ImGuiCanvasPinRec* pt = CanvasFindPin(c, c->HoveredPin);
         if (pf != nullptr && pt != nullptr && pf->Kind == ImGui::ImGuiCanvasPin_In && pt->Kind == ImGui::ImGuiCanvasPin_Out)
@@ -673,7 +665,7 @@ namespace ImGui
     c->Splitter.Split(c->DrawList, 3);   // 0 = grid + wires, 1 = node plates, 2 = node content
     c->Splitter.SetCurrentChannel(c->DrawList, 0);
 
-    // Grid: model spacing x zoom, offset by pan -- all current-frame values, nothing cached.
+    // Grid: model spacing x zoom, offset by pan; all current-frame values.
     if (c->Style.GridLines && c->Style.GridSpacing > 0.0f)
     {
       const float step = c->Style.GridSpacing * c->Zoom;
@@ -686,9 +678,9 @@ namespace ImGui
       }
     }
 
-    // The interaction catch-all: one invisible item spanning the canvas. Node-body widgets submit
-    // AFTER it, so they win hover per imgui's last-wins rule; the catch-all receives exactly the
-    // empty-canvas and node-plate gestures (plates are draw-list primitives, not items).
+    // Interaction catch-all: one invisible item spanning the canvas. Node-body widgets submit
+    // AFTER it and win hover (last-wins); the catch-all receives empty-canvas and node-plate
+    // gestures (plates are draw-list primitives, not items).
     SetNextItemAllowOverlap();
     InvisibleButton("##canvas_input", ImVec2(ImMax(1.0f, c->CanvasSize.x), ImMax(1.0f, c->CanvasSize.y)));
     const bool item_hovered = IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
@@ -727,7 +719,7 @@ namespace ImGui
 
   void CanvasNextNodeTitleEditable(char* buf, int buf_size, bool* editing, ImU32 title_color)
   {
-    // The title bar always occupies its band (a blank editable title still needs somewhere to type).
+    // An editable title always occupies its band, even when blank.
     ImStrncpy(s_next_title, buf != nullptr && buf[0] ? buf : " ", IM_ARRAYSIZE(s_next_title));
     s_next_title_color = title_color;
     s_next_edit_buf = buf;
@@ -772,8 +764,8 @@ namespace ImGui
     c->CurNodeScreen = CanvasToScreen(c, n->Pos);
     c->CurNodePins.resize(0);
 
-    // Content renders in the FG channel, under the zoomed font + zoom-scaled layout metrics -- the
-    // engine owns the scaling so hosts submit plain widgets (docs/phase-coherence.md rule 1).
+    // Content renders under the zoomed font + zoom-scaled layout metrics; the engine owns the
+    // scaling, hosts submit plain widgets (docs/phase-coherence.md rule 1).
     c->Splitter.SetCurrentChannel(c->DrawList, 2);
     const float z = c->Zoom;
     const ImGuiStyle& gs = GetStyle();
@@ -803,20 +795,20 @@ namespace ImGui
     const float  z = c->Zoom;
     const float  title_h = n->Title[0] ? GetFrameHeight() : 0.0f;   // still under the zoomed font
 
-    // Same-frame measurement in the same zoom the content rendered with: the model size is exact.
+    // Same-frame measurement in the same zoom the content rendered with; the model size is exact.
     const ImVec2 content_px(ImMax(content_mx.x - content_mn.x, GetFontSize() * 2.0f), ImMax(content_mx.y - content_mn.y, 0.0f));
     n->Size.x = (content_px.x + c->Style.NodePadding.x * z * 2.0f) / z;
     n->Size.y = (content_px.y + c->Style.NodePadding.y * z * 2.0f + title_h) / z;
 
-    // Pin anchors resolve NOW, with the final node width known: In pins sit on the left edge, Out
-    // pins on the right, each at its submitted row's vertical center -- model units, this frame.
+    // Pin anchors resolve NOW, with the final node width known: In pins on the left edge, Out pins
+    // on the right, at their row's vertical center; model units, this frame.
     for (int i = 0; i < c->CurNodePins.Size; i++)
     {
       ImGuiCanvasPinRec* p = &c->Pins.Data[c->CurNodePins.Data[i]];
       p->Anchor.x = p->Kind == ImGuiCanvasPin_In ? n->Pos.x : n->Pos.x + n->Size.x;
     }
 
-    // Plate + title into the plate channel, under the content just submitted.
+    // Plate + title into the plate channel, under the content.
     const ImVec2 mn = c->CurNodeScreen;
     const ImVec2 mx = mn + n->Size * z;
     const bool hovered = c->HoveredNode == n->Id;
@@ -839,7 +831,7 @@ namespace ImGui
     c->Splitter.SetCurrentChannel(c->DrawList, 2);
 
     // Rename in place: an InputText over the title band, bound to the host's buffer; deactivation
-    // hands the edit state back (still under the zoomed font, so the field tracks the canvas scale).
+    // clears the host's edit flag. Still under the zoomed font.
     if (editing_title)
     {
       SetCursorScreenPos(ImVec2(mn.x + c->Style.NodePadding.x * z, mn.y + ImMax(0.0f, (title_h - GetFrameHeight()) * 0.5f)));
@@ -931,8 +923,8 @@ namespace ImGui
     const ImVec2 mouse = GetIO().MousePos;
     const int    frame = GetFrameCount();
 
-    // Hover resolution against THIS frame's geometry (pins beat nodes beat wires; wires only reachable
-    // where nothing else is). Feeds this frame's own draw colors and the next frame's press decisions.
+    // Hover against THIS frame's geometry: pins beat nodes beat wires. Feeds this frame's draw
+    // colors and the next frame's press decisions.
     c->HoveredPin = -1;
     {
       float best = c->Style.PinHoverRadius * z;
@@ -976,7 +968,7 @@ namespace ImGui
       }
     }
 
-    // Wires draw UNDER the node plates (channel 0, above the grid emitted earlier in the same channel).
+    // Wires draw in channel 0: under the node plates, above the grid.
     c->Splitter.SetCurrentChannel(c->DrawList, 0);
     for (int i = 0; i < c->Wires.Size; i++)
     {
@@ -999,7 +991,7 @@ namespace ImGui
     c->SubmitOrder = c->SubmitOrderNow;   // this frame's z-order becomes the hit-test order
     c->WiresPrev = c->Wires;              // press decisions at the next CanvasBegin walk these
 
-    // Pins draw over everything on the canvas (they are the interaction affordance), post-merge.
+    // Pins draw over everything, post-merge.
     for (int i = 0; i < c->Pins.Size; i++)
     {
       const ImGuiCanvasPinRec* p = &c->Pins.Data[i];
@@ -1048,12 +1040,9 @@ namespace ImGui
       }
     }
 
-    // Minimap. The mapping covers the node content bounds (the viewport when the canvas is empty);
-    // the inset is the content aspect fitted into max_size = canvas * fraction, placed bottom-right
-    // behind an offset + padding ring. Everything below draws through one mapping:
+    // Minimap. The mapping covers the node content bounds (the viewport when the canvas is empty).
+    // Everything below draws through one mapping, which the FSM inverts next frame:
     //   mini = (model - bounds_min) * scaling + content_min
-    // The current view is a translucent rect through that mapping, clipped to the map. Holding LMB
-    // over the map continuously recenters the camera (the FSM inverts the mapping next frame).
     bool minimap_drawn = false;
     if (c->MiniMapReq)
     {
@@ -1070,7 +1059,7 @@ namespace ImGui
       }
       if (bmin.x > bmax.x)
       {
-        // No nodes: map the current viewport so the map still frames something sensible.
+        // No nodes: map the current viewport.
         bmin = CanvasFromScreen(c, c->Origin);
         bmax = CanvasFromScreen(c, c->Origin + c->CanvasSize);
       }

@@ -10,15 +10,13 @@ Index of this file:
 // [SECTION] Graph topology and persistence (ImGuiAppNodeLink, link capture, save/load)
 // [SECTION] Code generation (GenerateAppControlCode)
 
-This header isolates the reflection-driven, data-driven node tooling for ImGuiAppLayer.
-Like ImStructTable, it pulls in the C++20 reflection library and a little STL; that
-dependency is deliberately kept out of the lean core (imgui_applayer.h). Public entry
-points stay imgui-shaped: pointer parameters, char[] buffers, ImGuiID, ImVector.
+Reflection-driven node tooling. Pulls in the C++20 reflection library and some STL,
+kept out of imgui_applayer.h. Public entry points stay imgui-shaped: pointer parameters,
+char[] buffers, ImGuiID, ImVector.
 
-Reflection-capable subset: the C++20 reflection library only reflects aggregates, and it
-miscounts (explodes) on raw array members such as char Label[128] -- the same limitation
-ImStructTable documents (wrap arrays in a struct). So data driven through these helpers
-should be a plain-scalar aggregate. Codegen (later steps) emits exactly such aggregates.
+Reflection subset: the reflection library only reflects aggregates and miscounts raw
+array members such as char Label[128] (wrap arrays in a struct). Data driven through
+these helpers must be a plain-scalar aggregate; codegen emits exactly such aggregates.
 
 */
 
@@ -44,8 +42,8 @@ struct ImGuiCanvasState;                  // canvas engine state (imgui_applayer
 
 namespace ImGui
 {
-  // True when std::format can stringify U with "{}". The disabled primary std::formatter
-  // is not default-constructible; enabled specializations are. Standard detection idiom.
+  // True when std::format can stringify U with "{}": the disabled primary std::formatter
+  // is not default-constructible; enabled specializations are.
   template <typename U>
   inline constexpr bool ImIsFormattable = std::is_default_constructible_v<std::formatter<std::remove_cvref_t<U>, char>>;
 
@@ -53,7 +51,7 @@ namespace ImGui
   template <typename U>
   inline constexpr bool ImIsCharArray = std::is_array_v<U> && std::is_same_v<std::remove_cv_t<std::remove_extent_t<U>>, char>;
 
-  // Read-only render of a single reflected field value. Never mutates.
+  // Read-only render of one reflected field value.
   template <typename T>
   inline void DrawAppField(const char* label, const T* value)
   {
@@ -77,8 +75,8 @@ namespace ImGui
     }
   }
 
-  // Editable widget for a single reflected field value. Returns true if the value changed.
-  // Falls back to a read-only render for types with no obvious editor.
+  // Editable widget for one reflected field value. Returns true if the value changed.
+  // Falls back to a read-only render for types with no editor.
   template <typename T>
   inline bool EditAppField(const char* label, T* value)
   {
@@ -112,8 +110,7 @@ namespace ImGui
   }
 
   // Visit each reflected field of an aggregate: visitor(int index, std::string_view name, auto& value).
-  // The value is passed by reference so visitors may read or mutate it in place. Pass a const T*
-  // to visit fields read-only (value deduces const).
+  // The value is passed by reference; pass a const T* to visit read-only.
   template <typename T, typename Visitor>
   inline void VisitAppFields(T* obj, Visitor visitor)
   {
@@ -136,10 +133,9 @@ namespace ImGui
   IMGUI_API void BeginAppNode(::ImGuiCanvasState* c, int id, const char* title);
   IMGUI_API void EndAppNode(::ImGuiCanvasState* c);
 
-  // Renamable node scaffold: the title bar shows *name and turns into an inline text box when clicked
-  // (list-view rename). Commits on Enter or focus loss, cancels on Escape. *editing_node_id is
-  // caller-owned single-slot state holding the id of the node being renamed (or -1 for none); the
-  // helper sets it on a title click and clears it when the edit ends. Pair with EndAppNode().
+  // Renamable node scaffold: the title bar shows *name, turns into an inline text box when clicked.
+  // Commits on Enter or focus loss, cancels on Escape. *editing_node_id is caller-owned (-1 = none);
+  // set on title click, cleared when the edit ends. Pair with EndAppNode().
   IMGUI_API void BeginAppNodeRenamable(::ImGuiCanvasState* c, int id, char* name, int name_size, int* editing_node_id);
 
   // Render every reflected field of an aggregate as read-only labelled rows in the current node.
@@ -158,7 +154,6 @@ namespace ImGui
   }
 
   // Editable reflected field rows inside the current node. Returns true if any value changed.
-  // Item width is clamped so nodes stay compact (canvas nodes auto-size to their content).
   template <typename T>
   inline bool EditAppNodeFields(T* data)
   {
@@ -181,10 +176,8 @@ namespace ImGui
 // [SECTION] Design-phase node drafts (ImGuiAppFieldType, ImGuiAppFieldDesc, ImGuiAppNodeDraft)
 //-----------------------------------------------------------------------------
 
-// A draft describes a node whose backing C++ type does not exist yet: the user designs its
-// fields here, then codegen (later steps) emits a reflection-capable aggregate from it. Once
-// emitted and compiled, that aggregate is reflected by the helpers above. Drafts therefore use
-// the same plain-scalar field vocabulary the codegen can emit.
+// A draft describes a node whose backing C++ type does not exist yet; codegen emits a
+// reflection-capable aggregate from it. Fields use the plain-scalar vocabulary codegen can emit.
 typedef int ImGuiAppFieldType;
 enum ImGuiAppFieldType_
 {
@@ -209,8 +202,7 @@ struct ImGuiAppFieldDesc
   ImGuiAppFieldDesc() { Name[0] = 0; Type = ImGuiAppFieldType_Float; ArraySize = 128; StructType[0] = 0; }
 };
 
-// One drafted control: a name plus its persisted and per-frame field sets. Ports/links are
-// derived from graph edges in a later step, so they are not stored here yet.
+// One drafted control: a name plus its persisted and per-frame field sets.
 struct ImGuiAppNodeDraft
 {
   char                        Name[IM_LABEL_SIZE];
@@ -222,18 +214,17 @@ struct ImGuiAppNodeDraft
 
 namespace ImGui
 {
-  // C++ base type spelling for a field type. Shared by the draft editor and codegen.
+  // C++ base type spelling for a field type.
   IMGUI_API const char* AppFieldTypeName(ImGuiAppFieldType type);
 
-  // Draft field-list mutators (pointer-in, imgui-style).
+  // Draft field-list mutators.
   IMGUI_API void AppNodeDraftAddField(ImVector<ImGuiAppFieldDesc>* fields, const char* name, ImGuiAppFieldType type);
   IMGUI_API void AppNodeDraftRemoveField(ImVector<ImGuiAppFieldDesc>* fields, int index);
 
   // Inspector UI: rename the draft and add/remove/edit its persist and temp fields.
   IMGUI_API void EditAppNodeDraft(ImGuiAppNodeDraft* draft);
 
-  // Just the persist/temp field editors (no Name input). Used where the name is edited elsewhere --
-  // e.g. inside a renamable node title -- so the body would otherwise show a duplicate Name field.
+  // Persist/temp field editors without the Name input, for hosts that edit the name elsewhere.
   IMGUI_API void EditAppNodeDraftFields(ImGuiAppNodeDraft* draft);
 
   // Render a draft's fields as read-only node rows (no reflection: the type does not exist yet).
@@ -244,10 +235,9 @@ namespace ImGui
 // [SECTION] Typed graph kinds (node/layer/port/edge discriminators)
 //-----------------------------------------------------------------------------
 
-// A node mirrors one slot of the live ImGuiApp object model. App is the singleton root that owns the
-// Layers/Windows/Sidebars/Controls vectors (imgui_applayer.h: ImGuiApp). Layers are fixed C++ types
-// (Task/Command/Status/Window) pushed via PushAppLayer<T>; Windows/Sidebars via PushAppWindow/Sidebar<T>;
-// Controls (the only draftable kind) via PushAppControl<T>.
+// A node mirrors one slot of the live ImGuiApp object model (imgui_applayer.h). App is the singleton
+// root; Layers push via PushAppLayer<T>, Windows/Sidebars via PushAppWindow/Sidebar<T>, Controls (the
+// only draftable kind) via PushAppControl<T>.
 typedef int ImGuiAppNodeKind;
 enum ImGuiAppNodeKind_
 {
@@ -261,10 +251,9 @@ enum ImGuiAppNodeKind_
   ImGuiAppNodeKind_COUNT,
 };
 
-// The four CORE layer classes (imgui_applayer.h: ImGuiAppTaskLayer..ImGuiAppWindowLayer) are the frame's
-// phases: permanent, one each, immutable type -- codegen emits PushAppLayer<ImGuiAppXxxLayer>. Custom is a
-// user-authored ImGuiAppLayer subclass: the NODE'S NAME is its class name, any number may exist, and codegen
-// emits the subclass skeleton plus PushAppLayer<Name>.
+// The four CORE layer classes are permanent, one each, immutable type -- codegen emits
+// PushAppLayer<ImGuiAppXxxLayer>. Custom is a user-authored ImGuiAppLayer subclass: the NODE'S NAME is
+// its class name, any number may exist, codegen emits the subclass skeleton plus PushAppLayer<Name>.
 typedef int ImGuiAppLayerType;
 enum ImGuiAppLayerType_
 {
@@ -276,10 +265,9 @@ enum ImGuiAppLayerType_
   ImGuiAppLayerType_COUNT,
 };
 
-// A port is a typed canvas pin with a role. DataOut/DataIn carry the runtime data flow; ChildOut/ChildIn
-// carry containment (which window/sidebar/app owns a node). Layers are root composition slots and have no
-// containment sockets. A Control has one DataOut (its PersistData), one multi-link DataIn (all its dependencies
-// -- the runtime keys app->Data by PersistData TYPE, so one type-keyed intake is faithful), and one ChildOut.
+// DataOut/DataIn carry the runtime data flow; ChildOut/ChildIn carry containment. Layers are root
+// composition slots with no containment sockets. A Control has one DataOut (its PersistData), one
+// multi-link DataIn (the runtime keys app->Data by PersistData TYPE), and one ChildOut.
 typedef int ImGuiAppPortKind;
 enum ImGuiAppPortKind_
 {
@@ -290,8 +278,8 @@ enum ImGuiAppPortKind_
   ImGuiAppPortKind_COUNT,
 };
 
-// An edge is either a data dependency (producer PersistData -> consumer dependency) or a containment edge
-// (child -> parent). The kind is derived from the linked ports' kinds at capture time.
+// Data dependency (producer -> consumer) or containment (child -> parent); derived from the linked
+// ports' kinds at capture time.
 typedef int ImGuiAppEdgeKind;
 enum ImGuiAppEdgeKind_
 {
@@ -305,9 +293,8 @@ enum ImGuiAppEdgeKind_
 //-----------------------------------------------------------------------------
 
 // A user-created edge between two node ports (source -> target). StartAttr/EndAttr are STABLE port ids
-// (ImGuiAppNodePort::Id), not array-derived, so they survive node reorder/delete. Kind is a trailing field
-// with a default member initializer: brace-init like { id, start, end } still compiles (value-inits Kind to
-// _Data) so the legacy 3-int aggregate usage and save/load format keep working.
+// (ImGuiAppNodePort::Id), never array-derived, so they survive node reorder/delete. Kind's default
+// member initializer keeps { id, start, end } brace-init and the legacy save/load format working.
 struct ImGuiAppNodeLink
 {
   int Id;
@@ -321,17 +308,16 @@ namespace ImGui
   // Draw the model's links as wires on the canvas (between CanvasBegin/End).
   IMGUI_API void DrawAppNodeLinks(::ImGuiCanvasState* c, const ImVector<ImGuiAppNodeLink>* links);
 
-  // After CanvasEnd: fold the canvas's wire events (created / detached) into the link model. New
-  // links take ids from *next_link_id (incremented). Returns true if the model changed.
+  // After CanvasEnd: fold the canvas's wire events into the link model. New links take ids from
+  // *next_link_id (incremented). Returns true if the model changed.
   IMGUI_API bool CaptureAppNodeLinks(::ImGuiCanvasState* c, ImVector<ImGuiAppNodeLink>* links, int* next_link_id);
 
   // Persist / restore a draft and its links as imgui-style text. Return false on file error.
   IMGUI_API bool SaveAppNodeGraph(const char* path, const ImGuiAppNodeDraft* draft, const ImVector<ImGuiAppNodeLink>* links);
   IMGUI_API bool LoadAppNodeGraph(const char* path, ImGuiAppNodeDraft* draft, ImVector<ImGuiAppNodeLink>* links);
 
-  // Multi-draft variants: persist / restore a whole graph of drafts plus its links. Same text
-  // format as the single-draft pair -- each draft is one "[Draft]" section -- so a single-draft
-  // file loads as a one-element vector and round-trips. *drafts is cleared before loading.
+  // Multi-draft variants, same text format (one "[Draft]" section per draft): a single-draft file
+  // loads as a one-element vector. *drafts is cleared before loading.
   IMGUI_API bool SaveAppNodeGraphMulti(const char* path, const ImVector<ImGuiAppNodeDraft>* drafts, const ImVector<ImGuiAppNodeLink>* links);
   IMGUI_API bool LoadAppNodeGraphMulti(const char* path, ImVector<ImGuiAppNodeDraft>* drafts, ImVector<ImGuiAppNodeLink>* links);
 }
@@ -342,11 +328,9 @@ namespace ImGui
 
 namespace ImGui
 {
-  // Emit a hand-written-looking ImGuiAppControl from a draft: the persist aggregate (<Name>Data),
-  // the per-frame aggregate (<Name>TempData) and the control skeleton with stubbed overrides.
-  // Scalar-only emissions are reflection-capable and round-trip back into the helpers above; a
-  // String field emits char[N], which (like any raw array) falls outside the reflection subset.
-  // Output is appended to *out.
+  // Emit an ImGuiAppControl from a draft: <Name>Data, <Name>TempData, and the control skeleton with
+  // stubbed overrides. A String field emits char[N], which falls outside the reflection subset.
+  // Appends to *out.
   IMGUI_API void GenerateAppControlCode(const ImGuiAppNodeDraft* draft, ImGuiTextBuffer* out);
 }
 
@@ -372,22 +356,21 @@ struct ImGuiAppCommandDesc
   ImGuiAppCommandDesc() { ImStrncpy(Name, "NewCommand", IM_ARRAYSIZE(Name)); }
 };
 
-// The framework's event idiom, made authorable. OnRender records raw input into TempData (zeroed every frame);
-// OnUpdate receives BOTH this frame's TempData and last frame's, so user code derives events by comparing them --
-// the demo's `temp_data->hovered ^ last_temp_data->hovered` (Breathing) and `temp_data->generate` (RandomTime).
-// An edge names which comparison the generated OnUpdate guards with.
+// OnRender records raw input into TempData (zeroed every frame); OnUpdate receives BOTH this frame's
+// TempData and last frame's, deriving events by comparing them. An edge names which comparison the
+// generated OnUpdate guards with.
 typedef int ImGuiAppEventEdge;
 enum ImGuiAppEventEdge_
 {
-  ImGuiAppEventEdge_Rising = 0,   // temp && !last   -- became true this frame (a click / press)
-  ImGuiAppEventEdge_Falling,      // !temp && last   -- became false this frame (a release)
-  ImGuiAppEventEdge_Changed,      // temp ^ last     -- either transition (Breathing's hover edge)
+  ImGuiAppEventEdge_Rising = 0,   // temp && !last   -- became true this frame
+  ImGuiAppEventEdge_Falling,      // !temp && last   -- became false this frame
+  ImGuiAppEventEdge_Changed,      // temp ^ last     -- either transition
   ImGuiAppEventEdge_Active,       // temp            -- level: every frame while true
   ImGuiAppEventEdge_COUNT,
 };
 
-// What the event does when its edge fires. SetField mutates PersistData (OnUpdate is the sole mutator);
-// EmitCommand routes through the command pipeline: OnUpdate latches a persist bool, OnGetCommand emits it.
+// SetField mutates PersistData (OnUpdate is the sole mutator); EmitCommand latches a persist bool in
+// OnUpdate that OnGetCommand emits.
 typedef int ImGuiAppEventAction;
 enum ImGuiAppEventAction_
 {
@@ -396,8 +379,8 @@ enum ImGuiAppEventAction_
   ImGuiAppEventAction_COUNT,
 };
 
-// One authored event on a Control: "when <TempField> <edge> -> <action>". Codegen turns each into a guarded
-// block in OnUpdate (and, for EmitCommand, the latch + OnGetCommand emission).
+// One authored event on a Control: "when <TempField> <edge> -> <action>". Codegen emits a guarded
+// block in OnUpdate (plus, for EmitCommand, the latch + OnGetCommand emission).
 struct ImGuiAppEventDesc
 {
   char                TempField[IM_LABEL_SIZE];   // watched TempData field
@@ -410,8 +393,8 @@ struct ImGuiAppEventDesc
   ImGuiAppEventDesc() { TempField[0] = 0; Edge = ImGuiAppEventEdge_Changed; Action = ImGuiAppEventAction_SetField; DstField[0] = 0; Expr[0] = 0; Command[0] = 0; }
 };
 
-// One node in the authored graph. Embeds ImGuiAppNodeDraft so the existing rename/field-edit/codegen
-// helpers apply verbatim and a legacy "[Draft]" maps 1:1 to a Control node. Most fields are kind-specific.
+// One node in the authored graph. Embeds ImGuiAppNodeDraft so the rename/field-edit/codegen helpers
+// apply verbatim and a legacy "[Draft]" maps 1:1 to a Control node. Most fields are kind-specific.
 struct ImGuiAppNode
 {
   int               Id;            // from NextId; == canvas node id
@@ -442,8 +425,8 @@ struct ImGuiAppNode
   int               FieldList;       // Field node: which list it belongs to on its owner (0 = Persist, 1 = Temp)
   int               PersistStructId; // Control: Struct node its PersistData was exploded into (-1 = inline)
   int               TempStructId;    // Control: Struct node its TempData was exploded into (-1 = inline)
-  bool              GroupCollapsed;  // owner whose group is folded: its descendants are hidden behind a proxy chip (transient view state, not serialized)
-  bool              Hidden;          // outliner eye toggle / isolate: not submitted to the canvas (transient view state, not serialized)
+  bool              GroupCollapsed;  // descendants hidden behind a proxy chip (transient, not serialized)
+  bool              Hidden;          // not submitted to the canvas (transient, not serialized)
 
   ImGuiAppNode()
   {
@@ -457,8 +440,8 @@ struct ImGuiAppNode
   }
 };
 
-// Optional per-data-edge field assignment: emits one "data->Dst = dep->Src;" line in OnUpdate. Kept off the
-// link (an ImVector member would make ImGuiAppNodeLink a non-aggregate and break brace-init); keyed by LinkId.
+// Per-data-edge field assignment: emits one "data->Dst = dep->Src;" line in OnUpdate. Keyed by LinkId,
+// kept off the link (an ImVector member would break ImGuiAppNodeLink's aggregate brace-init).
 struct ImGuiAppFieldBinding
 {
   int  LinkId;
@@ -468,30 +451,28 @@ struct ImGuiAppFieldBinding
   ImGuiAppFieldBinding() { LinkId = 0; DstField[0] = 0; SrcField[0] = 0; }
 };
 
-// The whole authored graph: nodes, typed links, field bindings, and one monotonic id allocator shared by
-// every node/port/body-attr/link so ids are globally unique and never reused.
+// The whole authored graph. One monotonic id allocator shared by every node/port/body-attr/link:
+// ids are globally unique, never reused.
 struct ImGuiAppGraph
 {
   ImVector<ImGuiAppNode>         Nodes;
   ImVector<ImGuiAppNodeLink>     Links;
   ImVector<ImGuiAppFieldBinding> Bindings;
   ImVector<int>                  Selection;   // multi-selection (node ids); the single selected_node_id is primary
-  ImVector<int>                  ViewScope;   // drill-down scope stack (node ids, outer->inner); empty = whole app.
-                                              // Transient view state (not serialized): Tab enters the selected
-                                              // node's composition, Esc goes up, breadcrumb segments jump.
+  ImVector<int>                  ViewScope;   // drill-down scope stack (node ids, outer->inner); empty = whole app; transient, not serialized
   int NextId;
   int EditingNodeId;             // node whose title is being renamed inline, or -1
-  char LastLinkErr[IM_LABEL_SIZE];  // last refused-link reason; transient UI state, NOT in Save/Load
-  int  LastLinkErrSeq;              // bumped on every rejection -> demo edge-triggers the fade
+  char LastLinkErr[IM_LABEL_SIZE];  // last refused-link reason; transient, NOT in Save/Load
+  int  LastLinkErrSeq;              // bumped on every rejection
 
   ImGuiAppGraph() { NextId = 1; EditingNodeId = -1; LastLinkErr[0] = 0; LastLinkErrSeq = 0; }
 };
 
 namespace ImGui
 {
-  // Allocation / factory. AddNode/AddBuiltin push an empty node then stamp the kind's mandatory ports and a
-  // body-attr id, returning a pointer valid until the next node is added (Nodes may reallocate). Find* resolve
-  // by search, never by index. RemoveNode also sweeps incident links and orphaned bindings.
+  // AddNode/AddBuiltin stamp the kind's mandatory ports and a body-attr id; the returned pointer is
+  // valid only until the next node is added (Nodes may reallocate). Find* resolve by search, never by
+  // index. RemoveNode also sweeps incident links and orphaned bindings.
   IMGUI_API int                 AppGraphAllocId(ImGuiAppGraph* g);
   IMGUI_API ImGuiAppNode*       AppGraphAddNode(ImGuiAppGraph* g, ImGuiAppNodeKind kind, const char* name);
   IMGUI_API ImGuiAppNode*       AppGraphAddBuiltin(ImGuiAppGraph* g, ImGuiAppNodeKind kind, const char* type_name, const char* data_type_name);
@@ -502,68 +483,65 @@ namespace ImGui
   IMGUI_API void                AppNodeAddCommand(ImGuiAppNode* n, const char* name);
   IMGUI_API void                AppNodeRemoveCommand(ImGuiAppNode* n, int index);
 
-  // The runtime data-flow key for a node named <node_name>: ConstantHash of the sanitized "<Name>Data" the
-  // codegen emits -- equals ImGuiType<<Name>Data>::ID, so a design DataOut port shares the live storage key.
+  // Runtime data-flow key for a node named <node_name>: ConstantHash of the sanitized "<Name>Data"
+  // codegen emits == ImGuiType<<Name>Data>::ID, so a design DataOut port shares the live storage key.
   IMGUI_API ImGuiID             AppNodeStructTypeId(const char* node_name);
 
-  // Stable fold of the codegen-DETERMINING authored (!IsLive) graph state: changes iff the emitted C++ would
-  // change, so a panel can show fresh|STALE. Excludes positions/ids/live-mirror churn. char[] hashed as
-  // NUL-terminated string (ctors zero only byte 0, so ImHashData over the fixed buffer would be unstable).
+  // Stable fold of the codegen-determining authored (!IsLive) state: changes iff the emitted C++ would
+  // change. Excludes positions/ids/live-mirror churn. char[] hashed as NUL-terminated string (ctors
+  // zero only byte 0, so ImHashData over the fixed buffer would be unstable).
   IMGUI_API ImGuiID             AppGraphSignature(const ImGuiAppGraph* g);
 
-  // Typed links. CanLink validates an attempted edge (kind pairing, no self/dup, no duplicate dep type, no
-  // cycle) and writes a reason to err on rejection. CaptureAppGraphLinks folds the canvas wire events,
-  // refusing illegal creations; returns true if the model changed.
+  // CanLink validates an attempted edge (kind pairing, no self/dup, no duplicate dep type, no cycle),
+  // writing a reason to err on rejection. CaptureAppGraphLinks folds the canvas wire events, refusing
+  // illegal creations; returns true if the model changed.
   IMGUI_API bool                AppGraphCanLink(ImGuiAppGraph* g, int start_port, int end_port, char* err, int err_size);
   IMGUI_API bool                CaptureAppGraphLinks(ImGuiAppGraph* g, char* err, int err_size);
 
-  // Per-edge field-binding editor (call inside an attribute). Lists/edits the bindings for one data link.
+  // Per-edge field-binding editor for one data link (call inside an attribute).
   IMGUI_API void                EditAppDataEdgeBindings(ImGuiAppGraph* g, int link_id);
 
-  // Render the whole typed graph inside the current window (wraps BeginNodeEditor..EndNodeEditor). app may be
-  // null (design-only); when non-null, builtin control bodies can reflect live data. *selected_node_id is the
-  // window-level selection (caller-owned, -1 = none): the editor reconciles it both ways (canvas<->tree) and
-  // clears dangling ids. show_live hides (never deletes) read-only live-mirror nodes when false.
+  // Render the whole typed graph inside the current window. app may be null (design-only); when
+  // non-null, builtin control bodies can reflect live data. *selected_node_id is caller-owned (-1 =
+  // none): the editor reconciles it both ways (canvas<->tree) and clears dangling ids. show_live hides
+  // (never deletes) live-mirror nodes when false.
   IMGUI_API void                ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, bool show_live);
 
-  // "Play": render a design Control node's effective Persist/Temp fields as a live mock panel of real ImGui
-  // widgets (float->drag, bool->checkbox, vec->drag2/4, string->read-only box), so you can see the authored UI
-  // without compiling. Numeric values are scratch (ImGuiStorage), not wired to anything. node_id < 0 -> hint.
+  // Render a design Control's effective Persist/Temp fields as a mock panel of real ImGui widgets.
+  // Values are scratch (ImGuiStorage), not wired to anything. node_id < 0 -> hint.
   IMGUI_API void                AppGraphRenderMockPanel(ImGuiAppGraph* g, int node_id);
 
-  // Roomy inspector for one node's authored data (name, Persist/Temp fields, window/sidebar props). Live nodes
-  // are read-only. node_id < 0 -> a "select a node" hint. Edits mutate the graph in place.
+  // Inspector for one node's authored data. Live nodes are read-only. node_id < 0 -> hint. Edits
+  // mutate the graph in place.
   IMGUI_API void                EditAppNodeInspector(ImGuiAppGraph* g, int node_id);
   IMGUI_API void                EditAppNodeInspectorEx(ImGuiAppGraph* g, int node_id, ImGuiApp* live_app);   // + live style write-back (see workbench §3.5)
   IMGUI_API void                EditAppNodesInspectorMulti(ImGuiAppGraph* g);   // multi-selection: intersection editing (style across all selected)
 
-  // Inspector section header (workbench §5.1, the Unity/UE component anatomy): collapse triangle + icon +
-  // label, optional enable checkbox, optional kebab whose click the caller answers with its own popup.
-  // Open state is session-lived per window. Shared with hosts so panel and project inspectors match.
+  // Inspector section header (workbench §5.1): collapse triangle + icon + label, optional enable
+  // checkbox, optional kebab whose click the caller answers with its own popup. Open state is
+  // session-lived per window.
   IMGUI_API bool                AppInspectorSection(const char* str_id, const char* icon, const char* label, bool* enabled, bool* kebab_clicked);
 
-  // Origin breadcrumb for a selected node: "sel: MainWindow > Mixer [design]" / "[live]" / "[promoted]" /
-  // "sel: -" when id < 0 or unknown. char[] out, no references; encapsulates the containment-parent walk.
+  // Origin breadcrumb for a selected node: "sel: MainWindow > Mixer [design]" / "[live]" /
+  // "[promoted]" / "sel: -" when id < 0 or unknown.
   IMGUI_API void                AppGraphSelectionBreadcrumb(const ImGuiAppGraph* g, int node_id, char* buf, int buf_size);
 
-  // Mirror the running app's controls into *g WITHOUT reflection: remove all prior live nodes, then add one
-  // read-only live Control node per pushed control (keyed by GetControlDataID) plus the data edges between
-  // them, and flag design control nodes whose emitted data type matches a live node. Design (non-live) nodes
-  // are untouched. Safe to call every frame.
+  // Mirror the running app's controls into *g: remove all prior live nodes, add one read-only live
+  // Control node per pushed control (keyed by GetControlDataID) plus their data edges, and flag design
+  // controls whose emitted data type matches a live node. Design nodes untouched. Safe every frame.
   IMGUI_API void                BuildAppLiveGraph(const ImGuiApp* app, ImGuiAppGraph* g);
 
-  // Scene-hierarchy / outliner panel (call inside your own child/window): a tree of the running app's
-  // composition -- Layers, Windows, Sidebars, Controls -- plus the graph's authored nodes. Clicking a graph
-  // row selects that node in the editor. *selected_node_id is caller-owned selection state (-1 = none).
-  // show_live mirrors the canvas toggle: when false, live-mirror rows are not listed (never deleted).
+  // Outliner panel (call inside your own child/window): the running app's composition plus the graph's
+  // authored nodes. Clicking a graph row selects that node in the editor. *selected_node_id is
+  // caller-owned (-1 = none). show_live false hides (never deletes) live-mirror rows.
   IMGUI_API void                ShowAppGraphTree(const ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, bool show_live = true);
 
-  // Topologically order the Control nodes by data dependency (producers before consumers). Returns false and
-  // writes err on a cycle. out_control_ids receives node ids in push order.
+  // Topologically order the Control nodes by data dependency (producers before consumers). Returns
+  // false and writes err on a cycle. out_control_ids receives node ids in push order.
   IMGUI_API bool                AppGraphTopoOrder(const ImGuiAppGraph* g, ImVector<int>* out_control_ids, char* err, int err_size);
 
-  // One authoring problem found by AppGraphValidate. Severity: 1 = warning, 2 = error. NodeId is the node to
-  // reveal when the row is clicked (-1 for whole-graph issues like a dependency cycle).
+  // One problem found by AppGraphValidate. Severity: 1 = warning, 2 = error. NodeId is the node to
+  // reveal (-1 for whole-graph issues).
   struct ImGuiAppGraphIssue
   {
     int  NodeId;
@@ -573,15 +551,13 @@ namespace ImGui
     ImGuiAppGraphIssue() { NodeId = -1; Severity = 1; Text[0] = 0; }
   };
 
-  // Static-analyze the authored (design) graph and append any problems to *out: empty structs, struct/string
-  // fields missing their type/size, controls whose exploded data struct is missing, blank/duplicate names,
-  // empty windows, and dependency cycles. Live-mirror nodes are skipped (read-only). Clears nothing.
+  // Static-analyze the design graph, appending problems to *out (clears nothing). Live-mirror nodes
+  // are skipped.
   IMGUI_API void                AppGraphValidate(const ImGuiAppGraph* g, ImVector<ImGuiAppGraphIssue>* out);
 
-  // Brushing across coordinated views: any panel reports the graph datum under the mouse; every panel
-  // reads LAST frame's report and highlights that same datum (one-frame latency, imperceptible). The
-  // source lets a view skip echoing its own hover -- the canvas already outlines its natively hovered
-  // node. Single-editor-instance state, like the editor's other function statics.
+  // Brushing across coordinated views: any panel reports the datum under the mouse; every panel reads
+  // LAST frame's report and highlights it (one-frame latency). The source lets a view skip echoing its
+  // own hover. Single-editor-instance state.
   typedef int ImGuiAppHoverSource;
   enum ImGuiAppHoverSource_
   {
@@ -591,10 +567,9 @@ namespace ImGui
     ImGuiAppHoverSource_Inspector,   // inspector / binding rows
     ImGuiAppHoverSource_External,    // problems list, code panel, any host-app panel
   };
-  // Context keymap hint (what the mouse does right now, given its hover target) + transient refused-link
-  // errors, computed by ShowAppGraphEditor every frame. A host status bar renders it OUTSIDE the canvas --
-  // the game-editor pattern: hints live in the window's status bar, never over the viewport. severity:
-  // 0 = plain hint, 2 = error (refused link). Valid for the frame after the editor ran.
+  // Context keymap hint + transient refused-link errors, computed by ShowAppGraphEditor every frame.
+  // Render it OUTSIDE the canvas (host status bar). severity: 0 = plain hint, 2 = error (refused
+  // link). Valid for the frame after the editor ran.
   IMGUI_API const char*         AppGraphStatusHint(int* out_severity);
 
   IMGUI_API void                AppGraphHoverNode(int node_id, ImGuiAppHoverSource source);
@@ -602,10 +577,9 @@ namespace ImGui
   IMGUI_API int                 AppGraphHoveredNode(ImGuiAppHoverSource* out_source);   // -1 = none; out_source may be null
   IMGUI_API int                 AppGraphHoveredLink(ImGuiAppHoverSource* out_source);
 
-  // Host verbs surfaced in the canvas command palette (workbench W2: the palette is the completeness proof --
-  // one searchable surface reaching editor AND document verbs). The host registers its commands each frame
-  // before ShowAppGraphEditor (pointers must outlive the frame); a picked command is reported back through
-  // AppGraphConsumeHostCommand -- the edit-intent idiom, one-frame latency, the editor never calls the host.
+  // Host verbs surfaced in the canvas command palette (workbench W2). Register each frame before
+  // ShowAppGraphEditor (pointers must outlive the frame); a picked command is reported back through
+  // AppGraphConsumeHostCommand (one-frame latency, the editor never calls the host).
   struct ImGuiAppGraphHostCmd
   {
     const char* Label;      // e.g. "File: Save graph"
@@ -615,17 +589,16 @@ namespace ImGui
   IMGUI_API void                AppGraphSetHostCommands(const ImGuiAppGraphHostCmd* cmds, int count);
   IMGUI_API int                 AppGraphConsumeHostCommand();   // picked host cmd id since last call, or -1
 
-  // Host toolbars' "compose" entry point: opens the add-node palette at the canvas center on the editor's
-  // next submission (one-shot; same palette as RMB / Space / the + gizmo).
+  // One-shot: open the add-node palette at the canvas center on the editor's next submission (same
+  // palette as RMB / Space / the + gizmo).
   IMGUI_API void                AppGraphRequestAddPalette();
 
-  // One-shot: frame the whole graph on the editor's next submission (hosts call it after seeding or loading a
-  // document -- the first view must never open on clipped, off-camera content).
+  // One-shot: frame the whole graph on the editor's next submission.
   IMGUI_API void                AppGraphRequestFitAll();
 
-  // The composer chrome's own push-stack palette, stated in desc terms and exposed read-write (stable
-  // pointer): the project inspector's Theme section edits it live -- the composer styles itself with the
-  // machinery it teaches. Col slots are semantic and fixed; Value/Active are the editable half.
+  // The composer chrome's push-stack palette, exposed read-write (stable pointer): the project
+  // inspector's Theme section edits it live. Col slots are semantic and fixed; Value/Active are the
+  // editable half.
   struct ImGuiAppChromeTheme
   {
     ImGuiAppColorModDesc Combo[8];   // dropdown fields (enum combos, struct picker): field + popup + rows
@@ -633,8 +606,8 @@ namespace ImGui
   };
   IMGUI_API ImGuiAppChromeTheme*    AppGraphChromeTheme();
 
-  // Canvas view settings: snap-to-grid + the overlays popover's toggles. Presentation-only, never model state.
-  // Exposed (stable pointer, single editor instance) so the host can persist them across sessions.
+  // Canvas view settings: presentation-only, never model state. Stable pointer (single editor
+  // instance) so the host can persist them across sessions.
   struct ImGuiAppGraphViewState
   {
     bool  SnapGrid;
@@ -646,28 +619,25 @@ namespace ImGui
   };
   IMGUI_API ImGuiAppGraphViewState* AppGraphViewState();
 
-  // The editor's canvas-engine state (single editor instance; see imgui_applayer_canvas.h). Exposed so
-  // hosts and tests can query geometry (CanvasNodePos/CanvasNodeSize/CanvasToScreen) or drive the camera.
+  // The editor's canvas-engine state (single editor instance; see imgui_applayer_canvas.h): hosts and
+  // tests can query geometry or drive the camera.
   IMGUI_API ::ImGuiCanvasState* AppGraphEditorCanvas();
 
-  // Cached validation, keyed by AppGraphSignature (+ bindings): cheap enough to query every frame, so
-  // problems can render ambiently where they live (canvas severity dot, outliner underline, inspector
-  // header) instead of only in a list. Worst per-node severity: 0 = clean, 1 = warning, 2 = error.
+  // Cached validation, keyed by AppGraphSignature (+ bindings): cheap enough to query every frame.
+  // Worst per-node severity: 0 = clean, 1 = warning, 2 = error.
   IMGUI_API const ImVector<ImGuiAppGraphIssue>* AppGraphIssuesCached(const ImGuiAppGraph* g);
   IMGUI_API int                 AppGraphNodeSeverity(const ImGuiAppGraph* g, int node_id);
 
-  // Type-check one authored event's Expr against the control's effective field lists. The grammar is tiny on
-  // purpose (events stay analyzable data, not strings): field refs `temp_data->x` / `last_temp_data->x` /
-  // `data->x` / `<dep_param>-><field>`, nested struct members via '.', bool/int/float literals, parens, and
-  // scalar operators at C precedence (! unary- * / % + - ^ comparisons && ||). `^` pairs bools (the change
-  // idiom) or ints. The result type must fit DstField. Empty Expr is valid (codegen copies the watched temp
-  // field). Returns true when well-typed; else writes a diagnostic to err. Used by AppGraphValidate and the
-  // events editor; exposed so tests can drive it directly.
+  // Type-check one authored event's Expr against the control's effective field lists. Grammar: field
+  // refs `temp_data->x` / `last_temp_data->x` / `data->x` / `<dep_param>-><field>`, nested struct
+  // members via '.', bool/int/float literals, parens, scalar operators at C precedence
+  // (! unary- * / % + - ^ comparisons && ||). `^` pairs bools or ints. The result type must fit
+  // DstField. Empty Expr is valid (codegen copies the watched temp field). Returns true when
+  // well-typed; else writes a diagnostic to err.
   IMGUI_API bool                AppEventExprCheck(const ImGuiAppGraph* g, const ImGuiAppNode* n, const ImGuiAppEventDesc* ev, char* err, int err_size);
 
-  // One node's contribution to the last whole-graph emission: [LineBegin, LineEnd) in the generated text.
-  // A node may own several spans (its type definitions AND its bring-up line in SetupApp). This is the
-  // code<->canvas source map: a code panel can highlight, scroll to, and select nodes from their lines.
+  // One node's contribution to the last whole-graph emission: [LineBegin, LineEnd) in the generated
+  // text. A node may own several spans (type definitions AND its bring-up line in SetupApp).
   struct ImGuiAppCodeSpan
   {
     int NodeId;
@@ -677,68 +647,64 @@ namespace ImGui
     ImGuiAppCodeSpan() { NodeId = -1; LineBegin = 0; LineEnd = 0; }
   };
 
-  // Whole-graph codegen: data structs + controls with derived DataDependencies (topo order) + one bring-up
-  // function pushing layers, then windows/sidebars, then controls. Appends to *out. The Ex variant also
-  // records the per-node source map (out_spans may be null; it is cleared first).
+  // Whole-graph codegen: data structs + controls with derived DataDependencies (topo order) + one
+  // bring-up function pushing layers, then windows/sidebars, then controls. Appends to *out. The Ex
+  // variant also records the per-node source map (out_spans may be null; cleared first).
   IMGUI_API void                GenerateAppGraphCode(const ImGuiAppGraph* g, ImGuiTextBuffer* out);
   IMGUI_API void                GenerateAppGraphCodeEx(const ImGuiAppGraph* g, ImGuiTextBuffer* out, ImVector<ImGuiAppCodeSpan>* out_spans);
 
-  // Per-node codegen for the inspector: emits only the code a single selected node produces -- a Control's
-  // struct(s) with derived deps, the CommandLayer's AppCommand enum + dispatch, a window/sidebar/layer
-  // bring-up line, or (App node) the whole composition. Appends to *out.
+  // Per-node codegen: emits only the code one node produces -- a Control's struct(s) with derived
+  // deps, the CommandLayer's AppCommand enum + dispatch, a bring-up line, or (App node) the whole
+  // composition. Appends to *out.
   IMGUI_API void                GenerateAppNodeCode(const ImGuiAppGraph* g, const ImGuiAppNode* n, ImGuiTextBuffer* out);
 
-  // Persist / restore the whole graph as imgui-style text. LoadAppGraph also ingests the legacy single/multi
-  // "[Draft]" format (each becomes a Control node). The four legacy Save/Load*Graph[Multi] functions above are
-  // unchanged. Return false on file error.
+  // Persist / restore the whole graph as imgui-style text. LoadAppGraph also ingests the legacy
+  // single/multi "[Draft]" format (each becomes a Control node). Return false on file error.
   IMGUI_API bool                SaveAppGraph(const char* path, const ImGuiAppGraph* g);
   IMGUI_API bool                LoadAppGraph(const char* path, ImGuiAppGraph* g);
 
-  // Headless codegen: load a graph file and write its whole-graph generated C++ to out_header_path, no GUI.
-  // Returns false on a load or write error. (Bake graphs in a build step.)
+  // Headless codegen: load a graph file, write its generated C++ to out_header_path. Returns false on
+  // a load or write error.
   IMGUI_API bool                AppGraphGenerateToFiles(const char* graph_path, const char* out_header_path);
 
-  // Line diff of two graphs' generated C++ (unified-style: ' ' context, '-' only in a, '+' only in b). Appends
-  // to *out. Use to show what changed between an edited graph and a baseline (e.g. the last-saved version).
+  // Line diff of two graphs' generated C++ (' ' context, '-' only in a, '+' only in b). Appends to *out.
   IMGUI_API void                AppGraphDiffCode(const ImGuiAppGraph* a, const ImGuiAppGraph* b, ImGuiTextBuffer* out);
 
-  // Round-trip: parse C `struct <Name> { <type> <field>; ... };` blocks out of arbitrary C++ source and add one
-  // Struct node per struct (with its fields, types mapped back from C++). The inverse of the struct codegen --
-  // paste a POD header to reconstruct nodes. New nodes are laid out starting at `origin`. Returns structs added.
+  // Parse C `struct <Name> { <type> <field>; ... };` blocks out of C++ source, adding one Struct node
+  // per struct (fields, types mapped back). New nodes laid out at `origin`. Returns structs added.
   IMGUI_API int                 AppGraphImportStructsFromCode(ImGuiAppGraph* g, const char* code, ImVec2 origin);
 
-  // Undo / redo. The editor calls AppGraphCheckpoint once per frame to capture settled mutations into an
-  // in-memory history (snapshots coalesce while the mouse is held or a widget is being edited, so a drag or
-  // inline rename folds into one step). Ctrl+Z / Ctrl+Y are handled inside ShowAppGraphEditor; the Undo/Redo
-  // entry points are also exposed for a toolbar. Can* report whether a step is available for this graph.
+  // Undo / redo. The editor calls AppGraphCheckpoint once per frame; snapshots coalesce while the
+  // mouse is held or a widget is being edited, so a drag or inline rename folds into one step.
+  // Ctrl+Z / Ctrl+Y are handled inside ShowAppGraphEditor; Undo/Redo are also exposed for a toolbar.
   IMGUI_API void                AppGraphCheckpoint(ImGuiAppGraph* g);
   IMGUI_API void                AppGraphUndo(ImGuiAppGraph* g);
   IMGUI_API void                AppGraphRedo(ImGuiAppGraph* g);
   IMGUI_API bool                AppGraphCanUndo(const ImGuiAppGraph* g);
   IMGUI_API bool                AppGraphCanRedo(const ImGuiAppGraph* g);
 
-  // Undo-history introspection for a time-travel scrubber: Count = number of snapshots, Cursor = the one the
-  // live graph currently matches (0..Count-1, -1 if empty), Goto = jump the live graph to a snapshot index.
+  // Undo-history introspection: Count = snapshots, Cursor = the one the live graph matches
+  // (0..Count-1, -1 if empty), Goto = jump to a snapshot index.
   IMGUI_API int                 AppGraphHistoryCount(const ImGuiAppGraph* g);
   IMGUI_API int                 AppGraphHistoryCursor(const ImGuiAppGraph* g);
   IMGUI_API void                AppGraphHistoryGoto(ImGuiAppGraph* g, int index);
   IMGUI_API const char*         AppGraphHistoryLabel(const ImGuiAppGraph* g, int index);   // derived operation name ("Add Mixer", "Rename A -> B"); "" if unknown
 
-  // Prefabs: reusable named subtrees. SavePrefab serializes the roots' containment subtrees under a name
-  // (replacing one of the same name); Instantiate stamps a saved prefab into g with fresh ids at `origin` and
-  // selects it. Count/Name enumerate the registry (in-memory, session-lived). Reuses the copy/paste machinery.
+  // Prefabs: SavePrefab serializes the roots' containment subtrees under a name (replacing one of the
+  // same name); Instantiate stamps a saved prefab into g with fresh ids at `origin` and selects it.
+  // Count/Name enumerate the registry (in-memory, session-lived).
   IMGUI_API void                AppGraphSavePrefab(const ImGuiAppGraph* g, const ImVector<int>& roots, const char* name);
   IMGUI_API int                 AppGraphPrefabCount();
   IMGUI_API const char*         AppGraphPrefabName(int index);
   IMGUI_API int                 AppGraphInstantiatePrefab(ImGuiAppGraph* g, int index, ImVec2 origin);
 
-  // Guarantee the four-layer framework foundation (Window, Task, Command, Status) exists in g -- adds any that
-  // are missing, never duplicates. These layers are permanent (AppGraphRemoveNode refuses them) and are the base
-  // every app builds windows/controls/commands on top of. Call on new/empty graphs and after load.
+  // Ensure the four foundation layers (Window, Task, Command, Status) exist in g -- adds missing,
+  // never duplicates. They are permanent (AppGraphRemoveNode refuses them). Call on new/empty graphs
+  // and after load.
   IMGUI_API void                AppGraphEnsureFoundation(ImGuiAppGraph* g);
 
-  // One-shot tidy layout: arrange design nodes as a left-to-right containment tree (window -> hosted controls
-  // -> data structs -> fields), siblings stacked and parents centered. Bound to the L key inside the editor and
-  // exposed for a toolbar button. Layers keep their own column packing; live-mirror nodes are left in place.
+  // One-shot tidy layout: design nodes as a left-to-right containment tree, siblings stacked, parents
+  // centered. L key inside the editor; also exposed for a toolbar. Layers keep their own column
+  // packing; live-mirror nodes are left in place.
   IMGUI_API void                AppGraphAutoLayout(ImGuiAppGraph* g, bool show_live);
 }

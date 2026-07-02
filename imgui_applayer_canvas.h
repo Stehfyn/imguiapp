@@ -1,7 +1,6 @@
-// ImGuiAppLayer canvas engine: a lean, phase-coherent node canvas.
-// Design: docs/canvas-engine-design.md. Core invariant: node geometry lives in MODEL units; the
-// camera (pan + zoom) is the only transform, applied at draw; measurements are captured the same
-// frame in the same units they are consumed in (docs/phase-coherence.md).
+// ImGuiAppLayer canvas engine. Invariant: node geometry lives in MODEL units; the camera
+// (pan + zoom) is the only transform, applied at draw; measurements are captured the same frame in
+// the same units they are consumed in. docs/canvas-engine-design.md, docs/phase-coherence.md.
 
 #pragma once
 
@@ -9,7 +8,7 @@
 
 struct ImGuiCanvasStyle
 {
-  // Colors (subset of what the Composer themes today; set directly, no push/pop stack).
+  // Colors: set directly, no push/pop stack.
   ImU32 GridBg;
   ImU32 GridLine;
   ImU32 GridLinePrimary;
@@ -53,15 +52,13 @@ struct ImGuiCanvasStyle
 struct ImGuiCanvasIO
 {
   // Bindings policy.
-  bool LmbPansEmptyCanvas;     // LMB-drag on empty canvas pans (box select intentionally absent)
+  bool LmbPansEmptyCanvas;     // LMB-drag on empty canvas pans (no box select)
   bool RmbPans;                // RMB-drag pans; a short RMB click reports CanvasMenuRequest*
   bool WheelZooms;             // cursor-centered; Ctrl+wheel zooms even over nodes/items
   float ZoomMin, ZoomMax;      // clamp (defaults 0.3 / 2.5)
 };
 
-// One canvas instance (the Composer has exactly one; the API still takes the state explicitly --
-// pointers, no hidden globals, no context stack).
-struct ImGuiCanvasState;   // opaque; created/destroyed by the engine
+struct ImGuiCanvasState;   // opaque; created/destroyed by the engine; passed explicitly, no context stack
 
 namespace ImGui
 {
@@ -71,10 +68,10 @@ namespace ImGui
   IMGUI_API ImGuiCanvasIO*    CanvasGetIO(ImGuiCanvasState* c);
 
   // ---- frame ----------------------------------------------------------------------------------
-  // BeginCanvas opens the child (fills the available region unless size is given), draws the grid,
-  // and applies camera input per the IO policy. All node/pin/wire submission happens between
-  // Begin/End; EndCanvas draws wires + pins from THIS frame's geometry, resolves hover, runs the
-  // interaction FSM, and latches the frame's events (queried until the next BeginCanvas).
+  // CanvasBegin opens the child (fills the available region unless size is given), draws the grid,
+  // and applies camera input per the IO policy. Submit nodes/pins/wires between Begin/End;
+  // CanvasEnd draws wires + pins from THIS frame's geometry, resolves hover, runs the interaction
+  // FSM, and latches events (valid until the next CanvasBegin).
   IMGUI_API void CanvasBegin(ImGuiCanvasState* c, const char* str_id, ImVec2 size /*= 0,0*/);
   IMGUI_API void CanvasEnd(ImGuiCanvasState* c);
 
@@ -90,20 +87,18 @@ namespace ImGui
   IMGUI_API void   CanvasSetZoom(ImGuiCanvasState* c, float zoom, ImVec2 keep_screen_pos);   // keeps that screen point fixed
   IMGUI_API ImVec2 CanvasToScreen(const ImGuiCanvasState* c, ImVec2 model);
   IMGUI_API ImVec2 CanvasFromScreen(const ImGuiCanvasState* c, ImVec2 screen);
-  IMGUI_API void   CanvasCenterOn(ImGuiCanvasState* c, ImVec2 model_pos);                    // MoveToNode successor
+  IMGUI_API void   CanvasCenterOn(ImGuiCanvasState* c, ImVec2 model_pos);
   IMGUI_API void   CanvasFitRect(ImGuiCanvasState* c, ImVec2 model_min, ImVec2 model_max, float margin_px);
   IMGUI_API void   CanvasFitNodes(ImGuiCanvasState* c, const int* node_ids, int count, float margin_px);
   IMGUI_API void   CanvasFitAll(ImGuiCanvasState* c, float margin_px);                       // over nodes submitted last frame
 
   // Minimap: call between CanvasBegin/CanvasEnd; drawn by CanvasEnd as a bottom-right inset fitted
-  // to the node content's aspect within size_fraction of the canvas. Node plates are state-colored
-  // (map-hover / selected / default), links draw as scaled beziers, and the current view is a
-  // translucent rect through the same mapping (clipped when the camera sees more than the content).
-  // Holding LMB over the map continuously recenters the camera. Its rect is excluded from the FSM.
+  // to the node content's aspect within size_fraction of the canvas. Holding LMB over the map
+  // continuously recenters the camera. Its rect is excluded from the FSM.
   IMGUI_API void   CanvasMiniMap(ImGuiCanvasState* c, float size_fraction);
 
   // ---- nodes (geometry in MODEL units, always) --------------------------------------------------
-  // Between BeginCanvasNode/EndCanvasNode submit ordinary ImGui widgets; the engine renders them
+  // Between CanvasBeginNode/CanvasEndNode submit ordinary ImGui widgets; the engine renders them
   // under the zoomed font + scaled layout metrics and measures the node the SAME frame.
   IMGUI_API void   CanvasNextNodeTitle(const char* title, ImU32 title_color /*= 0 -> style*/);
   // Editable variant (host-driven rename): while *editing, the engine renders an InputText in the

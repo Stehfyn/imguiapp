@@ -1,6 +1,5 @@
-// ImGuiAppLayer core: the frame pipeline (ingest -> command -> publish -> render), typed app
-// composition (layers / windows / sidebars / controls), and the state discipline that makes apps
-// snapshottable, replayable, and phase-coherent (see docs/phase-coherence.md).
+// ImGuiAppLayer core: frame pipeline, typed app composition (layers / windows / sidebars / controls),
+// state discipline (docs/phase-coherence.md).
 //
 // Index of this file (search for "[SECTION]"):
 // [SECTION] Assert forensics (symbolized backtrace + WAL sink)
@@ -92,7 +91,7 @@ IMGUI_API int ImStackTrace(char* out, int out_size, int skip_frames)
 
 IMGUI_API void ImGuiAppAssertFail(const char* expr, const char* file, int line)
 {
-    // Re-entrancy guard: an assert inside the logging path must not recurse -- die plainly instead.
+    // Re-entrancy guard: an assert inside the logging path must not recurse.
     static bool in_assert = false;
     if (in_assert)
       exit(3);
@@ -113,7 +112,7 @@ IMGUI_API void ImGuiAppAssertFail(const char* expr, const char* file, int line)
       return;
     }
 #endif
-    exit(3);   // deterministic, popup-free
+    exit(3);
 }
 
 ImGuiApp::~ImGuiApp()
@@ -137,8 +136,8 @@ bool ImGuiApp::OnInitializePlatform(ImGuiAppConfig& config)
 
 void ImGuiApp::OnShutdownPlatform()
 {
-    // ImGuiX shutdown must happen before the backend tears down its platform/renderer
-    // resources, since the registered backend Shutdown hook still needs them alive.
+    // ImGuiX shutdown must precede backend teardown: the registered backend Shutdown hook
+    // still needs platform/renderer resources alive.
     if (ImGuiX::GetCurrentContext() != nullptr)
     {
         ImGuiX::Shutdown();
@@ -233,10 +232,9 @@ void ImGuiAppTaskLayer::OnDetach(ImGuiApp* app) const
 
 void ImGuiAppTaskLayer::OnUpdate(ImGuiApp* app, float dt) const
 {
-    // Controls are the app's per-frame state machines: OnUpdate consumes the TempData that OnRender recorded
-    // last frame (against last_temp_data -- the event-identification idiom) and mutates PersistData. They run
-    // in the TASK layer, before the Command layer collects OnGetCommand, so state updated this frame can emit
-    // a command this same frame; the Window layer stays purely presentational.
+    // OnUpdate consumes the TempData recorded by last frame's OnRender and mutates PersistData.
+    // Runs before the Command layer collects OnGetCommand, so state updated this frame can emit
+    // a command the same frame.
     ImGui::ForEachAppControl(app, [app, dt](ImGuiAppControlBase* control, ImGuiAppWindowBase* host)
     {
         IM_UNUSED(host);
@@ -263,11 +261,9 @@ void ImGuiAppCommandLayer::OnUpdate(ImGuiApp* app, float dt) const
 {
     IM_UNUSED(dt);
 
-    // Collect at most one command per control this frame -- app-level and hosted alike -- then dispatch each
-    // DISTINCT command once, in first-emission order. Dedup is set-semantics over an open command space (apps
-    // extend the enum past ImGuiAppCommand_COUNT, so a COUNT-sized bit array cannot represent user commands).
-    // Runs after the Task layer's control updates (layer push order), so a command decided in OnUpdate is
-    // collected and executed the same frame.
+    // At most one command per control; each distinct command dispatched once, in first-emission order.
+    // Dedup scans linearly: apps extend the enum past ImGuiAppCommand_COUNT, so a COUNT-sized
+    // bit array cannot represent user commands.
     ImVector<ImGuiAppCommand> cmds;
     ImGui::ForEachAppControl(app, [app, &cmds](ImGuiAppControlBase* control, ImGuiAppWindowBase* host)
     {
@@ -442,7 +438,6 @@ void ImGuiAppWindowLayer::OnAttach(ImGuiApp* app) const
     if (ImGui::FindSettingsHandler("AppWindowLayer") != nullptr)
         return;
 
-    // Add .ini handle for persistent AppWindow layer data
     ImGuiSettingsHandler ini_handler;
     ini_handler.TypeName = "AppWindowLayer";
     ini_handler.TypeHash = ImHashStr("AppWindowLayer");
@@ -462,8 +457,7 @@ void ImGuiAppWindowLayer::OnDetach(ImGuiApp* app) const
 
 void ImGuiAppWindowLayer::OnUpdate(ImGuiApp* app, float dt) const
 {
-    // Window/sidebar OBJECTS update here; their hosted controls updated in the Task layer (with all controls),
-    // so hosts always see this frame's control state.
+    // Hosted controls update in the Task layer; hosts here always see this frame's control state.
     for (auto& sidebar : app->Sidebars)
       sidebar->OnUpdate(app, dt);
 
@@ -483,9 +477,8 @@ void ImGuiAppWindowLayer::OnRender(const ImGuiApp* app) const
         const int  idx = horizontal ? 0 : 1;
         float ideal = sidebar->Window->ContentSizeIdeal[idx] + (2.0f * ImGui::GetStyle().WindowPadding[idx]);
 
-        // Left/Right sidebars auto-size their width, but wrapped or auto-width content reports a
-        // collapsed ideal width (it wraps to the current bar width), making the bar far too thin.
-        // Clamp to a sensible minimum, in text units so it scales with the font.
+        // Wrapped/auto-width content reports a collapsed ideal width (it wraps to the current
+        // bar width); clamp to a font-scaled minimum.
         if (horizontal)
           ideal = ImMax(ideal, ImGui::GetFontSize() * 8.0f);
 
@@ -531,9 +524,8 @@ void ImGuiAppWindowLayer::OnRender(const ImGuiApp* app) const
         window->Window = ImGui::GetCurrentWindow();
         window->OnRender(app);
 
-        // Window-hosted controls render INSIDE the host window (they submit child regions, not their own
-        // Begin/End). This is what distinguishes a hosted control from an app-level control (which owns a window).
-        // Style mods bracket OnRender only, so they style the control's region but not its popups.
+        // Hosted controls render INSIDE the host window (child regions, not their own Begin/End).
+        // Style mods bracket OnRender only: they style the control's region but not its popups.
         for (auto& control : window->Controls)
         {
           control->OnStylePush(app);
@@ -559,9 +551,8 @@ namespace ImGui
   //-----------------------------------------------------------------------------
   // [SECTION] Write-ahead log (ImGuiAppWAL)
   //
-  // The contract: a record is on disk BEFORE the operation it names runs, so a crash's
-  // forensics are one `tail` away -- the last line is the in-flight operation. fflush on every record is the
-  // cost of that guarantee; Lifecycle level is cheap (composition changes only), Frame level is for hunts.
+  // Contract: a record is on disk BEFORE the operation it names runs; fflush on every record.
+  // Lifecycle level = composition changes only; Frame level = per-frame records.
   //-----------------------------------------------------------------------------
 
   IMGUI_API bool AppWALOpen(ImGuiAppWAL* wal, const char* path, ImGuiAppWALLevel level)
@@ -603,11 +594,11 @@ namespace ImGui
       ImFormatStringV(msg, IM_ARRAYSIZE(msg), fmt, args);
       va_end(args);
 
-      // Frame number when an ImGui context exists (WAL must also work before/after the context's lifetime).
+      // WAL must also work before/after the ImGui context's lifetime.
       const int frame = ImGui::GetCurrentContext() != nullptr ? ImGui::GetFrameCount() : -1;
       FILE* f = (FILE*)wal->File;
       fprintf(f, "[%06d f%05d] %s\n", wal->Seq++, frame, msg);
-      fflush(f);   // the write-ahead guarantee
+      fflush(f);   // write-ahead guarantee
   }
 
   IMGUI_API void RegisterAppStorage(ImGuiApp* app, ImGuiID id, void* ptr, void (*destroy)(void*))
@@ -649,13 +640,6 @@ namespace ImGui
       app->StorageEntries.push_back(entry);
   }
 
-  //-----------------------------------------------------------------------------
-  // Time travel. The state discipline makes this a theorem, not a feature: OnUpdate is the sole mutator and
-  // every control's durable state (Persist + LastTemp + Temp) lives in registered storage, so a byte copy of
-  // the snapshottable entries IS the app's state at that frame. Restore it and the app resumes from there --
-  // deterministically, because the next OnUpdate is a pure function of that state plus recorded input.
-  //-----------------------------------------------------------------------------
-
   IMGUI_API void AppStateHistoryClear(ImGuiAppStateHistory* h)
   {
       IM_ASSERT(h != nullptr);
@@ -672,6 +656,9 @@ namespace ImGui
 
   //-----------------------------------------------------------------------------
   // [SECTION] State snapshots + input record/replay (time travel)
+  //
+  // OnUpdate is the sole state mutator and all durable state lives in registered storage,
+  // so a byte copy of the snapshottable entries IS the app's state at that frame.
   //-----------------------------------------------------------------------------
 
   IMGUI_API bool AppStateSnapshot(ImGuiApp* app, ImGuiAppStateHistory* h)
@@ -680,8 +667,8 @@ namespace ImGui
       if (app == nullptr || h == nullptr || h->MaxFrames <= 0)
         return false;
 
-      // Composition changed (or first use): rebuild the slot layout and start the timeline over. A snapshot
-      // only means something against the composition it was taken from.
+      // A snapshot is only valid against the composition it was taken from; rebuild the slot
+      // layout and restart the timeline on change.
       const ImGuiID comp = GetAppCompositionID(app);
       if (comp != h->CompositionID || h->SlotIds.Size == 0)
       {
@@ -705,7 +692,7 @@ namespace ImGui
       for (int s = 0; s < h->SlotIds.Size; s++)
       {
         const void* src = app->Data.GetVoidPtr(h->SlotIds[s]);
-        if (src == nullptr)   // entry vanished without a composition change -- shouldn't happen; invalidate
+        if (src == nullptr)   // entry vanished without a composition change; invalidate
         {
           AppStateHistoryClear(h);
           return false;
@@ -719,15 +706,15 @@ namespace ImGui
       return true;
   }
 
-  // Hash of the app's DETERMINISTIC state: the Persist + LastTemp prefix of every snapshottable instance
-  // (TempData is this frame's raw input, not state -- excluded so record-time and replay-time hashes align).
+  // Hash of the Persist + LastTemp prefix of every snapshottable instance. TempData is this
+  // frame's raw input, not state: excluded so record-time and replay-time hashes align.
   static ImGuiID AppStateHash(ImGuiApp* app)
   {
       ImGuiID h = 0;
       for (int i = 0; i < app->StorageEntries.Size; i++)
       {
         const ImGuiAppStorageEntry& e = app->StorageEntries[i];
-        const int state_bytes = e.TempSize > 0 ? e.TempOffset : e.Size;   // no temp range -> whole block is state
+        const int state_bytes = e.TempSize > 0 ? e.TempOffset : e.Size;   // no temp range: whole block is state
         if (e.Size <= 0 || e.Ptr == nullptr || state_bytes <= 0)
           continue;
         h = ImHashData(e.Ptr, (size_t)state_bytes, h);
@@ -761,7 +748,7 @@ namespace ImGui
       {
         AppInputLogClear(log);
         log->CompositionID = comp;
-        log->FrameSize = (int)sizeof(float);   // dt always travels with the frame
+        log->FrameSize = (int)sizeof(float);   // dt travels with the frame
         for (int i = 0; i < app->StorageEntries.Size; i++)
         {
           const ImGuiAppStorageEntry& e = app->StorageEntries[i];
@@ -775,7 +762,7 @@ namespace ImGui
         if (log->SlotIds.Size == 0)
         {
           AppInputLogClear(log);
-          return false;   // nothing records input -> nothing to replay
+          return false;   // nothing records input: nothing to replay
         }
       }
 
@@ -812,9 +799,9 @@ namespace ImGui
 
       AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "replay %d recorded frames", log->Count);
 
-      // Alignment with the live loop: UpdateApp consumes the TempData already in place (the starting snapshot's,
-      // then each injected frame's), the injection AFTER update stands in for that frame's RenderApp recording.
-      // The state hash compares post-update, pre-inject -- exactly what AppInputRecord hashed.
+      // UpdateApp consumes the TempData already in place; injection AFTER update stands in for
+      // that frame's RenderApp recording. The state hash compares post-update, pre-inject --
+      // exactly what AppInputRecord hashed.
       for (int f = 0; f < log->Count; f++)
       {
         const char* src = log->Frames.Data + f * log->FrameSize;
@@ -845,7 +832,7 @@ namespace ImGui
       if (app == nullptr || h == nullptr || index < 0 || index >= h->Count)
         return false;
       if (GetAppCompositionID(app) != h->CompositionID)
-        return false;   // the world these bytes describe no longer exists
+        return false;
 
       AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "restore state snapshot %d/%d", index, h->Count);
 

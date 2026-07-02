@@ -1,7 +1,4 @@
-// ImGuiAppLayer demo. Mirrors Dear ImGui's split of imgui.cpp / imgui_demo.cpp and its demo
-// window layout: a single "ImGuiAppLayer Demo" window with collapsing-header sections that drive
-// a live ImGuiApp, pushing/popping the real layers, windows, sidebars and controls so each
-// framework feature (incl. the Breathing control and its Random Time dependency) is showcased.
+// ImGuiAppLayer demo.
 //
 // Index of this file (search for "[SECTION]"):
 // [SECTION] Sample controls (RandomTime, Breathing) -- the framework idioms, showcased
@@ -23,21 +20,19 @@
 #include <ctime>
 #include <cstdlib>
 #include <cstdio>
-#include <cstring>                         // strncmp (codegen-warning scan)
-#include <filesystem>                      // Project tab: the document's files on disk
+#include <cstring>
+#include <filesystem>
 #include <string>                          // std::filesystem path -> utf8 at the ImGui boundary
 
 namespace
 {
-  // Monospace font for the generated-code inspector (set via ImGui::SetAppCodeFont). Null -> UI font.
+  // Set via ImGui::SetAppCodeFont; null -> UI font.
   static ImFont* g_AppCodeFont = nullptr;
 
-  // Encourage "pure" design, such that a control is "agnostic to the data passing through it."
   static void RenderTextT(const char* text, ImVec2 text_size, ImVec2 pos, ImVec2 avail, float t_value)
   {
-    // Draw directly into the (clipped) window draw list: this is a purely visual centered effect,
-    // so it must not move the layout cursor (SetCursorScreenPos past the content max trips
-    // imgui's "using SetCursorPos to extend boundaries" assert).
+    // Draws into the window draw list; must not move the layout cursor (SetCursorScreenPos past
+    // the content max trips imgui's extend-boundaries assert).
     float offset = avail.x * 0.5f + (t_value * 0.5f * (avail.x - text_size.x));
     ImVec2 text_pos = pos + ImVec2(offset, 0.0f) + (text_size * -0.5f);
     ImGui::GetWindowDrawList()->AddText(text_pos, ImGui::GetColorU32(ImGuiCol_Text), text);
@@ -52,11 +47,8 @@ namespace
     char label[128];
     char type[128];
     float max_timer_secs;
-    ImU64 rng;                 // deterministic effect source: randomness kept IN the state (see ImAppRandom).
-                               // Seeded once from the clock in OnInitialize (an init-time effect becomes
-                               // state), then only ever stepped by OnUpdate -- so snapshots capture it and
-                               // record/replay reproduces every "random" roll exactly. rand()/srand() would
-                               // be a hidden effect that breaks the replay theorem (contract 9 detects it).
+    ImU64 rng;                 // seeded once in OnInitialize, stepped only by OnUpdate: snapshots capture it,
+                               // record/replay reproduces every roll (see ImAppRandom)
   };
 
   struct RandomTimeTempData
@@ -66,7 +58,6 @@ namespace
 
   struct RandomTimeControlDemo : ImGuiAppControl <RandomTimeData, RandomTimeTempData>
   {
-    // Random time between 1 and 30 seconds, drawn from the control's own seed.
     static float GenerateTime(ImU64* rng) { return (float)ImAppRandomInt(rng, 1, 30); }
 
     virtual void OnInitialize(ImGuiApp*, RandomTimeData* data) const override final
@@ -120,7 +111,7 @@ namespace
     char type[128];
     char text[128];
     char timer_text[128];
-    const ImGuiApp* app;       // used to read the optional Random Time "source" control
+    const ImGuiApp* app;       // reads the optional Random Time source control
     float timer_secs;
     float t_value;
     float t_direction;
@@ -134,10 +125,8 @@ namespace
 
   struct BreathingControlDemo : ImGuiAppControl<BreathingControlData, BreathingControlTempData>
   {
-    // Used when the Random Time "source" control is not active.
     static constexpr float DefaultMaxTimerSecs = 5.0f;
 
-    // Read the Random Time source control's value if that control is active, else the default.
     float SourceMaxTimerSecs(const BreathingControlData* data) const
     {
       if (data->app != nullptr)
@@ -164,7 +153,6 @@ namespace
 
       if (temp_data->hovered ^ last_temp_data->hovered)
       {
-        // On hover, sample the Random Time source (or the default when that control is inactive).
         data->timer_secs = temp_data->hovered * SourceMaxTimerSecs(data);
         data->t_value = 0.0f;
         data->t_direction = 1.0f;
@@ -224,11 +212,10 @@ namespace
     }
   };
 
-  // A window-hosted control: renders INSIDE its host window (child content, no Begin/End). Hosted on BaseWindow,
-  // it exercises the live mirror's hosted-control + containment edge (control -> BaseWindow) in the editor.
+  // Window-hosted control: renders inside its host window (no Begin/End).
   struct BaseInfoData
   {
-    int Frames;   // alive-frame counter, advanced in OnUpdate
+    int Frames;
   };
   struct BaseInfoTempData {};
   struct BaseInfoControl : ImGuiAppControl<BaseInfoData, BaseInfoTempData>
@@ -262,19 +249,12 @@ namespace
     }
   };
 
-  // Seed a fresh graph. The graph IS the app: the collective of layer/window/control nodes composes it,
-  // so there is no "App" container node. A fresh document is the four guaranteed phases and nothing else.
   void SeedAppGraph(ImGuiAppGraph* graph)
   {
-    // The authored foundation is guaranteed here: the four layers are the frame's phases and anchor the canvas
-    // root whether or not a live mirror exists. The mirror upserts ONTO them (BuildAppLiveGraph skips live
-    // layers that have a design twin), so there are never design/live duplicates of a phase.
+    // BuildAppLiveGraph upserts onto the foundation layers, so design/live phases never duplicate.
     ImGui::AppGraphEnsureFoundation(graph);
   }
 
-  // "+ Add node" palette: layers, windows, sidebars, controls -- the pieces that compose the app. Builtin
-  // controls are backed by the demo's compiled types (RandomTime / Breathing) so their real data types
-  // become wireable graph nodes.
   void ShowNodePalette(ImGuiAppGraph* graph)
   {
     if (ImGui::BeginMenu("Control"))
@@ -288,7 +268,7 @@ namespace
         ImGui::AppGraphAddBuiltin(graph, ImGuiAppNodeKind_Control, "Breathing", "BreathingData");
       ImGui::EndMenu();
     }
-    // The core phases are guaranteed by the foundation; the only authorable layer is a Custom subclass.
+    // Core phases come from the foundation; the only authorable layer is Custom.
     if (ImGui::MenuItem("Custom Layer"))
     {
       ImGuiAppNode* n = ImGui::AppGraphAddNode(graph, ImGuiAppNodeKind_Layer, "CustomLayer");
@@ -299,27 +279,14 @@ namespace
     if (ImGui::MenuItem("Sidebar")) ImGui::AppGraphAddNode(graph, ImGuiAppNodeKind_Sidebar, "Sidebar");
   }
 
-  //---------------------------------------------------------------------------------------------------
-  // Dogfooded Composer node editor: the editor is itself an ImGuiApp object model.
-  //
-  // The graph IS the document. ONE control (GraphDocControl) owns it as PersistData and is the single
-  // writer; the panels are controls that receive `const GraphDocData*` as a typed dependency (read), and
-  // the interactive panels mutate the doc through that pointer (a localized, deliberate escape from the
-  // framework's read-only dependency rule -- the interim until an edit-intent bus lands). TempData is empty
-  // on every panel: actions apply immediately, nothing needs to survive to next frame.
-  //
-  // No ImGuiApp* is passed to OnUpdate/OnRender, so the doc stashes the app it MIRRORS (the demo's example
-  // app) in PersistData -- the Breathing-control convention (imgui_applayer_demo.cpp data->app).
-  //---------------------------------------------------------------------------------------------------
-
-  // PersistData is value-initialized by PushAppControl<>, then seeded in GraphDocControl::OnInitialize -- no
-  // member initializers here (defaults belong to OnInitialize, not the declaration).
+  // Dogfooded Composer node editor: GraphDocControl owns the graph as PersistData and is the single
+  // writer; panels read it as a typed dependency and mutate through a cached pointer (deliberate escape
+  // from the read-only dependency rule until an edit-intent bus lands).
   //-----------------------------------------------------------------------------
   // [SECTION] Composer document (GraphDocData) + workspace layout persistence
   //-----------------------------------------------------------------------------
 
-  // Bottom-bar panel identities, for the one-shot reveal intent (any subsystem summons any panel; the tab bar
-  // consumes the intent by SetSelected-ing the named tab and opening the bar if collapsed).
+  // Bottom-bar panel identities for the one-shot reveal intent.
   enum ComposerPanel_
   {
     ComposerPanel_None = 0,
@@ -329,8 +296,7 @@ namespace
     ComposerPanel_Output,
   };
 
-  // Document verbs the Composer registers into the canvas command palette (AppGraphSetHostCommands). The
-  // toolbar consumes the pick -- it already owns every one of these intents.
+  // Document verbs registered into the canvas command palette; the toolbar consumes the pick.
   enum ComposerHostCmd_
   {
     ComposerHostCmd_Save = 1,
@@ -356,15 +322,13 @@ namespace
     char            WriteMsg[64];     // transient "wrote header" confirmation
     ImGuiID         WrittenSig;       // AppGraphSignature at the last header write (0 = never) -> Generate state
 
-    // Frame-published document facts (single producer: GraphDocControl::OnUpdate derives these once per
-    // frame; every panel READS them -- re-deriving in a render path risks a phase mismatch, see
-    // docs/phase-coherence.md).
+    // Frame-published facts: derived once per frame in GraphDocControl::OnUpdate, read everywhere;
+    // never re-derive in a render path (docs/phase-coherence.md).
     ImGuiID         FrameSig;         // this frame's AppGraphSignature
     int             NumErrors;        // cached-validation counts
     int             NumWarnings;
     char            GraphPath[256];
     char            HeaderPath[256];
-    // Output panel: a running document log (actions, refused links, file IO) beside the validation issues.
     struct DocLogLine { int Severity; char Text[184]; };
     ImVector<DocLogLine> Log;         // newest last; capped in DocLog()
     int             RevealPanel;      // one-shot ComposerPanel_*: reveal + select that bottom tab (0 = none)
@@ -372,8 +336,8 @@ namespace
     ImGuiID         LayoutSavedHash;  // hash of the last-persisted layout fields (change detection)
     float           LayoutSaveT;      // debounce: seconds until the next layout-save check
     ImGuiApp*       Mirror;           // the ACTIVE mirrored app (resolved each update from MirrorSource below)
-    ImGuiApp*       MirrorSample;     // the example app (RandomTime/Breathing) -- mirror source 0
-    ImGuiApp*       MirrorComposer;   // the editor app hosting the Composer ITSELF -- mirror source 1 (dogfood)
+    ImGuiApp*       MirrorSample;     // mirror source 0: the example app (RandomTime/Breathing)
+    ImGuiApp*       MirrorComposer;   // mirror source 1: the editor app hosting the Composer itself
     int             MirrorSource;     // 0 = sample app, 1 = the Composer's own composition
     ImGuiAppStateHistory MirrorHistory;   // the mirrored app's recorded state ring (time travel)
     bool            TimeScrub;        // true: freeze the mirror at TimeScrubIndex instead of recording
@@ -381,21 +345,19 @@ namespace
   };
   struct GraphDocTempData {};
 
-  // Mutable fetch of the shared doc from an app's storage (PersistData aliases the start of InstanceData).
+  // PersistData aliases the start of InstanceData.
   static GraphDocData* GetGraphDoc(ImGuiApp* app)
   {
     return static_cast<GraphDocData*>(app->Data.GetVoidPtr(ImGuiType<GraphDocData>::ID));
   }
 
   //-----------------------------------------------------------------------------
-  // Workspace layout persistence (workbench design W1). A sidecar key=value file rather than an imgui
-  // .ini settings handler: the Composer initializes mid-frame-loop, AFTER imgui has already loaded its ini,
-  // and handlers registered late never see their sections. The sidecar has no such timing trap.
+  // Workspace layout persistence. A sidecar file, not an imgui settings handler: the Composer
+  // initializes after imgui loads its ini, and handlers registered late never see their sections.
   //-----------------------------------------------------------------------------
 
   static const char* kComposerLayoutPath = "imguix_composer_layout.ini";
 
-  // The persisted fields, packed for hashing (change detection) and IO in one place.
   struct ComposerLayoutFields
   {
     float TreeW, InspW, CodeH;
@@ -444,7 +406,7 @@ namespace
     doc->LayoutSavedHash = ImHashData(&f, sizeof(f));
   }
 
-  // Debounced write-on-change: at most one disk check per second, skipped mid-gesture so a drag lands once.
+  // At most one disk check per second, skipped mid-gesture so a drag lands once.
   static void ComposerLayoutSaveIfChanged(GraphDocData* doc, float dt)
   {
     doc->LayoutSaveT -= dt;
@@ -467,8 +429,7 @@ namespace
     }
   }
 
-  // Append one line to the document log (Output panel). Severity: 0 info, 1 warning, 2 error. Called from
-  // OnUpdate paths only -- the log is document state, and update is its sole mutator.
+  // Severity: 0 info, 1 warning, 2 error. OnUpdate paths only -- the log is document state.
   static void DocLog(GraphDocData* doc, int severity, const char* fmt, ...)
   {
     GraphDocData::DocLogLine line;
@@ -479,7 +440,7 @@ namespace
     va_end(args);
     doc->Log.push_back(line);
     if (doc->Log.Size > 256)
-      doc->Log.erase(doc->Log.Data, doc->Log.Data + 64);   // drop the oldest chunk, keep the ring bounded
+      doc->Log.erase(doc->Log.Data, doc->Log.Data + 64);
   }
 
   struct GraphDocControl : ImGuiAppControl<GraphDocData, GraphDocTempData>
@@ -488,7 +449,7 @@ namespace
     {
       IM_UNUSED(app);
       data->Selection   = -1;
-      data->ShowLive    = false;   // live mirror is opt-in (the toolbar eye): the outliner + canvas start with the DESIGN only
+      data->ShowLive    = false;   // live mirror is opt-in (the toolbar eye)
       data->TreeW       = 0.0f;          // 0 -> EditorBody picks a default on first layout
       data->CodeH       = 0.0f;          // collapsed
       data->InspW       = 0.0f;          // 0 -> EditorBody picks a default on first layout
@@ -509,33 +470,28 @@ namespace
       data->TimeScrubIndex = 0;
       ImStrncpy(data->GraphPath,  "imguix_node_graph.txt",      sizeof(data->GraphPath));
       ImStrncpy(data->HeaderPath, "imguix_generated_control.h", sizeof(data->HeaderPath));
-      ComposerLayoutLoad(data);          // workspace layout survives sessions (workbench W1)
+      ComposerLayoutLoad(data);
       if (data->Graph.Nodes.empty())
       {
         SeedAppGraph(&data->Graph);
-        ImGui::AppGraphAutoLayout(&data->Graph, false);   // a seeded document must open TIDY, not with stale template positions
+        ImGui::AppGraphAutoLayout(&data->Graph, false);
       }
-      ImGui::AppGraphRequestFitAll();    // and FRAMED -- the first view never opens on clipped, off-camera content
+      ImGui::AppGraphRequestFitAll();
     }
     virtual void OnUpdate(float dt, GraphDocData* data, const GraphDocTempData*, const GraphDocTempData*) const override final
     {
       ComposerLayoutSaveIfChanged(data, dt);
 
-      // Viewport perspective: resolve which app the mirror reflects (UE/Unity view-mode idiom). Source 1 is
-      // the editor app itself -- the Composer inspecting its OWN composition, the dogfood closing its loop.
-      // BuildAppLiveGraph only reads the app's object model, so self-mirroring from inside our own update is
-      // safe; the time-travel ring is keyed to the composition id and rebuilds itself on a source switch.
+      // Self-mirroring from inside our own update is safe: BuildAppLiveGraph only reads the object model.
       data->Mirror = (data->MirrorSource == 1 && data->MirrorComposer != nullptr) ? data->MirrorComposer : data->MirrorSample;
 
-      // Reconcile-before-report: build the live mirror first so every panel reads the reconciled graph this frame.
+      // Build the live mirror first so every panel reads the reconciled graph this frame.
       if (data->Mirror != nullptr)
       {
         ImGui::BuildAppLiveGraph(data->Mirror, &data->Graph);
       }
 
-      // Publish this frame's derived document facts ONCE (single producer; phase-coherence rule 3): the
-      // graph signature and issue counts every panel reads. GraphDoc updates first (push order), so all
-      // consumers see the same values in the same frame.
+      // Publish frame facts once; GraphDoc updates first (push order), so all consumers see the same values.
       data->FrameSig = ImGui::AppGraphSignature(&data->Graph);
       {
         const ImVector<ImGui::ImGuiAppGraphIssue>* issues = ImGui::AppGraphIssuesCached(&data->Graph);
@@ -545,8 +501,7 @@ namespace
           (issues->Data[i].Severity >= 2 ? data->NumErrors : data->NumWarnings)++;
       }
 
-      // Fold refused-link reasons into the document log: the status bar shows them for three seconds, the
-      // Output panel keeps them (a debugging trail, not just a toast).
+      // Fold refused-link reasons into the document log.
       if (data->Graph.LastLinkErrSeq != data->LinkErrSeqSeen)
       {
         data->LinkErrSeqSeen = data->Graph.LastLinkErrSeq;
@@ -554,10 +509,7 @@ namespace
           DocLog(data, 1, "link refused: %s", data->Graph.LastLinkErr);
       }
 
-      // Time travel over the mirrored app. While scrubbing, re-impose the chosen snapshot every frame (the
-      // mirror advances exactly one frame from it after we return -- a stable freeze at that moment);
-      // otherwise record this frame. Nothing here is example-specific: the state discipline (all durable
-      // state in registered storage, OnUpdate the sole mutator) makes ANY framework app scrubbable.
+      // While scrubbing, re-impose the chosen snapshot every frame (stable freeze); otherwise record.
       if (data->Mirror != nullptr && data->Mirror->Layers.Size > 0)   // composed (IsInitialized == platform-only)
       {
         if (data->TimeScrub)
@@ -580,22 +532,16 @@ namespace
     ImGui::SameLine(0.0f, em * 0.6f);
   }
 
-  // Each panel caches the shared doc's true (non-const) pointer from app storage in OnInitialize -- the
-  // BreathingControlDemo::data->app convention. No control receives the doc as a const dependency to cast away.
   //-----------------------------------------------------------------------------
   // [SECTION] Composer toolbar (flow-ordered: compose -> iterate -> persist -> produce | observe)
   //-----------------------------------------------------------------------------
 
-  // DECLARED dependency on GraphDocData (not just a stashed pointer): the framework orders updates producer-
-  // first, the live mirror shows the edge (the Composer's own composition becomes auditable in itself), and a
-  // phase audit can walk declared deps mechanically instead of grepping for hidden reads. The mutable Doc
-  // pointer remains ONLY for the write half (the documented edit-intent escape hatch until command payloads).
+  // Declared GraphDocData dependency orders updates producer-first; the Doc pointer is the write half only.
   struct ToolbarData
   {
     GraphDocData* Doc;
   };
-  // The button bar's discrete actions are captured here in OnRender and applied in OnUpdate -- TempData IS the
-  // edit-intent bus (so file IO and geometry changes leave the render path entirely).
+  // Actions captured in OnRender, applied in OnUpdate -- TempData is the edit-intent bus.
   struct ToolbarTempData
   {
     bool Save;
@@ -618,7 +564,7 @@ namespace
   {
     virtual void OnInitialize(ImGuiApp* app, ToolbarData* data, const GraphDocData*) const override final
     {
-      data->Doc = GetGraphDoc(app);   // write half only (escape hatch); reads flow through the declared dep
+      data->Doc = GetGraphDoc(app);   // write half only; reads flow through the declared dep
     }
 
     virtual void OnUpdate(float dt, ToolbarData* data, const ToolbarTempData* temp_data, const ToolbarTempData* last_temp_data, const GraphDocData*) const override final
@@ -633,8 +579,8 @@ namespace
       if (temp_data->Load)
       {
         ImGui::LoadAppGraph(doc->GraphPath, &doc->Graph);
-        ImGui::AppGraphEnsureFoundation(&doc->Graph);   // the frame's phases anchor the root, always
-        ImGui::AppGraphRequestFitAll();                 // frame what was loaded
+        ImGui::AppGraphEnsureFoundation(&doc->Graph);
+        ImGui::AppGraphRequestFitAll();
         DocLog(doc, 0, "loaded graph <- %s", doc->GraphPath);
       }
       if (temp_data->WriteHeader)
@@ -646,7 +592,7 @@ namespace
           ImFileWrite(full.c_str(), sizeof(char), (ImU64)full.size(), fh);
           ImFileClose(fh);
           ImFormatString(doc->WriteMsg, IM_ARRAYSIZE(doc->WriteMsg), "wrote %s", doc->HeaderPath);
-          doc->WrittenSig = doc->FrameSig;   // Generate button reads fresh vs stale off this (frame-published fact)
+          doc->WrittenSig = doc->FrameSig;   // Generate button reads fresh vs stale off this
           DocLog(doc, 0, "generated C++ -> %s", doc->HeaderPath);
         }
         else
@@ -693,7 +639,7 @@ namespace
       if (temp_data->MirrorSourceSet && temp_data->MirrorSource != doc->MirrorSource)
       {
         doc->MirrorSource = temp_data->MirrorSource;
-        doc->TimeScrub = false;   // the old timeline names another app's moments
+        doc->TimeScrub = false;   // old timeline belongs to the previous source
         DocLog(doc, 0, "live mirror -> %s", doc->MirrorSource == 1 ? "the Composer itself" : "sample app");
       }
       if (temp_data->Diff)
@@ -722,26 +668,18 @@ namespace
       const ImGuiStyle& style     = ImGui::GetStyle();
       const bool        code_open = doc->CodeH > 0.0f;
       bool              show_live = doc->ShowLive;
-      // Document toolbar, game-editor grammar: the PRIMARY action leads and carries the document's health
-      // as its state (UE's Compile button); file verbs next; edit history after; view/panel toggles and run
-      // controls right-aligned (Unity's toolbar). View verbs (add/frame/tidy/snap/overlays) live on the
-      // viewport's gizmo cluster, not here.
       if (ImGui::BeginChild("##Toolbar", ImVec2(0.0f, 0.0f), ImGuiChildFlags_FrameStyle | ImGuiChildFlags_AutoResizeY))
       {
-        // FLOW-ORDERED toolbar (usability findings #2): one left-to-right eye walk per authoring loop --
-        // compose (Add) -> iterate (undo/redo/history) -> persist (Save) -> produce (Generate, whose health
-        // state doubles as "how did my loop go"). Panel/observe toggles stay right-aligned. The dim caption
-        // row underneath names the phases (recognition of the flow without a tutorial).
+        // Flow-ordered: compose -> iterate -> persist -> produce; panel/observe toggles right-aligned.
         float cap_x[4] = { 0, 0, 0, 0 };
 
-        // -- compose: the loop's entry point (same palette as RMB / Space / the + gizmo).
+        // -- compose
         cap_x[0] = ImGui::GetCursorPosX();
         temp_data->AddNode = ImGui::Button(ICON_FA_PLUS "  Add");
         ImGui::SetItemTooltip("Add a node (Space / right-click canvas)");
 
         EditorToolSep(em);
-        // -- iterate: undo/redo carry the NAME of the step they would take (VS "Undo Typing"); the clock
-        //    opens the whole named history -- click any step to jump. Render only records the pick.
+        // -- iterate: undo/redo carry the name of the step; render only records the pick.
         cap_x[1] = ImGui::GetCursorPosX();
         const int hist_count  = ImGui::AppGraphHistoryCount(&doc->Graph);
         const int hist_cursor = ImGui::AppGraphHistoryCursor(&doc->Graph);
@@ -770,8 +708,7 @@ namespace
         ImGui::SetItemTooltip("Edit history (%d steps) -- click a step to jump", hist_count);
         if (ImGui::BeginPopup("##edit_history"))
         {
-          // Newest first; the cursor row is the state the canvas shows right now.
-          for (int i = hist_count - 1; i >= 0; i--)
+          for (int i = hist_count - 1; i >= 0; i--)   // newest first
           {
             char row[128];
             ImFormatString(row, IM_ARRAYSIZE(row), "%s %s###h%d", i == hist_cursor ? ICON_FA_CARET_RIGHT : " ",
@@ -786,8 +723,7 @@ namespace
         }
 
         EditorToolSep(em);
-        // -- persist: Save leads; Load is its split-half sibling (one top-level file verb, VS split-button).
-        //    Ctrl+S is document-global, captured here because the toolbar renders every frame.
+        // -- persist. Ctrl+S captured here because the toolbar renders every frame.
         cap_x[2] = ImGui::GetCursorPosX();
         temp_data->Save = ImGui::Button(ICON_FA_FLOPPY_DISK "  Save")
                        || (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false));
@@ -804,11 +740,8 @@ namespace
         }
 
         EditorToolSep(em);
-        // -- produce: Generate ends the walk (it is the loop's OUTPUT). Green check = header on disk matches
-        //    the graph; amber = model changed since the last write; red = validation errors (writing stays
-        //    allowed; the ambient marks say where to look). The chevron holds the family (copy / diff).
+        // -- produce: green = header matches graph; amber = graph changed; red = errors (writing stays allowed).
         cap_x[3] = ImGui::GetCursorPosX();
-        // Frame-published facts (GraphDoc is the single producer; never re-derive in a render path).
         const int   nerr  = doc->NumErrors;
         const bool  fresh = doc->WrittenSig != 0 && doc->WrittenSig == doc->FrameSig;
         const char* gen_label = nerr > 0 ? ICON_FA_TRIANGLE_EXCLAMATION "  Generate" : fresh ? ICON_FA_CHECK "  Generated" : ICON_FA_FILE_EXPORT "  Generate";
@@ -836,9 +769,7 @@ namespace
           ImGui::EndPopup();
         }
 
-        // -- Right cluster (observe): panel toggles + the mirror PERSPECTIVE (UE/Unity view-mode idiom --
-        //    which app the Live eye reflects: the sample app, or the Composer's own composition). Run
-        //    controls (App time) live on the viewport transport; the health chip on the viewport strip.
+        // -- observe (right-aligned): panel toggles + which app the Live eye reflects.
         const char* code_lbl = ICON_FA_CODE "  Code";
         const char* live_lbl = show_live ? ICON_FA_EYE "  Live###live" : ICON_FA_EYE_SLASH "  Live###live";
         const char* src_lbl  = doc->MirrorSource == 1 ? ICON_FA_CIRCLE_NODES "  Composer###mirsrc" : ICON_FA_CUBE "  Sample###mirsrc";
@@ -877,8 +808,7 @@ namespace
         ImGui::SetItemTooltip("Show / hide the generated-code + problems panel");
         ImGui::SameLine();
 
-        // Live-mirror visibility: a latched toggle, lit while the mirror is shown. Hiding never deletes.
-        // The render path records only the CLICK; OnUpdate derives the new state.
+        // Hiding the live mirror never deletes; render records the click, OnUpdate derives the state.
         if (show_live)
           ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonActive]);
         temp_data->ToggleLive = ImGui::Button(live_lbl);
@@ -886,8 +816,7 @@ namespace
           ImGui::PopStyleColor();
         ImGui::SetItemTooltip("Show / hide read-only nodes mirrored from the running app");
 
-        // Palette pick from last frame's canvas (one-frame latency idiom): the palette lists the document
-        // verbs, this toolbar owns their intents -- fold the pick into the same temp flags the buttons set.
+        // Palette pick from last frame's canvas folds into the same temp flags the buttons set.
         switch (ImGui::AppGraphConsumeHostCommand())
         {
         case ComposerHostCmd_Save:         temp_data->Save = true; break;
@@ -902,8 +831,7 @@ namespace
         default: break;
         }
 
-        // Phase captions: a dim small-type row naming the flow under each cluster. Teaches "what do I do
-        // first / next" by recognition; costs one text row.
+        // Phase captions: dim small-type row naming the flow under each cluster.
         {
           static const char* caps[4] = { "compose", "iterate", "persist", "produce" };
           ImGui::PushFont(nullptr, ImGui::GetFontSize() * 0.78f);
@@ -925,9 +853,8 @@ namespace
   // [SECTION] Composer status strip (keymap hints + document facts)
   //-----------------------------------------------------------------------------
 
-  // The window's status bar (rendered LAST, at the bottom -- Blender's status bar): live keymap hints on
-  // the left (composed by the editor, read via AppGraphStatusHint), document/selection facts on the right.
-  // All right-side text is derived from the doc in OnUpdate and parked here; OnRender only lays out text.
+  // Rendered last -> window bottom. Keymap hints left, document facts right; all right-side text is
+  // derived in OnUpdate, OnRender only lays out text.
   struct StatusStripData
   {
     GraphDocData* Doc;
@@ -938,12 +865,12 @@ namespace
     char Breadcrumb[IM_LABEL_SIZE * 2]; // selection breadcrumb
     char Msg[64];                       // transient write/diff confirmation (doc->WriteMsg snapshot)
   };
-  struct StatusStripTempData {};   // empty by design: the strip is read-only display, it captures no input
+  struct StatusStripTempData {};   // read-only display, captures no input
   struct StatusStripControl : ImGuiAppControl<StatusStripData, StatusStripTempData, GraphDocData>
   {
     virtual void OnInitialize(ImGuiApp* app, StatusStripData* data, const GraphDocData*) const override final
     {
-      data->Doc = GetGraphDoc(app);   // declared dep = ordering + audit edge; pointer = the write escape hatch
+      data->Doc = GetGraphDoc(app);
     }
 
     virtual void OnUpdate(float dt, StatusStripData* data, const StatusStripTempData*, const StatusStripTempData*, const GraphDocData*) const override final
@@ -951,7 +878,6 @@ namespace
       IM_UNUSED(dt);
       const GraphDocData* doc = data->Doc;
 
-      // Cycle/validation state now lives on the Generate button + Problems chip; the strip carries facts.
       int nd = 0;
       int nl = 0;
       int np = 0;
@@ -986,7 +912,7 @@ namespace
       {
         const ImGuiApp* a = doc->Mirror;
         ImFormatString(data->MirrorCounts, IM_ARRAYSIZE(data->MirrorCounts), "L%d W%d S%d C%d", a->Layers.Size, a->Windows.Size, a->Sidebars.Size, a->Controls.Size);
-        data->MirrorInit = a->Layers.Size > 0;   // "composed"; Initialized is the platform flag, never set here
+        data->MirrorInit = a->Layers.Size > 0;   // "composed"; Initialized is the platform flag
       }
 
       ImGui::AppGraphSelectionBreadcrumb(&doc->Graph, doc->Selection, data->Breadcrumb, IM_ARRAYSIZE(data->Breadcrumb));
@@ -999,13 +925,12 @@ namespace
       const ImGuiStyle& style = ImGui::GetStyle();
       if (ImGui::BeginChild("##Strip", ImVec2(0.0f, 0.0f), ImGuiChildFlags_FrameStyle | ImGuiChildFlags_AutoResizeY))
       {
-        // Left: the editor's live keymap hint (what the mouse does right now); refused links show in red.
+        // Left: live keymap hint; refused links show in red.
         int sev = 0;
         const char* hint = ImGui::AppGraphStatusHint(&sev);
         ImGui::AlignTextToFramePadding();
         ImGui::TextColored(sev >= 2 ? ImVec4(0.90f, 0.42f, 0.38f, 1.0f) : style.Colors[ImGuiCol_TextDisabled], "%s", hint);
 
-        // Right: transient confirmation, selection breadcrumb, node counts, mirrored-app composition.
         char right[512];
         int  len = 0;
         if (data->Msg[0])
@@ -1026,11 +951,9 @@ namespace
   // [SECTION] Generated-code view (source-mapped, shared by every code surface)
   //-----------------------------------------------------------------------------
 
-  // The one generated-code view, used by every code tab (consistency: code reads identically wherever it
-  // appears). Monospace, line-numbered gutter, clipped rendering. With a source map it also carries the
-  // coordinated-view interactions: the selection's lines highlight + auto-scroll into view, a node hovered
-  // in any other view tints its lines, hovering a line brushes its node back out, clicking a line selects.
-  // Pure view: reads const data, records the click into *selection (the caller's intent capture).
+  // Shared by every code tab. With a source map it carries the coordinated-view interactions
+  // (selection highlight + scroll, hover brushing, click-to-select). Pure view: reads const data,
+  // records the click into *selection.
   static void ShowGeneratedCodeView(const char* str_id, const ImGuiTextBuffer& text, const ImVector<int>& lines,
                                     const ImVector<ImGui::ImGuiAppCodeSpan>* spans, int* selection)
   {
@@ -1043,7 +966,7 @@ namespace
       const int   line_count = lines.Size;
       const float line_h     = ImGui::GetTextLineHeight();
 
-      // Gutter sized to the widest line number (min 3 digits so short files don't jitter the layout).
+      // Min 3 digits so short files don't jitter the layout.
       int digits = 3;
       for (int n = line_count; n >= 1000; n /= 10)
         digits++;
@@ -1063,8 +986,7 @@ namespace
         return -1;
       };
 
-      // Focus: when the selection changes, scroll its first span into the top quarter. The latch is window
-      // view state (like the scroll position itself), so it lives in the window's state storage.
+      // On selection change, scroll its first span into the top quarter; the latch is window view state.
       if (spans != nullptr && selection != nullptr)
       {
         const ImGuiID focus_key = ImGui::GetID("##codefocus");
@@ -1101,7 +1023,6 @@ namespace
             dl->AddRectFilled(row_min, ImVec2(row_min.x + 3.0f, row_max.y), hl_sel ? IM_COL32(220, 170, 90, 220) : IM_COL32(235, 235, 240, 90));
           }
 
-          // Line number, right-aligned in the gutter; then the code text.
           char num[16];
           const int num_len = ImFormatString(num, IM_ARRAYSIZE(num), "%d", ln + 1);
           dl->AddText(ImVec2(row_min.x + gutter_w - ImGui::CalcTextSize(num, num + num_len).x, row_min.y), gutter_col, num, num + num_len);
@@ -1117,7 +1038,7 @@ namespace
           {
             ImGui::AppGraphHoverNode(owner, ImGui::ImGuiAppHoverSource_External);
             if (selection != nullptr && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-              *selection = owner;   // click code -> select the node (flows into tree + canvas)
+              *selection = owner;
           }
         }
       }
@@ -1128,8 +1049,6 @@ namespace
       ImGui::PopFont();
   }
 
-  // PersistData: durable state, mutated only in OnUpdate. CodeText/CodeName are the rendered output (Breathing's
-  // timer_text pattern -- derived in OnUpdate, drawn from const data in OnRender).
   //-----------------------------------------------------------------------------
   // [SECTION] Composer editor body (outliner | canvas + bottom console | inspector; project inspector)
   //-----------------------------------------------------------------------------
@@ -1140,7 +1059,7 @@ namespace
     bool            TreeDragging;            // tree splitter drag FSM (advanced only in OnUpdate)
     float           TreeDragDX;              // grab offset within the grip, captured at drag start
     bool            InspDragging;            // inspector splitter drag FSM (advanced only in OnUpdate)
-    ImGuiTextBuffer CodeText;                // the WHOLE app's generated C++ (kept current while the panel is open)
+    ImGuiTextBuffer CodeText;                // whole app's generated C++ (kept current while the panel is open)
     ImVector<ImGui::ImGuiAppCodeSpan> CodeSpans;   // source map: node id -> line ranges in CodeText
     ImVector<int>   CodeLines;               // byte offset of each line start in CodeText (render index)
     ImGuiTextBuffer CodeNodeText;            // the selected node's code (the focused "Node" tab)
@@ -1151,23 +1070,19 @@ namespace
     bool            HasNodeCode;             // a node is selected and its code was generated
     char            CodeName[IM_LABEL_SIZE]; // selected node's draft name (the Node tab label)
 
-    // Code panel's Diff MODE (usability findings #3: diff is a way of LOOKING at the code, not a clipboard
-    // side effect). Regenerated behind the same signature gate as the code buffers.
+    // Diff mode, regenerated behind the same signature gate as the code buffers.
     bool            DiffMode;                // Code tab shows diff-vs-saved instead of the whole program
     ImGuiTextBuffer DiffText;
     ImVector<int>   DiffLines;
     bool            HasDiff;                 // a saved graph existed to diff against
     ImVector<ImGui::ImGuiAppGraphIssue> Issues;  // validation problems, recomputed while the panel is open
 
-    // Project tab: the document's files on disk (graph, generated header, write-ahead logs), rescanned on a
-    // slow cadence in OnUpdate -- the Unity/UE "Project" idea scoped to what the Composer actually produces.
+    // Project tab: the document's files on disk, rescanned on a slow cadence in OnUpdate.
     struct ProjFile { char Name[160]; unsigned long long Size; bool IsGraph; bool IsHeader; };
     ImVector<ProjFile> ProjFiles;
     float              ProjRescan;    // seconds until the next directory scan
   };
-  // TempData: raw input recorded by OnRender (the only place ImGui item geometry exists) and consumed by OnUpdate.
-  // OnRender performs no logic and mutates no state -- it just records what the user did, exactly like the demo's
-  // RandomTimeTempData::generate / BreathingControlTempData::hovered.
+  // Raw input recorded by OnRender (the only place ImGui item geometry exists), consumed by OnUpdate.
   struct EditorBodyTempData
   {
     bool  TreeGripActivated;   // drag started on the tree grip this frame
@@ -1192,12 +1107,10 @@ namespace
     bool  AckReveal;           // the bottom tab bar consumed the one-shot RevealPanel intent this frame
     bool  ClearLog;            // Output tab: clear the document log
     bool  ToggleDiffMode;      // Code tab header: flip whole-program <-> diff-vs-saved
-    int   StampPrefab;         // project inspector: prefab index to instantiate (-1 = none) -- render records, update applies
+    int   StampPrefab;         // prefab index to instantiate (-1 = none)
   };
 
-  // Project-level inspector (workbench §5.3): the empty selection shows the DOCUMENT -- the altitude above
-  // any node, in the same section grammar the node inspector speaks. The Theme section edits the composer
-  // chrome's own desc tables live: the editor wears the machinery it teaches.
+  // Empty selection shows the document, in the same section grammar as the node inspector.
   static void ShowComposerProjectInspector(GraphDocData* doc, ImGuiAppGraph* graph, EditorBodyTempData* temp_data)
   {
     const float em = ImGui::GetFontSize();
@@ -1205,7 +1118,7 @@ namespace
 
     if (ImGui::AppInspectorSection("##psec_doc", ICON_FA_FILE_LINES, "Document", nullptr, nullptr))
     {
-      const bool fresh = doc->WrittenSig != 0 && doc->WrittenSig == doc->FrameSig;   // frame-published fact
+      const bool fresh = doc->WrittenSig != 0 && doc->WrittenSig == doc->FrameSig;
       ImGui::TextDisabled("graph");
       ImGui::SameLine(label_w);
       ImGui::TextUnformatted(doc->GraphPath);
@@ -1230,13 +1143,13 @@ namespace
       ImGui::Text("%d links   %d bindings", graph->Links.Size, graph->Bindings.Size);
       ImGui::TextDisabled("signature");
       ImGui::SameLine(label_w);
-      ImGui::Text("%08X", doc->FrameSig);   // frame-published fact
+      ImGui::Text("%08X", doc->FrameSig);
       ImGui::Spacing();
     }
 
     if (ImGui::AppInspectorSection("##psec_val", ICON_FA_TRIANGLE_EXCLAMATION, "Validation", nullptr, nullptr))
     {
-      const int nerr = doc->NumErrors, nwarn = doc->NumWarnings;   // frame-published facts
+      const int nerr = doc->NumErrors, nwarn = doc->NumWarnings;
       if (nerr + nwarn == 0)
         ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f), ICON_FA_CHECK "  No configuration problems.");
       else
@@ -1251,7 +1164,6 @@ namespace
 
     if (ImGui::AppInspectorSection("##psec_theme", ICON_FA_PALETTE, "Composer theme", nullptr, nullptr))
     {
-      // The chrome's push-stack palette as editable desc rows -- the same row anatomy authored nodes use.
       ImGui::ImGuiAppChromeTheme* theme = ImGui::AppGraphChromeTheme();
       auto theme_rows = [](const char* caption, ImGuiAppColorModDesc* descs, int count)
       {
@@ -1287,7 +1199,7 @@ namespace
         ImGui::TextUnformatted(ImGui::AppGraphPrefabName(i));
         ImGui::SameLine(ImGui::GetContentRegionMax().x - em * 4.0f);
         if (ImGui::SmallButton("Stamp"))
-          temp_data->StampPrefab = i;   // render records the intent; OnUpdate mutates the graph (edit-intent bus)
+          temp_data->StampPrefab = i;
         ImGui::SetItemTooltip("Instantiate this prefab on the canvas (fresh ids, selected)");
         ImGui::PopID();
       }
@@ -1297,7 +1209,7 @@ namespace
   {
     virtual void OnInitialize(ImGuiApp* app, EditorBodyData* data, const GraphDocData*) const override final
     {
-      data->Doc = GetGraphDoc(app);   // declared dep = ordering + audit edge; pointer = the write escape hatch
+      data->Doc = GetGraphDoc(app);
       data->CodeSig = 0;
       data->CodeSel = -2;   // "never generated" (a real empty selection is -1)
       data->InspDragging = false;
@@ -1310,7 +1222,7 @@ namespace
     {
       GraphDocData* doc = data->Doc;
 
-      // Tree splitter FSM, driven entirely by input captured last render.
+      // Tree splitter FSM, driven by input captured last render.
       if (temp_data->TreeGripActivated)
       {
         data->TreeDragging = true;
@@ -1351,8 +1263,7 @@ namespace
           doc->InspW = temp_data->BodyMaxX - temp_data->MouseX;
       }
 
-      // Panel reveal intents (viewport status strip today; palette/status-bar zones join via the same door).
-      // Revealing a bottom tab opens the bar if collapsed -- an intent that lands on a closed panel is a bug.
+      // Revealing a bottom tab opens the bar if collapsed -- an intent must never land on a closed panel.
       if (temp_data->OpenOutput)
         doc->RevealPanel = ComposerPanel_Output;
       if (doc->RevealPanel != ComposerPanel_None && doc->CodeH <= 0.0f)
@@ -1364,7 +1275,6 @@ namespace
         doc->Log.resize(0);
       }
 
-      // Project tab intents + slow directory rescan (the document's files: graph, header, WALs).
       if (temp_data->ProjLoadGraph)
       {
         ImGui::LoadAppGraph(doc->GraphPath, &doc->Graph);
@@ -1405,8 +1315,6 @@ namespace
         doc->Selection = temp_data->Selection;
       }
 
-      // Transport overlay intents (App-time freeze + frame scrub over the mirror's state ring). The button
-      // records only the CLICK; deriving the next state is this function's job, not the render path's.
       if (temp_data->ToggleScrub)
       {
         doc->TimeScrub = !doc->TimeScrub;
@@ -1418,16 +1326,15 @@ namespace
         doc->TimeScrubIndex = temp_data->ScrubIdx;
       }
 
-      // Regenerate the code buffers only when their inputs changed (graph signature or selection): derived
-      // state lives in PersistData, computed here, drawn from const data in OnRender. A closed panel keeps
-      // its stale buffers -- the signature gate makes them correct again the moment they are next needed.
+      // Regenerate the code buffers only when graph signature or selection changed. A closed panel keeps
+      // stale buffers; the gate makes them correct when next needed.
       if (temp_data->ToggleDiffMode)
       {
         data->DiffMode = !data->DiffMode;
-        data->CodeSig = 0;   // force the gated regen below to build (or drop) the diff buffer
+        data->CodeSig = 0;   // force the gated regen below
       }
-      const ImGuiID gsig = doc->FrameSig;   // frame-published (GraphDoc updates first in push order)
-      if (gsig != data->CodeSig || doc->Selection != data->CodeSel)   // inspector + code tab both feed off these
+      const ImGuiID gsig = doc->FrameSig;
+      if (gsig != data->CodeSig || doc->Selection != data->CodeSel)
       {
         data->CodeSig = gsig;
         data->CodeSel = doc->Selection;
@@ -1460,7 +1367,6 @@ namespace
         }
         index_lines(data->CodeNodeText, &data->NodeLines);
 
-        // Diff mode: regenerate behind the same gate (diff is a VIEW of the code, findings #3).
         data->DiffText.clear();
         data->HasDiff = false;
         if (data->DiffMode)
@@ -1476,7 +1382,7 @@ namespace
         index_lines(data->DiffText, &data->DiffLines);
       }
 
-      // Validation problems for the Problems tab (only while the panel is open -- it scans the whole graph).
+      // Only while the panel is open -- validation scans the whole graph.
       data->Issues.clear();
       if (doc->CodeH > 0.0f)
       {
@@ -1487,22 +1393,19 @@ namespace
     virtual void OnRender(const EditorBodyData* data, EditorBodyTempData* temp_data, const GraphDocData*) const override final
     {
       GraphDocData* doc = data->Doc;
-      temp_data->StampPrefab = -1;   // TempData zero-init would read as prefab INDEX 0 -- "none" must be explicit
-      if (doc->Mirror == nullptr)                            // tree + canvas mirror the example app
+      temp_data->StampPrefab = -1;   // zero-init would read as prefab INDEX 0 -- "none" must be explicit
+      if (doc->Mirror == nullptr)
       {
         return;
       }
       ImGuiApp*      app   = doc->Mirror;                    // non-const: the viewer/canvas APIs edit through it
       ImGuiAppGraph* graph = &doc->Graph;
 
-      // All layout is local + display-only (TreeW == 0 -> default); nothing is written to the doc from OnRender.
+      // Layout is local + display-only; nothing is written to the doc from OnRender.
       const float    em            = ImGui::GetFontSize();
       const ImGuiIO& io            = ImGui::GetIO();
       ImVec2         body          = ImGui::GetContentRegionAvail();
-      // Reserve the status strip's REAL height: a frame-styled auto-resize child is one frame-height of
-      // content plus its FramePadding on both sides, plus the item spacing between body and strip. The old
-      // FrameHeightWithSpacing reserve under-counted by 2*FramePadding.y -- the whole Composer overflowed
-      // its window by a few pixels and grew a window-level scrollbar.
+      // Status strip's real height: frame height + FramePadding.y both sides + ItemSpacing before it.
       const ImGuiStyle& lay_style = ImGui::GetStyle();
       body.y = ImMax(em * 4.0f, body.y - (ImGui::GetFrameHeight() + lay_style.FramePadding.y * 2.0f + lay_style.ItemSpacing.y));
       const float    tree_origin_x = ImGui::GetCursorScreenPos().x;
@@ -1510,9 +1413,8 @@ namespace
       const float    min_canvas_w  = em * 16.0f;
       const float    min_canvas_h  = em * 8.0f;
       const float    vspacing      = lay_style.ItemSpacing.y;   // canvas | grip | code stack in ##Right
-      // The ##Right column stacks canvas | grip | code panel with ItemSpacing BETWEEN the items -- the
-      // heights must sum to body.y INCLUDING that spacing, or the column grows a scrollbar. Collapsed code
-      // panel = the canvas alone owns the full height, exactly.
+      // ##Right stacks canvas | grip | code with ItemSpacing between: heights must sum to body.y
+      // INCLUDING that spacing, or the column grows a scrollbar.
       const float    code_grip     = (doc->CodeH > 0.0f) ? em * 0.5f : 0.0f;
       const float    code_chrome   = (doc->CodeH > 0.0f) ? code_grip + vspacing * 2.0f : 0.0f;
       const float    code_max      = ImMax(0.0f, body.y - min_canvas_h - code_chrome);
@@ -1523,16 +1425,15 @@ namespace
       const float    insp_w        = ImClamp((doc->InspW > 0.0f) ? doc->InspW : em * 22.0f, em * 14.0f, ImMax(em * 14.0f, body.x - tree_w - tree_grip - insp_grip - min_canvas_w));
       const float    right_w       = ImMax(0.0f, body.x - tree_w - tree_grip - insp_grip - insp_w);
       int            selection     = doc->Selection;
-      float          col_w         = 0.0f;     // assigned once inside ##Right (needs that child's content region)
+      float          col_w         = 0.0f;     // assigned inside ##Right (needs that child's content region)
 
-      // Left: tree sidebar (full height above the status bar).
       if (ImGui::BeginChild("##Tree", ImVec2(tree_w, body.y), ImGuiChildFlags_Borders))
       {
         ImGui::ShowAppGraphTree(app, graph, &selection, doc->ShowLive);
       }
       ImGui::EndChild();
 
-      // Tree splitter: record raw input; the drag is resolved in OnUpdate. Cursor is a pure visual.
+      // Tree splitter: record raw input; the drag resolves in OnUpdate.
       ImGui::SameLine(0.0f, 0.0f);
       ImGui::InvisibleButton("##tsplit", ImVec2(tree_grip, body.y));
       temp_data->TreeGripActivated = ImGui::IsItemActivated();
@@ -1546,10 +1447,8 @@ namespace
       }
       ImGui::SameLine(0.0f, 0.0f);
 
-      // Right column: node graph canvas on top, code inspector on the bottom split.
-      // NoScrollbar is a hard rule, not styling: this column's children are sized to fill it EXACTLY; a
-      // scrollbar here can only ever mean the layout math regressed, and it must fail visibly-large (clipped
-      // content), not quietly-annoying (a scrollbar).
+      // NoScrollbar is a hard rule: children fill this column exactly; a scrollbar means the layout
+      // math regressed and must fail visibly (clipped content).
       if (ImGui::BeginChild("##Right", ImVec2(right_w, body.y), ImGuiChildFlags_None,
                             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
       {
@@ -1557,8 +1456,7 @@ namespace
 
         if (ImGui::BeginChild("##NodeGraph", ImVec2(col_w, canvas_h), ImGuiChildFlags_Borders))
         {
-          // Document verbs in the canvas palette (workbench W2): the editor lists them, the pick comes back
-          // through AppGraphConsumeHostCommand (the toolbar consumes it -- it already owns these intents).
+          // Document verbs for the canvas palette; the pick comes back through AppGraphConsumeHostCommand.
           static const ImGui::ImGuiAppGraphHostCmd host_cmds[] =
           {
             { "File: Save graph", "Ctrl+S", ComposerHostCmd_Save },
@@ -1575,15 +1473,9 @@ namespace
 
           ImGui::ShowAppGraphEditor(app, graph, &selection, doc->ShowLive);
 
-          // Transport overlay (bottom-center of the canvas): the run-time controls float on the viewport,
-          // the game-editor play bar. Freeze the MIRRORED app ("App time") and scrub its recorded state
-          // ring -- the framework's state discipline makes ANY app scrubbable; this is that theorem as a
-          // slider. Real ImGui items submitted after the editor, so they win hover over the canvas.
-          // Viewport status strip (bottom-left): the Output panel's health at a glance -- error/warning
-          // counts from the cached validation plus the newest log line. Clicking it reveals + selects
-          // Output (the toolbar's old check/warning chip lives here now, on the viewport it describes).
+          // Viewport overlays (health chip bottom-left, transport bottom-center): real ImGui items
+          // submitted after the editor, so they win hover over the canvas.
           {
-            // Frame-published facts (GraphDoc is the single producer).
             const int nerr = doc->NumErrors, nwarn = doc->NumWarnings;
 
             char health[48];
@@ -1598,9 +1490,8 @@ namespace
             const float  h      = ImGui::GetTextLineHeight() + em * 0.5f;
             const ImVec2 s_min(c_min.x + em * 0.6f, c_min.y + c_size.y - h - em * 0.55f);
 
-            // A real overlay WINDOW, not draw-list-over-canvas: viewport chrome must render above canvas
-            // content AND keep its hit-test when a node scrolls beneath it (the parent-window invisible
-            // button loses its hit-test under the canvas child).
+            // Real overlay WINDOW, not draw-list-over-canvas: must render above canvas content AND keep
+            // its hit-test when a node scrolls beneath it.
             ImGui::SetNextWindowPos(s_min);
             ImGui::SetNextWindowBgAlpha(0.99f);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, em * 0.35f);
@@ -1633,8 +1524,7 @@ namespace
 
           temp_data->ToggleScrub = false;
           temp_data->ScrubIdxSet = false;
-          // Transport only appears with the live mirror VISIBLE: scrubbing an app you cannot see is a dead
-          // control, and a floating clock icon that does nothing reads as broken chrome.
+          // Transport only appears with the live mirror visible.
           const int app_frames = doc->MirrorHistory.Count;
           if (doc->ShowLive && (app_frames > 1 || doc->TimeScrub))
           {
@@ -1645,7 +1535,7 @@ namespace
             const ImVec2      c_min   = ImGui::GetWindowPos();
             const ImVec2      c_size  = ImGui::GetWindowSize();
             const ImVec2      t_pos(c_min.x + (c_size.x - t_w) * 0.5f, c_min.y + c_size.y - ImGui::GetFrameHeight() - em * 0.7f);
-            // Real overlay window (same reason as the health chip: z-order AND hit-testing above nodes).
+            // Real overlay window, same reason as the health chip.
             ImGui::SetNextWindowPos(ImVec2(t_pos.x - em * 0.4f, t_pos.y - em * 0.25f));
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, em * 0.5f);
             ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(24, 25, 28, 252));
@@ -1655,7 +1545,7 @@ namespace
             {
               if (doc->TimeScrub)
                 ImGui::PushStyleColor(ImGuiCol_Button, tstyle.Colors[ImGuiCol_ButtonActive]);
-              temp_data->ToggleScrub = ImGui::Button(t_lbl);   // record the click; OnUpdate derives the new state
+              temp_data->ToggleScrub = ImGui::Button(t_lbl);
               if (doc->TimeScrub)
                 ImGui::PopStyleColor();
               ImGui::SetItemTooltip("Freeze the running app and scrub its recorded state history (%d frames)", app_frames);
@@ -1696,13 +1586,10 @@ namespace
           {
             if (ImGui::BeginTabBar("##bottomtabs"))
             {
-              // Code: the whole generated program, source-mapped -- the selection's lines highlight and
-              // scroll into view, hover brushes both ways, clicking a line selects the node. Scopes are
-              // TABS (the idiom this panel already speaks), so the focused view is its own tab below.
               temp_data->ToggleDiffMode = false;
               if (ImGui::BeginTabItem("Code", nullptr, doc->RevealPanel == ComposerPanel_Code ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
               {
-                // Shared header grammar (findings #3): context label left, actions right -- every tab the same.
+                // Shared tab header grammar: context label left, actions right.
                 ImGui::AlignTextToFramePadding();
                 ImGui::TextDisabled(data->DiffMode ? "Diff vs saved graph" : "Whole program");
                 if (doc->WriteMsg[0])
@@ -1742,13 +1629,11 @@ namespace
                 }
                 ImGui::EndTabItem();
               }
-              // Project: the document's files on disk (Unity/UE "Project" scoped to what the Composer
-              // produces): the graph file, the generated header (freshness-chipped), and the WAL logs.
               if (ImGui::BeginTabItem("Project", nullptr, doc->RevealPanel == ComposerPanel_Project ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
               {
                 temp_data->ProjLoadGraph = false;
                 ImGui::AlignTextToFramePadding();
-                ImGui::TextDisabled("Document files on disk");   // shared header grammar: context label left
+                ImGui::TextDisabled("Document files on disk");
                 if (data->ProjFiles.Size == 0)
                 {
                   ImGui::TextDisabled("No document files yet -- Save the graph or Generate the header.");
@@ -1759,7 +1644,7 @@ namespace
                   ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthStretch, 0.15f);
                   ImGui::TableSetupColumn("##act", ImGuiTableColumnFlags_WidthStretch, 0.25f);
                   ImGui::TableHeadersRow();
-                  const bool fresh = doc->WrittenSig != 0 && doc->WrittenSig == doc->FrameSig;   // frame-published fact
+                  const bool fresh = doc->WrittenSig != 0 && doc->WrittenSig == doc->FrameSig;
                   for (int i = 0; i < data->ProjFiles.Size; i++)
                   {
                     const EditorBodyData::ProjFile& f = data->ProjFiles.Data[i];
@@ -1797,11 +1682,6 @@ namespace
                 }
                 ImGui::EndTabItem();
               }
-              // (Preview moved into the Inspector -- it previews the SELECTION; it was mis-altituded among
-              // document-level tabs. Findings #3.)
-              // Output: validation issues (clickable, brushing) + the running document log -- config errors
-              // AND a debugging trail in one stream. The tab label carries the issue count; the viewport
-              // status strip's click lands here (one-shot SetSelected via doc->RevealPanel).
               char output_label[32];
               if (data->Issues.Size > 0)
                 ImFormatString(output_label, IM_ARRAYSIZE(output_label), "Output (%d)###output", data->Issues.Size);
@@ -1810,9 +1690,7 @@ namespace
               temp_data->AckReveal = doc->RevealPanel != ComposerPanel_None;   // consume the one-shot select
               if (ImGui::BeginTabItem(output_label, nullptr, doc->RevealPanel == ComposerPanel_Output ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
               {
-                // The console operates like one (findings #3): severity chips + a text filter up top, one
-                // filtered stream below (issues first, then the log, newest first). Filter state is pure view
-                // state, session-lived.
+                // Filter state is pure view state, session-lived.
                 static bool s_out_err = true, s_out_warn = true, s_out_info = true;
                 static ImGuiTextFilter s_out_filter;
                 int nerr2 = 0, nwarn2 = 0;
@@ -1859,9 +1737,8 @@ namespace
                     ImFormatString(row, IM_ARRAYSIZE(row), "%s%s", (it.Severity >= 2) ? "[x] " : "[!] ", it.Text);
                     if (ImGui::Selectable(row) && it.NodeId >= 0)
                     {
-                      selection = it.NodeId;   // reveal + select the offending node in tree + canvas
+                      selection = it.NodeId;
                     }
-                    // Brushing: hovering a problem previews its node everywhere, before committing a click.
                     if (it.NodeId >= 0 && ImGui::IsItemHovered())
                       ImGui::AppGraphHoverNode(it.NodeId, ImGui::ImGuiAppHoverSource_External);
                     ImGui::PopStyleColor();
@@ -1892,7 +1769,7 @@ namespace
       }
       ImGui::EndChild();
 
-      // Inspector splitter: record raw input; the drag resolves in OnUpdate (tree-splitter FSM, mirrored).
+      // Inspector splitter: record raw input; the drag resolves in OnUpdate.
       ImGui::SameLine(0.0f, 0.0f);
       ImGui::InvisibleButton("##isplit", ImVec2(insp_grip, body.y));
       temp_data->InspGripActivated = ImGui::IsItemActivated();
@@ -1903,8 +1780,6 @@ namespace
       }
       ImGui::SameLine(0.0f, 0.0f);
 
-      // Right: the Inspector column (Unity/UE): selection header, editable properties, and the selected
-      // node's generated C++ -- everything about ONE node, always in the same place.
       if (ImGui::BeginChild("##Inspector", ImVec2(insp_w, body.y), ImGuiChildFlags_Borders))
       {
         ImGui::AlignTextToFramePadding();
@@ -1912,20 +1787,15 @@ namespace
         ImGui::Separator();
         if (selection < 0)
         {
-          // Nothing selected = the DOCUMENT is selected (workbench §5.3): paths, freshness, validation,
-          // the composer's own theme, and the prefab library -- the altitude above any node.
           ShowComposerProjectInspector(doc, graph, temp_data);
         }
         else if (graph->Selection.Size > 1)
         {
-          // Multi-selection = intersection editing (style across all selected design nodes).
           ImGui::EditAppNodesInspectorMulti(graph);
         }
         else
         {
           ImGui::EditAppNodeInspectorEx(graph, selection, doc->Mirror);
-          // Preview lives HERE (findings #3): it previews the SELECTION -- inspector content, not a
-          // document-level tab.
           if (ImGui::AppInspectorSection("##sec_preview", ICON_FA_PLAY, "Preview", nullptr, nullptr))
             ImGui::AppGraphRenderMockPanel(graph, selection);
           if (data->HasNodeCode)
@@ -1943,14 +1813,12 @@ namespace
       }
       ImGui::EndChild();
 
-      // Record the selection change for OnUpdate to apply (the tree/canvas widgets edited the local copy).
+      // The tree/canvas widgets edited the local copy; OnUpdate applies it.
       temp_data->SelectionChanged = (selection != doc->Selection);
       temp_data->Selection = selection;
     }
   };
 
-  // The host window: empty body; its hosted controls (toolbar, strip, body) fill it in push order. Label is
-  // fixed (not the type-derived unique label) so the saved .ini dock binding + central-node dock still match.
   //-----------------------------------------------------------------------------
   // [SECTION] Composer host window + demo menu
   //-----------------------------------------------------------------------------
@@ -1959,17 +1827,16 @@ namespace
   {
     ComposerWindow()
     {
+      // Fixed label (not type-derived) so the saved .ini dock binding still matches.
       ImStrncpy(this->Label, "ImGuiAppLayer Composer", sizeof(this->Label));
-      // The workbench is a fixed-height composition (toolbar + body + status bar sized to fill exactly);
-      // a window scrollbar over the WHOLE editor is always a layout bug, never a feature -- forbid it.
+      // The composition fills the window exactly; a window scrollbar is always a layout bug.
       this->Flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
     }
     virtual void OnRender(const ImGuiApp*) const override final {}
   };
 
-  // The demo's own control panel, dogfooded as a framework window+control rather than a pile of function statics.
-  // The toggle values + their "applied" bookkeeping live in PersistData; OnRender copies them into locals for the
-  // ImGui-bound MenuItems, then records the result into TempData; OnUpdate writes it back (RandomTime's pattern).
+  // Toggle values + "applied" bookkeeping live in PersistData; OnRender records MenuItem results into
+  // TempData; OnUpdate writes them back.
   struct DemoMenuData
   {
     bool ShowBaseWindow;
@@ -1993,8 +1860,6 @@ namespace
   };
   struct DemoMenuControl : ImGuiAppControl<DemoMenuData, DemoMenuTempData>
   {
-    // First-run defaults show the framework doing its job: the two idiom controls running live and the
-    // Composer mirroring them. An empty screen taught nothing.
     virtual void OnInitialize(ImGuiApp* app, DemoMenuData* data) const override final
     {
       IM_UNUSED(app);
@@ -2084,9 +1949,7 @@ namespace ImGui
   {
       static ImGuiApp app;          // the mirrored "example" app the demo composes
 
-      // Blender-flat node-editor theme on the editor canvas, once per session: rounded nodes, soft
-      // outlines, roomy padding, a dark recessed canvas with low-contrast grid, thicker links. Tuned
-      // to match the Bl-palette node bodies.
+      // Editor canvas theme, applied once per session.
       static bool canvas_theme_ready = false;
       if (!canvas_theme_ready)
       {
@@ -2111,22 +1974,18 @@ namespace ImGui
         canvas_theme_ready = true;
       }
 
-      // ---- editor_app: a dedicated, never-rebuilt ImGuiApp hosting BOTH the demo's control panel and the
-      //      dogfooded Composer. Pushed once so the graph + toggle state survive example rebuilds. Toggle
-      //      state lives in DemoMenuData (PersistData), not function statics. Only the WindowLayer is needed.
+      // editor_app: dedicated, never-rebuilt ImGuiApp hosting the demo control panel + the Composer,
+      // pushed once so graph + toggle state survive example rebuilds.
       static ImGuiApp editor_app;
       static bool editor_ready = false;
       if (!editor_ready)
       {
         ImGuiViewport* vp = ImGui::GetMainViewport();
-        // Task layer FIRST: control OnUpdate runs there since the core moved it out of the Window layer --
-        // without it every Composer control's update (toolbar intents, splitters, mirror, time travel) is
-        // silently skipped. No Command/Status layers: the Composer emits no commands and the status overlay
-        // belongs to the example app.
+        // Task layer first: control OnUpdate runs there -- without it every Composer control's update is
+        // silently skipped.
         ImGui::PushAppLayer<ImGuiAppTaskLayer>(&editor_app);
         ImGui::PushAppLayer<ImGuiAppWindowLayer>(&editor_app);
 
-        // Demo control panel (menu + blurb).
         ImGui::PushAppWindow<DemoPanelWindow>(&editor_app);
         ImGuiAppWindowBase* panel = editor_app.Windows.back();
         panel->HasInitialPlacement = true;
@@ -2134,7 +1993,6 @@ namespace ImGui
         panel->InitialPos  = vp->WorkPos + ImVec2(vp->WorkSize.x * 0.02f, vp->WorkSize.y * 0.04f);
         ImGui::PushWindowControl<DemoMenuControl>(&editor_app, panel);
 
-        // Composer (GraphDoc + Toolbar + StatusStrip + EditorBody).
         ImGui::PushAppWindow<ComposerWindow>(&editor_app);
         ImGuiAppWindowBase* metrics = editor_app.Windows.back();
         metrics->HasInitialPlacement = true;
@@ -2157,8 +2015,7 @@ namespace ImGui
       ImGuiAppWindowBase* metrics = editor_app.Windows[1];
       DemoMenuData*       st      = GetDemoMenu(&editor_app);
 
-      // Drive the framework windows' Open from the external/menu flags, tick the editor app, then read the X
-      // buttons back out. The menu (a control on `panel`) toggles st->* during RenderApp.
+      // Drive the windows' Open from the external/menu flags, tick the editor app, read the X buttons back.
       panel->Open   = (p_open == nullptr) || *p_open;
       metrics->Open = st->ShowMetrics;
       ImGui::UpdateApp(&editor_app);
@@ -2172,12 +2029,8 @@ namespace ImGui
         st->ShowMetrics = false;
       }
 
-      // Reconcile desired -> live app. Full rebuild keeps app storage consistent across toggles. Also fire on
-      // the first frame (no layers yet) so the framework foundation exists immediately and is visible in the
-      // tree/canvas without toggling an example. NOT !IsInitialized(): that flag belongs to the PLATFORM
-      // bring-up (ImGuiApp::Initialize) and never goes true for this embedded app -- gating on it rebuilt the
-      // example EVERY frame (RandomTime re-rolled per frame, Breathing never accumulated, the state history
-      // reset before it could hold two frames).
+      // Full rebuild on toggle change or first frame. NOT !IsInitialized(): that flag belongs to platform
+      // bring-up and never goes true for this embedded app -- gating on it rebuilds every frame.
       if (app.Layers.empty() ||
           st->AppliedBaseWindow != st->ShowBaseWindow ||
           st->AppliedStatusBar  != st->ShowStatusBar  ||
@@ -2188,7 +2041,7 @@ namespace ImGui
         InitializeApp(&app);
 
         ImGuiViewport* vp = ImGui::GetMainViewport();
-        const float em = ImGui::GetFontSize();       // text size: drives all sizing, scales with DPI/font
+        const float em = ImGui::GetFontSize();
 
         if (st->ShowBaseWindow)
         {
@@ -2197,7 +2050,7 @@ namespace ImGui
           w->HasInitialPlacement = true;
           w->InitialSize = ImVec2(em * 16.0f, em * 8.0f);
           w->InitialPos  = ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + em * 2.0f);
-          PushWindowControl<BaseInfoControl>(&app, w);   // hosted control -> live containment edge in the editor
+          PushWindowControl<BaseInfoControl>(&app, w);
         }
 
         if (st->ShowStatusBar)
@@ -2205,7 +2058,6 @@ namespace ImGui
           PushAppSidebar<StatusBar>(&app, vp, ImGuiDir_Down, 0.0f, ImGuiWindowFlags_AlwaysAutoResize);
         }
 
-        // Controls are app-level: they render their own windows, no host sidebar needed.
         if (st->ShowRandomTime)
         {
           PushAppControl<RandomTimeControlDemo>(&app);
