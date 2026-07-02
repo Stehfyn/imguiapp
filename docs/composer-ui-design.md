@@ -185,7 +185,91 @@ check: **if it's not in the palette, it doesn't exist.**
 Transient feedback consolidates onto the status bar (T2): link-rejection reasons, "copied N
 nodes", "layout applied" — one place, one fade behavior, no floating toasts scattered per feature.
 
-## 7. Delivery slices (each shippable, each independently visible)
+## 7. Viewport chrome: toolbar, status bar, overlay gizmos
+
+The organizing rule, shared by all three reference editors: **chrome is sorted by what it acts on.**
+Document verbs go in the top toolbar (UE Blueprint toolbar: Compile/Save/Find/panels[^ue]); view verbs
+go on the viewport itself (Blender's per-editor header + gizmo column, overlays popover[^bl]); panel
+toggles right-align (Unity Shader Graph: Blackboard/Inspector/Preview toggles[^un]); status lives in
+one bar under everything (Blender: keymap hints left, facts right). A control placed at the wrong
+altitude reads as clutter no matter how useful it is — that, not feature count, is what made the old
+toolbar feel wrong: Add (view), Tidy (view), Write .h (document) and App time (run) shared one
+undifferentiated row, above a second row of read-only pills nothing could interact with.
+
+### Stencil
+
+```
+┌────────────────────────────────────────────────────────────────────────────────────┐
+│ [⚠/✓/● Generate]  |  Save  Load  Diff  |  ↶ ↷ ══history══     …      [⚠2] [Code] [👁Live] [🕐App time ══] │  DOC toolbar
+├──────────┬─────────────────────────────────────────────────────────────────────────┤
+│ OUTLINER │  root ‣ MainWindow ‣ Mixer                                    ╭───╮     │
+│          │   (scope breadcrumb overlay)                                  │ + │     │  view gizmo
+│  filter  │                                                               │ ◎ │     │  column
+│  chips   │                    C A N V A S                                │ ⤢ │     │  (overlay)
+│  search  │                                                               │ ✨ │     │
+│  tree    │                                                               │ ⌁ │     │
+│          │                                                               │ ⚙ │     │
+│          │                                              ┌─minimap──┐    ╰───╯     │
+│          │                                              └──────────┘               │
+├──────────┴─────────────────────────────────────────────────────────────────────────┤
+│ CODE / PROBLEMS / DIFF panel (toggled)                                              │
+├─────────────────────────────────────────────────────────────────────────────────────┤
+│ drag move · click select · Tab enter · RMB menu        wrote a.h   sel: Main>Mixer   design 12 live 4   L4 W1 C3 composed │  STATUS bar
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Document toolbar (one row, left → right)
+
+| Control | State it carries | Why here |
+|---|---|---|
+| **Generate** (primary) | green ✓ = header matches graph (signature == last written); amber ● = model changed since write; red ⚠ = validation errors (writing stays allowed) | UE's Compile button: the document's health lives ON the primary action, not in a separate lamp. Merges the old strip's "graph ok / cycle" pill into a control that can act on it. |
+| Save / Load / Diff | — | file verbs, grouped, after the primary action |
+| Undo / Redo / history rail | disabled when unavailable; rail = edit-time scrubber | edit verbs; the rail is T5's Edit rail until the unified timeline lands |
+| *(right)* Problems chip | count, colored by worst severity; click reveals the panel | UE compile-results pattern; the ambient marks (T6) point where, this counts how many |
+| *(right)* Code toggle | lit while open | Unity panel-toggle placement: right-aligned, latched |
+| *(right)* Live toggle | eye lit while the mirror shows | view-population toggle used rarely → right cluster, not prime left space |
+| *(right)* App time | lit while frozen + frame scrubber | run control (UE's Simulate cluster sits right of the doc verbs) |
+
+Dropped from the toolbar: **Add node** (view verb — gizmo column, RMB, Space), **Tidy** (view verb —
+gizmo column, L), the **Show-live checkbox** (became the latched eye toggle: state reads at a glance,
+Fitts-cheaper than a checkbox label).
+
+### Viewport gizmo column (top-right overlay, draw-list buttons)
+
+Blender's gizmo column / UE's in-viewport toolbar: view verbs live where the view is, reachable
+without leaving the canvas. Top → bottom: **+ add** (opens the kind palette at the viewport center),
+**◎ frame selection** (F), **⤢ fit all** (Home), **✨ tidy** (L), **⌁ snap** (G, latched-lit), **⚙
+overlays popover** (grid / phase bands / group frames / minimap — Blender's overlays dropdown; lit
+when any overlay is off, so a de-cluttered canvas is visibly a *mode*). Every gizmo tooltips its
+shortcut (recognition trains recall). Hit-tests follow the overlay rule (AllowWhenBlockedByActiveItem).
+
+### Status bar (window bottom, one row)
+
+Left: the editor's **live keymap hint** — what LMB/drag/RMB do given the current hover target
+(node/pin/wire/canvas, live- and layer-aware), computed by the editor, rendered by the host via
+`AppGraphStatusHint`; refused-link errors override in red for 3 s. Right, in fixed order: transient
+confirmation (`wrote imguix_generated_control.h`) · selection breadcrumb · node counts (design/live/
+promoted) · mirrored-app composition (`L4 W1 S0 C3 composed`). Facts only — anything actionable
+graduated to the toolbar (that inertness is what made the old strip feel broken: it sat *above* the
+viewport in prime toolbar position while affording nothing).
+
+### Deliberately excluded (decided, not forgotten)
+
+- **Zoom % indicator** — imnodes has no zoom (§4 R6); showing one would promise a control that
+  doesn't exist.
+- **A second header row on the canvas** (Blender's editor header): at the demo's panel sizes one doc
+  toolbar + gizmo column covers the verb set; a second strip is chrome tax. Revisit if the Composer
+  becomes a multi-editor workspace.
+- **Toolbar search field** — arrives with T3 (filter co-application); placing it before it filters
+  the canvas would ship a lie.
+- **Breadcrumb in the toolbar** — the scope breadcrumb stays a canvas overlay: it is view state and
+  clicking it navigates the view; duplicating it in chrome splits one concept across two homes.
+
+[^ue]: [Toolbar in the Blueprints Visual Scripting Editor (Epic docs)](https://dev.epicgames.com/documentation/en-us/unreal-engine/toolbar-in-the-blueprints-visual-scripting-editor-for-unreal-engine) — compile-state-as-button, doc verbs, debug cluster.
+[^bl]: [Blender manual: Node Editors](https://docs.blender.org/manual/en/latest/interface/controls/nodes/node_editors.html) — header, snapping toggle, overlays popover, sidebar, status-bar keymap.
+[^un]: [Unity Shader Graph: Blackboard / toolbar](https://docs.unity3d.com/Packages/com.unity.shadergraph@12.0/manual/Blackboard.html) — Save Asset primary, right-aligned panel toggles.
+
+## 8. Delivery slices (each shippable, each independently visible)
 
 | Slice | Contents | Serves |
 |---|---|---|

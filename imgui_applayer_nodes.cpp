@@ -2757,6 +2757,19 @@ namespace ImGui
     return false;
   }
 
+  static bool AppTreeRowIcon(const char* icon, ImVec2 center, float r, ImU32 col);   // fwd (defined with the outliner)
+
+  // Status hint written by ShowAppGraphEditor, rendered by the host's status bar (AppGraphStatusHint).
+  static char s_status_hint[256] = "";
+  static int  s_status_sev = 0;
+
+  const char* AppGraphStatusHint(int* out_severity)
+  {
+    if (out_severity != nullptr)
+      *out_severity = s_status_sev;
+    return s_status_hint;
+  }
+
   // Draw INSIDE the imnodes canvas, right after BeginNodeEditor: the canvas draw list then holds grid ->
   // this box -> nodes, so the grid can never show through the box/bands and the bands sit under the nodes.
   // Geometry comes from the PREVIOUS frame's node rects (imnodes position getters are pool reads, legal
@@ -3789,6 +3802,14 @@ namespace ImGui
     else
       ImNodes::GetStyle().Flags &= ~ImNodesStyleFlags_GridSnapping;
 
+    // Canvas overlay toggles, driven from the gizmo cluster's popover (Blender's overlays popover): each is
+    // presentation-only and never touches the model.
+    static bool s_ov_grid = true, s_ov_bands = true, s_ov_frames = true, s_ov_minimap = true;
+    if (s_ov_grid)
+      ImNodes::GetStyle().Flags |= (ImNodesStyleFlags_GridLines | ImNodesStyleFlags_GridLinesPrimary);
+    else
+      ImNodes::GetStyle().Flags &= ~(ImNodesStyleFlags_GridLines | ImNodesStyleFlags_GridLinesPrimary);
+
     // While hidden, live nodes are not submitted, so imnodes evicts them from its pool. On the hidden->shown
     // transition, re-arm _NeedsPlace so each one is re-placed at its saved GridPos (otherwise imnodes recreates
     // it at the default origin). Single editor instance in the demo, so a function-local latch is enough.
@@ -3853,7 +3874,7 @@ namespace ImGui
     // nodes (emitted below): grid under box, box under nodes. Uses last frame's node rects, so it needs the
     // imnodes pool to exist -- skip until one editor frame has completed.
     static bool s_editor_ran_once = false;
-    if (at_root && s_editor_ran_once)
+    if (at_root && s_editor_ran_once && s_ov_bands)
       AppDrawLayerGroupBox(g, show_live);
 
     // Last frame's pool ids, kept for the re-entry check below; the current list is rebuilt from scratch
@@ -4164,7 +4185,8 @@ namespace ImGui
     // and jump to nodes that sit past the visible canvas edge.
     ImNodes::PopAttributeFlag();
     ImNodes::PopAttributeFlag();
-    ImNodes::MiniMap(0.2f, ImNodesMiniMapLocation_BottomRight);
+    if (s_ov_minimap)
+      ImNodes::MiniMap(0.2f, ImNodesMiniMapLocation_BottomRight);
     ImNodes::EndNodeEditor();
     const ImVec2 editor_size = ImGui::GetItemRectSize();   // captured before later items, for fit-all centering
     const ImVec2 editor_min  = ImGui::GetItemRectMin();    // editor canvas top-left (screen), for overlay extents
@@ -4172,6 +4194,7 @@ namespace ImGui
     // Semantic group frames: a translucent labeled box around each containment group, layered by depth so inner
     // groups sit atop outer ones -- windows/sidebars (+ hosted controls) behind, control data clusters, then
     // structs (+ their fields) in front.
+    if (s_ov_frames)
     {
       auto group_box = [&](int owner_id, ImU32 kind_col, int depth)
       {
@@ -4262,6 +4285,7 @@ namespace ImGui
           ImGui::PopID();
 
           const ImU32 chip_bg = (hov || act) ? ((line & 0x00FFFFFF) | 0xFF000000) : line;
+          dl->AddRectFilled(chip_mn, chip_mx, IM_COL32(26, 27, 30, 255), 3.0f);   // opaque underlay -- the grid must never cut through a caption plate
           dl->AddRectFilled(chip_mn, chip_mx, chip_bg, 3.0f);
           // Disclosure triangle: right-pointing when folded, down-pointing when open.
           const ImU32 glyph = IM_COL32(235, 235, 235, 255);
@@ -5102,11 +5126,11 @@ namespace ImGui
       }
     }
 
-    // Status line (Blender-style keymap hints): one strip along the canvas bottom stating what the mouse
-    // does RIGHT NOW given the hover target. Recognition over recall -- it teaches the gesture vocabulary
-    // passively; F1 stays as the full reference. Transient feedback (refused links) lands here too.
+    // Status hint (Blender-style keymap hints): what the mouse does RIGHT NOW given the hover target.
+    // Composed here (only the editor knows the hover target), rendered by the host's status bar via
+    // AppGraphStatusHint -- the game-editor pattern: hints live under the viewport, never over it.
+    // Transient feedback (refused links) overrides for three seconds.
     {
-      const float em = ImGui::GetFontSize();
       static int    s_err_seq_seen = 0;
       static double s_err_time = -1000.0;
       if (g->LastLinkErrSeq != s_err_seq_seen)
@@ -5116,34 +5140,90 @@ namespace ImGui
       }
       const bool show_err = g->LastLinkErr[0] != 0 && (ImGui::GetTime() - s_err_time) < 3.0;
 
-      char hint[256];
+      s_status_sev = show_err ? 2 : 0;
       if (show_err)
-        ImFormatString(hint, IM_ARRAYSIZE(hint), "%s %s", ICON_FA_TRIANGLE_EXCLAMATION, g->LastLinkErr);
+        ImFormatString(s_status_hint, IM_ARRAYSIZE(s_status_hint), "%s %s", ICON_FA_TRIANGLE_EXCLAMATION, g->LastLinkErr);
       else if (over_pin)
-        ImStrncpy(hint, "drag  wire   (release on empty canvas: filtered add)", IM_ARRAYSIZE(hint));
+        ImStrncpy(s_status_hint, "drag  wire   (release on empty canvas: filtered add)", IM_ARRAYSIZE(s_status_hint));
       else if (over_link)
-        ImStrncpy(hint, "drag end  rewire     click  select     Del  delete     RMB  menu", IM_ARRAYSIZE(hint));
+        ImStrncpy(s_status_hint, "drag end  rewire     click  select     Del  delete     RMB  menu", IM_ARRAYSIZE(s_status_hint));
       else if (over_node)
       {
         const ImGuiAppNode* hn = AppGraphFindNodeConst(g, hovered_node);
         if (hn != nullptr && hn->IsLive)
-          ImStrncpy(hint, "live mirror (read-only)     dbl-click  enter     RMB  menu", IM_ARRAYSIZE(hint));
+          ImStrncpy(s_status_hint, "live mirror (read-only)     dbl-click  enter     RMB  menu", IM_ARRAYSIZE(s_status_hint));
         else if (hn != nullptr && hn->Kind == ImGuiAppNodeKind_Layer)
-          ImStrncpy(hint, "drag  reorder phase     dbl-click  enter     RMB  menu", IM_ARRAYSIZE(hint));
+          ImStrncpy(s_status_hint, "drag  reorder phase     dbl-click  enter     RMB  menu", IM_ARRAYSIZE(s_status_hint));
         else
-          ImStrncpy(hint, "drag  move     click  select (Ctrl multi)     Tab  enter scope     dbl-click  rename     RMB  menu", IM_ARRAYSIZE(hint));
+          ImStrncpy(s_status_hint, "drag  move     click  select (Ctrl multi)     Tab  enter scope     dbl-click  rename     RMB  menu", IM_ARRAYSIZE(s_status_hint));
       }
       else
-        ImStrncpy(hint, "RMB  add     Space  palette     MMB-drag  pan     F  frame     F1  help", IM_ARRAYSIZE(hint));
+        ImStrncpy(s_status_hint, "RMB  add     Space  palette     MMB-drag  pan     F  frame     F1  help", IM_ARRAYSIZE(s_status_hint));
+    }
 
+    // Viewport gizmo cluster (top-right overlay column): the VIEW verbs live on the viewport itself --
+    // Blender's gizmo column / UE's viewport toolbar. Document verbs (save, generate, undo) belong to the
+    // host toolbar; nothing here mutates the model except Tidy, which is a layout op. Draw-list buttons:
+    // hit-tests follow the overlay rule (AllowWhenBlockedByActiveItem, see AppTreeRowIcon).
+    {
+      const float em = ImGui::GetFontSize();
+      const float r = em * 0.72f;
+      const float step = r * 2.0f + em * 0.30f;
       ImDrawList* dl = ImGui::GetWindowDrawList();
-      const float h = ImGui::GetTextLineHeight() + em * 0.5f;
-      const ImVec2 mn(editor_min.x, editor_min.y + editor_size.y - h);
-      const ImVec2 mx(editor_min.x + editor_size.x, editor_min.y + editor_size.y);
-      dl->AddRectFilled(mn, mx, IM_COL32(20, 20, 22, 200));
-      dl->AddLine(mn, ImVec2(mx.x, mn.y), IM_COL32(255, 255, 255, 18));
-      dl->AddText(ImVec2(mn.x + em * 0.6f, mn.y + em * 0.25f),
-                  show_err ? AppSeverityColor(2) : ImGui::GetColorU32(ImGuiCol_TextDisabled), hint);
+
+      const int   count = 6;
+      const ImVec2 col_c(editor_min.x + editor_size.x - em * 1.2f, editor_min.y + em * 1.2f);
+      dl->AddRectFilled(ImVec2(col_c.x - r - em * 0.25f, col_c.y - r - em * 0.25f),
+                        ImVec2(col_c.x + r + em * 0.25f, col_c.y + (count - 1) * step + r + em * 0.25f),
+                        IM_COL32(24, 25, 28, 215), r + em * 0.25f);
+
+      float gy = col_c.y;
+      const ImU32 dim = ImGui::GetColorU32(ImGuiCol_Text, 0.55f);
+      const ImU32 lit = IM_COL32(220, 170, 90, 255);
+      auto gizmo = [&](const char* icon, const char* tip, bool on) -> bool
+      {
+        const ImVec2 c(col_c.x, gy);
+        gy += step;
+        if (on)
+          dl->AddCircleFilled(c, r, (lit & 0x00FFFFFF) | 0x38000000);
+        const bool clicked = AppTreeRowIcon(icon, c, r, on ? lit : dim);
+        const ImVec2 m = ImGui::GetIO().MousePos;
+        const float dx = m.x - c.x, dy = m.y - c.y;
+        if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && dx * dx + dy * dy <= r * r)
+          ImGui::SetTooltip("%s", tip);
+        return clicked;
+      };
+
+      if (gizmo(ICON_FA_PLUS, "Add node (Space / RMB)", false))
+      {
+        add_popup_grid = ImVec2(editor_size.x * 0.5f, editor_size.y * 0.5f) - ImNodes::EditorContextGetPanning();
+        ImGui::OpenPopup("##AppGraphAdd");
+      }
+      if (gizmo(ICON_FA_CROSSHAIRS, "Frame selection (F)", false))
+        if (!fit_ids(g->Selection) && ImNodes::NumSelectedNodes() > 0)
+        {
+          int picked = 0;
+          ImNodes::GetSelectedNodes(&picked);
+          ImNodes::EditorContextMoveToNode(picked);
+        }
+      if (gizmo(ICON_FA_EXPAND, "Fit all (Home)", false))
+        fit_all();
+      if (gizmo(ICON_FA_WAND_MAGIC_SPARKLES, "Tidy layout (L)", false))
+        AppGraphAutoLayout(g, show_live);
+      if (gizmo(ICON_FA_MAGNET, "Snap to grid (G)", s_snap_grid))
+        s_snap_grid = !s_snap_grid;
+      if (gizmo(ICON_FA_SLIDERS, "Overlays", !(s_ov_grid && s_ov_bands && s_ov_frames && s_ov_minimap)))
+        ImGui::OpenPopup("##CanvasOverlays");
+      if (ImGui::BeginPopup("##CanvasOverlays"))
+      {
+        ImGui::TextDisabled("Overlays");
+        ImGui::Separator();
+        ImGui::MenuItem("Grid", nullptr, &s_ov_grid);
+        ImGui::MenuItem("Phase bands", nullptr, &s_ov_bands);
+        ImGui::MenuItem("Group frames", nullptr, &s_ov_frames);
+        ImGui::MenuItem("Minimap", nullptr, &s_ov_minimap);
+        ImGui::EndPopup();
+      }
     }
 
     // Shortcut cheat-sheet (F1): a translucent reference card in the canvas corner.

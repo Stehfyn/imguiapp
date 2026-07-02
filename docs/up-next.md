@@ -69,6 +69,12 @@ of the USER'S composed app:
 
 ## Recently landed (2026-07-01)
 
+- **Viewport chrome** (composer-ui-design.md §7) — chrome sorted by what it acts on: document
+  toolbar (Generate carries graph health as its state, UE-Compile-style; file/edit verbs; problems
+  chip + panel/live/App-time toggles right-aligned), view gizmo column overlaid top-right on the
+  canvas (add/frame/fit/tidy/snap + overlays popover: grid/bands/frames/minimap), and a real status
+  bar at the window bottom (live keymap hints via `AppGraphStatusHint` + breadcrumb/counts/mirror
+  facts). The old dead strip died; the grid no longer cuts through group caption chips.
 - **S1 coherence core** (from composer-ui-design.md) — brushing hover sync (`AppGraphHoverNode/Link`
   + `AppGraphHovered*`, one-frame latency): outliner row hover halos the canvas node, canvas hover
   tints the outliner row, wire hover halos both endpoints, inspector binding rows light their wire,

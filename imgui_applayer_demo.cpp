@@ -319,6 +319,7 @@ namespace
     float           TreeW;            // outliner width (0 -> default on first use)
     float           CodeH;            // code-inspector height, bottom split under the canvas (0 == collapsed)
     char            WriteMsg[64];     // transient "wrote header" confirmation
+    ImGuiID         WrittenSig;       // AppGraphSignature at the last header write (0 = never) -> Generate state
     char            GraphPath[256];
     char            HeaderPath[256];
     ImGuiApp*       Mirror;           // app reflected into the live graph (set after push; see ShowAppLayerDemo)
@@ -344,6 +345,7 @@ namespace
       data->TreeW       = 0.0f;          // 0 -> EditorBody picks a default on first layout
       data->CodeH       = 0.0f;          // collapsed
       data->WriteMsg[0] = 0;
+      data->WrittenSig  = 0;
       data->Mirror      = nullptr;       // set after push by ShowAppLayerDemo
       data->TimeScrub   = false;
       data->TimeScrubIndex = 0;
@@ -405,9 +407,9 @@ namespace
     bool ToggleCode;
     bool SetShowLive;   // "Show live mirror" checkbox changed this frame
     bool ShowLive;      // its captured value
-    bool Undo;          // undo / redo / tidy edit-intents (applied in OnUpdate)
+    bool Undo;          // undo / redo edit-intents (applied in OnUpdate)
     bool Redo;
-    bool Tidy;
+    bool OpenProblems;  // problems chip clicked -> reveal the code/problems panel
     bool Diff;          // diff current graph's codegen vs the saved-on-disk graph -> clipboard
     bool HistGoto;      // time-travel scrubber moved this frame
     int  HistIndex;     // target snapshot index
@@ -445,7 +447,12 @@ namespace
           ImFileWrite(full.c_str(), sizeof(char), (ImU64)full.size(), fh);
           ImFileClose(fh);
           ImFormatString(doc->WriteMsg, IM_ARRAYSIZE(doc->WriteMsg), "wrote %s", doc->HeaderPath);
+          doc->WrittenSig = ImGui::AppGraphSignature(&doc->Graph);   // Generate button reads fresh vs stale off this
         }
+      }
+      if (temp_data->OpenProblems && doc->CodeH <= 0.0f)
+      {
+        doc->CodeH = ImGui::GetFontSize() * 12.0f;   // reveal the panel that hosts the Problems tab
       }
       if (temp_data->ToggleCode)
       {
@@ -462,10 +469,6 @@ namespace
       if (temp_data->Redo)
       {
         ImGui::AppGraphRedo(&doc->Graph);
-      }
-      if (temp_data->Tidy)
-      {
-        ImGui::AppGraphAutoLayout(&doc->Graph, doc->ShowLive);
       }
       if (temp_data->HistGoto)
       {
@@ -505,20 +508,41 @@ namespace
       const ImGuiStyle& style     = ImGui::GetStyle();
       const bool        code_open = doc->CodeH > 0.0f;
       bool              show_live = doc->ShowLive;
+      // Document toolbar, game-editor grammar: the PRIMARY action leads and carries the document's health
+      // as its state (UE's Compile button); file verbs next; edit history after; view/panel toggles and run
+      // controls right-aligned (Unity's toolbar). View verbs (add/frame/tidy/snap/overlays) live on the
+      // viewport's gizmo cluster, not here.
       if (ImGui::BeginChild("##Toolbar", ImVec2(0.0f, 0.0f), ImGuiChildFlags_FrameStyle | ImGuiChildFlags_AutoResizeY))
       {
-        if (ImGui::Button(ICON_FA_CIRCLE_NODES "  Add node"))
-        {
-          ImGui::OpenPopup("##addnode");
-        }
-        ImGui::SetItemTooltip("Add a node (Layer / Window / Sidebar / Control) to the canvas");
-        // The Add-node palette is a multi-level ImGui popup menu (builtins, layer-type dedup) -- genuinely bound to
-        // submission, so it writes the graph directly through the cached doc pointer.
-        if (ImGui::BeginPopup("##addnode"))
-        {
-          ShowNodePalette(&doc->Graph);
-          ImGui::EndPopup();
-        }
+        // -- Generate: green check = header on disk matches the graph; amber = model changed since the last
+        //    write; red = validation errors (writing stays allowed; the ambient marks say where to look).
+        const ImVector<ImGui::ImGuiAppGraphIssue>* issues = ImGui::AppGraphIssuesCached(&doc->Graph);
+        int nerr = 0, nwarn = 0;
+        for (int i = 0; i < issues->Size; i++)
+          (issues->Data[i].Severity >= 2 ? nerr : nwarn)++;
+        const bool  fresh     = doc->WrittenSig != 0 && doc->WrittenSig == ImGui::AppGraphSignature(&doc->Graph);
+        const char* gen_label = nerr > 0 ? ICON_FA_TRIANGLE_EXCLAMATION "  Generate" : fresh ? ICON_FA_CHECK "  Generated" : ICON_FA_FILE_EXPORT "  Generate";
+        ImGui::PushStyleColor(ImGuiCol_Button, nerr > 0 ? ImVec4(0.55f, 0.21f, 0.18f, 1.0f)
+                                             : fresh    ? ImVec4(0.16f, 0.38f, 0.22f, 1.0f)
+                                                        : ImVec4(0.52f, 0.39f, 0.14f, 1.0f));
+        temp_data->WriteHeader = ImGui::Button(gen_label);
+        ImGui::PopStyleColor();
+        if (nerr > 0)
+          ImGui::SetItemTooltip("%d error(s) in the graph -- writes anyway; see the Problems chip", nerr);
+        else if (fresh)
+          ImGui::SetItemTooltip("%s matches the graph -- click to rewrite", doc->HeaderPath);
+        else
+          ImGui::SetItemTooltip("Graph changed -- write whole-graph C++ -> %s", doc->HeaderPath);
+
+        EditorToolSep(em);
+        temp_data->Save = ImGui::Button(ICON_FA_FLOPPY_DISK "  Save");
+        ImGui::SetItemTooltip("Save graph -> %s", doc->GraphPath);
+        ImGui::SameLine();
+        temp_data->Load = ImGui::Button(ICON_FA_FOLDER_OPEN "  Load");
+        ImGui::SetItemTooltip("Load graph <- %s", doc->GraphPath);
+        ImGui::SameLine();
+        temp_data->Diff = ImGui::Button(ICON_FA_CODE_COMPARE "  Diff");
+        ImGui::SetItemTooltip("Diff generated C++ vs the saved graph -> clipboard");
 
         EditorToolSep(em);
         ImGui::BeginDisabled(!ImGui::AppGraphCanUndo(&doc->Graph));
@@ -530,11 +554,8 @@ namespace
         temp_data->Redo = ImGui::Button(ICON_FA_ARROW_ROTATE_RIGHT "##redo");
         ImGui::EndDisabled();
         ImGui::SetItemTooltip("Redo (Ctrl+Y)");
-        ImGui::SameLine();
-        temp_data->Tidy = ImGui::Button(ICON_FA_WAND_MAGIC_SPARKLES "  Tidy");
-        ImGui::SetItemTooltip("Auto-layout the graph as a containment tree (L)");
 
-        // Time-travel scrubber: drag across the undo history to replay graph states live.
+        // Edit-history scrubber (time travel over undo states).
         const int hist_count  = ImGui::AppGraphHistoryCount(&doc->Graph);
         const int hist_cursor = ImGui::AppGraphHistoryCursor(&doc->Graph);
         temp_data->HistGoto = false;
@@ -551,48 +572,67 @@ namespace
           ImGui::SetItemTooltip("Time-travel: scrub %d undo states", hist_count);
         }
 
-        EditorToolSep(em);
-        temp_data->Save = ImGui::Button(ICON_FA_FLOPPY_DISK "  Save");
-        ImGui::SetItemTooltip("Save graph -> %s", doc->GraphPath);
-        ImGui::SameLine();
-        temp_data->Load = ImGui::Button(ICON_FA_FOLDER_OPEN "  Load");
-        ImGui::SetItemTooltip("Load graph <- %s", doc->GraphPath);
-
-        EditorToolSep(em);
-        temp_data->WriteHeader = ImGui::Button(ICON_FA_FILE_EXPORT "  Write .h");
-        ImGui::SetItemTooltip("Write whole-graph C++ -> %s", doc->HeaderPath);
-        ImGui::SameLine();
-        temp_data->Diff = ImGui::Button(ICON_FA_CODE_COMPARE "  Diff");
-        ImGui::SetItemTooltip("Diff generated C++ vs the saved graph -> clipboard");
-        ImGui::SameLine();
-        if (code_open)
-        {
-          ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonActive]);
-        }
-        temp_data->ToggleCode = ImGui::Button(code_open ? ICON_FA_CODE "  Code " ICON_FA_ANGLE_DOWN : ICON_FA_CODE "  Code " ICON_FA_ANGLE_RIGHT);
-        if (code_open)
-        {
-          ImGui::PopStyleColor();
-        }
-        ImGui::SetItemTooltip("Show / hide the generated-code inspector");
-
-        EditorToolSep(em);
-        temp_data->SetShowLive = ImGui::Checkbox("Show live mirror", &show_live);
-        temp_data->ShowLive    = show_live;
-        ImGui::SetItemTooltip("Hide/show read-only nodes mirrored from the running app. Hiding never deletes your design.");
-
-        // App timeline: pause the MIRRORED app and scrub its recorded state ring. No example-specific code --
-        // the framework's state discipline (OnUpdate sole mutator, state in registered storage) makes any app
-        // scrubbable; this is that theorem as a slider (watch the Breathing timer run backwards).
-        temp_data->ScrubSet = false;
+        // -- Right cluster: problems chip, panel toggles, run controls. Width measured so it hugs the edge.
+        temp_data->ScrubSet    = false;
         temp_data->ScrubIdxSet = false;
         const int app_frames = doc->MirrorHistory.Count;
-        if (app_frames > 1 || doc->TimeScrub)
+        const bool show_time = app_frames > 1 || doc->TimeScrub;
+
+        char prob_lbl[48];
+        ImFormatString(prob_lbl, IM_ARRAYSIZE(prob_lbl), "%s %d", (nerr + nwarn) > 0 ? ICON_FA_TRIANGLE_EXCLAMATION : ICON_FA_CHECK, nerr + nwarn);
+        const char* code_lbl = ICON_FA_CODE "  Code";
+        const char* live_lbl = show_live ? ICON_FA_EYE "  Live" : ICON_FA_EYE_SLASH "  Live";
+        const float pad2 = style.FramePadding.x * 2.0f;
+        float cluster_w = ImGui::CalcTextSize(prob_lbl).x + pad2
+                        + ImGui::CalcTextSize(code_lbl).x + pad2 + style.ItemSpacing.x
+                        + ImGui::CalcTextSize(live_lbl).x + pad2 + style.ItemSpacing.x;
+        if (show_time)
+          cluster_w += ImGui::CalcTextSize(ICON_FA_CLOCK "  App time").x + pad2 + style.ItemSpacing.x + (doc->TimeScrub ? em * 9.0f + style.ItemSpacing.x : 0.0f);
+        ImGui::SameLine(ImMax(ImGui::GetCursorPosX() + em, ImGui::GetContentRegionMax().x - cluster_w - em * 0.2f));
+
+        // Problems chip: severity-colored count; click reveals the Problems tab's panel.
+        ImGui::PushStyleColor(ImGuiCol_Text, nerr > 0 ? ImVec4(0.90f, 0.45f, 0.42f, 1.0f)
+                                           : nwarn > 0 ? ImVec4(0.90f, 0.75f, 0.35f, 1.0f)
+                                                       : ImVec4(0.50f, 0.75f, 0.50f, 1.0f));
+        temp_data->OpenProblems = ImGui::Button(prob_lbl);
+        ImGui::PopStyleColor();
+        ImGui::SetItemTooltip("%d error(s), %d warning(s) -- click to open Problems", nerr, nwarn);
+        ImGui::SameLine();
+
+        if (code_open)
+          ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonActive]);
+        temp_data->ToggleCode = ImGui::Button(code_lbl);
+        if (code_open)
+          ImGui::PopStyleColor();
+        ImGui::SetItemTooltip("Show / hide the generated-code + problems panel");
+        ImGui::SameLine();
+
+        // Live-mirror visibility: a latched toggle, lit while the mirror is shown. Hiding never deletes.
+        if (show_live)
+          ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonActive]);
+        const bool live_clicked = ImGui::Button(live_lbl);
+        if (show_live)
+          ImGui::PopStyleColor();
+        temp_data->SetShowLive = live_clicked;
+        temp_data->ShowLive    = live_clicked ? !show_live : show_live;
+        ImGui::SetItemTooltip("Show / hide read-only nodes mirrored from the running app");
+
+        // App timeline: freeze the MIRRORED app and scrub its recorded state ring -- the framework's state
+        // discipline (OnUpdate sole mutator, registered storage) makes ANY app scrubbable; this is that
+        // theorem as a slider.
+        if (show_time)
         {
-          EditorToolSep(em);
+          ImGui::SameLine();
           bool scrub = doc->TimeScrub;
-          temp_data->ScrubSet = ImGui::Checkbox("App time", &scrub);
-          temp_data->Scrub    = scrub;
+          if (scrub)
+            ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonActive]);
+          if (ImGui::Button(ICON_FA_CLOCK "  App time"))
+          {
+            temp_data->ScrubSet = true;
+            temp_data->Scrub = !scrub;
+          }
+          if (scrub)
+            ImGui::PopStyleColor();
           ImGui::SetItemTooltip("Freeze the running app and scrub its recorded state history (%d frames)", app_frames);
           if (doc->TimeScrub && app_frames > 0)
           {
@@ -611,18 +651,18 @@ namespace
     }
   };
 
-  // All strip text is derived from the doc in OnUpdate and parked here; OnRender only lays out pills. `Level`
-  // selects the pill color (0 disabled, 1 green, 2 amber, 3 red).
+  // The window's status bar (rendered LAST, at the bottom -- Blender's status bar): live keymap hints on
+  // the left (composed by the editor, read via AppGraphStatusHint), document/selection facts on the right.
+  // All right-side text is derived from the doc in OnUpdate and parked here; OnRender only lays out text.
   struct StatusStripData
   {
     GraphDocData* Doc;
-    char GraphMsg[180];                 // "graph ok" or "cycle: ..."
-    int  GraphLevel;                    // 1 ok, 3 cycle
     char CountMsg[96];                  // "design N  live N  promoted N"
     bool HasMirror;                     // doc->Mirror != nullptr
     bool MirrorInit;                    // mirror app initialized
     char MirrorCounts[64];              // "L# W# S# C#"
     char Breadcrumb[IM_LABEL_SIZE * 2]; // selection breadcrumb
+    char Msg[64];                       // transient write/diff confirmation (doc->WriteMsg snapshot)
   };
   struct StatusStripTempData {};   // empty by design: the strip is read-only display, it captures no input
   struct StatusStripControl : ImGuiAppControl<StatusStripData, StatusStripTempData>
@@ -637,23 +677,10 @@ namespace
       IM_UNUSED(dt);
       const GraphDocData* doc = data->Doc;
 
-      // The order vector is throwaway scratch for the topo call; only success/failure feeds the strip.
-      ImVector<int> order;
-      char          err[160] = "";
-      int           nd       = 0;
-      int           nl       = 0;
-      int           np       = 0;
-
-      if (ImGui::AppGraphTopoOrder(&doc->Graph, &order, err, IM_ARRAYSIZE(err)))
-      {
-        ImStrncpy(data->GraphMsg, "graph ok", sizeof(data->GraphMsg));
-        data->GraphLevel = 1;
-      }
-      else
-      {
-        ImFormatString(data->GraphMsg, IM_ARRAYSIZE(data->GraphMsg), "cycle: %s", err[0] ? err : "dependency cycle");
-        data->GraphLevel = 3;
-      }
+      // Cycle/validation state now lives on the Generate button + Problems chip; the strip carries facts.
+      int nd = 0;
+      int nl = 0;
+      int np = 0;
 
       for (int i = 0; i < doc->Graph.Nodes.Size; i++)
       {
@@ -689,33 +716,33 @@ namespace
       }
 
       ImGui::AppGraphSelectionBreadcrumb(&doc->Graph, doc->Selection, data->Breadcrumb, IM_ARRAYSIZE(data->Breadcrumb));
+      ImStrncpy(data->Msg, doc->WriteMsg, IM_ARRAYSIZE(data->Msg));
     }
 
     virtual void OnRender(const StatusStripData* data, StatusStripTempData*) const override final
     {
       const float       em    = ImGui::GetFontSize();
       const ImGuiStyle& style = ImGui::GetStyle();
-      auto pill = [&](const char* text, int level)
-      {
-        const ImVec4 col[4] = { style.Colors[ImGuiCol_TextDisabled], ImVec4(0.45f,0.85f,0.45f,1.0f),
-                                ImVec4(0.90f,0.80f,0.35f,1.0f), ImVec4(0.90f,0.45f,0.45f,1.0f) };
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextColored(col[level], "%s", text);
-      };
       if (ImGui::BeginChild("##Strip", ImVec2(0.0f, 0.0f), ImGuiChildFlags_FrameStyle | ImGuiChildFlags_AutoResizeY))
       {
-        pill(data->GraphMsg, data->GraphLevel);
-        EditorToolSep(em);
-        pill(data->CountMsg, 0);
+        // Left: the editor's live keymap hint (what the mouse does right now); refused links show in red.
+        int sev = 0;
+        const char* hint = ImGui::AppGraphStatusHint(&sev);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(sev >= 2 ? ImVec4(0.90f, 0.42f, 0.38f, 1.0f) : style.Colors[ImGuiCol_TextDisabled], "%s", hint);
+
+        // Right: transient confirmation, selection breadcrumb, node counts, mirrored-app composition.
+        char right[512];
+        int  len = 0;
+        if (data->Msg[0])
+          len += ImFormatString(right + len, IM_ARRAYSIZE(right) - len, "%s      ", data->Msg);
+        len += ImFormatString(right + len, IM_ARRAYSIZE(right) - len, "%s      %s", data->Breadcrumb, data->CountMsg);
         if (data->HasMirror)
-        {
-          EditorToolSep(em);
-          pill(data->MirrorCounts, 0);
-          EditorToolSep(em);
-          pill(data->MirrorInit ? "init" : "uninit", data->MirrorInit ? 1 : 0);
-        }
-        EditorToolSep(em);
-        pill(data->Breadcrumb, 0);
+          ImFormatString(right + len, IM_ARRAYSIZE(right) - len, "      %s  %s", data->MirrorCounts, data->MirrorInit ? "composed" : "uncomposed");
+        const float w = ImGui::CalcTextSize(right).x;
+        ImGui::SameLine(ImMax(ImGui::GetCursorPosX() + em, ImGui::GetContentRegionMax().x - w - em * 0.4f));
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", right);
       }
       ImGui::EndChild();
     }
@@ -831,7 +858,8 @@ namespace
       // All layout is local + display-only (TreeW == 0 -> default); nothing is written to the doc from OnRender.
       const float    em            = ImGui::GetFontSize();
       const ImGuiIO& io            = ImGui::GetIO();
-      const ImVec2   body          = ImGui::GetContentRegionAvail();
+      ImVec2         body          = ImGui::GetContentRegionAvail();
+      body.y = ImMax(em * 4.0f, body.y - ImGui::GetFrameHeightWithSpacing());   // reserve the status bar row below
       const float    tree_origin_x = ImGui::GetCursorScreenPos().x;
       const float    tree_grip     = em * 0.5f;
       const float    min_canvas_w  = em * 16.0f;
@@ -845,8 +873,8 @@ namespace
       int            selection     = doc->Selection;
       float          col_w         = 0.0f;     // assigned once inside ##Right (needs that child's content region)
 
-      // Left: tree sidebar (full height).
-      if (ImGui::BeginChild("##Tree", ImVec2(tree_w, 0.0f), ImGuiChildFlags_Borders))
+      // Left: tree sidebar (full height above the status bar).
+      if (ImGui::BeginChild("##Tree", ImVec2(tree_w, body.y), ImGuiChildFlags_Borders))
       {
         ImGui::ShowAppGraphTree(app, graph, &selection);
       }
@@ -867,7 +895,7 @@ namespace
       ImGui::SameLine(0.0f, 0.0f);
 
       // Right column: node graph canvas on top, code inspector on the bottom split.
-      if (ImGui::BeginChild("##Right", ImVec2(right_w, 0.0f)))
+      if (ImGui::BeginChild("##Right", ImVec2(right_w, body.y)))
       {
         col_w = ImGui::GetContentRegionAvail().x;
 
@@ -1188,8 +1216,8 @@ namespace ImGui
         metrics->InitialPos  = vp->WorkPos + ImVec2(vp->WorkSize.x * 0.10f, vp->WorkSize.y * 0.10f);
         ImGui::PushWindowControl<GraphDocControl>(&editor_app, metrics);   // producer: owns the doc (push first)
         ImGui::PushWindowControl<ToolbarControl>(&editor_app, metrics);    // consumers depend on GraphDocData
-        ImGui::PushWindowControl<StatusStripControl>(&editor_app, metrics);
         ImGui::PushWindowControl<EditorBodyControl>(&editor_app, metrics);
+        ImGui::PushWindowControl<StatusStripControl>(&editor_app, metrics);   // status bar renders LAST -> window bottom
         if (GraphDocData* d = GetGraphDoc(&editor_app))
         {
           d->Mirror = &app;

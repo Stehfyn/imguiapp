@@ -581,6 +581,12 @@ namespace ImGui
     ImGuiAppHoverSource_Inspector,   // inspector / binding rows
     ImGuiAppHoverSource_External,    // problems list, code panel, any host-app panel
   };
+  // Context keymap hint (what the mouse does right now, given its hover target) + transient refused-link
+  // errors, computed by ShowAppGraphEditor every frame. A host status bar renders it OUTSIDE the canvas --
+  // the game-editor pattern: hints live in the window's status bar, never over the viewport. severity:
+  // 0 = plain hint, 2 = error (refused link). Valid for the frame after the editor ran.
+  IMGUI_API const char*         AppGraphStatusHint(int* out_severity);
+
   IMGUI_API void                AppGraphHoverNode(int node_id, ImGuiAppHoverSource source);
   IMGUI_API void                AppGraphHoverLink(int link_id, ImGuiAppHoverSource source);
   IMGUI_API int                 AppGraphHoveredNode(ImGuiAppHoverSource* out_source);   // -1 = none; out_source may be null
