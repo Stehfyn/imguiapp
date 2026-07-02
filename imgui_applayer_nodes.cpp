@@ -215,6 +215,31 @@ namespace ImGui
     const ImU32 kBlBorder    = IM_COL32(  0,   0,   0,  60);  // faint outline
     const ImU32 kBlText      = IM_COL32(229, 229, 229, 255);
 
+    // The chrome's push-stack styling, stated in the same desc vocabulary authored compositions use -- one
+    // definition form for "what style applies here", whether the author is a graph node or the composer itself.
+    // Rounding is size-relative (GetFrameHeight * kBlRounding), so the var descs are materialized per scope.
+    const float kBlRounding = 0.28f;
+
+    const ImGuiAppColorModDesc kBlComboColors[] =    // dropdown fields (AppBlEnum, struct picker): field + popup + rows
+    {
+      ImGuiAppColorModDesc(ImGuiCol_FrameBg,        kBlFill),
+      ImGuiAppColorModDesc(ImGuiCol_FrameBgHovered, kBlFillHover),
+      ImGuiAppColorModDesc(ImGuiCol_FrameBgActive,  kBlFillHover),
+      ImGuiAppColorModDesc(ImGuiCol_Text,           kBlText),
+      ImGuiAppColorModDesc(ImGuiCol_PopupBg,        kBlFillEdit),
+      ImGuiAppColorModDesc(ImGuiCol_Header,         kBlFillHover),
+      ImGuiAppColorModDesc(ImGuiCol_HeaderHovered,  kBlFillHover),
+      ImGuiAppColorModDesc(ImGuiCol_Border,         kBlBorder),
+    };
+
+    const ImGuiAppColorModDesc kBlEditColors[] =     // in-place editors (InputText/InputInt): transparent frame over the self-drawn bg
+    {
+      ImGuiAppColorModDesc(ImGuiCol_FrameBg,        0),
+      ImGuiAppColorModDesc(ImGuiCol_FrameBgHovered, 0),
+      ImGuiAppColorModDesc(ImGuiCol_FrameBgActive,  0),
+      ImGuiAppColorModDesc(ImGuiCol_Text,           kBlText),
+    };
+
     // Single text/number-edit focus across the whole UI (one at a time), plus the per-active-id drag scratch.
     ImGuiID g_bl_editing = 0;
     bool    g_bl_focus_pending = false;
@@ -222,6 +247,32 @@ namespace ImGui
     float   g_bl_drag_accum = 0.0f;
     float   g_bl_press_x = 0.0f;
     bool    g_bl_dragged = false;
+  }
+
+  // Apply one chrome scope: a color desc table + the size-relative rounding vars. Returns the pushed counts;
+  // pop with AppBlPopStyle. The PopupRounding entry's Active flag gates the popup half of the scope -- the desc
+  // vocabulary's on/off switch doing chrome duty.
+  struct AppBlStyleScope { int Colors; int Vars; };
+  static AppBlStyleScope AppBlPushStyle(const ImGuiAppColorModDesc* cols, int ncols, bool with_popup)
+  {
+    const float r = ImGui::GetFrameHeight() * kBlRounding;
+    const ImGuiAppStyleModDesc vars[] =
+    {
+      ImGuiAppStyleModDesc(ImGuiStyleVar_FrameRounding, r),
+      ImGuiAppStyleModDesc(ImGuiStyleVar_PopupRounding, r, with_popup),
+    };
+    AppBlStyleScope s;
+    s.Colors = ImGui::PushAppColorMods(cols, ncols);
+    s.Vars = ImGui::PushAppStyleMods(vars, IM_ARRAYSIZE(vars));
+    return s;
+  }
+
+  static void AppBlPopStyle(const AppBlStyleScope& s)
+  {
+    if (s.Vars > 0)
+      ImGui::PopStyleVar(s.Vars);
+    if (s.Colors > 0)
+      ImGui::PopStyleColor(s.Colors);
   }
 
   // Rounded fill + faint outline; returns the rounding so an in-place editor can match it.
@@ -388,21 +439,16 @@ namespace ImGui
 
     if (g_bl_editing == id)
     {
-      const float r = AppBlFieldBg(dl, mn, mx, true, true);
+      AppBlFieldBg(dl, mn, mx, true, true);
       ImGui::SetCursorScreenPos(mn);
       ImGui::SetNextItemWidth(width);
-      ImGui::PushStyleColor(ImGuiCol_FrameBg, 0);
-      ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, 0);
-      ImGui::PushStyleColor(ImGuiCol_FrameBgActive, 0);
-      ImGui::PushStyleColor(ImGuiCol_Text, kBlText);
-      ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, r);
+      const AppBlStyleScope sc = AppBlPushStyle(kBlEditColors, IM_ARRAYSIZE(kBlEditColors), false);
       if (g_bl_focus_pending) { ImGui::SetKeyboardFocusHere(); g_bl_focus_pending = false; }
       ImGui::PushID(id);
       changed = ImGui::InputText("##e", buf, buf_size, ImGuiInputTextFlags_AutoSelectAll);
       const bool done = ImGui::IsItemDeactivated();
       ImGui::PopID();
-      ImGui::PopStyleVar();
-      ImGui::PopStyleColor(4);
+      AppBlPopStyle(sc);
       if (done) g_bl_editing = 0;
     }
     else
@@ -425,19 +471,9 @@ namespace ImGui
     // mis-anchors and lets the click fall through to the node/window drag. BeginCombo's popup is managed by
     // ImGui and behaves -- it's the same path the layer-type combo uses. Styled with the Blender field palette
     // (flat dark rounded field, dark popup, hover-highlighted rows) so it matches the other Bl widgets.
-    const float r = ImGui::GetFrameHeight() * 0.28f;
     bool changed = false;
 
-    ImGui::PushStyleColor(ImGuiCol_FrameBg,        kBlFill);
-    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, kBlFillHover);
-    ImGui::PushStyleColor(ImGuiCol_FrameBgActive,  kBlFillHover);
-    ImGui::PushStyleColor(ImGuiCol_Text,           kBlText);
-    ImGui::PushStyleColor(ImGuiCol_PopupBg,        kBlFillEdit);
-    ImGui::PushStyleColor(ImGuiCol_Header,         kBlFillHover);
-    ImGui::PushStyleColor(ImGuiCol_HeaderHovered,  kBlFillHover);
-    ImGui::PushStyleColor(ImGuiCol_Border,         kBlBorder);
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, r);
-    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, r);
+    const AppBlStyleScope sc = AppBlPushStyle(kBlComboColors, IM_ARRAYSIZE(kBlComboColors), true);
 
     ImGui::SetNextItemWidth(width);
     ImGui::PushID(str_id);
@@ -456,8 +492,7 @@ namespace ImGui
     }
     ImGui::PopID();
 
-    ImGui::PopStyleVar(2);
-    ImGui::PopStyleColor(8);
+    AppBlPopStyle(sc);
     return changed;
   }
 
@@ -473,19 +508,16 @@ namespace ImGui
 
     if (g_bl_editing == id)
     {
-      const float r = AppBlFieldBg(dl, mn, mx, true, true);
+      AppBlFieldBg(dl, mn, mx, true, true);
       ImGui::SetCursorScreenPos(mn);
       ImGui::SetNextItemWidth(width);
-      ImGui::PushStyleColor(ImGuiCol_FrameBg, 0);
-      ImGui::PushStyleColor(ImGuiCol_Text, kBlText);
-      ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, r);
+      const AppBlStyleScope sc = AppBlPushStyle(kBlEditColors, IM_ARRAYSIZE(kBlEditColors), false);
       if (g_bl_focus_pending) { ImGui::SetKeyboardFocusHere(); g_bl_focus_pending = false; }
       ImGui::PushID(id);
       changed = ImGui::InputInt("##e", v, 0, 0, ImGuiInputTextFlags_AutoSelectAll);
       const bool done = ImGui::IsItemDeactivated();
       ImGui::PopID();
-      ImGui::PopStyleVar();
-      ImGui::PopStyleColor(2);
+      AppBlPopStyle(sc);
       if (done) g_bl_editing = 0;
       *v = ImClamp(*v, vmin, vmax);
       return changed;
@@ -560,13 +592,9 @@ namespace ImGui
     else if (f->Type == ImGuiAppFieldType_Struct)
     {
       ImGui::SameLine();
-      const float r = ImGui::GetFrameHeight() * 0.28f;
-      ImGui::PushStyleColor(ImGuiCol_FrameBg,        kBlFill);
-      ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, kBlFillHover);
-      ImGui::PushStyleColor(ImGuiCol_Text,           kBlText);
-      ImGui::PushStyleColor(ImGuiCol_PopupBg,        kBlFillEdit);
-      ImGui::PushStyleColor(ImGuiCol_HeaderHovered,  kBlFillHover);
-      ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, r);
+      // Same widget family as AppBlEnum -> the same chrome scope (unifies the previously narrower push set:
+      // this picker now also gets the faint border, active-frame fill, selected-row header, and popup rounding).
+      const AppBlStyleScope sc = AppBlPushStyle(kBlComboColors, IM_ARRAYSIZE(kBlComboColors), true);
       ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8.0f);
       if (ImGui::BeginCombo("##stype", f->StructType[0] ? f->StructType : "<struct>", ImGuiComboFlags_NoArrowButton))
       {
@@ -587,8 +615,7 @@ namespace ImGui
         }
         ImGui::EndCombo();
       }
-      ImGui::PopStyleVar();
-      ImGui::PopStyleColor(5);
+      AppBlPopStyle(sc);
     }
   }
 
@@ -1447,6 +1474,8 @@ namespace ImGui
     n->DockSize = src->DockSize;
     n->Commands = src->Commands;           // ImVector deep-copy
     n->Events = src->Events;               // ImVector deep-copy
+    n->StyleMods = src->StyleMods;         // ImVector deep-copy
+    n->ColorMods = src->ColorMods;         // ImVector deep-copy
     n->GridPos = src->GridPos + ImVec2(40.0f, 40.0f);
     n->HasGridPos = true;
     n->_NeedsPlace = true;
@@ -2980,6 +3009,178 @@ namespace ImGui
     }
   }
 
+  // Codegen: the C++ enum spelling for a style var, indexed by ImGuiStyleVar value. This imgui has no
+  // GetStyleVarName, so the table is ours; the IM_STATIC_ASSERT pins it to the enum so an imgui upgrade that
+  // adds/reorders vars fails the build here instead of silently mislabeling.
+  static const char* kAppStyleVarEnumNames[] =
+  {
+    "ImGuiStyleVar_Alpha",
+    "ImGuiStyleVar_DisabledAlpha",
+    "ImGuiStyleVar_WindowPadding",
+    "ImGuiStyleVar_WindowRounding",
+    "ImGuiStyleVar_WindowBorderSize",
+    "ImGuiStyleVar_WindowMinSize",
+    "ImGuiStyleVar_WindowTitleAlign",
+    "ImGuiStyleVar_ChildRounding",
+    "ImGuiStyleVar_ChildBorderSize",
+    "ImGuiStyleVar_PopupRounding",
+    "ImGuiStyleVar_PopupBorderSize",
+    "ImGuiStyleVar_FramePadding",
+    "ImGuiStyleVar_FrameRounding",
+    "ImGuiStyleVar_FrameBorderSize",
+    "ImGuiStyleVar_ItemSpacing",
+    "ImGuiStyleVar_ItemInnerSpacing",
+    "ImGuiStyleVar_IndentSpacing",
+    "ImGuiStyleVar_CellPadding",
+    "ImGuiStyleVar_ScrollbarSize",
+    "ImGuiStyleVar_ScrollbarRounding",
+    "ImGuiStyleVar_ScrollbarPadding",
+    "ImGuiStyleVar_GrabMinSize",
+    "ImGuiStyleVar_GrabRounding",
+    "ImGuiStyleVar_ImageRounding",
+    "ImGuiStyleVar_ImageBorderSize",
+    "ImGuiStyleVar_TabRounding",
+    "ImGuiStyleVar_TabBorderSize",
+    "ImGuiStyleVar_TabMinWidthBase",
+    "ImGuiStyleVar_TabMinWidthShrink",
+    "ImGuiStyleVar_TabBarBorderSize",
+    "ImGuiStyleVar_TabBarOverlineSize",
+    "ImGuiStyleVar_TableAngledHeadersAngle",
+    "ImGuiStyleVar_TableAngledHeadersTextAlign",
+    "ImGuiStyleVar_TreeLinesSize",
+    "ImGuiStyleVar_TreeLinesRounding",
+    "ImGuiStyleVar_MenuItemRounding",
+    "ImGuiStyleVar_SelectableRounding",
+    "ImGuiStyleVar_DragDropTargetRounding",
+    "ImGuiStyleVar_ButtonTextAlign",
+    "ImGuiStyleVar_SelectableTextAlign",
+    "ImGuiStyleVar_SeparatorSize",
+    "ImGuiStyleVar_SeparatorTextBorderSize",
+    "ImGuiStyleVar_SeparatorTextAlign",
+    "ImGuiStyleVar_SeparatorTextPadding",
+    "ImGuiStyleVar_DockingSeparatorSize",
+  };
+  IM_STATIC_ASSERT(IM_ARRAYSIZE(kAppStyleVarEnumNames) == ImGuiStyleVar_COUNT);
+
+  static const char* AppStyleVarEnumName(int v)
+  {
+    return (v >= 0 && v < ImGuiStyleVar_COUNT) ? kAppStyleVarEnumNames[v] : kAppStyleVarEnumNames[0];
+  }
+
+  // Inspector display: the enum spelling minus its "ImGuiStyleVar_" prefix.
+  static const char* AppStyleVarShortName(int v)
+  {
+    return AppStyleVarEnumName(v) + (sizeof("ImGuiStyleVar_") - 1);
+  }
+
+  // Seed a mod's value from the CURRENT style, so a freshly added/retargeted row starts at "no visible change"
+  // instead of a jarring zero.
+  static void AppStyleModSeedValue(ImGuiAppStyleModDesc* sm)
+  {
+    const ImGuiStyleVarInfo* info = ImGui::GetStyleVarInfo(sm->Var);
+    const float* v = (const float*)info->GetVarPtr(&ImGui::GetStyle());
+    sm->Value = (info->Count == 2) ? ImVec2(v[0], v[1]) : ImVec2(v[0], 0.0f);
+  }
+
+  // Editable style-var override rows for a Window/Sidebar/Control node. Rows land in the item's StyleMods at
+  // bring-up (SetupApp), where the runtime pushes Active entries around the item's submission.
+  static void EditAppNodeStyleMods(ImGuiAppNode* n)
+  {
+    const float em = ImGui::GetFontSize();
+    int remove = -1;
+    for (int i = 0; i < n->StyleMods.Size; i++)
+    {
+      ImGuiAppStyleModDesc* sm = &n->StyleMods.Data[i];
+      ImGui::PushID(3000 + i);
+
+      if (AppRowDeleteButton("##del"))
+        remove = i;
+      ImGui::SameLine();
+      ImGui::Checkbox("##active", &sm->Active);
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("active: pushed at runtime (a live app can toggle this without regenerating)");
+      ImGui::SameLine();
+      int var = sm->Var;
+      if (AppBlEnum("##var", em * 11.0f, &var, AppStyleVarShortName, ImGuiStyleVar_COUNT) && var != sm->Var)
+      {
+        sm->Var = (ImGuiStyleVar)var;
+        AppStyleModSeedValue(sm);
+      }
+      ImGui::SameLine();
+      const ImGuiStyleVarInfo* info = ImGui::GetStyleVarInfo(sm->Var);
+      ImGui::SetNextItemWidth(em * (info->Count == 2 ? 8.0f : 4.5f));
+      if (info->Count == 2)
+        ImGui::DragFloat2("##val", &sm->Value.x, 0.05f, 0.0f, 0.0f, "%.2f");
+      else
+        ImGui::DragFloat("##val", &sm->Value.x, 0.05f, 0.0f, 0.0f, "%.2f");
+
+      ImGui::PopID();
+    }
+    if (remove >= 0)
+      n->StyleMods.erase(n->StyleMods.Data + remove);
+
+    int remove_col = -1;
+    for (int i = 0; i < n->ColorMods.Size; i++)
+    {
+      ImGuiAppColorModDesc* cm = &n->ColorMods.Data[i];
+      ImGui::PushID(3500 + i);
+
+      if (AppRowDeleteButton("##del"))
+        remove_col = i;
+      ImGui::SameLine();
+      ImGui::Checkbox("##active", &cm->Active);
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("active: pushed at runtime (a live app can toggle this without regenerating)");
+      ImGui::SameLine();
+      int col = cm->Col;
+      if (AppBlEnum("##col", em * 11.0f, &col, &ImGui::GetStyleColorName, ImGuiCol_COUNT) && col != cm->Col)
+      {
+        cm->Col = (ImGuiCol)col;
+        cm->Value = ImGui::ColorConvertFloat4ToU32(ImGui::GetStyleColorVec4(cm->Col));   // seed: "no visible change"
+      }
+      ImGui::SameLine();
+      ImVec4 c4 = ImGui::ColorConvertU32ToFloat4(cm->Value);
+      if (ImGui::ColorEdit4("##val", &c4.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaPreviewHalf))
+        cm->Value = ImGui::ColorConvertFloat4ToU32(c4);
+
+      ImGui::PopID();
+    }
+    if (remove_col >= 0)
+      n->ColorMods.erase(n->ColorMods.Data + remove_col);
+
+    if (AppBlAddPill("##addstyle", "Style"))
+    {
+      ImGuiAppStyleModDesc sm(n->Kind == ImGuiAppNodeKind_Control ? ImGuiStyleVar_FrameRounding : ImGuiStyleVar_WindowRounding, 0.0f, true);
+      AppStyleModSeedValue(&sm);
+      n->StyleMods.push_back(sm);
+    }
+    ImGui::SameLine();
+    if (AppBlAddPill("##addcolor", "Color"))
+    {
+      const ImGuiCol col = n->Kind == ImGuiAppNodeKind_Control ? ImGuiCol_FrameBg : ImGuiCol_WindowBg;
+      n->ColorMods.push_back(ImGuiAppColorModDesc(col, ImGui::ColorConvertFloat4ToU32(ImGui::GetStyleColorVec4(col)), true));
+    }
+  }
+
+  // Read-only echo of a live item's mirrored style/color mods.
+  static void DrawAppNodeStyleMods(const ImGuiAppNode* n)
+  {
+    for (int i = 0; i < n->StyleMods.Size; i++)
+    {
+      const ImGuiAppStyleModDesc* sm = &n->StyleMods.Data[i];
+      const ImGuiStyleVarInfo* info = ImGui::GetStyleVarInfo(sm->Var);
+      if (info->Count == 2)
+        ImGui::TextDisabled("%s %s = %.2f, %.2f", sm->Active ? "[on] " : "[off]", AppStyleVarShortName(sm->Var), sm->Value.x, sm->Value.y);
+      else
+        ImGui::TextDisabled("%s %s = %.2f", sm->Active ? "[on] " : "[off]", AppStyleVarShortName(sm->Var), sm->Value.x);
+    }
+    for (int i = 0; i < n->ColorMods.Size; i++)
+    {
+      const ImGuiAppColorModDesc* cm = &n->ColorMods.Data[i];
+      ImGui::TextDisabled("%s %s = #%08X", cm->Active ? "[on] " : "[off]", ImGui::GetStyleColorName(cm->Col), cm->Value);
+    }
+  }
+
   // Editable node-body UI for a Sidebar's dock direction + size (ImGuiAppSidebarBase). Windows have no body props.
   static void EditAppWindowNodeProps(ImGuiAppNode* n)
   {
@@ -3069,6 +3270,11 @@ namespace ImGui
         DrawAppWindowNodeProps(n);
       else if (n->Kind == ImGuiAppNodeKind_Control && n->DataTypeName[0])
         ImGui::TextDisabled("data: %s", n->DataTypeName);
+      if (n->StyleMods.Size > 0 || n->ColorMods.Size > 0)
+      {
+        ImGui::SeparatorText("style");
+        DrawAppNodeStyleMods(n);
+      }
       ImGui::PopID();
       return;
     }
@@ -3091,10 +3297,14 @@ namespace ImGui
         ImGui::SeparatorText("events");
         EditAppControlEvents(g, n);            // temp-vs-last-temp reactions (see ImGuiAppEventDesc)
       }
+      ImGui::SeparatorText("style");
+      EditAppNodeStyleMods(n);                 // style-var overrides applied around the control's render
       break;
     case ImGuiAppNodeKind_Window:
     case ImGuiAppNodeKind_Sidebar:
       EditAppWindowNodeProps(n);               // sidebar dock direction / size
+      ImGui::SeparatorText("style");
+      EditAppNodeStyleMods(n);                 // style-var overrides applied around the window's Begin/End
       break;
     case ImGuiAppNodeKind_Struct:
       EditAppFieldList("fields", &n->Draft.PersistFields, g);
@@ -6952,6 +7162,20 @@ namespace ImGui
         h = ImHashStr(ev->Command, 0, h);
         h = ImHashStr(ev->Expr, 0, h);
       }
+      for (int s = 0; s < n->StyleMods.Size; s++)
+      {
+        const ImGuiAppStyleModDesc* sm = &n->StyleMods.Data[s];
+        h = ImHashData(&sm->Var, sizeof(sm->Var), h);
+        h = ImHashData(&sm->Value, sizeof(sm->Value), h);
+        h = ImHashData(&sm->Active, sizeof(sm->Active), h);
+      }
+      for (int s = 0; s < n->ColorMods.Size; s++)
+      {
+        const ImGuiAppColorModDesc* cm = &n->ColorMods.Data[s];
+        h = ImHashData(&cm->Col, sizeof(cm->Col), h);
+        h = ImHashData(&cm->Value, sizeof(cm->Value), h);
+        h = ImHashData(&cm->Active, sizeof(cm->Active), h);
+      }
     }
     for (int li = 0; li < g->Links.Size; li++)
     {
@@ -7001,6 +7225,45 @@ namespace ImGui
   void GenerateAppGraphCode(const ImGuiAppGraph* g, ImGuiTextBuffer* out)
   {
     GenerateAppGraphCodeEx(g, out, nullptr);
+  }
+
+  // Format a float as a C++ literal: %g alone drops the decimal point from whole values, and "8f" won't compile.
+  static void AppFloatLit(char* out, size_t out_size, float v)
+  {
+    int len = ImFormatString(out, out_size, "%g", v);
+    if (strchr(out, '.') == nullptr && strchr(out, 'e') == nullptr)
+      len += ImFormatString(out + len, out_size - (size_t)len, ".0");
+    ImFormatString(out + len, out_size - (size_t)len, "f");
+  }
+
+  // Emit the StyleMods/ColorMods fill lines for one just-pushed item; `expr` names the item (e.g.
+  // "app->Windows.back()"). Emitted into SetupApp right after the push -- windows/sidebars/controls have no
+  // generated classes, so bring-up is the one codegen site that can reach the runtime object.
+  static void AppEmitStyleModLines(const ImGuiAppNode* n, const char* expr, const char* indent, ImGuiTextBuffer* out)
+  {
+    for (int i = 0; i < n->StyleMods.Size; i++)
+    {
+      const ImGuiAppStyleModDesc* sm = &n->StyleMods.Data[i];
+      const ImGuiStyleVarInfo* info = ImGui::GetStyleVarInfo(sm->Var);
+      char x[32], y[32];
+      AppFloatLit(x, IM_ARRAYSIZE(x), sm->Value.x);
+      AppFloatLit(y, IM_ARRAYSIZE(y), sm->Value.y);
+      if (info->Count == 2)
+        out->appendf("%s%s->StyleMods.push_back(ImGuiAppStyleModDesc(%s, ImVec2(%s, %s), %s));\n",
+                     indent, expr, AppStyleVarEnumName(sm->Var), x, y, sm->Active ? "true" : "false");
+      else
+        out->appendf("%s%s->StyleMods.push_back(ImGuiAppStyleModDesc(%s, %s, %s));\n",
+                     indent, expr, AppStyleVarEnumName(sm->Var), x, sm->Active ? "true" : "false");
+    }
+    for (int i = 0; i < n->ColorMods.Size; i++)
+    {
+      const ImGuiAppColorModDesc* cm = &n->ColorMods.Data[i];
+      out->appendf("%s%s->ColorMods.push_back(ImGuiAppColorModDesc(ImGuiCol_%s, IM_COL32(%u, %u, %u, %u), %s));\n",
+                   indent, expr, ImGui::GetStyleColorName(cm->Col),
+                   (cm->Value >> IM_COL32_R_SHIFT) & 0xFF, (cm->Value >> IM_COL32_G_SHIFT) & 0xFF,
+                   (cm->Value >> IM_COL32_B_SHIFT) & 0xFF, (cm->Value >> IM_COL32_A_SHIFT) & 0xFF,
+                   cm->Active ? "true" : "false");
+    }
   }
 
   void GenerateAppGraphCodeEx(const ImGuiAppGraph* g, ImGuiTextBuffer* out, ImVector<ImGuiAppCodeSpan>* out_spans)
@@ -7118,6 +7381,7 @@ namespace ImGui
         const int begin = line_now();
         char base[IM_LABEL_SIZE]; AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
         out->appendf("  ImGui::PushAppWindow<%s>(app);\n", base);
+        AppEmitStyleModLines(n, "app->Windows.back()", "  ", out);
         if (AppGraphHostsControl(g, n->Id))
           out->appendf("  ImGuiAppWindowBase* win_%d = app->Windows.back();\n", n->Id);
         span(n->Id, begin);
@@ -7130,7 +7394,8 @@ namespace ImGui
       {
         const int begin = line_now();
         char base[IM_LABEL_SIZE]; AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
-        out->appendf("  ImGui::PushAppSidebar<%s>(app, vp, %s, %.0ff, ImGuiWindowFlags_None);\n", base, AppDirEnumName(n->DockDir), n->DockSize);
+        out->appendf("  ImGui::PushAppSidebar<%s>(app, vp, %s, %.1ff, ImGuiWindowFlags_None);\n", base, AppDirEnumName(n->DockDir), n->DockSize);
+        AppEmitStyleModLines(n, "app->Sidebars.back()", "  ", out);
         if (AppGraphHostsControl(g, n->Id))
           out->appendf("  ImGuiAppSidebarBase* sb_%d = app->Sidebars.back();\n", n->Id);
         span(n->Id, begin);
@@ -7145,11 +7410,22 @@ namespace ImGui
       const int parent = AppGraphParentOf(g, n->Id);
       const ImGuiAppNode* pn = parent >= 0 ? AppGraphFindNodeConst(g, parent) : nullptr;
       if (pn && pn->Kind == ImGuiAppNodeKind_Sidebar)
+      {
         out->appendf("  ImGui::PushSidebarControl<%s>(app, sb_%d); // hosted by %s\n", base, pn->Id, pn->Draft.Name);
+        char expr[48]; ImFormatString(expr, IM_ARRAYSIZE(expr), "sb_%d->Controls.back()", pn->Id);
+        AppEmitStyleModLines(n, expr, "  ", out);
+      }
       else if (pn && pn->Kind == ImGuiAppNodeKind_Window)
+      {
         out->appendf("  ImGui::PushWindowControl<%s>(app, win_%d); // hosted by %s\n", base, pn->Id, pn->Draft.Name);
+        char expr[48]; ImFormatString(expr, IM_ARRAYSIZE(expr), "win_%d->Controls.back()", pn->Id);
+        AppEmitStyleModLines(n, expr, "  ", out);
+      }
       else
+      {
         out->appendf("  ImGui::PushAppControl<%s>(app);\n", base);
+        AppEmitStyleModLines(n, "app->Controls.back()", "  ", out);
+      }
       span(n->Id, begin);
     }
     out->appendf("}\n");
@@ -7182,12 +7458,14 @@ namespace ImGui
     {
       char base[IM_LABEL_SIZE]; AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
       out->appendf("// Window '%s' bring-up:\nImGui::PushAppWindow<%s>(app);\n", n->Draft.Name, base);
+      AppEmitStyleModLines(n, "app->Windows.back()", "", out);
       break;
     }
     case ImGuiAppNodeKind_Sidebar:
     {
       char base[IM_LABEL_SIZE]; AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
-      out->appendf("// Sidebar '%s' bring-up:\nImGui::PushAppSidebar<%s>(app, vp, %s, %.0ff, ImGuiWindowFlags_None);\n", n->Draft.Name, base, AppDirEnumName(n->DockDir), n->DockSize);
+      out->appendf("// Sidebar '%s' bring-up:\nImGui::PushAppSidebar<%s>(app, vp, %s, %.1ff, ImGuiWindowFlags_None);\n", n->Draft.Name, base, AppDirEnumName(n->DockDir), n->DockSize);
+      AppEmitStyleModLines(n, "app->Sidebars.back()", "", out);
       break;
     }
     case ImGuiAppNodeKind_Struct:
@@ -7236,6 +7514,10 @@ namespace ImGui
       buf->appendf("Temp=%s,%d,%d,%s\n", n->Draft.TempFields.Data[f].Name, (int)n->Draft.TempFields.Data[f].Type, n->Draft.TempFields.Data[f].ArraySize, n->Draft.TempFields.Data[f].StructType);
     for (int c = 0; c < n->Commands.Size; c++)
       buf->appendf("Command=%s\n", n->Commands.Data[c].Name);
+    for (int s = 0; s < n->StyleMods.Size; s++)
+      buf->appendf("Style=%d,%g,%g,%d\n", (int)n->StyleMods.Data[s].Var, n->StyleMods.Data[s].Value.x, n->StyleMods.Data[s].Value.y, n->StyleMods.Data[s].Active ? 1 : 0);
+    for (int s = 0; s < n->ColorMods.Size; s++)
+      buf->appendf("Color=%d,%08X,%d\n", (int)n->ColorMods.Data[s].Col, n->ColorMods.Data[s].Value, n->ColorMods.Data[s].Active ? 1 : 0);
     // Expr is last: it is emitted verbatim into generated C++ and may itself contain commas.
     for (int e = 0; e < n->Events.Size; e++)
       buf->appendf("Event=%d,%d,%s,%s,%s,%s\n", (int)n->Events.Data[e].Edge, (int)n->Events.Data[e].Action,
@@ -7425,6 +7707,18 @@ namespace ImGui
       else if (strncmp(p, "Temp=", 5) == 0)      { if (cur) AppNodeParseField(&cur->Draft.TempFields, p + 5); }
       else if (strncmp(p, "Command=", 8) == 0)   { if (cur) AppNodeAddCommand(cur, p + 8); }
       else if (strncmp(p, "Event=", 6) == 0)     { if (cur) AppNodeParseEvent(cur, p + 6); }
+      else if (strncmp(p, "Style=", 6) == 0)
+      {
+        int var = 0, active = 1; float x = 0.0f, y = 0.0f;
+        if (cur && sscanf(p + 6, "%d,%f,%f,%d", &var, &x, &y, &active) >= 3 && var >= 0 && var < ImGuiStyleVar_COUNT)
+          cur->StyleMods.push_back(ImGuiAppStyleModDesc((ImGuiStyleVar)var, ImVec2(x, y), active != 0));
+      }
+      else if (strncmp(p, "Color=", 6) == 0)
+      {
+        int col = 0, active = 1; unsigned val = 0;
+        if (cur && sscanf(p + 6, "%d,%X,%d", &col, &val, &active) >= 2 && col >= 0 && col < ImGuiCol_COUNT)
+          cur->ColorMods.push_back(ImGuiAppColorModDesc((ImGuiCol)col, (ImU32)val, active != 0));
+      }
       else if (strncmp(p, "Link=", 5) == 0)
       {
         ImGuiAppNodeLink l; int kind = ImGuiAppEdgeKind_Data;
@@ -8147,6 +8441,9 @@ namespace ImGui
     ImVec2           InitialSize;
     ImGuiDir         DockDir;    // Sidebar only
     float            DockSize;   // Sidebar only
+    const ImGuiAppItemBase* Item; // live object (windows/sidebars/controls; null for layers) -- read within
+                                  // BuildAppLiveGraph only, to mirror StyleMods (kept OFF this struct: a nested
+                                  // ImVector member inside ImVector<AppLiveWant> would break ImVector's memcpy grow)
   };
 
   static const char* AppLayerTypeName(ImGuiAppLayerType t);   // fwd (defined above)
@@ -8174,6 +8471,7 @@ namespace ImGui
       AppLiveWant w; w.Kind = ImGuiAppNodeKind_Control; w.Key = id; w.DataId = id; w.LayerType = ImGuiAppLayerType_Task;
       w.ParentKey = parent_key;
       w.Flags = 0; w.HasPlacement = false; w.InitialPos = ImVec2(0.0f, 0.0f); w.InitialSize = ImVec2(0.0f, 0.0f); w.DockDir = ImGuiDir_None; w.DockSize = 0.0f;
+      w.Item = ctrl;
       ctrl->GetControlDataTypeName(w.Name, IM_ARRAYSIZE(w.Name));
       if (w.Name[0] == 0) ImStrncpy(w.Name, "Control", IM_ARRAYSIZE(w.Name));
       int n = ctrl->GetControlDependencyIDs(w.Deps, IM_ARRAYSIZE(w.Deps));
@@ -8200,6 +8498,7 @@ namespace ImGui
       AppLiveWant w; w.Kind = ImGuiAppNodeKind_Layer; w.Key = 0x4C000000u + (ImGuiID)i;
       w.DataId = 0; w.DepCount = 0; w.ParentKey = 0;
       w.Flags = 0; w.HasPlacement = false; w.InitialPos = ImVec2(0.0f, 0.0f); w.InitialSize = ImVec2(0.0f, 0.0f); w.DockDir = ImGuiDir_None; w.DockSize = 0.0f;
+      w.Item = nullptr;
       w.LayerType = lt;
       if (app->Layers.Data[i]->Label[0])   // PushAppLayer stamps the class name
         ImStrncpy(w.Name, app->Layers.Data[i]->Label, IM_ARRAYSIZE(w.Name));
@@ -8218,6 +8517,7 @@ namespace ImGui
       w.DataId = 0; w.DepCount = 0; w.LayerType = ImGuiAppLayerType_Task; w.ParentKey = 0;
       w.Flags = win->Flags; w.HasPlacement = win->HasInitialPlacement; w.InitialPos = win->InitialPos; w.InitialSize = win->InitialSize;
       w.DockDir = ImGuiDir_None; w.DockSize = 0.0f;
+      w.Item = win;
       ImStrncpy(w.Name, lbl[0] ? lbl : "Window", IM_ARRAYSIZE(w.Name));
       want.push_back(w);
       for (int c = 0; c < win->Controls.Size; c++)
@@ -8232,6 +8532,7 @@ namespace ImGui
       w.DataId = 0; w.DepCount = 0; w.LayerType = ImGuiAppLayerType_Task; w.ParentKey = 0;
       w.Flags = sb->Flags; w.HasPlacement = sb->HasInitialPlacement; w.InitialPos = sb->InitialPos; w.InitialSize = sb->InitialSize;
       w.DockDir = sb->DockDir; w.DockSize = sb->Size;
+      w.Item = sb;
       ImStrncpy(w.Name, lbl[0] ? lbl : "Sidebar", IM_ARRAYSIZE(w.Name));
       want.push_back(w);
       for (int c = 0; c < sb->Controls.Size; c++)
@@ -8304,6 +8605,11 @@ namespace ImGui
         node->InitialSize = want.Data[w].InitialSize;
         node->DockDir = want.Data[w].DockDir;
         node->DockSize = want.Data[w].DockSize;
+        if (want.Data[w].Item != nullptr)
+        {
+          node->StyleMods = want.Data[w].Item->StyleMods;
+          node->ColorMods = want.Data[w].Item->ColorMods;
+        }
         break;
       }
       made.push_back(lm);

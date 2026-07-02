@@ -436,6 +436,8 @@ struct ImGuiAppNode
   ImGuiID           LiveKey;        // stable upsert key for a live node (so its position survives re-mirroring)
   ImVector<ImGuiAppCommandDesc> Commands; // CommandLayer: definitions. Control: selected commands emitted by OnGetCommand.
   ImVector<ImGuiAppEventDesc>   Events;   // Control: authored temp-vs-last-temp events (see ImGuiAppEventDesc)
+  ImVector<ImGuiAppStyleModDesc> StyleMods; // Window/Sidebar/Control: authored style-var overrides (emitted into SetupApp)
+  ImVector<ImGuiAppColorModDesc> ColorMods; // Window/Sidebar/Control: authored style-color overrides (same lifecycle)
   ImVector<ImGuiAppNodePort> Ports;
   int               FieldList;       // Field node: which list it belongs to on its owner (0 = Persist, 1 = Temp)
   int               PersistStructId; // Control: Struct node its PersistData was exploded into (-1 = inline)

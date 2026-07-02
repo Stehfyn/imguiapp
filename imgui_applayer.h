@@ -267,16 +267,31 @@ IMGUI_API int ImStackTrace(char* out, int out_size, int skip_frames = 0);
 // under a debugger or exits with code 3 -- never the blocking CRT assert popup.
 IMGUI_API void ImGuiAppAssertFail(const char* expr, const char* file, int line);
 
-struct ImGuiColorModEx
+// One authorable style-var override on a window/sidebar/control: which var, the value to push, and a
+// runtime-toggleable Active flag. Value is self-describing (Value.x for float vars, both lanes for ImVec2
+// vars -- every ImGuiStyleVar is one of the two), unlike ImGuiStyleMod whose union needs GetStyleVarInfo to
+// interpret and whose fields carry pop-restore ("backup") semantics.
+struct ImGuiAppStyleModDesc
 {
-  ImGuiColorMod ColorMod;
+  ImGuiStyleVar Var;
+  ImVec2        Value;
   bool          Active;
+
+  ImGuiAppStyleModDesc()                                                { Var = 0; Value = ImVec2(0.0f, 0.0f); Active = true; }
+  ImGuiAppStyleModDesc(ImGuiStyleVar var, float v, bool active = true)  { Var = var; Value = ImVec2(v, 0.0f); Active = active; }
+  ImGuiAppStyleModDesc(ImGuiStyleVar var, ImVec2 v, bool active = true) { Var = var; Value = v; Active = active; }
 };
 
-struct ImGuiStyleModEx
+// The color twin: one authorable PushStyleColor override. Value is a packed IM_COL32 RGBA (the palette-constant
+// form), converted to/from floats only at the editing boundary.
+struct ImGuiAppColorModDesc
 {
-  ImGuiStyleMod StyleMod;
-  bool          Active;
+  ImGuiCol Col;
+  ImU32    Value;
+  bool     Active;
+
+  ImGuiAppColorModDesc()                                        { Col = 0; Value = 0; Active = true; }
+  ImGuiAppColorModDesc(ImGuiCol col, ImU32 v, bool active = true) { Col = col; Value = v; Active = active; }
 };
 
 //-----------------------------------------------------------------------------
@@ -350,6 +365,12 @@ namespace ImGui
 
   IMGUI_API void ShowAppLayerDemo(bool* p_open = nullptr);
 
+  // Apply desc arrays to the shared style/color stacks: pushes every Active (in-range) entry, returns the number
+  // pushed -- pop with PopStyleVar/PopStyleColor(count). One vocabulary, three users: composed items apply their
+  // authored StyleMods/ColorMods through these, and the composer's own chrome palette is defined in the same terms.
+  IMGUI_API int PushAppStyleMods(const ImGuiAppStyleModDesc* mods, int count);
+  IMGUI_API int PushAppColorMods(const ImGuiAppColorModDesc* mods, int count);
+
   // Monospace font for the dogfooded editor's generated-code inspector. Space-padded column alignment (e.g. the
   // generated AppCommand enum) only lines up in a fixed-width font; the app's UI font is proportional. The host
   // loads a mono face (e.g. Consolas) at font-init time and registers it here; null leaves the inspector on the UI font.
@@ -366,13 +387,21 @@ struct ImGuiAppLayerBase : ImGuiInterface
 
 struct ImGuiAppItemBase : ImGuiInterface
 {
+  // Authored style-var/color overrides, applied around the item's submission. The base OnStylePush pushes every
+  // Active entry and latches the pushed counts; OnStylePop pops those latched counts, so flipping Active between
+  // push and pop cannot unbalance the stacks. Override only for exotic non-desc styling.
+  ImVector<ImGuiAppStyleModDesc> StyleMods;
+  ImVector<ImGuiAppColorModDesc> ColorMods;
+  mutable int                    _StylePushCount = 0;
+  mutable int                    _ColorPushCount = 0;
+
   virtual void OnInitialize(ImGuiApp*)                         const = 0;
   virtual void OnShutdown(ImGuiApp*)                           const = 0;
   virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*) const = 0;
   virtual void OnUpdate(const ImGuiApp* app, float dt)         const = 0;
   virtual void OnRender(const ImGuiApp*)                       const = 0;
-  virtual void OnStylePush(const ImGuiApp*)                    const = 0;
-  virtual void OnStylePop(const ImGuiApp*)                     const = 0;
+  virtual void OnStylePush(const ImGuiApp*)                    const;
+  virtual void OnStylePop(const ImGuiApp*)                     const;
 };
 
 struct ImGuiAppWindowBase : ImGuiAppItemBase
@@ -382,8 +411,6 @@ struct ImGuiAppWindowBase : ImGuiAppItemBase
   ImGuiViewport* Viewport = nullptr;
   ImGuiWindowFlags Flags = ImGuiWindowFlags_None;
   ImVector<ImGuiAppControlBase*> Controls;
-  ImVector<ImGuiStyleModEx> StyleMods;
-  ImVector<ImGuiColorModEx> ColorMods;
 
   // Optional first-use placement (applied with ImGuiCond_FirstUseEver, so saved .ini wins).
   bool   HasInitialPlacement = false;
@@ -608,9 +635,6 @@ struct ImGuiInterfaceAdapter : Base, ImGuiInterfaceAdapterBase<PersistDataT, Tem
       std::apply([=, this](DataDependencies*... dependencies) { OnRender(&_InstanceData->PersistData, &_InstanceData->TempData, dependencies...); }, GetAllDependencyData(app));
     }
 
-    // Controls do not push/pop style by default (override in a derived control if needed).
-    virtual void OnStylePush(const ImGuiApp*) const override {}
-    virtual void OnStylePop(const ImGuiApp*) const override {}
 };
 
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
@@ -648,8 +672,6 @@ struct ImGuiAppWindow : ImGuiAppWindowBase
   virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*) const override {};
   virtual void OnUpdate(const ImGuiApp* app, float dt)         const override {};
   virtual void OnRender(const ImGuiApp*)                       const override {};
-  virtual void OnStylePush(const ImGuiApp*)                    const override {};
-  virtual void OnStylePop(const ImGuiApp*)                     const override {};
 };
 
 template <typename T>
@@ -662,8 +684,6 @@ struct ImGuiAppSidebar : ImGuiAppSidebarBase
   virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*) const override {};
   virtual void OnUpdate(const ImGuiApp* app, float dt)         const override {};
   virtual void OnRender(const ImGuiApp*)                       const override {};
-  virtual void OnStylePush(const ImGuiApp*)                    const override {};
-  virtual void OnStylePop(const ImGuiApp*)                     const override {};
 };
 
 namespace ImGui

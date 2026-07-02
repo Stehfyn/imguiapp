@@ -356,6 +356,60 @@ namespace
   }
 }
 
+int ImGui::PushAppStyleMods(const ImGuiAppStyleModDesc* mods, int count)
+{
+    int pushed = 0;
+    for (int i = 0; i < count; i++)
+    {
+      const ImGuiAppStyleModDesc& mod = mods[i];
+      if (!mod.Active || mod.Var < 0 || mod.Var >= ImGuiStyleVar_COUNT)
+        continue;
+      const ImGuiStyleVarInfo* info = ImGui::GetStyleVarInfo(mod.Var);
+      if (info == nullptr || info->DataType != ImGuiDataType_Float)
+        continue;
+      if (info->Count == 2)
+        ImGui::PushStyleVar(mod.Var, mod.Value);
+      else
+        ImGui::PushStyleVar(mod.Var, mod.Value.x);
+      pushed++;
+    }
+    return pushed;
+}
+
+int ImGui::PushAppColorMods(const ImGuiAppColorModDesc* mods, int count)
+{
+    int pushed = 0;
+    for (int i = 0; i < count; i++)
+    {
+      const ImGuiAppColorModDesc& mod = mods[i];
+      if (!mod.Active || mod.Col < 0 || mod.Col >= ImGuiCol_COUNT)
+        continue;
+      ImGui::PushStyleColor(mod.Col, mod.Value);
+      pushed++;
+    }
+    return pushed;
+}
+
+void ImGuiAppItemBase::OnStylePush(const ImGuiApp* app) const
+{
+    IM_UNUSED(app);
+
+    _StylePushCount = ImGui::PushAppStyleMods(StyleMods.Data, StyleMods.Size);
+    _ColorPushCount = ImGui::PushAppColorMods(ColorMods.Data, ColorMods.Size);
+}
+
+void ImGuiAppItemBase::OnStylePop(const ImGuiApp* app) const
+{
+    IM_UNUSED(app);
+
+    if (_StylePushCount > 0)
+      ImGui::PopStyleVar(_StylePushCount);
+    if (_ColorPushCount > 0)
+      ImGui::PopStyleColor(_ColorPushCount);
+    _StylePushCount = 0;
+    _ColorPushCount = 0;
+}
+
 void ImGuiAppWindowLayer::OnAttach(ImGuiApp* app) const
 {
     IM_UNUSED(app);
@@ -429,7 +483,11 @@ void ImGuiAppWindowLayer::OnRender(const ImGuiApp* app) const
 
       // Controls render their own windows; submit them outside the sidebar's Begin/End.
       for (auto& control : sidebar->Controls)
+      {
+        control->OnStylePush(app);
         control->OnRender(app);
+        control->OnStylePop(app);
+      }
     }
 
     for (auto& window : app->Windows)
@@ -450,8 +508,13 @@ void ImGuiAppWindowLayer::OnRender(const ImGuiApp* app) const
 
         // Window-hosted controls render INSIDE the host window (they submit child regions, not their own
         // Begin/End). This is what distinguishes a hosted control from an app-level control (which owns a window).
+        // Style mods bracket OnRender only, so they style the control's region but not its popups.
         for (auto& control : window->Controls)
+        {
+          control->OnStylePush(app);
           control->OnRender(app);
+          control->OnStylePop(app);
+        }
       }
       ImGui::End();
 
@@ -459,7 +522,11 @@ void ImGuiAppWindowLayer::OnRender(const ImGuiApp* app) const
     }
 
     for (auto& control : app->Controls)
+    {
+      control->OnStylePush(app);
       control->OnRender(app);
+      control->OnStylePop(app);
+    }
 }
 
 namespace ImGui
