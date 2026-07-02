@@ -1,11 +1,7 @@
-// ImGuiAppLayer canvas engine: a lean, phase-coherent node canvas (imnodes replacement).
+// ImGuiAppLayer canvas engine: a lean, phase-coherent node canvas.
 // Design: docs/canvas-engine-design.md. Core invariant: node geometry lives in MODEL units; the
 // camera (pan + zoom) is the only transform, applied at draw; measurements are captured the same
-// frame in the same units they are consumed in -- the out-of-phase bug class of
-// docs/phase-coherence.md is unrepresentable by construction.
-//
-// Status: API contract for slices C1-C3 (see the design doc). Implementation lands slice by slice;
-// nothing in the Composer includes this header until C4 (migration).
+// frame in the same units they are consumed in (docs/phase-coherence.md).
 
 #pragma once
 
@@ -46,7 +42,7 @@ struct ImGuiCanvasStyle
 
 struct ImGuiCanvasIO
 {
-  // Bindings policy (the Composer's field-tested defaults are the defaults here).
+  // Bindings policy.
   bool LmbPansEmptyCanvas;     // LMB-drag on empty canvas pans (box select intentionally absent)
   bool RmbPans;                // RMB-drag pans; a short RMB click reports CanvasMenuRequest*
   bool WheelZooms;             // cursor-centered; Ctrl+wheel zooms even over nodes/items
@@ -89,12 +85,11 @@ namespace ImGui
   IMGUI_API void   CanvasFitNodes(ImGuiCanvasState* c, const int* node_ids, int count, float margin_px);
   IMGUI_API void   CanvasFitAll(ImGuiCanvasState* c, float margin_px);                       // over nodes submitted last frame
 
-  // Minimap, matched to imnodes' MiniMap: call between CanvasBegin/CanvasEnd; drawn by CanvasEnd as
-  // a bottom-right inset fitted to the NODE CONTENT's aspect within size_fraction of the canvas --
-  // the content always fills the map. Node plates are state-colored (map-hover / selected / default)
-  // with scaled rounding, links are scaled beziers, and the current view is a translucent canvas
-  // rect through the same mapping (clipped when the camera sees more than the content). Holding LMB
-  // over the map continuously recenters the camera. Its rect is excluded from the canvas FSM.
+  // Minimap: call between CanvasBegin/CanvasEnd; drawn by CanvasEnd as a bottom-right inset fitted
+  // to the node content's aspect within size_fraction of the canvas. Node plates are state-colored
+  // (map-hover / selected / default), links draw as scaled beziers, and the current view is a
+  // translucent rect through the same mapping (clipped when the camera sees more than the content).
+  // Holding LMB over the map continuously recenters the camera. Its rect is excluded from the FSM.
   IMGUI_API void   CanvasMiniMap(ImGuiCanvasState* c, float size_fraction);
 
   // ---- nodes (geometry in MODEL units, always) --------------------------------------------------

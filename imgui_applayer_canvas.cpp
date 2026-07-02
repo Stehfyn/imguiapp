@@ -1,11 +1,10 @@
-// ImGuiAppLayer canvas engine, slice C1: canvas child + native camera (pan/zoom) + grid + nodes
-// with same-frame model-unit measurement + selection + drag + menu requests.
+// ImGuiAppLayer canvas engine: canvas child + native camera (pan/zoom) + grid + nodes with
+// same-frame model-unit measurement + pins/wires + selection + drag + minimap + event latches.
 // Design: docs/canvas-engine-design.md. Coherence rules: docs/phase-coherence.md.
 //
-// The core invariant, restated where it is enforced: node geometry is STORED in model units; the
-// camera is applied exactly once, at draw/hit-test time, always with THIS frame's values. Sizes are
-// measured in the same frame and same zoom they were rendered with, so the model value is exact --
-// no cross-frame pixel ever meets a fresh transform.
+// The core invariant: node geometry is STORED in model units; the camera is applied exactly once,
+// at draw/hit-test time, always with THIS frame's values. Sizes are measured in the same frame and
+// same zoom they were rendered with, so the model value is exact.
 //
 // Index of this file (search for "[SECTION]"):
 // [SECTION] State
@@ -122,7 +121,7 @@ struct ImGuiCanvasState
   bool   EditFocusPending;
   int    LastEditingNodeId;    // focus-once tracking across frames
 
-  // Minimap (imnodes-style: the rect hugs the mapped content's aspect within the max fraction box)
+  // Minimap (the rect hugs the mapped content's aspect within the max fraction box)
   bool   MiniMapReq;
   float  MiniMapFraction;
   ImVec2 MiniRectMin;          // last drawn rect (screen); the FSM keeps out of it
@@ -423,8 +422,8 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
   ImGuiIO& io = ImGui::GetIO();
   const ImVec2 mouse = io.MousePos;
 
-  // The minimap owns its rect (imnodes semantics): while the mouse is over it, holding LMB
-  // continuously recenters the camera on the mapped point. The canvas FSM stays out.
+  // The minimap owns its rect: while the mouse is over it, holding LMB continuously recenters the
+  // camera on the mapped point. The canvas FSM stays out.
   const bool in_minimap = mouse.x >= c->MiniRectMin.x && mouse.x < c->MiniRectMax.x
                        && mouse.y >= c->MiniRectMin.y && mouse.y < c->MiniRectMax.y;
   if (in_minimap && c->Interaction == ImGuiCanvasInteraction_None)
@@ -526,8 +525,8 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
     }
     else
     {
-      // Click on empty canvas deselects (Blender/imnodes convention); Ctrl preserves the set so an
-      // additive gesture that misses a node does not wipe it.
+      // Click on empty canvas deselects; Ctrl preserves the set so an additive gesture that misses
+      // a node does not wipe it.
       if (!io.KeyCtrl)
         c->Selection.resize(0);
       c->SelectedWire = -1;
@@ -679,7 +678,7 @@ namespace ImGui
 
     // The interaction catch-all: one invisible item spanning the canvas. Node-body widgets submit
     // AFTER it, so they win hover per imgui's last-wins rule; the catch-all receives exactly the
-    // empty-canvas and node-plate gestures (plates are draw-list, not items -- deliberate).
+    // empty-canvas and node-plate gestures (plates are draw-list primitives, not items).
     SetNextItemAllowOverlap();
     InvisibleButton("##canvas_input", ImVec2(ImMax(1.0f, c->CanvasSize.x), ImMax(1.0f, c->CanvasSize.y)));
     const bool item_hovered = IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
@@ -1039,12 +1038,11 @@ namespace ImGui
       }
     }
 
-    // Minimap, matched to imnodes' MiniMap (CalcMiniMapLayout/MiniMapUpdate): the mapping covers the
-    // NODE CONTENT bounds only -- never the viewport -- so the nodes always fill the map at the
-    // content's own aspect ratio (fitted inside the max fraction box). The current view is drawn
-    // THROUGH that same mapping as a translucent canvas rect, clipped to the map when it extends
-    // past the content. Holding LMB over the map continuously recenters the camera (no hysteresis).
-    // The rect + extents are remembered so the next frame's FSM can invert the mapping.
+    // Minimap: the mapping covers the NODE CONTENT bounds only -- never the viewport -- so the
+    // nodes always fill the map at the content's own aspect ratio (fitted inside the max fraction
+    // box). The current view is drawn THROUGH that same mapping as a translucent rect, clipped to
+    // the map when it extends past the content. Holding LMB over the map continuously recenters
+    // the camera. The rect + extents are remembered so the next frame's FSM can invert the mapping.
     bool minimap_drawn = false;
     if (c->MiniMapReq)
     {
@@ -1061,7 +1059,7 @@ namespace ImGui
       }
       if (bmin.x <= bmax.x)
       {
-        // imnodes CalcMiniMapLayout: fit the CONTENT aspect into max_size = canvas * fraction.
+        // Fit the CONTENT aspect into max_size = canvas * fraction.
         const ImVec2 span(ImMax(1.0f, bmax.x - bmin.x), ImMax(1.0f, bmax.y - bmin.y));
         const ImVec2 max_size(c->CanvasSize.x * c->MiniMapFraction, c->CanvasSize.y * c->MiniMapFraction);
         const float  content_aspect = span.x / span.y;
@@ -1086,7 +1084,7 @@ namespace ImGui
         c->DrawList->AddRect(rmin, rmax, IM_COL32(90, 92, 100, 180), 4.0f);
         c->DrawList->PushClipRect(rmin, rmax, true);
 
-        // Links: scaled beziers, thickness scaled by the minimap scaling (imnodes MiniMapDrawLink).
+        // Links: beziers with thickness scaled by the map scaling.
         for (int i = 0; i < c->Wires.Size; i++)
         {
           const ImGuiCanvasPinRec* pa = CanvasFindPin(c, c->Wires.Data[i].PinA);
@@ -1102,8 +1100,8 @@ namespace ImGui
                                       ImMax(1.0f, c->Style.WireThickness * s));
         }
 
-        // Nodes: filled + outlined, state-colored (imnodes MiniMapDrawNode -- hovered-in-map beats
-        // selected beats default), rounding scaled by the map scaling.
+        // Nodes: filled + outlined, state-colored (hovered-in-map beats selected beats default),
+        // rounding scaled by the map scaling.
         for (int i = 0; i < c->Nodes.Size; i++)
         {
           const ImGuiCanvasNodeRec* n = &c->Nodes.Data[i];
@@ -1121,8 +1119,8 @@ namespace ImGui
           c->DrawList->AddRect(nm, nx, IM_COL32(20, 20, 22, 200), rounding);
         }
 
-        // Current view (imnodes MiniMapCanvas): faint fill + outline through the SAME mapping; the
-        // clip rect crops it when the camera sees more than the content.
+        // Current view: faint fill + outline through the SAME mapping; the clip rect crops it when
+        // the camera sees more than the content.
         const ImVec2 vmn = to_mini(CanvasFromScreen(c, c->Origin));
         const ImVec2 vmx = to_mini(CanvasFromScreen(c, c->Origin + c->CanvasSize));
         c->DrawList->AddRectFilled(vmn, vmx, IM_COL32(200, 200, 200, 25));

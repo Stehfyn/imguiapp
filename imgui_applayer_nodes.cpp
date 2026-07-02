@@ -1,4 +1,4 @@
-// ImGuiAppLayer data-driven node tooling, on the in-house canvas engine (imgui_applayer_canvas.h):
+// ImGuiAppLayer data-driven node tooling, on the canvas engine (imgui_applayer_canvas.h):
 // model-unit geometry, native camera, same-frame measurement. The engine dependency stays confined
 // to this translation unit; imgui_applayer_nodes.h only forward-declares the canvas state.
 //
@@ -530,7 +530,7 @@ namespace ImGui
   // Flat rounded enum: centered value, hover shows L/R step arrows (click edges to step), click center for dropdown.
   static bool AppBlEnum(const char* str_id, float width, int* v, const char* (*name_of)(int), int count)
   {
-    // Built on ImGui::BeginCombo (NOT a hand-rolled OpenPopup): a raw popup opened inside a canvas node
+    // Built on ImGui::BeginCombo (not a raw OpenPopup): a popup opened inside a canvas node
     // mis-anchors and lets the click fall through to the node/window drag. BeginCombo's popup is managed by
     // ImGui and behaves -- it's the same path the layer-type combo uses. Styled with the Blender field palette
     // (flat dark rounded field, dark popup, hover-highlighted rows) so it matches the other Bl widgets.
@@ -1203,8 +1203,8 @@ namespace ImGui
   static const ImGuiAppGraph* g_editor_pool_graph = nullptr;   // the graph whose ids the editor canvas holds
 
   // The Composer's single canvas instance (the engine stores node geometry in MODEL units and
-  // measures it the same frame it renders -- the stale-frame bug class is unrepresentable there,
-  // see imgui_applayer_canvas.h). Created on first use; engine defaults match the Composer theme.
+  // measures it the same frame it renders; see
+  // imgui_applayer_canvas.h). Created on first use.
   static ImGuiCanvasState* g_app_canvas = nullptr;
 
   static ImGuiCanvasState* AppEditorCanvas()
@@ -1230,7 +1230,7 @@ namespace ImGui
   }
 
   // A node's footprint in MODEL units: last frame's measurement when it has been on the canvas, a per-kind
-  // estimate before that. Placement and tidy both size against THIS -- fixed fantasy row heights are what made
+  // estimate before that. Placement and tidy both size against THIS -- fixed per-kind row heights made
   // the old layout pile tall nodes onto each other. The pool-graph guard matters: a DIFFERENT graph's node ids
   // (tests, tools) can collide numerically with the editor canvas's, returning another graph's geometry.
   static ImVec2 AppLayoutNodeSize(const ImGuiAppGraph* g, const ImGuiAppNode* n)
@@ -2705,8 +2705,7 @@ namespace ImGui
   }
 
   // Canvas camera + node geometry, straight from the engine (model units everywhere; the camera is
-  // the engine's one transform). These names survive from the old zoom-emulation seam so the many
-  // call sites read unchanged; the bodies are now trivial passthroughs.
+  // the engine's one transform).
   static float AppCanvasZoom()
   {
     return ImGui::CanvasGetZoom(AppEditorCanvas());
@@ -3031,7 +3030,7 @@ namespace ImGui
     // Per visible layer: screen y-span + accent, for the Unity-execution-order-style flow rail and phase bands.
     // [Phase-coherent geometry] positions come from the MODEL (GridPos) and sizes from the engine's model
     // measurement, both transformed with THIS frame's camera -- never from last frame's pixel rects, which lag
-    // one frame behind any zoom change (the stale flash this framework exists to remove).
+    // one frame behind any zoom change (docs/phase-coherence.md rule 1).
     ImGuiCanvasState* cv = AppEditorCanvas();
     const float  z = AppCanvasZoom();
 
@@ -4607,7 +4606,7 @@ namespace ImGui
     int              pending_build_owner = -1;
 
     // Camera bindings (LMB-drag pan, RMB pan + short-click menu, cursor-anchored wheel zoom) are the
-    // engine's IO defaults -- the Composer's field-tested policy IS the default policy.
+    // engine's IO defaults.
 
     // Uniform layer width, constrained TOGETHER, from the engine's MODEL measurements: the widest layer's
     // content raises everyone's width. Model units are zoom-invariant, so a zoom change can never show a
@@ -6119,7 +6118,7 @@ namespace ImGui
       const float r = em * 0.72f;
       const float step = r * 2.0f + em * 0.30f;
       // Viewport chrome renders ABOVE canvas content, always: the window list sits UNDER the canvas child, so
-      // any node scrolled beneath the gizmo column used to occlude the controls (dead-looking chrome again).
+      // a node scrolled beneath the gizmo column would occlude these controls.
       ImDrawList* dl = ImGui::GetForegroundDrawList();
       dl->PushClipRect(editor_min, editor_min + editor_size, true);
 

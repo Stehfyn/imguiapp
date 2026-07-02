@@ -1600,7 +1600,7 @@ namespace
 
             // A real overlay WINDOW, not draw-list-over-canvas: viewport chrome must render above canvas
             // content AND keep its hit-test when a node scrolls beneath it (the parent-window invisible
-            // button went dead under the canvas child -- the dead-chrome class again).
+            // button loses its hit-test under the canvas child).
             ImGui::SetNextWindowPos(s_min);
             ImGui::SetNextWindowBgAlpha(0.99f);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, em * 0.35f);
