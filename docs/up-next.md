@@ -28,8 +28,8 @@ of the USER'S composed app:
 
 - **UI coherence program** — [composer-ui-design.md](composer-ui-design.md): lateral interaction
   ties (brushing & linking across outliner/canvas/inspector/code/problems) + canvas refinement
-  measured against Blender/UE/Unity, grounded in Cognitive Dimensions of Notations. Start with
-  slice S1 (hover reciprocity, status-bar keymap hints, ambient problem marks).
+  measured against Blender/UE/Unity, grounded in Cognitive Dimensions of Notations. S1 landed;
+  next slice S2 (annotation frames, align/distribute; minimap already existed via imnodes).
 
 - **Sequence-order editing** — drag execution badges to reorder pushes inside a scope (plus a
   click-nudge fallback); order is model state, codegen emits it. (Reading the sequence exists;
@@ -68,6 +68,15 @@ of the USER'S composed app:
   acknowledged tech debt; fold into the command pipeline once payloads exist.
 
 ## Recently landed (2026-07-01)
+
+- **S1 coherence core** (from composer-ui-design.md) — brushing hover sync (`AppGraphHoverNode/Link`
+  + `AppGraphHovered*`, one-frame latency): outliner row hover halos the canvas node, canvas hover
+  tints the outliner row, wire hover halos both endpoints, inspector binding rows light their wire,
+  problems rows preview their node. Status line along the canvas bottom states what the mouse does
+  right now (hover-target keymap hints, Blender-style) and absorbs link-rejection messages. Ambient
+  problem marks from a signature-keyed validation cache (`AppGraphIssuesCached` /
+  `AppGraphNodeSeverity`): severity dot on the canvas title bar, underline on the outliner row,
+  issue rows at the top of the inspector.
 
 - **Event expression checking** — `AppEventExprCheck`: tiny grammar (field refs
   `temp_data->x` / `last_temp_data->x` / `data->x` / `<dep_param>-><field>`, struct members via

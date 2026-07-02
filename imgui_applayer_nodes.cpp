@@ -2452,12 +2452,17 @@ namespace ImGui
       if (g->Bindings.Data[i].LinkId != link_id)
         continue;
       ImGui::PushID(row++);
+      ImGui::BeginGroup();
       AppBlInputText("##dst", g->Bindings.Data[i].DstField, IM_ARRAYSIZE(g->Bindings.Data[i].DstField), ImGui::GetFontSize() * 6.0f);
       ImGui::SameLine(); ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("="); ImGui::SameLine();
       AppBlInputText("##src", g->Bindings.Data[i].SrcField, IM_ARRAYSIZE(g->Bindings.Data[i].SrcField), ImGui::GetFontSize() * 6.0f);
       ImGui::SameLine();
       if (AppRowDeleteButton("##del"))
         remove = i;
+      ImGui::EndGroup();
+      // Brushing: pointing at a binding row lights the wire it belongs to on the canvas.
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
+        AppGraphHoverLink(link_id, ImGuiAppHoverSource_Inspector);
       ImGui::PopID();
     }
     if (remove >= 0)
@@ -2469,6 +2474,103 @@ namespace ImGui
       g->Bindings.push_back(b);
     }
     ImGui::PopID();
+  }
+
+  //-----------------------------------------------------------------------------
+  // [SECTION] Hover sync (brushing across coordinated views) + cached validation
+  //-----------------------------------------------------------------------------
+  // The Composer's panels are projections of one model; brushing (hover in one view highlights the same
+  // datum in all views) is what makes them read as one instrument. Writers report this frame; readers see
+  // last frame's report -- the same one-frame-latency idiom the node title hover uses.
+
+  struct AppHoverState { int NodeId; int LinkId; ImGuiAppHoverSource NodeSrc; ImGuiAppHoverSource LinkSrc; };
+  static AppHoverState s_hover_cur   = { -1, -1, ImGuiAppHoverSource_None, ImGuiAppHoverSource_None };
+  static AppHoverState s_hover_prev  = { -1, -1, ImGuiAppHoverSource_None, ImGuiAppHoverSource_None };
+  static int           s_hover_frame = -1;
+
+  static void AppHoverRotate()
+  {
+    const int fc = ImGui::GetFrameCount();
+    if (fc == s_hover_frame)
+      return;
+    const AppHoverState empty = { -1, -1, ImGuiAppHoverSource_None, ImGuiAppHoverSource_None };
+    s_hover_prev = (fc == s_hover_frame + 1) ? s_hover_cur : empty;   // a skipped frame drops stale hover
+    s_hover_cur = empty;
+    s_hover_frame = fc;
+  }
+
+  void AppGraphHoverNode(int node_id, ImGuiAppHoverSource source)
+  {
+    AppHoverRotate();
+    if (node_id >= 0) { s_hover_cur.NodeId = node_id; s_hover_cur.NodeSrc = source; }
+  }
+
+  void AppGraphHoverLink(int link_id, ImGuiAppHoverSource source)
+  {
+    AppHoverRotate();
+    if (link_id >= 0) { s_hover_cur.LinkId = link_id; s_hover_cur.LinkSrc = source; }
+  }
+
+  int AppGraphHoveredNode(ImGuiAppHoverSource* out_source)
+  {
+    AppHoverRotate();
+    if (out_source != nullptr) *out_source = s_hover_prev.NodeSrc;
+    return s_hover_prev.NodeId;
+  }
+
+  int AppGraphHoveredLink(ImGuiAppHoverSource* out_source)
+  {
+    AppHoverRotate();
+    if (out_source != nullptr) *out_source = s_hover_prev.LinkSrc;
+    return s_hover_prev.LinkId;
+  }
+
+  // Validation cache. AppGraphSignature covers everything codegen-visible; bindings are folded in on top
+  // (they can carry issues of their own without changing the signature). Recomputes only on model change.
+  static ImVector<ImGui::ImGuiAppGraphIssue> s_issues_cache;
+  static ImGuiID      s_issues_sig = 0;
+  static bool         s_issues_valid = false;
+  static ImGuiStorage s_issues_severity;   // node id -> worst severity on that node
+
+  const ImVector<ImGuiAppGraphIssue>* AppGraphIssuesCached(const ImGuiAppGraph* g)
+  {
+    IM_ASSERT(g != nullptr);
+    ImGuiID sig = AppGraphSignature(g);
+    for (int i = 0; i < g->Bindings.Size; i++)
+    {
+      sig = ImHashData(&g->Bindings.Data[i].LinkId, sizeof(int), sig);
+      sig = ImHashStr(g->Bindings.Data[i].DstField, 0, sig);
+      sig = ImHashStr(g->Bindings.Data[i].SrcField, 0, sig);
+    }
+    if (!s_issues_valid || sig != s_issues_sig)
+    {
+      s_issues_sig = sig;
+      s_issues_valid = true;
+      s_issues_cache.resize(0);
+      AppGraphValidate(g, &s_issues_cache);
+      s_issues_severity.Clear();
+      for (int i = 0; i < s_issues_cache.Size; i++)
+      {
+        if (s_issues_cache.Data[i].NodeId < 0)
+          continue;
+        const ImGuiID key = (ImGuiID)s_issues_cache.Data[i].NodeId;
+        if (s_issues_cache.Data[i].Severity > s_issues_severity.GetInt(key, 0))
+          s_issues_severity.SetInt(key, s_issues_cache.Data[i].Severity);
+      }
+    }
+    return &s_issues_cache;
+  }
+
+  int AppGraphNodeSeverity(const ImGuiAppGraph* g, int node_id)
+  {
+    AppGraphIssuesCached(g);
+    return s_issues_severity.GetInt((ImGuiID)node_id, 0);
+  }
+
+  // Shared severity accents: same glyph + hue in canvas, outliner, and inspector (consistency dimension).
+  static ImU32 AppSeverityColor(int severity)
+  {
+    return severity >= 2 ? IM_COL32(224, 92, 82, 255) : IM_COL32(222, 168, 62, 255);
   }
 
   //-----------------------------------------------------------------------------
@@ -2929,6 +3031,23 @@ namespace ImGui
     }
 
     ImGui::PushID(n->Id);
+
+    // Ambient problem marks: this node's validation issues, stated where the fix happens. The Problems
+    // list stays the whole-graph index; here only the selected node's rows appear.
+    if (AppGraphNodeSeverity(g, node_id) > 0)
+    {
+      const ImVector<ImGuiAppGraphIssue>* issues = AppGraphIssuesCached(g);
+      for (int i = 0; i < issues->Size; i++)
+      {
+        if (issues->Data[i].NodeId != node_id)
+          continue;
+        ImGui::PushStyleColor(ImGuiCol_Text, AppSeverityColor(issues->Data[i].Severity));
+        ImGui::TextWrapped(ICON_FA_TRIANGLE_EXCLAMATION "  %s", issues->Data[i].Text);
+        ImGui::PopStyleColor();
+      }
+      ImGui::Separator();
+    }
+
     if (n->IsLive)
     {
       ImGui::TextDisabled("%s  (live -- read-only mirror)", n->Draft.Name[0] ? n->Draft.Name : "(live)");
@@ -4031,7 +4150,14 @@ namespace ImGui
       // Skip links into a node folded behind a collapsed group: its attribute was not submitted this frame.
       if ((oa && AppNodeHiddenByCollapse(g, oa->Id)) || (ob && AppNodeHiddenByCollapse(g, ob->Id)))
         continue;
+      // Brushing echo on wires: the link another view (inspector binding rows) points at renders bright.
+      ImGuiAppHoverSource lsrc = ImGuiAppHoverSource_None;
+      const bool brushed = g->Links.Data[li].Id == AppGraphHoveredLink(&lsrc) && lsrc != ImGuiAppHoverSource_Canvas && lsrc != ImGuiAppHoverSource_None;
+      if (brushed)
+        ImNodes::PushColorStyle(ImNodesCol_Link, IM_COL32(250, 250, 252, 220));
       ImNodes::Link(g->Links.Data[li].Id, g->Links.Data[li].StartAttr, g->Links.Data[li].EndAttr);
+      if (brushed)
+        ImNodes::PopColorStyle();
     }
 
     // Overview minimap (drawn as an overlay inside the editor; must precede EndNodeEditor). Lets the user see
@@ -4301,6 +4427,11 @@ namespace ImGui
     const bool over_node = ImNodes::IsNodeHovered(&hovered_node);
     const bool over_link = ImNodes::IsLinkHovered(&hovered_link);
     const bool over_pin  = ImNodes::IsPinHovered(&hovered_pin);
+    // Brushing: report the canvas's hovered datum so the other views can echo it next frame.
+    if (over_node)
+      AppGraphHoverNode(hovered_node, ImGuiAppHoverSource_Canvas);
+    if (over_link)
+      AppGraphHoverLink(hovered_link, ImGuiAppHoverSource_Canvas);
     // Double-click drills into a node's composition where the title is not a rename target: layers always
     // (their titles are static), live mirrors too. Design windows/controls rename on title double-click, so
     // they enter via Tab / the outliner instead.
@@ -4915,6 +5046,104 @@ namespace ImGui
         ImGui::CloseCurrentPopup();
       }
       ImGui::EndPopup();
+    }
+
+    // Brushing echo: halo the node the user is pointing at in ANOTHER view (the canvas's own hovered node
+    // is already outlined by imnodes), and halo both endpoints of a hovered wire -- wherever it was hovered.
+    {
+      const float em = ImGui::GetFontSize();
+      auto halo = [&](int node_id)
+      {
+        if (node_id < 0 || !AppEditorNodeWasSubmitted(node_id))
+          return;
+        const ImGuiAppNode* hn = AppGraphFindNodeConst(g, node_id);
+        if (hn == nullptr)
+          return;
+        const ImU32 tint = AppGraphOriginColor(hn);
+        const ImU32 accent = tint ? tint : (hn->Kind == ImGuiAppNodeKind_Layer ? AppLayerAccent(hn->LayerType) : AppKindColor(hn->Kind));
+        const ImVec2 p = ImNodes::GetNodeScreenSpacePos(node_id);
+        const ImVec2 d = ImNodes::GetNodeDimensions(node_id);
+        const float ex = em * 0.25f;
+        ImGui::GetWindowDrawList()->AddRect(ImVec2(p.x - ex, p.y - ex), ImVec2(p.x + d.x + ex, p.y + d.y + ex),
+                                            (accent & 0x00FFFFFF) | 0xE6000000, em * 0.4f, 0, 2.0f);
+      };
+      ImGuiAppHoverSource nsrc = ImGuiAppHoverSource_None;
+      ImGuiAppHoverSource lsrc = ImGuiAppHoverSource_None;
+      const int hnode = AppGraphHoveredNode(&nsrc);
+      const int hlink = AppGraphHoveredLink(&lsrc);
+      if (hnode >= 0 && nsrc != ImGuiAppHoverSource_Canvas)
+        halo(hnode);
+      if (hlink >= 0)
+        for (int li = 0; li < g->Links.Size; li++)
+          if (g->Links.Data[li].Id == hlink)
+          {
+            halo(AppGraphPortOwnerId(g, g->Links.Data[li].StartAttr));
+            halo(AppGraphPortOwnerId(g, g->Links.Data[li].EndAttr));
+            break;
+          }
+    }
+
+    // Ambient problem marks: a severity dot on the node's title bar, where the problem lives -- the
+    // Problems list stays the index, the mark removes the navigation step.
+    {
+      const float em = ImGui::GetFontSize();
+      ImDrawList* dl = ImGui::GetWindowDrawList();
+      for (int i = 0; i < s_editor_pool_ids.Size; i++)
+      {
+        const int sev = AppGraphNodeSeverity(g, s_editor_pool_ids.Data[i]);
+        if (sev <= 0)
+          continue;
+        const ImVec2 p = ImNodes::GetNodeScreenSpacePos(s_editor_pool_ids.Data[i]);
+        const ImVec2 d = ImNodes::GetNodeDimensions(s_editor_pool_ids.Data[i]);
+        const float r = em * 0.22f;
+        const ImVec2 c(p.x + d.x - r - em * 0.3f, p.y + em * 0.55f);
+        dl->AddCircleFilled(c, r, AppSeverityColor(sev));
+        dl->AddCircle(c, r, IM_COL32(20, 20, 22, 220), 0, 1.0f);
+      }
+    }
+
+    // Status line (Blender-style keymap hints): one strip along the canvas bottom stating what the mouse
+    // does RIGHT NOW given the hover target. Recognition over recall -- it teaches the gesture vocabulary
+    // passively; F1 stays as the full reference. Transient feedback (refused links) lands here too.
+    {
+      const float em = ImGui::GetFontSize();
+      static int    s_err_seq_seen = 0;
+      static double s_err_time = -1000.0;
+      if (g->LastLinkErrSeq != s_err_seq_seen)
+      {
+        s_err_seq_seen = g->LastLinkErrSeq;
+        s_err_time = ImGui::GetTime();
+      }
+      const bool show_err = g->LastLinkErr[0] != 0 && (ImGui::GetTime() - s_err_time) < 3.0;
+
+      char hint[256];
+      if (show_err)
+        ImFormatString(hint, IM_ARRAYSIZE(hint), "%s %s", ICON_FA_TRIANGLE_EXCLAMATION, g->LastLinkErr);
+      else if (over_pin)
+        ImStrncpy(hint, "drag  wire   (release on empty canvas: filtered add)", IM_ARRAYSIZE(hint));
+      else if (over_link)
+        ImStrncpy(hint, "drag end  rewire     click  select     Del  delete     RMB  menu", IM_ARRAYSIZE(hint));
+      else if (over_node)
+      {
+        const ImGuiAppNode* hn = AppGraphFindNodeConst(g, hovered_node);
+        if (hn != nullptr && hn->IsLive)
+          ImStrncpy(hint, "live mirror (read-only)     dbl-click  enter     RMB  menu", IM_ARRAYSIZE(hint));
+        else if (hn != nullptr && hn->Kind == ImGuiAppNodeKind_Layer)
+          ImStrncpy(hint, "drag  reorder phase     dbl-click  enter     RMB  menu", IM_ARRAYSIZE(hint));
+        else
+          ImStrncpy(hint, "drag  move     click  select (Ctrl multi)     Tab  enter scope     dbl-click  rename     RMB  menu", IM_ARRAYSIZE(hint));
+      }
+      else
+        ImStrncpy(hint, "RMB  add     Space  palette     MMB-drag  pan     F  frame     F1  help", IM_ARRAYSIZE(hint));
+
+      ImDrawList* dl = ImGui::GetWindowDrawList();
+      const float h = ImGui::GetTextLineHeight() + em * 0.5f;
+      const ImVec2 mn(editor_min.x, editor_min.y + editor_size.y - h);
+      const ImVec2 mx(editor_min.x + editor_size.x, editor_min.y + editor_size.y);
+      dl->AddRectFilled(mn, mx, IM_COL32(20, 20, 22, 200));
+      dl->AddLine(mn, ImVec2(mx.x, mn.y), IM_COL32(255, 255, 255, 18));
+      dl->AddText(ImVec2(mn.x + em * 0.6f, mn.y + em * 0.25f),
+                  show_err ? AppSeverityColor(2) : ImGui::GetColorU32(ImGuiCol_TextDisabled), hint);
     }
 
     // Shortcut cheat-sheet (F1): a translucent reference card in the canvas corner.
@@ -8307,6 +8536,22 @@ namespace ImGui
     const bool row_hovered  = ImGui::IsItemHovered();
     const ImVec2 rmn = ImGui::GetItemRectMin();
     const ImVec2 rmx = ImGui::GetItemRectMax();
+
+    // Brushing: report this row's node; echo a hover that originated in another view as a faint accent
+    // fill + a solid left edge (never selection -- hover previews, it does not commit).
+    if (row_hovered)
+      AppGraphHoverNode(n->Id, ImGuiAppHoverSource_Tree);
+    ImGuiAppHoverSource brush_src = ImGuiAppHoverSource_None;
+    if (AppGraphHoveredNode(&brush_src) == n->Id && brush_src != ImGuiAppHoverSource_Tree && brush_src != ImGuiAppHoverSource_None && !row_hovered)
+    {
+      ImDrawList* bdl = ImGui::GetWindowDrawList();
+      bdl->AddRectFilled(rmn, rmx, (row_col & 0x00FFFFFF) | 0x24000000);
+      bdl->AddRectFilled(rmn, ImVec2(rmn.x + 3.0f, rmx.y), row_col);
+    }
+    // Ambient problem mark: severity underline along the row bottom (same hue as the canvas dot).
+    if (const int row_sev = AppGraphNodeSeverity(g, n->Id))
+      ImGui::GetWindowDrawList()->AddLine(ImVec2(rmn.x, rmx.y - 1.0f), ImVec2(rmx.x, rmx.y - 1.0f),
+                                          (AppSeverityColor(row_sev) & 0x00FFFFFF) | 0xB4000000, 1.0f);
 
     // Right-edge overlay (pure draw-list, manual hit-test -- no ImGui items, so the layout cursor is untouched):
     // an always-on eye (hide/show this subtree), hover-revealed rename / duplicate / delete, else the meta count.

@@ -980,6 +980,9 @@ namespace
                     {
                       selection = it.NodeId;   // reveal + select the offending node in tree + canvas
                     }
+                    // Brushing: hovering a problem previews its node everywhere, before committing a click.
+                    if (it.NodeId >= 0 && ImGui::IsItemHovered())
+                      ImGui::AppGraphHoverNode(it.NodeId, ImGui::ImGuiAppHoverSource_External);
                     ImGui::PopStyleColor();
                     ImGui::PopID();
                   }

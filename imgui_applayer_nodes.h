@@ -568,6 +568,30 @@ namespace ImGui
   // empty windows, and dependency cycles. Live-mirror nodes are skipped (read-only). Clears nothing.
   IMGUI_API void                AppGraphValidate(const ImGuiAppGraph* g, ImVector<ImGuiAppGraphIssue>* out);
 
+  // Brushing across coordinated views: any panel reports the graph datum under the mouse; every panel
+  // reads LAST frame's report and highlights that same datum (one-frame latency, imperceptible). The
+  // source lets a view skip echoing its own hover -- the canvas already outlines its natively hovered
+  // node. Single-editor-instance state, like the editor's other function statics.
+  typedef int ImGuiAppHoverSource;
+  enum ImGuiAppHoverSource_
+  {
+    ImGuiAppHoverSource_None = 0,
+    ImGuiAppHoverSource_Canvas,      // the node editor
+    ImGuiAppHoverSource_Tree,        // the outliner
+    ImGuiAppHoverSource_Inspector,   // inspector / binding rows
+    ImGuiAppHoverSource_External,    // problems list, code panel, any host-app panel
+  };
+  IMGUI_API void                AppGraphHoverNode(int node_id, ImGuiAppHoverSource source);
+  IMGUI_API void                AppGraphHoverLink(int link_id, ImGuiAppHoverSource source);
+  IMGUI_API int                 AppGraphHoveredNode(ImGuiAppHoverSource* out_source);   // -1 = none; out_source may be null
+  IMGUI_API int                 AppGraphHoveredLink(ImGuiAppHoverSource* out_source);
+
+  // Cached validation, keyed by AppGraphSignature (+ bindings): cheap enough to query every frame, so
+  // problems can render ambiently where they live (canvas severity dot, outliner underline, inspector
+  // header) instead of only in a list. Worst per-node severity: 0 = clean, 1 = warning, 2 = error.
+  IMGUI_API const ImVector<ImGuiAppGraphIssue>* AppGraphIssuesCached(const ImGuiAppGraph* g);
+  IMGUI_API int                 AppGraphNodeSeverity(const ImGuiAppGraph* g, int node_id);
+
   // Type-check one authored event's Expr against the control's effective field lists. The grammar is tiny on
   // purpose (events stay analyzable data, not strings): field refs `temp_data->x` / `last_temp_data->x` /
   // `data->x` / `<dep_param>-><field>`, nested struct members via '.', bool/int/float literals, parens, and
