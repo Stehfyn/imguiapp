@@ -3267,6 +3267,13 @@ namespace ImGui
         ImGui::DragFloat2("##val", &sm->Value.x, 0.05f, 0.0f, 0.0f, "%.2f");
       else
         ImGui::DragFloat("##val", &sm->Value.x, 0.05f, 0.0f, 0.0f, "%.2f");
+      // Row reset (UE/Blender right-click-revert): back to the CURRENT style's value for this var.
+      if (ImGui::BeginPopupContextItem("##rowreset"))
+      {
+        if (ImGui::MenuItem("Reset to current style value"))
+          AppStyleModSeedValue(sm);
+        ImGui::EndPopup();
+      }
 
       ImGui::PopID();
     }
@@ -3296,6 +3303,12 @@ namespace ImGui
       ImVec4 c4 = ImGui::ColorConvertU32ToFloat4(cm->Value);
       if (ImGui::ColorEdit4("##val", &c4.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaPreviewHalf))
         cm->Value = ImGui::ColorConvertFloat4ToU32(c4);
+      if (ImGui::BeginPopupContextItem("##rowreset"))
+      {
+        if (ImGui::MenuItem("Reset to current style value"))
+          cm->Value = ImGui::ColorConvertFloat4ToU32(ImGui::GetStyleColorVec4(cm->Col));
+        ImGui::EndPopup();
+      }
 
       ImGui::PopID();
     }
@@ -9543,13 +9556,26 @@ namespace ImGui
       return;
     if (n->IsLive)
     {
+      // Four-roads parity with the canvas menu: live rows offer the same Promote the canvas offers.
       ImGui::TextDisabled("live (read-only)");
+      if (n->Kind == ImGuiAppNodeKind_Control)
+      {
+        ImGui::Separator();
+        if (ImGui::MenuItem("Promote to design")) { c->Act = 6; c->ActNode = n->Id; }
+      }
       ImGui::EndPopup();
       return;
     }
     if (n->Kind != ImGuiAppNodeKind_Layer && ImGui::MenuItem("Rename"))   { *c->RenameNode = n->Id; *c->RenameFocus = true; }
     if (n->Kind != ImGuiAppNodeKind_Layer && ImGui::MenuItem("Duplicate")) { c->Act = 2; c->ActNode = n->Id; }
     if (ImGui::MenuItem("Delete"))                                         { c->Act = 1; c->ActNode = n->Id; }
+    // Prefab save serializes without mutating the graph -- safe inline mid-iteration (canvas menu parity).
+    if (n->Kind != ImGuiAppNodeKind_Layer && ImGui::MenuItem("Save as prefab"))
+    {
+      ImVector<int> roots;
+      roots.push_back(n->Id);
+      AppGraphSavePrefab(g, roots, n->Draft.Name[0] ? n->Draft.Name : "prefab");
+    }
     if (n->Kind == ImGuiAppNodeKind_Struct && !n->IsBuiltin)
     {
       ImGui::Separator();
@@ -9884,7 +9910,13 @@ namespace ImGui
     for (int i = 0; i < IM_ARRAYSIZE(chip_kinds); i++)
     {
       const ImGuiAppNodeKind k = chip_kinds[i];
-      if (i > 0) ImGui::SameLine(0.0f, 3.0f);
+      if (i > 0)
+      {
+        // Flow-wrap: at narrow panel widths the chips wrap to a second row instead of clipping dead.
+        ImGui::SameLine(0.0f, 3.0f);
+        if (ImGui::GetContentRegionAvail().x < em * 3.2f)
+          ImGui::NewLine();
+      }
       ImGui::PushID(i);
       if (AppBlFilterChip("##chip", AppKindIcon(k), kind_count[k], s_kind_vis[k], AppKindColor(k)))
         s_kind_vis[k] = !s_kind_vis[k];
@@ -9983,6 +10015,15 @@ namespace ImGui
         else if (ctx.Act == 5)
         {
           AppGraphReparent(g, ctx.ActNode, ctx.ActTarget);
+        }
+        else if (ctx.Act == 6)
+        {
+          // Promote a live control to an editable design twin (canvas menu parity; see ##AppGraphNodeCtx).
+          const ImVec2 near_pos = an->GridPos + ImVec2(260.0f, 0.0f);
+          ImGuiAppNode* d = AppGraphAddNode(g, ImGuiAppNodeKind_Control, an->Draft.Name[0] ? an->Draft.Name : "NewControl");
+          ImStrncpy(d->DataTypeName, an->DataTypeName, IM_ARRAYSIZE(d->DataTypeName));
+          AppGraphPlaceNode(g, d, &near_pos);
+          if (selected_node_id) *selected_node_id = d->Id;
         }
       }
     }

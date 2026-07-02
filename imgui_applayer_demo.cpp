@@ -359,7 +359,10 @@ namespace
     int             LinkErrSeqSeen;   // last Graph.LastLinkErrSeq folded into the log
     ImGuiID         LayoutSavedHash;  // hash of the last-persisted layout fields (change detection)
     float           LayoutSaveT;      // debounce: seconds until the next layout-save check
-    ImGuiApp*       Mirror;           // app reflected into the live graph (set after push; see ShowAppLayerDemo)
+    ImGuiApp*       Mirror;           // the ACTIVE mirrored app (resolved each update from MirrorSource below)
+    ImGuiApp*       MirrorSample;     // the example app (RandomTime/Breathing) -- mirror source 0
+    ImGuiApp*       MirrorComposer;   // the editor app hosting the Composer ITSELF -- mirror source 1 (dogfood)
+    int             MirrorSource;     // 0 = sample app, 1 = the Composer's own composition
     ImGuiAppStateHistory MirrorHistory;   // the mirrored app's recorded state ring (time travel)
     bool            TimeScrub;        // true: freeze the mirror at TimeScrubIndex instead of recording
     int             TimeScrubIndex;
@@ -484,6 +487,9 @@ namespace
       data->LayoutSavedHash = 0;
       data->LayoutSaveT = 0.0f;
       data->Mirror      = nullptr;       // set after push by ShowAppLayerDemo
+      data->MirrorSample = nullptr;
+      data->MirrorComposer = nullptr;
+      data->MirrorSource = 0;
       data->TimeScrub   = false;
       data->TimeScrubIndex = 0;
       ImStrncpy(data->GraphPath,  "imguix_node_graph.txt",      sizeof(data->GraphPath));
@@ -497,6 +503,12 @@ namespace
     virtual void OnUpdate(float dt, GraphDocData* data, const GraphDocTempData*, const GraphDocTempData*) const override final
     {
       ComposerLayoutSaveIfChanged(data, dt);
+
+      // Viewport perspective: resolve which app the mirror reflects (UE/Unity view-mode idiom). Source 1 is
+      // the editor app itself -- the Composer inspecting its OWN composition, the dogfood closing its loop.
+      // BuildAppLiveGraph only reads the app's object model, so self-mirroring from inside our own update is
+      // safe; the time-travel ring is keyed to the composition id and rebuilds itself on a source switch.
+      data->Mirror = (data->MirrorSource == 1 && data->MirrorComposer != nullptr) ? data->MirrorComposer : data->MirrorSample;
 
       // Reconcile-before-report: build the live mirror first so every panel reads the reconciled graph this frame.
       if (data->Mirror != nullptr)
@@ -562,6 +574,8 @@ namespace
     bool CopyCode;       // Generate menu: copy the generated C++ to the clipboard
     int  RevealPanel;    // ComposerPanel_* intent from a palette pick (0 = none)
     bool AddNode;        // toolbar "+ Add" -> open the canvas add palette (the loop's entry point)
+    bool MirrorSourceSet; // observe cluster picked a mirror perspective
+    int  MirrorSource;   // 0 = sample app, 1 = the Composer itself
   };
   struct ToolbarControl : ImGuiAppControl<ToolbarData, ToolbarTempData>
   {
@@ -637,6 +651,12 @@ namespace
       if (temp_data->AddNode)
       {
         ImGui::AppGraphRequestAddPalette();
+      }
+      if (temp_data->MirrorSourceSet && temp_data->MirrorSource != doc->MirrorSource)
+      {
+        doc->MirrorSource = temp_data->MirrorSource;
+        doc->TimeScrub = false;   // the old timeline names another app's moments
+        DocLog(doc, 0, "live mirror -> %s", doc->MirrorSource == 1 ? "the Composer itself" : "sample app");
       }
       if (temp_data->Diff)
       {
@@ -780,14 +800,38 @@ namespace
           ImGui::EndPopup();
         }
 
-        // -- Right cluster: panel toggles. Width measured so it hugs the edge. Run controls (App time)
-        //    live on the viewport's transport overlay; the health chip lives on the viewport status strip.
+        // -- Right cluster (observe): panel toggles + the mirror PERSPECTIVE (UE/Unity view-mode idiom --
+        //    which app the Live eye reflects: the sample app, or the Composer's own composition). Run
+        //    controls (App time) live on the viewport transport; the health chip on the viewport strip.
         const char* code_lbl = ICON_FA_CODE "  Code";
         const char* live_lbl = show_live ? ICON_FA_EYE "  Live###live" : ICON_FA_EYE_SLASH "  Live###live";
+        const char* src_lbl  = doc->MirrorSource == 1 ? ICON_FA_CIRCLE_NODES "  Composer###mirsrc" : ICON_FA_CUBE "  Sample###mirsrc";
         const float pad2 = style.FramePadding.x * 2.0f;
         const float cluster_w = ImGui::CalcTextSize(code_lbl).x + pad2
-                              + ImGui::CalcTextSize(live_lbl, ImGui::FindRenderedTextEnd(live_lbl)).x + pad2 + style.ItemSpacing.x;
+                              + ImGui::CalcTextSize(live_lbl, ImGui::FindRenderedTextEnd(live_lbl)).x + pad2 + style.ItemSpacing.x
+                              + ImGui::CalcTextSize(src_lbl, ImGui::FindRenderedTextEnd(src_lbl)).x + pad2 + style.ItemSpacing.x;
         ImGui::SameLine(ImMax(ImGui::GetCursorPosX() + em, ImGui::GetContentRegionMax().x - cluster_w - em * 0.2f));
+
+        temp_data->MirrorSourceSet = false;
+        temp_data->MirrorSource = doc->MirrorSource;
+        if (ImGui::Button(src_lbl))
+          ImGui::OpenPopup("##mirror_source");
+        ImGui::SetItemTooltip("Live mirror perspective: which running app the eye reflects");
+        if (ImGui::BeginPopup("##mirror_source"))
+        {
+          if (ImGui::MenuItem(ICON_FA_CUBE "  Sample app", nullptr, doc->MirrorSource == 0))
+          {
+            temp_data->MirrorSourceSet = true;
+            temp_data->MirrorSource = 0;
+          }
+          if (ImGui::MenuItem(ICON_FA_CIRCLE_NODES "  The Composer itself", nullptr, doc->MirrorSource == 1))
+          {
+            temp_data->MirrorSourceSet = true;
+            temp_data->MirrorSource = 1;
+          }
+          ImGui::EndPopup();
+        }
+        ImGui::SameLine();
 
         if (code_open)
           ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonActive]);
@@ -2029,6 +2073,8 @@ namespace ImGui
         if (GraphDocData* d = GetGraphDoc(&editor_app))
         {
           d->Mirror = &app;
+          d->MirrorSample = &app;            // perspective 0: the example app
+          d->MirrorComposer = &editor_app;   // perspective 1: the Composer's own composition (dogfood)
         }
         editor_ready = true;
       }
