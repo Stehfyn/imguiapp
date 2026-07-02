@@ -26,6 +26,11 @@ of the USER'S composed app:
 
 ## Now
 
+- **UI coherence program** — [composer-ui-design.md](composer-ui-design.md): lateral interaction
+  ties (brushing & linking across outliner/canvas/inspector/code/problems) + canvas refinement
+  measured against Blender/UE/Unity, grounded in Cognitive Dimensions of Notations. Start with
+  slice S1 (hover reciprocity, status-bar keymap hints, ambient problem marks).
+
 - **Sequence-order editing** — drag execution badges to reorder pushes inside a scope (plus a
   click-nudge fallback); order is model state, codegen emits it. (Reading the sequence exists;
   writing it doesn't.) Hard constraint: the four core phase layers never reorder relative to one
