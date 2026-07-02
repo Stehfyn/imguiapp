@@ -132,17 +132,15 @@ namespace ImGui
 
 namespace ImGui
 {
-  // imnodes node scaffold. imnodes itself stays confined to imgui_applayer_nodes.cpp.
-  IMGUI_API void BeginAppNode(int id, const char* title);
-  IMGUI_API void EndAppNode();
+  // Canvas-engine node scaffold (see imgui_applayer_canvas.h): titled node between CanvasBegin/End.
+  IMGUI_API void BeginAppNode(::ImGuiCanvasState* c, int id, const char* title);
+  IMGUI_API void EndAppNode(::ImGuiCanvasState* c);
 
-  // Renamable node scaffold: the title bar shows *name and turns into an inline text box on
-  // double-click (list-view rename). Commits on Enter or focus loss, cancels on Escape. *editing_node_id
-  // is caller-owned single-slot state holding the id of the node being renamed (or -1 for none); the
-  // helper sets it on double-click and clears it when the edit ends. Returns true if *name changed this
-  // frame. Pair with EndAppNode(). imnodes suppresses node-drag while the box is active, so typing and
-  // text-selection drags do not move the node.
-  IMGUI_API bool BeginAppNodeRenamable(int id, char* name, int name_size, int* editing_node_id);
+  // Renamable node scaffold: the title bar shows *name and turns into an inline text box when clicked
+  // (list-view rename). Commits on Enter or focus loss, cancels on Escape. *editing_node_id is
+  // caller-owned single-slot state holding the id of the node being renamed (or -1 for none); the
+  // helper sets it on a title click and clears it when the edit ends. Pair with EndAppNode().
+  IMGUI_API void BeginAppNodeRenamable(::ImGuiCanvasState* c, int id, char* name, int name_size, int* editing_node_id);
 
   // Render every reflected field of an aggregate as read-only labelled rows in the current node.
   template <typename T>
@@ -160,7 +158,7 @@ namespace ImGui
   }
 
   // Editable reflected field rows inside the current node. Returns true if any value changed.
-  // Item width is clamped so nodes stay compact (imnodes nodes auto-size to their content).
+  // Item width is clamped so nodes stay compact (canvas nodes auto-size to their content).
   template <typename T>
   inline bool EditAppNodeFields(T* data)
   {
@@ -278,7 +276,7 @@ enum ImGuiAppLayerType_
   ImGuiAppLayerType_COUNT,
 };
 
-// A port is an imnodes attribute with a role. DataOut/DataIn carry the runtime data flow; ChildOut/ChildIn
+// A port is a typed canvas pin with a role. DataOut/DataIn carry the runtime data flow; ChildOut/ChildIn
 // carry containment (which window/sidebar/app owns a node). Layers are root composition slots and have no
 // containment sockets. A Control has one DataOut (its PersistData), one multi-link DataIn (all its dependencies
 // -- the runtime keys app->Data by PersistData TYPE, so one type-keyed intake is faithful), and one ChildOut.
@@ -320,12 +318,12 @@ struct ImGuiAppNodeLink
 
 namespace ImGui
 {
-  // Draw the model's links inside the current node editor. Wraps imnodes (confined to the .cpp).
-  IMGUI_API void DrawAppNodeLinks(const ImVector<ImGuiAppNodeLink>* links);
+  // Draw the model's links as wires on the canvas (between CanvasBegin/End).
+  IMGUI_API void DrawAppNodeLinks(::ImGuiCanvasState* c, const ImVector<ImGuiAppNodeLink>* links);
 
-  // After EndNodeEditor: fold imnodes create/destroy events into the link model. New links take
-  // ids from *next_link_id (incremented). Returns true if the model changed.
-  IMGUI_API bool CaptureAppNodeLinks(ImVector<ImGuiAppNodeLink>* links, int* next_link_id);
+  // After CanvasEnd: fold the canvas's wire events (created / detached) into the link model. New
+  // links take ids from *next_link_id (incremented). Returns true if the model changed.
+  IMGUI_API bool CaptureAppNodeLinks(::ImGuiCanvasState* c, ImVector<ImGuiAppNodeLink>* links, int* next_link_id);
 
   // Persist / restore a draft and its links as imgui-style text. Return false on file error.
   IMGUI_API bool SaveAppNodeGraph(const char* path, const ImGuiAppNodeDraft* draft, const ImVector<ImGuiAppNodeLink>* links);
@@ -356,10 +354,10 @@ namespace ImGui
 // [SECTION] Typed node graph (ports, nodes, graph model, factory, codegen, persistence)
 //-----------------------------------------------------------------------------
 
-// One imnodes attribute on a node, stored (never index-derived) so its id is stable across reorder/delete.
+// One pin on a node, stored (never index-derived) so its id is stable across reorder/delete.
 struct ImGuiAppNodePort
 {
-  int              Id;          // from ImGuiAppGraph::NextId; == imnodes attribute id
+  int              Id;          // from ImGuiAppGraph::NextId; == canvas pin id
   ImGuiAppPortKind Kind;
   char             Name[IM_LABEL_SIZE];
   ImGuiID          DataTypeId;  // ImGuiType<PersistData>::ID for DataOut/DataIn (the data-flow key); 0 otherwise
@@ -416,7 +414,7 @@ struct ImGuiAppEventDesc
 // helpers apply verbatim and a legacy "[Draft]" maps 1:1 to a Control node. Most fields are kind-specific.
 struct ImGuiAppNode
 {
-  int               Id;            // from NextId; == imnodes node id
+  int               Id;            // from NextId; == canvas node id
   ImGuiAppNodeKind  Kind;
   ImGuiAppNodeDraft Draft;         // Draft.Name is the node label; PersistFields/TempFields used by Control
   bool              IsBuiltin;     // true: backed by a compiled C++ type (palette), not drafted
@@ -431,7 +429,7 @@ struct ImGuiAppNode
   ImGuiWindowFlags  Flags;         // Window/Sidebar flags
   ImVec2            GridPos;        // persisted canvas position
   bool              HasGridPos;
-  bool              _NeedsPlace;    // apply GridPos to imnodes before the next BeginNode
+  bool              _NeedsPlace;    // apply GridPos to the canvas before the next submission
   int               BodyAttrId;     // dedicated non-port static-attribute id for the node body
   bool              IsLive;         // mirrored from a running app object (read-only)
   bool              IsPromoted;     // design control whose emitted data type matches a live node (transient)
@@ -514,7 +512,7 @@ namespace ImGui
   IMGUI_API ImGuiID             AppGraphSignature(const ImGuiAppGraph* g);
 
   // Typed links. CanLink validates an attempted edge (kind pairing, no self/dup, no duplicate dep type, no
-  // cycle) and writes a reason to err on rejection. CaptureAppGraphLinks folds imnodes create/destroy events,
+  // cycle) and writes a reason to err on rejection. CaptureAppGraphLinks folds the canvas wire events,
   // refusing illegal creations; returns true if the model changed.
   IMGUI_API bool                AppGraphCanLink(ImGuiAppGraph* g, int start_port, int end_port, char* err, int err_size);
   IMGUI_API bool                CaptureAppGraphLinks(ImGuiAppGraph* g, char* err, int err_size);

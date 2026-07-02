@@ -1,8 +1,6 @@
-// ImGuiAppLayer data-driven node tooling. The Composer's whole-graph editor runs on the in-house
-// canvas engine (imgui_applayer_canvas.h) -- model-unit geometry, native camera, same-frame
-// measurement. The legacy BeginAppNode/CaptureAppNodeLinks wrappers below still target imnodes for
-// older call sites and go away with it in slice C5. Keeping both backends confined to this
-// translation unit lets imgui_applayer_nodes.h stay free of either dependency.
+// ImGuiAppLayer data-driven node tooling, on the in-house canvas engine (imgui_applayer_canvas.h):
+// model-unit geometry, native camera, same-frame measurement. The engine dependency stays confined
+// to this translation unit; imgui_applayer_nodes.h only forward-declares the canvas state.
 //
 // Index of this file (search for "[SECTION]"):
 // [SECTION] Blender-style field widgets (node body)
@@ -28,7 +26,6 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "imgui_applayer_nodes.h"
 #include "imgui_applayer_canvas.h"
-#include "imnodes.h"
 #include "IconsFontAwesome6.h"             // Font Awesome glyphs for layer roles (font merged by the host app)
 
 #include <stdio.h>                         // sscanf (graph text parse)
@@ -37,106 +34,53 @@
 
 namespace ImGui
 {
-  void BeginAppNode(int id, const char* title)
+  void BeginAppNode(ImGuiCanvasState* c, int id, const char* title)
   {
-    IM_ASSERT(title != nullptr);
+    IM_ASSERT(c != nullptr && title != nullptr);
 
-    ImNodes::BeginNode(id);
-    ImNodes::BeginNodeTitleBar();
-    ImGui::TextUnformatted(title);
-    ImNodes::EndNodeTitleBar();
+    ImGui::CanvasNextNodeTitle(title, 0);
+    ImGui::CanvasBeginNode(c, id);
   }
 
-  void EndAppNode()
+  // Renamable rename handoff: one node renames at a time, so a single shared latch bridges the
+  // caller's int-slot (*editing_node_id) and the engine's bool edit flag across Begin/EndAppNode.
+  static bool s_wrap_title_editing = false;
+  static int* s_wrap_edit_owner = nullptr;
+  static int  s_wrap_edit_id = -1;
+
+  void EndAppNode(ImGuiCanvasState* c)
   {
-    ImNodes::EndNode();
+    ImGui::CanvasEndNode(c);
+
+    // The engine cleared its edit flag on deactivation (Enter, Escape, click-away): hand it back.
+    if (s_wrap_edit_owner != nullptr && *s_wrap_edit_owner == s_wrap_edit_id && !s_wrap_title_editing)
+      *s_wrap_edit_owner = -1;
+    s_wrap_edit_owner = nullptr;
+    s_wrap_edit_id = -1;
   }
 
-  // Title-bar content for a renamable node: static label that becomes a focused text box while this
-  // node is the one being renamed. Lives inside BeginNodeTitleBar/EndNodeTitleBar.
-  static bool AppNodeTitleField(int id, char* name, int name_size, int* editing_node_id)
+  void BeginAppNodeRenamable(ImGuiCanvasState* c, int id, char* name, int name_size, int* editing_node_id)
   {
-    bool changed = false;
+    IM_ASSERT(c != nullptr && name != nullptr && editing_node_id != nullptr);
 
-    if (*editing_node_id == id)
+    // Click on the title band enters rename (list-view rename). Hit-test against last frame's
+    // geometry (model units x this frame's camera -- zoom-safe); the band is the frame-height strip
+    // at the node's top edge, matching what CanvasEndNode draws.
+    if (*editing_node_id != id && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
     {
-      ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10.0f);
-
-      // Grab keyboard focus (and select-all) only on the first edit frame. Re-grabbing every frame
-      // would trap focus and defeat click-away-to-commit. One node renames at a time, so a single
-      // shared latch is enough.
-      static int focused_id = -1;
-      if (focused_id != id)
-      {
-        ImGui::SetKeyboardFocusHere();
-        focused_id = id;
-      }
-
-      ImGui::PushID(id);
-      changed = ImGui::InputText("##rename", name, (size_t)name_size,
-          ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
-      if (ImGui::IsItemDeactivated())   // Enter, Escape, or click-away ends the rename
-      {
-        *editing_node_id = -1;
-        focused_id = -1;
-      }
-      ImGui::PopID();
-    }
-    else
-    {
-      const char* label = (name && name[0]) ? name : "(unnamed)";
-
-      // Convey editability by color: the title is plain text at rest and only grows a text-field
-      // frame on hover, so hovering reveals it is an input. Clicking swaps in the real InputText.
-      // The resting title reserves the SAME footprint as that InputText -- width em*10, height
-      // GetFrameHeight() -- so the node does not resize when editing starts. The label is drawn by
-      // hand into that rect (clipped like an input) and a Dummy reserves the area; a Dummy is not an
-      // active widget, so dragging the title still moves the node. Hover is sampled from the previous
-      // frame so the frame paints *behind* the text; the one-frame latency is imperceptible.
-      static int hovered_title_id = -1;
-
-      const ImGuiStyle& style = ImGui::GetStyle();
-      const float w = ImGui::GetFontSize() * 10.0f;
-      const float h = ImGui::GetFrameHeight();
-      const ImVec2 pos = ImGui::GetCursorScreenPos();
-      const ImVec2 mn = pos;
-      const ImVec2 mx = ImVec2(pos.x + w, pos.y + h);
-      ImDrawList* dl = ImGui::GetWindowDrawList();
-
-      if (hovered_title_id == id)
-        dl->AddRectFilled(mn, mx, ImGui::GetColorU32(ImGuiCol_FrameBgHovered), style.FrameRounding);
-
-      dl->PushClipRect(mn, mx, true);
-      dl->AddText(ImVec2(pos.x + style.FramePadding.x, pos.y + style.FramePadding.y),
-                  ImGui::GetColorU32(ImGuiCol_Text), label);
-      dl->PopClipRect();
-
-      ImGui::Dummy(ImVec2(w, h));   // reserve the InputText footprint so the node size stays constant
-
-      const bool hovered = ImGui::IsItemHovered();
-      if (hovered)
-      {
-        ImGui::SetMouseCursor(ImGuiMouseCursor_TextInput);
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-          *editing_node_id = id;
-      }
-      ImGui::SetItemTooltip("Click to rename");
-
-      hovered_title_id = hovered ? id : (hovered_title_id == id ? -1 : hovered_title_id);
+      const ImVec2 mn = ImGui::CanvasToScreen(c, ImGui::CanvasNodePos(c, id));
+      const ImVec2 sz = ImGui::CanvasNodeSize(c, id) * ImGui::CanvasGetZoom(c);
+      const float  th = ImGui::GetFrameHeight() * ImGui::CanvasGetZoom(c);
+      const ImVec2 m = ImGui::GetIO().MousePos;
+      if (sz.x > 0.0f && m.x >= mn.x && m.x < mn.x + sz.x && m.y >= mn.y && m.y < mn.y + th)
+        *editing_node_id = id;
     }
 
-    return changed;
-  }
-
-  bool BeginAppNodeRenamable(int id, char* name, int name_size, int* editing_node_id)
-  {
-    IM_ASSERT(name != nullptr && editing_node_id != nullptr);
-
-    ImNodes::BeginNode(id);
-    ImNodes::BeginNodeTitleBar();
-    const bool changed = AppNodeTitleField(id, name, name_size, editing_node_id);
-    ImNodes::EndNodeTitleBar();
-    return changed;
+    s_wrap_title_editing = *editing_node_id == id;
+    s_wrap_edit_owner = editing_node_id;
+    s_wrap_edit_id = id;
+    ImGui::CanvasNextNodeTitleEditable(name, name_size, &s_wrap_title_editing, 0);
+    ImGui::CanvasBeginNode(c, id);
   }
 
   const char* AppFieldTypeName(ImGuiAppFieldType type)
@@ -586,7 +530,7 @@ namespace ImGui
   // Flat rounded enum: centered value, hover shows L/R step arrows (click edges to step), click center for dropdown.
   static bool AppBlEnum(const char* str_id, float width, int* v, const char* (*name_of)(int), int count)
   {
-    // Built on ImGui::BeginCombo (NOT a hand-rolled OpenPopup): a raw popup opened inside an imnodes node
+    // Built on ImGui::BeginCombo (NOT a hand-rolled OpenPopup): a raw popup opened inside a canvas node
     // mis-anchors and lets the click fall through to the node/window drag. BeginCombo's popup is managed by
     // ImGui and behaves -- it's the same path the layer-type combo uses. Styled with the Blender field palette
     // (flat dark rounded field, dark popup, hover-highlighted rows) so it matches the other Bl widgets.
@@ -743,7 +687,7 @@ namespace ImGui
   static void EditAppFieldList(const char* list_label, ImVector<ImGuiAppFieldDesc>* fields, const ImGuiAppGraph* g = nullptr)
   {
     // TextDisabled (not SeparatorText) as the section label: a separator fills the content-region
-    // width, which would blow up the node when this editor is hosted inside an imnodes node.
+    // width, which would blow up the node when this editor is hosted inside a canvas node.
     ImGui::PushID(list_label);
     ImGui::TextDisabled("%s", list_label);
 
@@ -814,7 +758,7 @@ namespace ImGui
   {
     IM_ASSERT(draft != nullptr);
 
-    // imnodes positions the cursor at the node content origin in EndNodeTitleBar; the body must
+    // The canvas positions the cursor at the node content origin after the title; the body must
     // submit at least one item or EndNode trips imgui's "SetCursorPos extends boundaries" assert.
     // A field-less draft therefore still emits a placeholder row.
     if (draft->PersistFields.Size == 0 && draft->TempFields.Size == 0)
@@ -835,33 +779,35 @@ namespace ImGui
     }
   }
 
-  void DrawAppNodeLinks(const ImVector<ImGuiAppNodeLink>* links)
+  void DrawAppNodeLinks(ImGuiCanvasState* c, const ImVector<ImGuiAppNodeLink>* links)
   {
-    IM_ASSERT(links != nullptr);
+    IM_ASSERT(c != nullptr && links != nullptr);
 
     for (int i = 0; i < links->Size; i++)
-      ImNodes::Link(links->Data[i].Id, links->Data[i].StartAttr, links->Data[i].EndAttr);
+      ImGui::CanvasWire(c, links->Data[i].Id, links->Data[i].StartAttr, links->Data[i].EndAttr, 0);
   }
 
-  bool CaptureAppNodeLinks(ImVector<ImGuiAppNodeLink>* links, int* next_link_id)
+  bool CaptureAppNodeLinks(ImGuiCanvasState* c, ImVector<ImGuiAppNodeLink>* links, int* next_link_id)
   {
-    IM_ASSERT(links != nullptr && next_link_id != nullptr);
+    IM_ASSERT(c != nullptr && links != nullptr && next_link_id != nullptr);
 
     bool changed = false;
 
     ImGuiAppNodeLink created;
-    if (ImNodes::IsLinkCreated(&created.StartAttr, &created.EndAttr))
+    if (ImGui::CanvasWireCreated(c, &created.StartAttr, &created.EndAttr))
     {
       created.Id = (*next_link_id)++;
       links->push_back(created);
       changed = true;
     }
 
-    int destroyed_id = 0;
-    if (ImNodes::IsLinkDestroyed(&destroyed_id))
+    // Endpoint dragged off a pin: the wire dies at grab time (releasing on a pin re-creates above).
+    int detached_wire = 0;
+    int detached_grab = 0;
+    if (ImGui::CanvasWireDetached(c, &detached_wire, &detached_grab))
     {
       for (int i = 0; i < links->Size; i++)
-        if (links->Data[i].Id == destroyed_id)
+        if (links->Data[i].Id == detached_wire)
         {
           links->erase(links->Data + i);
           changed = true;
@@ -1392,8 +1338,8 @@ namespace ImGui
   }
 
   static float  AppCanvasZoom();                                       // fwd (defined with the view state)
-  static ImVec2 AppCanvasNodePos(int node_id);                         // fwd: imnodes grid -> model units
-  static void   AppCanvasSetNodePos(int node_id, const ImVec2& model); // fwd: model units -> imnodes grid
+  static ImVec2 AppCanvasNodePos(int node_id);                         // fwd: engine passthrough (model units)
+  static void   AppCanvasSetNodePos(int node_id, const ImVec2& model); // fwd: engine passthrough (model units)
 
   // MODEL-unit node height (the engine measures in model units; fallback row pitch until measured).
   static float AppGraphLayerNodeHeight(int node_id)
@@ -2500,7 +2446,7 @@ namespace ImGui
       ImStrncpy(err, msg, (size_t)err_size);
   }
 
-  // Resolve an attempted (a -> b) imnodes link (drag order arbitrary) into a normalized source->target edge.
+  // Resolve an attempted (a -> b) wire (drag order arbitrary) into a normalized source->target edge.
   // Writes the output port id to out_src, input port id to out_dst, and the derived edge kind. err on reject.
   static bool AppGraphResolveLink(ImGuiAppGraph* g, int a, int b, int* out_src, int* out_dst, ImGuiAppEdgeKind* out_kind, char* err, int err_size)
   {
@@ -2759,7 +2705,7 @@ namespace ImGui
   }
 
   // Canvas camera + node geometry, straight from the engine (model units everywhere; the camera is
-  // the engine's one transform). These names survive from the imnodes zoom-emulation seam so the many
+  // the engine's one transform). These names survive from the old zoom-emulation seam so the many
   // call sites read unchanged; the bodies are now trivial passthroughs.
   static float AppCanvasZoom()
   {
@@ -4618,7 +4564,7 @@ namespace ImGui
     prev_show_live = show_live;
 
     // Drill-down scope upkeep: repair dangling entries; on any scope change re-seat every now-visible node at its
-    // stored GridPos (imnodes evicted it while out of scope) and arm a deferred fit-all (dims valid post-submit).
+    // stored GridPos (it left the canvas while out of scope) and arm a deferred fit-all (dims valid post-submit).
     AppScopeValidate(g);
     const bool at_root = g->ViewScope.Size == 0;
     static int s_scope_sig = -1;
@@ -4846,7 +4792,7 @@ namespace ImGui
       ImGuiAppNode* n = &g->Nodes.Data[i];
 
       // Hidden live mirror: skip the ENTIRE per-node submission (incl. placement). Merely skipping the body
-      // would leave the grid-pos read-back below dereferencing a node imnodes evicted -> hard assert.
+      // would leave the grid-pos read-back below adopting a stale position for a node that never submitted.
       if (!show_live && n->IsLive)
         continue;
       // Folded behind a collapsed ancestor group: same deal -- never submit, so the read-back skips it too.
@@ -4950,7 +4896,7 @@ namespace ImGui
         if (n->IsBuiltin)
         {
           // The title already names the type; only show the data type when it adds something (differs from the
-          // title), with a minimal fallback so the body is never empty (imnodes' empty-body assert).
+          // title), with a minimal fallback so the body always says something.
           if (n->DataTypeName[0] && strcmp(n->DataTypeName, n->Draft.Name) != 0)
             ImGui::TextDisabled("data: %s", n->DataTypeName);
           else if (!n->IsLive && !n->IsPromoted)
@@ -5130,7 +5076,7 @@ namespace ImGui
     }
 
     // Draw links. When live nodes are hidden, skip any link incident on a hidden (live) owner: that attribute
-    // was never submitted this frame, so imnodes must not reference it. (Inlined: DrawAppNodeLinks can't resolve
+    // was never submitted this frame, so the wire has no live anchor. (Inlined: DrawAppNodeLinks can't resolve
     // owners.)
     for (int li = 0; li < g->Links.Size; li++)
     {
@@ -5556,7 +5502,7 @@ namespace ImGui
             ImGuiAppNode* sn = AppGraphFindNode(g, g->Selection.Data[i]);
             if (sn == nullptr || (!show_live && sn->IsLive) || AppNodeHiddenByCollapse(g, sn->Id))
               continue;
-            // Nudge in MODEL units (a grid unit is a grid unit at any zoom); imnodes wants zoomed coords.
+            // Nudge in MODEL units (a grid unit is a grid unit at any zoom).
             const ImVec2 np = AppCanvasNodePos(sn->Id) + d;
             AppCanvasSetNodePos(sn->Id, np);
             sn->GridPos = np;
@@ -5564,7 +5510,7 @@ namespace ImGui
         }
       }
 
-      // Z-order: '[' sends the selection to the back, ']' brings it to the front. imnodes draws in submission =
+      // Z-order: '[' sends the selection to the back, ']' brings it to the front. The canvas draws in submission =
       // g->Nodes order, so we restack by rebuilding the vector with the selected nodes moved to one end. Element
       // moves are byte-copies (ImVector never frees element-owned memory), so inner buffers transfer cleanly.
       if ((ImGui::IsKeyPressed(ImGuiKey_LeftBracket, false) || ImGui::IsKeyPressed(ImGuiKey_RightBracket, false)) && g->Selection.Size > 0)
@@ -6076,7 +6022,7 @@ namespace ImGui
     }
 
     // Brushing echo: halo the node the user is pointing at in ANOTHER view (the canvas's own hovered node
-    // is already outlined by imnodes), and halo both endpoints of a hovered wire -- wherever it was hovered.
+    // is already outlined by the canvas), and halo both endpoints of a hovered wire -- wherever it was hovered.
     {
       const float em = ImGui::GetFontSize();
       auto halo = [&](int node_id)
@@ -6172,7 +6118,7 @@ namespace ImGui
       const float em = ImGui::GetFontSize();
       const float r = em * 0.72f;
       const float step = r * 2.0f + em * 0.30f;
-      // Viewport chrome renders ABOVE canvas content, always: the window list sits UNDER imnodes' child, so
+      // Viewport chrome renders ABOVE canvas content, always: the window list sits UNDER the canvas child, so
       // any node scrolled beneath the gizmo column used to occlude the controls (dead-looking chrome again).
       ImDrawList* dl = ImGui::GetForegroundDrawList();
       dl->PushClipRect(editor_min, editor_min + editor_size, true);
@@ -6454,7 +6400,7 @@ namespace ImGui
       //    pan on a canvas-originated change (don't yank the viewport on a click).
       if (*selected_node_id != applied_sel)
       {
-        // Apply only to a node imnodes actually submitted this frame: a hidden live node (tree still lists it)
+        // Apply only to a node actually submitted this frame: a hidden live node (tree still lists it)
         // was evicted from the pool, so SelectNode/MoveToNode on it would assert.
         ImGuiAppNode* tn = (*selected_node_id >= 0) ? AppGraphFindNode(g, *selected_node_id) : nullptr;
         bool scope_revealing = false;
@@ -6512,7 +6458,7 @@ namespace ImGui
 
     // Clipboard + undo/redo keys (canvas focused, not typing). Ctrl+C copies the selected nodes' subtrees,
     // Ctrl+V pastes them with fresh ids and a cascading offset. Ctrl+Z / Ctrl+(Shift+)Z / Ctrl+Y restore
-    // snapshots -- and clear the imnodes selection so it can't reference an id the snapshot dropped.
+    // snapshots -- and clear the canvas selection so it can't reference an id the snapshot dropped.
     if (!ImGui::GetIO().WantTextInput && ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && ImGui::GetIO().KeyCtrl)
     {
       if (ImGui::IsKeyPressed(ImGuiKey_C, false))
@@ -9844,7 +9790,7 @@ namespace ImGui
     // AllowWhenBlockedByActiveItem: the icon overlays the row's TreeNode item, and the mouse press makes
     // that item active BEFORE this hit-test runs -- plain IsWindowHovered() is false on exactly the click
     // frame (hover highlight worked, clicks never landed). See AppPtInRectHovered.
-    // ChildWindows: the canvas gizmo column overlays imnodes' INNER child window -- without the flag the
+    // ChildWindows: the canvas gizmo column overlays the canvas's INNER child window -- without the flag the
     // hover test asks about the outer window, is always false there, and every gizmo is dead chrome.
     const ImVec2 m = ImGui::GetIO().MousePos;
     const float dx = m.x - center.x;

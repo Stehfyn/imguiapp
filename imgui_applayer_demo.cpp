@@ -16,8 +16,8 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "imgui_applayer.h"
 #include "imgui_applayer_nodes.h"
+#include "imgui_applayer_canvas.h"
 #include "imgui_internal.h"
-#include "imnodes.h"
 #include "IconsFontAwesome6.h"
 
 #include <ctime>
@@ -1613,7 +1613,7 @@ namespace
 
             // A real overlay WINDOW, not draw-list-over-canvas: viewport chrome must render above canvas
             // content AND keep its hit-test when a node scrolls beneath it (the parent-window invisible
-            // button went dead under imnodes' child -- the dead-chrome class again).
+            // button went dead under the canvas child -- the dead-chrome class again).
             ImGui::SetNextWindowPos(s_min);
             ImGui::SetNextWindowBgAlpha(0.99f);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, em * 0.35f);
@@ -2097,42 +2097,31 @@ namespace ImGui
   {
       static ImGuiApp app;          // the mirrored "example" app the demo composes
 
-      // imnodes shares the current ImGui context; create its context once (lives for the session).
-      static bool imnodes_ready = false;
-      if (!imnodes_ready)
+      // Blender-flat node-editor theme on the editor canvas, once per session: rounded nodes, soft
+      // outlines, roomy padding, a dark recessed canvas with low-contrast grid, thicker links. Tuned
+      // to match the Bl-palette node bodies.
+      static bool canvas_theme_ready = false;
+      if (!canvas_theme_ready)
       {
-        ImNodes::CreateContext();
-        // Ctrl adds to the selection (so box-select and Ctrl-click compose); left-drag on empty canvas still
-        // rubber-bands. Panning stays on the middle mouse (imnodes' default AltMouseButton), leaving right-click
-        // free for the canvas context menu.
-        ImNodes::GetIO().MultipleSelectModifier.Modifier = &ImGui::GetIO().KeyCtrl;
-
-        // Blender-flat node-editor theme: rounded nodes, soft outlines, roomy padding, a dark recessed canvas
-        // with low-contrast grid, and thicker curvier links. Tuned to match the Bl-palette node bodies.
-        ImNodesStyle& ns = ImNodes::GetStyle();
-        ns.NodeCornerRounding   = 5.0f;
-        ns.NodePadding          = ImVec2(9.0f, 7.0f);
-        ns.NodeBorderThickness  = 1.0f;
-        ns.LinkThickness        = 2.6f;
-        ns.LinkLineSegmentsPerLength = 0.15f;
-        ns.PinCircleRadius      = 4.2f;
-        ns.PinHoverRadius       = 10.0f;
-        ns.GridSpacing          = 26.0f;
-        ImU32* c = ns.Colors;
-        c[ImNodesCol_NodeBackground]         = IM_COL32(48, 48, 50, 255);
-        c[ImNodesCol_NodeBackgroundHovered]  = IM_COL32(56, 56, 58, 255);
-        c[ImNodesCol_NodeBackgroundSelected] = IM_COL32(60, 60, 62, 255);
-        c[ImNodesCol_NodeOutline]            = IM_COL32(28, 28, 30, 255);
-        c[ImNodesCol_TitleBarSelected]       = IM_COL32(220, 170, 90, 255);
-        c[ImNodesCol_GridBackground]         = IM_COL32(30, 30, 32, 255);
-        c[ImNodesCol_GridLine]               = IM_COL32(42, 42, 45, 255);
-        c[ImNodesCol_GridLinePrimary]        = IM_COL32(52, 52, 56, 255);
-        c[ImNodesCol_Link]                   = IM_COL32(170, 170, 175, 200);
-        c[ImNodesCol_LinkHovered]            = IM_COL32(220, 180, 100, 255);
-        c[ImNodesCol_LinkSelected]           = IM_COL32(230, 190, 110, 255);
-        c[ImNodesCol_BoxSelector]            = IM_COL32(220, 170, 90, 40);
-        c[ImNodesCol_BoxSelectorOutline]     = IM_COL32(220, 170, 90, 150);
-        imnodes_ready = true;
+        ImGuiCanvasStyle* cs = ImGui::CanvasGetStyle(ImGui::AppGraphEditorCanvas());
+        cs->GridBg          = IM_COL32(30, 30, 32, 255);
+        cs->GridLine        = IM_COL32(42, 42, 45, 255);
+        cs->GridLinePrimary = IM_COL32(52, 52, 56, 255);
+        cs->NodeBg          = IM_COL32(48, 48, 50, 255);
+        cs->NodeBgHovered   = IM_COL32(56, 56, 58, 255);
+        cs->NodeBgSelected  = IM_COL32(60, 60, 62, 255);
+        cs->NodeOutline     = IM_COL32(28, 28, 30, 255);
+        cs->Wire            = IM_COL32(170, 170, 175, 200);
+        cs->WireHovered     = IM_COL32(220, 180, 100, 255);
+        cs->WireSelected    = IM_COL32(230, 190, 110, 255);
+        cs->NodeRounding    = 5.0f;
+        cs->NodePadding     = ImVec2(9.0f, 7.0f);
+        cs->NodeBorder      = 1.0f;
+        cs->WireThickness   = 2.6f;
+        cs->PinRadius       = 4.2f;
+        cs->PinHoverRadius  = 10.0f;
+        cs->GridSpacing     = 26.0f;
+        canvas_theme_ready = true;
       }
 
       // ---- editor_app: a dedicated, never-rebuilt ImGuiApp hosting BOTH the demo's control panel and the
