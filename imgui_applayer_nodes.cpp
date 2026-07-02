@@ -6996,7 +6996,41 @@ namespace ImGui
 
   void GenerateAppGraphCode(const ImGuiAppGraph* g, ImGuiTextBuffer* out)
   {
+    GenerateAppGraphCodeEx(g, out, nullptr);
+  }
+
+  void GenerateAppGraphCodeEx(const ImGuiAppGraph* g, ImGuiTextBuffer* out, ImVector<ImGuiAppCodeSpan>* out_spans)
+  {
     IM_ASSERT(g != nullptr && out != nullptr);
+    if (out_spans != nullptr)
+      out_spans->resize(0);
+
+    // Source-map cursor: counts newlines incrementally so each chunk's [begin,end) line range is O(new bytes).
+    int scanned = 0;
+    int line = 0;
+    auto line_now = [&]() -> int
+    {
+      const char* s = out->Buf.Data;
+      const int n = out->size();
+      for (; scanned < n; scanned++)
+        if (s[scanned] == '\n')
+          line++;
+      return line;
+    };
+    auto span = [&](int node_id, int begin)
+    {
+      if (out_spans == nullptr || node_id < 0)
+        return;
+      const int end = line_now();
+      if (end > begin)
+      {
+        ImGuiAppCodeSpan sp;
+        sp.NodeId = node_id;
+        sp.LineBegin = begin;
+        sp.LineEnd = end;
+        out_spans->push_back(sp);
+      }
+    };
 
     // 1) Topo order of controls (producers before consumers).
     ImVector<int> order;
@@ -7009,30 +7043,51 @@ namespace ImGui
 
     // 2) Emit client command enum/app shell, then standalone struct types, then data structs + control structs
     // for DRAFTED controls in topo order (builtin types already exist).
-    AppEmitCommandEnumAndApp(g, out);
+    {
+      int cmd_layer_id = -1;
+      for (int i = 0; i < g->Nodes.Size && cmd_layer_id < 0; i++)
+        if (g->Nodes.Data[i].Kind == ImGuiAppNodeKind_Layer && g->Nodes.Data[i].LayerType == ImGuiAppLayerType_Command)
+          cmd_layer_id = g->Nodes.Data[i].Id;
+      const int begin = line_now();
+      AppEmitCommandEnumAndApp(g, out);
+      span(cmd_layer_id, begin);
+    }
 
     for (int i = 0; i < g->Nodes.Size; i++)
     {
       const ImGuiAppNode* n = &g->Nodes.Data[i];
       if (n->Kind == ImGuiAppNodeKind_Layer && n->LayerType == ImGuiAppLayerType_Custom && !n->IsLive)
+      {
+        const int begin = line_now();
         AppEmitCustomLayerCode(n, out);
+        span(n->Id, begin);
+      }
     }
 
     for (int i = 0; i < g->Nodes.Size; i++)
     {
       const ImGuiAppNode* n = &g->Nodes.Data[i];
       if (n->Kind == ImGuiAppNodeKind_Struct && !n->IsBuiltin && !n->IsLive)
+      {
+        const int begin = line_now();
         AppEmitStructCode(g, n, out);
+        span(n->Id, begin);
+      }
     }
 
     for (int i = 0; i < order.Size; i++)
     {
       const ImGuiAppNode* n = AppGraphFindNodeConst(g, order.Data[i]);
       if (n && !n->IsBuiltin)
+      {
+        const int begin = line_now();
         AppEmitControlWithDeps(g, n, out);
+        span(n->Id, begin);
+      }
     }
 
-    // 3) Bring-up function: layers, then windows/sidebars, then controls in topo order.
+    // 3) Bring-up function: layers, then windows/sidebars, then controls in topo order. Each node's push
+    // line(s) become a second span for that node, so selecting a node also lights its composition site.
     out->appendf("void SetupApp(ImGuiApp* app, ImGuiViewport* vp)\n{\n  IM_UNUSED(vp);\n");
 
     for (int i = 0; i < g->Nodes.Size; i++)
@@ -7040,6 +7095,7 @@ namespace ImGui
       const ImGuiAppNode* n = &g->Nodes.Data[i];
       if (n->Kind != ImGuiAppNodeKind_Layer || n->IsLive)
         continue;
+      const int begin = line_now();
       if (n->LayerType == ImGuiAppLayerType_Custom)
       {
         char base[IM_LABEL_SIZE];
@@ -7048,16 +7104,19 @@ namespace ImGui
       }
       else
         out->appendf("  ImGui::PushAppLayer<%s>(app);\n", AppLayerTypeName(n->LayerType));
+      span(n->Id, begin);
     }
     for (int i = 0; i < g->Nodes.Size; i++)
     {
       const ImGuiAppNode* n = &g->Nodes.Data[i];
       if (n->Kind == ImGuiAppNodeKind_Window && !n->IsLive)
       {
+        const int begin = line_now();
         char base[IM_LABEL_SIZE]; AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
         out->appendf("  ImGui::PushAppWindow<%s>(app);\n", base);
         if (AppGraphHostsControl(g, n->Id))
           out->appendf("  ImGuiAppWindowBase* win_%d = app->Windows.back();\n", n->Id);
+        span(n->Id, begin);
       }
     }
     for (int i = 0; i < g->Nodes.Size; i++)
@@ -7065,16 +7124,19 @@ namespace ImGui
       const ImGuiAppNode* n = &g->Nodes.Data[i];
       if (n->Kind == ImGuiAppNodeKind_Sidebar && !n->IsLive)
       {
+        const int begin = line_now();
         char base[IM_LABEL_SIZE]; AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
         out->appendf("  ImGui::PushAppSidebar<%s>(app, vp, %s, %.0ff, ImGuiWindowFlags_None);\n", base, AppDirEnumName(n->DockDir), n->DockSize);
         if (AppGraphHostsControl(g, n->Id))
           out->appendf("  ImGuiAppSidebarBase* sb_%d = app->Sidebars.back();\n", n->Id);
+        span(n->Id, begin);
       }
     }
     for (int i = 0; i < order.Size; i++)
     {
       const ImGuiAppNode* n = AppGraphFindNodeConst(g, order.Data[i]);
       if (n == nullptr) continue;
+      const int begin = line_now();
       char base[IM_LABEL_SIZE]; AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
       const int parent = AppGraphParentOf(g, n->Id);
       const ImGuiAppNode* pn = parent >= 0 ? AppGraphFindNodeConst(g, parent) : nullptr;
@@ -7084,6 +7146,7 @@ namespace ImGui
         out->appendf("  ImGui::PushWindowControl<%s>(app, win_%d); // hosted by %s\n", base, pn->Id, pn->Draft.Name);
       else
         out->appendf("  ImGui::PushAppControl<%s>(app);\n", base);
+      span(n->Id, begin);
     }
     out->appendf("}\n");
   }

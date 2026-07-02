@@ -607,9 +607,23 @@ namespace ImGui
   // events editor; exposed so tests can drive it directly.
   IMGUI_API bool                AppEventExprCheck(const ImGuiAppGraph* g, const ImGuiAppNode* n, const ImGuiAppEventDesc* ev, char* err, int err_size);
 
+  // One node's contribution to the last whole-graph emission: [LineBegin, LineEnd) in the generated text.
+  // A node may own several spans (its type definitions AND its bring-up line in SetupApp). This is the
+  // code<->canvas source map: a code panel can highlight, scroll to, and select nodes from their lines.
+  struct ImGuiAppCodeSpan
+  {
+    int NodeId;
+    int LineBegin;
+    int LineEnd;
+
+    ImGuiAppCodeSpan() { NodeId = -1; LineBegin = 0; LineEnd = 0; }
+  };
+
   // Whole-graph codegen: data structs + controls with derived DataDependencies (topo order) + one bring-up
-  // function pushing layers, then windows/sidebars, then controls. Appends to *out.
+  // function pushing layers, then windows/sidebars, then controls. Appends to *out. The Ex variant also
+  // records the per-node source map (out_spans may be null; it is cleared first).
   IMGUI_API void                GenerateAppGraphCode(const ImGuiAppGraph* g, ImGuiTextBuffer* out);
+  IMGUI_API void                GenerateAppGraphCodeEx(const ImGuiAppGraph* g, ImGuiTextBuffer* out, ImVector<ImGuiAppCodeSpan>* out_spans);
 
   // Per-node codegen for the inspector: emits only the code a single selected node produces -- a Control's
   // struct(s) with derived deps, the CommandLayer's AppCommand enum + dispatch, a window/sidebar/layer
