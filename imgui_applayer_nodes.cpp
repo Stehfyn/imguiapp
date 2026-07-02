@@ -4018,15 +4018,23 @@ namespace ImGui
   // Accumulate the screen-space bounding box of a containment group: the owner node + all its descendants
   // (window/sidebar -> hosted controls -> their data structs -> fields; control -> its structs -> fields;
   // struct -> fields). Skips hidden live nodes. Recursive.
+  // [Phase-coherent geometry] group frames draw BEFORE this frame's submission, so the pool's screen rects
+  // here are last frame's pixels -- one frame stale under any zoom change. Model position x current zoom +
+  // current panning, size from the model cache: coherent every frame (docs/phase-coherence.md).
   static void AppGroupAccumulate(const ImGuiAppGraph* g, int owner_id, bool show_live, ImVec2* mn, ImVec2* mx)
   {
     const ImGuiAppNode* n = AppGraphFindNodeConst(g, owner_id);
     if (n == nullptr || (!show_live && n->IsLive) || AppNodeHiddenByCollapse(g, owner_id))
-      return;   // a node hidden behind a collapsed ancestor was never submitted -> reading its pos would assert
-    if (!AppEditorNodeWasSubmitted(owner_id))
-      return;   // not in the imnodes pool (frames draw from LAST frame's rects, before this frame's submission)
-    const ImVec2 p = ImNodes::GetNodeScreenSpacePos(owner_id);
-    const ImVec2 d = ImNodes::GetNodeDimensions(owner_id);
+      return;
+    if (!n->HasGridPos && !AppEditorNodeWasSubmitted(owner_id))
+      return;   // neither a settled model position nor a measurement yet (first-ever frame)
+    const float  z = AppCanvasZoom();
+    const ImVec2 co = ImGui::GetWindowPos() + ImNodes::EditorContextGetPanning();
+    const ImVec2 p = co + n->GridPos * z;
+    ImVec2 m;
+    if (!AppNodeModelSize(owner_id, &m))
+      m = AppLayoutNodeSize(g, n);
+    const ImVec2 d = m * z;
     mn->x = ImMin(mn->x, p.x); mn->y = ImMin(mn->y, p.y);
     mx->x = ImMax(mx->x, p.x + d.x); mx->y = ImMax(mx->y, p.y + d.y);
 

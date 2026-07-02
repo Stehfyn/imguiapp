@@ -1201,6 +1201,7 @@ namespace
     bool  AckReveal;           // the bottom tab bar consumed the one-shot RevealPanel intent this frame
     bool  ClearLog;            // Output tab: clear the document log
     bool  ToggleDiffMode;      // Code tab header: flip whole-program <-> diff-vs-saved
+    int   StampPrefab;         // project inspector: prefab index to instantiate (-1 = none) -- render records, update applies
   };
 
   // Project-level inspector (workbench §5.3): the empty selection shows the DOCUMENT -- the altitude above
@@ -1295,7 +1296,7 @@ namespace
         ImGui::TextUnformatted(ImGui::AppGraphPrefabName(i));
         ImGui::SameLine(ImGui::GetContentRegionMax().x - em * 4.0f);
         if (ImGui::SmallButton("Stamp"))
-          ImGui::AppGraphInstantiatePrefab(graph, i, ImVec2(140.0f, 140.0f));
+          temp_data->StampPrefab = i;   // render records the intent; OnUpdate mutates the graph (edit-intent bus)
         ImGui::SetItemTooltip("Instantiate this prefab on the canvas (fresh ids, selected)");
         ImGui::PopID();
       }
@@ -1379,6 +1380,11 @@ namespace
         ImGui::AppGraphEnsureFoundation(&doc->Graph);
         ImGui::AppGraphRequestFitAll();
         DocLog(doc, 0, "loaded graph <- %s (Project)", doc->GraphPath);
+      }
+      if (temp_data->StampPrefab >= 0)
+      {
+        ImGui::AppGraphInstantiatePrefab(&doc->Graph, temp_data->StampPrefab, ImVec2(140.0f, 140.0f));
+        DocLog(doc, 0, "stamped prefab '%s'", ImGui::AppGraphPrefabName(temp_data->StampPrefab));
       }
       data->ProjRescan -= dt;
       if (data->ProjRescan <= 0.0f)
@@ -1490,6 +1496,7 @@ namespace
     virtual void OnRender(const EditorBodyData* data, EditorBodyTempData* temp_data) const override final
     {
       GraphDocData* doc = data->Doc;
+      temp_data->StampPrefab = -1;   // TempData zero-init would read as prefab INDEX 0 -- "none" must be explicit
       if (doc->Mirror == nullptr)                            // tree + canvas mirror the example app
       {
         return;
