@@ -3534,6 +3534,70 @@ namespace ImGui
       EditAppNodeStyleMods(n);
   }
 
+  // Multi-selection inspector (workbench §5.1): intersection editing -- today, the Style section across every
+  // selected DESIGN node: master enable over all their descs, paste the section clipboard to all, clear all.
+  void EditAppNodesInspectorMulti(ImGuiAppGraph* g)
+  {
+    IM_ASSERT(g != nullptr);
+    int design = 0, styled = 0;
+    bool any_active = false;
+    for (int i = 0; i < g->Selection.Size; i++)
+    {
+      const ImGuiAppNode* n = AppGraphFindNodeConst(g, g->Selection.Data[i]);
+      if (n == nullptr || n->IsLive)
+        continue;
+      design++;
+      styled += n->StyleMods.Size + n->ColorMods.Size;
+      for (int s = 0; s < n->StyleMods.Size && !any_active; s++) any_active = n->StyleMods.Data[s].Active;
+      for (int s = 0; s < n->ColorMods.Size && !any_active; s++) any_active = n->ColorMods.Data[s].Active;
+    }
+    ImGui::TextDisabled("%d nodes selected  (%d design)", g->Selection.Size, design);
+    ImGui::Separator();
+
+    bool enable = any_active;
+    bool kebab = false;
+    const bool open = AppInspectorSection("##sec_style_multi", ICON_FA_PALETTE, "Style (all selected)", styled > 0 ? &enable : nullptr, &kebab);
+    auto for_each_sel = [&](void (*fn)(ImGuiAppNode*, bool), bool arg)
+    {
+      for (int i = 0; i < g->Selection.Size; i++)
+        if (ImGuiAppNode* n = AppGraphFindNode(g, g->Selection.Data[i]))
+          if (!n->IsLive)
+            fn(n, arg);
+    };
+    if (styled > 0 && enable != any_active)
+      for_each_sel([](ImGuiAppNode* n, bool on)
+      {
+        for (int s = 0; s < n->StyleMods.Size; s++) n->StyleMods.Data[s].Active = on;
+        for (int s = 0; s < n->ColorMods.Size; s++) n->ColorMods.Data[s].Active = on;
+      }, enable);
+    if (kebab)
+      ImGui::OpenPopup("##multi_style_menu");
+    if (ImGui::BeginPopup("##multi_style_menu"))
+    {
+      if (ImGui::MenuItem("Paste section to all", nullptr, false, g_style_clip_has))
+        for (int i = 0; i < g->Selection.Size; i++)
+          if (ImGuiAppNode* n = AppGraphFindNode(g, g->Selection.Data[i]))
+            if (!n->IsLive)
+            {
+              n->StyleMods = g_style_clip_mods;
+              n->ColorMods = g_style_clip_cols;
+            }
+      ImGui::Separator();
+      if (ImGui::MenuItem("Clear style on all", nullptr, false, styled > 0))
+        for_each_sel([](ImGuiAppNode* n, bool)
+        {
+          n->StyleMods.clear();
+          n->ColorMods.clear();
+        }, false);
+      ImGui::EndPopup();
+    }
+    if (open)
+      for (int i = 0; i < g->Selection.Size; i++)
+        if (const ImGuiAppNode* n = AppGraphFindNodeConst(g, g->Selection.Data[i]))
+          if (!n->IsLive)
+            ImGui::TextDisabled("%s  --  %d style, %d color", n->Draft.Name[0] ? n->Draft.Name : "(unnamed)", n->StyleMods.Size, n->ColorMods.Size);
+  }
+
   // Roomy inspector for the selected node's authored data -- the same edits available cramped inside the node
   // body, surfaced in a dedicated panel as component SECTIONS (workbench §5.1). Dispatches by kind. Live
   // mirror nodes are read-only, except style Active flags, which write through to the running item when the
@@ -4409,6 +4473,7 @@ namespace ImGui
     // AppGraphViewState() so the host can persist it across sessions.
     bool& s_snap_grid = AppGraphViewState()->SnapGrid;
     static bool s_help = false;       // F1 shortcut cheat-sheet overlay
+    static bool s_quick_insp = false; // N: floating quick inspector beside the selection
     if (s_snap_grid)
       ImNodes::GetStyle().Flags |= ImNodesStyleFlags_GridSnapping;
     else
@@ -5326,6 +5391,8 @@ namespace ImGui
         s_snap_grid = !s_snap_grid;   // toggle snap-to-grid
       if (ImGui::IsKeyPressed(ImGuiKey_F1, false))
         s_help = !s_help;             // toggle shortcut cheat-sheet
+      if (ImGui::IsKeyPressed(ImGuiKey_N, false))
+        s_quick_insp = !s_quick_insp; // Blender N-panel: floating inspector beside the selection
       if (ImGui::IsKeyPressed(ImGuiKey_Space, false))
         ImGui::OpenPopup("##cmdpalette");   // Blender-style operator search
 
@@ -5740,6 +5807,8 @@ namespace ImGui
         { "Order: Send to back", "[", 32 }, { "Order: Bring to front", "]", 33 },
         { "Groups: Collapse all", "", 20 }, { "Groups: Expand all", "", 21 }, { "Import: Paste C++ struct(s)", "", 22 },
         { "Scope: Enter selection", "Tab", 23 }, { "Scope: Up one level", "Esc", 24 },
+        { "Scope: Whole app", "", 35 },
+        { "View: Quick inspector", "N", 36 },
         { "Help: Shortcut card", "F1", 34 },
       };
       int run = -1;
@@ -5923,6 +5992,8 @@ namespace ImGui
           break;
         }
         case 34: s_help = !s_help; break;
+        case 35: g->ViewScope.clear(); break;
+        case 36: s_quick_insp = !s_quick_insp; break;
         default: break;
         }
         if (added != nullptr)
@@ -6034,7 +6105,7 @@ namespace ImGui
       const float step = r * 2.0f + em * 0.30f;
       ImDrawList* dl = ImGui::GetWindowDrawList();
 
-      const int   count = 6;
+      const int   count = 7;
       const ImVec2 col_c(editor_min.x + editor_size.x - em * 1.2f, editor_min.y + em * 1.2f);
       dl->AddRectFilled(ImVec2(col_c.x - r - em * 0.25f, col_c.y - r - em * 0.25f),
                         ImVec2(col_c.x + r + em * 0.25f, col_c.y + (count - 1) * step + r + em * 0.25f),
@@ -6087,9 +6158,55 @@ namespace ImGui
         ImGui::MenuItem("Minimap", nullptr, &s_ov_minimap);
         ImGui::EndPopup();
       }
+      // View scope as an explicit MODE (UE/Unity viewport-perspective idiom): whole app, or drilled into one
+      // composition. Same state Tab/Esc/breadcrumb navigate -- this names it and lists the destinations.
+      if (gizmo(ICON_FA_LAYER_GROUP, g->ViewScope.Size > 0 ? "View scope (drilled in)" : "View scope: whole app", g->ViewScope.Size > 0))
+        ImGui::OpenPopup("##ViewScopeMode");
+      if (ImGui::BeginPopup("##ViewScopeMode"))
+      {
+        ImGui::TextDisabled("View scope");
+        ImGui::Separator();
+        if (ImGui::MenuItem("Whole app", "Esc", g->ViewScope.Size == 0))
+          g->ViewScope.clear();
+        for (int i = 0; i < g->Nodes.Size; i++)
+        {
+          const ImGuiAppNode* sn = &g->Nodes.Data[i];
+          if (sn->Kind != ImGuiAppNodeKind_Layer || (!show_live && sn->IsLive) || !AppScopeCanEnter(const_cast<ImGuiAppNode*>(sn)))
+            continue;
+          const char* nm = sn->Kind == ImGuiAppNodeKind_Layer && AppLayerIsCore(sn->LayerType) ? AppLayerNodeName(sn->LayerType) : sn->Draft.Name;
+          if (ImGui::MenuItem(nm, nullptr, AppScopeCurrent(g) == sn->Id))
+          {
+            g->ViewScope.clear();
+            g->ViewScope.push_back(sn->Id);
+          }
+        }
+        ImGui::EndPopup();
+      }
     }
 
     // Shortcut cheat-sheet (F1): a translucent reference card in the canvas corner.
+    // Quick inspector (Blender's N panel): a floating, self-sized inspector beside the primary selection --
+    // the cross-screen trip to the inspector column, removed. Follows the selection; N (or its X) closes it.
+    if (s_quick_insp && selected_node_id != nullptr && *selected_node_id >= 0 && AppEditorNodeWasSubmitted(*selected_node_id))
+    {
+      const float em_qi = ImGui::GetFontSize();
+      const ImVec2 np = ImNodes::GetNodeScreenSpacePos(*selected_node_id);
+      const ImVec2 nd = ImNodes::GetNodeDimensions(*selected_node_id);
+      ImVec2 pos(np.x + nd.x + em_qi, np.y);
+      pos.x = ImClamp(pos.x, editor_min.x, editor_min.x + editor_size.x - em_qi * 18.0f);
+      pos.y = ImClamp(pos.y, editor_min.y, editor_min.y + editor_size.y - em_qi * 8.0f);
+      ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
+      ImGui::SetNextWindowSizeConstraints(ImVec2(em_qi * 17.0f, 0.0f), ImVec2(em_qi * 22.0f, em_qi * 26.0f));
+      ImGui::SetNextWindowBgAlpha(0.97f);
+      if (ImGui::Begin("Quick inspect###quick_insp", &s_quick_insp,
+                       ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                       ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoCollapse))
+      {
+        EditAppNodeInspector(g, *selected_node_id);
+      }
+      ImGui::End();
+    }
+
     if (s_help)
     {
       static const char* lines[] =
@@ -6111,6 +6228,7 @@ namespace ImGui
         "drag empty canvas    pan (also right-drag)",
         "wheel over canvas    zoom (Ctrl+wheel anywhere)",
         "right-click          context menu",
+        "N        quick inspector at the selection",
         "F1       toggle this help",
       };
       const float em = ImGui::GetFontSize();
@@ -10088,10 +10206,24 @@ namespace ImGui
     }
     else
     {
-      // Browse hierarchy: render every root (tree-parent == -1) recursively.
-      for (int i = 0; i < g->Nodes.Size; i++)
-        if (AppNodeTreeParent(g, &g->Nodes.Data[i]) == -1)
+      // Browse hierarchy: DESIGN roots first, then a dim band, then LIVE mirror roots -- two populations
+      // must not read as one list (usability findings #4; the eye toggle already governs the live half).
+      bool live_band_drawn = false;
+      for (int pass = 0; pass < 2; pass++)
+        for (int i = 0; i < g->Nodes.Size; i++)
+        {
+          const ImGuiAppNode* rn = &g->Nodes.Data[i];
+          if (rn->IsLive != (pass == 1) || AppNodeTreeParent(g, rn) != -1)
+            continue;
+          if (pass == 1 && !live_band_drawn && ctx.ShowLive)
+          {
+            live_band_drawn = true;
+            ImGui::Spacing();
+            ImGui::TextDisabled(ICON_FA_EYE "  live mirror");
+            ImGui::Separator();
+          }
           AppTreeRenderNode(g, g->Nodes.Data[i].Id, &ctx);
+        }
     }
 
     // Apply the deferred row action (now safe to mutate g->Nodes).

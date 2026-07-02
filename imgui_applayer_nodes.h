@@ -535,6 +535,7 @@ namespace ImGui
   // are read-only. node_id < 0 -> a "select a node" hint. Edits mutate the graph in place.
   IMGUI_API void                EditAppNodeInspector(ImGuiAppGraph* g, int node_id);
   IMGUI_API void                EditAppNodeInspectorEx(ImGuiAppGraph* g, int node_id, ImGuiApp* live_app);   // + live style write-back (see workbench §3.5)
+  IMGUI_API void                EditAppNodesInspectorMulti(ImGuiAppGraph* g);   // multi-selection: intersection editing (style across all selected)
 
   // Inspector section header (workbench §5.1, the Unity/UE component anatomy): collapse triangle + icon +
   // label, optional enable checkbox, optional kebab whose click the caller answers with its own popup.

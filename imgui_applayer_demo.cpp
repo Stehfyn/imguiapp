@@ -1844,6 +1844,11 @@ namespace
           // the composer's own theme, and the prefab library -- the altitude above any node.
           ShowComposerProjectInspector(doc, graph, temp_data);
         }
+        else if (graph->Selection.Size > 1)
+        {
+          // Multi-selection = intersection editing (style across all selected design nodes).
+          ImGui::EditAppNodesInspectorMulti(graph);
+        }
         else
         {
           ImGui::EditAppNodeInspectorEx(graph, selection, doc->Mirror);
