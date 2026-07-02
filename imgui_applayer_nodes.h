@@ -628,11 +628,12 @@ namespace ImGui
   // Exposed (stable pointer, single editor instance) so the host can persist them across sessions.
   struct ImGuiAppGraphViewState
   {
-    bool SnapGrid;
-    bool OvGrid;
-    bool OvBands;
-    bool OvFrames;
-    bool OvMinimap;
+    bool  SnapGrid;
+    bool  OvGrid;
+    bool  OvBands;
+    bool  OvFrames;
+    bool  OvMinimap;
+    float Zoom;      // canvas zoom, wheel-driven, [0.3, 2.5]; authored positions stay zoom-independent
   };
   IMGUI_API ImGuiAppGraphViewState* AppGraphViewState();
 

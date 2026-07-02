@@ -420,6 +420,7 @@ namespace
       else if (sscanf(p, "OvBands=%d", &iv) == 1)   view->OvBands = iv != 0;
       else if (sscanf(p, "OvFrames=%d", &iv) == 1)  view->OvFrames = iv != 0;
       else if (sscanf(p, "OvMinimap=%d", &iv) == 1) view->OvMinimap = iv != 0;
+      else if (sscanf(p, "Zoom=%f", &fv) == 1)      view->Zoom = (fv > 0.0f) ? fv : 1.0f;
       if (saved == 0) break;
       p = eol + 1;
     }
@@ -443,8 +444,8 @@ namespace
     {
       ImGuiTextBuffer buf;
       buf.appendf("TreeW=%g\nInspW=%g\nCodeH=%g\nShowLive=%d\n", f.TreeW, f.InspW, f.CodeH, f.ShowLive ? 1 : 0);
-      buf.appendf("Snap=%d\nOvGrid=%d\nOvBands=%d\nOvFrames=%d\nOvMinimap=%d\n",
-                  f.View.SnapGrid ? 1 : 0, f.View.OvGrid ? 1 : 0, f.View.OvBands ? 1 : 0, f.View.OvFrames ? 1 : 0, f.View.OvMinimap ? 1 : 0);
+      buf.appendf("Snap=%d\nOvGrid=%d\nOvBands=%d\nOvFrames=%d\nOvMinimap=%d\nZoom=%g\n",
+                  f.View.SnapGrid ? 1 : 0, f.View.OvGrid ? 1 : 0, f.View.OvBands ? 1 : 0, f.View.OvFrames ? 1 : 0, f.View.OvMinimap ? 1 : 0, f.View.Zoom);
       ImFileWrite(buf.c_str(), sizeof(char), (ImU64)buf.size(), fh);
       ImFileClose(fh);
       doc->LayoutSavedHash = h;
@@ -1332,15 +1333,25 @@ namespace
       const float    em            = ImGui::GetFontSize();
       const ImGuiIO& io            = ImGui::GetIO();
       ImVec2         body          = ImGui::GetContentRegionAvail();
-      body.y = ImMax(em * 4.0f, body.y - ImGui::GetFrameHeightWithSpacing());   // reserve the status bar row below
+      // Reserve the status strip's REAL height: a frame-styled auto-resize child is one frame-height of
+      // content plus its FramePadding on both sides, plus the item spacing between body and strip. The old
+      // FrameHeightWithSpacing reserve under-counted by 2*FramePadding.y -- the whole Composer overflowed
+      // its window by a few pixels and grew a window-level scrollbar.
+      const ImGuiStyle& lay_style = ImGui::GetStyle();
+      body.y = ImMax(em * 4.0f, body.y - (ImGui::GetFrameHeight() + lay_style.FramePadding.y * 2.0f + lay_style.ItemSpacing.y));
       const float    tree_origin_x = ImGui::GetCursorScreenPos().x;
       const float    tree_grip     = em * 0.5f;
       const float    min_canvas_w  = em * 16.0f;
       const float    min_canvas_h  = em * 8.0f;
+      const float    vspacing      = lay_style.ItemSpacing.y;   // canvas | grip | code stack in ##Right
+      // The ##Right column stacks canvas | grip | code panel with ItemSpacing BETWEEN the items -- the
+      // heights must sum to body.y INCLUDING that spacing, or the column grows a scrollbar. Collapsed code
+      // panel = the canvas alone owns the full height, exactly.
       const float    code_grip     = (doc->CodeH > 0.0f) ? em * 0.5f : 0.0f;
-      const float    code_max      = ImMax(0.0f, body.y - min_canvas_h - code_grip);
+      const float    code_chrome   = (doc->CodeH > 0.0f) ? code_grip + vspacing * 2.0f : 0.0f;
+      const float    code_max      = ImMax(0.0f, body.y - min_canvas_h - code_chrome);
       const float    code_h        = ImClamp(doc->CodeH, 0.0f, code_max);
-      const float    canvas_h      = ImMax(0.0f, body.y - code_h - code_grip);
+      const float    canvas_h      = ImMax(0.0f, body.y - ((code_h > 0.0f) ? code_h + code_chrome : 0.0f));
       const float    insp_grip     = em * 0.5f;
       const float    tree_w        = ImClamp((doc->TreeW > 0.0f) ? doc->TreeW : em * 16.0f, em * 9.0f, ImMax(em * 9.0f, body.x - tree_grip - min_canvas_w));
       const float    insp_w        = ImClamp((doc->InspW > 0.0f) ? doc->InspW : em * 22.0f, em * 14.0f, ImMax(em * 14.0f, body.x - tree_w - tree_grip - insp_grip - min_canvas_w));
@@ -1370,7 +1381,11 @@ namespace
       ImGui::SameLine(0.0f, 0.0f);
 
       // Right column: node graph canvas on top, code inspector on the bottom split.
-      if (ImGui::BeginChild("##Right", ImVec2(right_w, body.y)))
+      // NoScrollbar is a hard rule, not styling: this column's children are sized to fill it EXACTLY; a
+      // scrollbar here can only ever mean the layout math regressed, and it must fail visibly-large (clipped
+      // content), not quietly-annoying (a scrollbar).
+      if (ImGui::BeginChild("##Right", ImVec2(right_w, body.y), ImGuiChildFlags_None,
+                            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
       {
         col_w = ImGui::GetContentRegionAvail().x;
 
@@ -1706,7 +1721,13 @@ namespace
   // fixed (not the type-derived unique label) so the saved .ini dock binding + central-node dock still match.
   struct ComposerWindow : ImGuiAppWindow<ComposerWindow>
   {
-    ComposerWindow() { ImStrncpy(this->Label, "ImGuiAppLayer Composer", sizeof(this->Label)); }
+    ComposerWindow()
+    {
+      ImStrncpy(this->Label, "ImGuiAppLayer Composer", sizeof(this->Label));
+      // The workbench is a fixed-height composition (toolbar + body + status bar sized to fill exactly);
+      // a window scrollbar over the WHOLE editor is always a layout bug, never a feature -- forbid it.
+      this->Flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+    }
     virtual void OnRender(const ImGuiApp*) const override final {}
   };
 
