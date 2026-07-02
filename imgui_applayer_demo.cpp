@@ -14,6 +14,8 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>                         // strncmp (codegen-warning scan)
+#include <filesystem>                      // Project tab: the document's files on disk
+#include <string>                          // std::filesystem path -> utf8 at the ImGui boundary
 
 namespace
 {
@@ -317,7 +319,8 @@ namespace
     int             Selection;        // node selection shared by tree + canvas
     bool            ShowLive;         // show vs hide (never delete) live-mirror nodes
     float           TreeW;            // outliner width (0 -> default on first use)
-    float           CodeH;            // code-inspector height, bottom split under the canvas (0 == collapsed)
+    float           CodeH;            // bottom panel height (code/preview/problems/project; 0 == collapsed)
+    float           InspW;            // right-side Inspector column width (0 -> default on first use)
     char            WriteMsg[64];     // transient "wrote header" confirmation
     ImGuiID         WrittenSig;       // AppGraphSignature at the last header write (0 = never) -> Generate state
     char            GraphPath[256];
@@ -344,6 +347,7 @@ namespace
       data->ShowLive    = false;   // live mirror is opt-in (the toolbar eye): the outliner + canvas start with the DESIGN only
       data->TreeW       = 0.0f;          // 0 -> EditorBody picks a default on first layout
       data->CodeH       = 0.0f;          // collapsed
+      data->InspW       = 0.0f;          // 0 -> EditorBody picks a default on first layout
       data->WriteMsg[0] = 0;
       data->WrittenSig  = 0;
       data->Mirror      = nullptr;       // set after push by ShowAppLayerDemo
@@ -782,6 +786,7 @@ namespace
     GraphDocData*   Doc;                     // shared doc, cached non-const in OnInitialize
     bool            TreeDragging;            // tree splitter drag FSM (advanced only in OnUpdate)
     float           TreeDragDX;              // grab offset within the grip, captured at drag start
+    bool            InspDragging;            // inspector splitter drag FSM (advanced only in OnUpdate)
     ImGuiTextBuffer CodeText;                // the WHOLE app's generated C++ (kept current while the panel is open)
     ImVector<ImGui::ImGuiAppCodeSpan> CodeSpans;   // source map: node id -> line ranges in CodeText
     ImVector<int>   CodeLines;               // byte offset of each line start in CodeText (render index)
@@ -793,6 +798,12 @@ namespace
     bool            HasNodeCode;             // a node is selected and its code was generated
     char            CodeName[IM_LABEL_SIZE]; // selected node's draft name (the Node tab label)
     ImVector<ImGui::ImGuiAppGraphIssue> Issues;  // validation problems, recomputed while the panel is open
+
+    // Project tab: the document's files on disk (graph, generated header, write-ahead logs), rescanned on a
+    // slow cadence in OnUpdate -- the Unity/UE "Project" idea scoped to what the Composer actually produces.
+    struct ProjFile { char Name[160]; unsigned long long Size; bool IsGraph; bool IsHeader; };
+    ImVector<ProjFile> ProjFiles;
+    float              ProjRescan;    // seconds until the next directory scan
   };
   // TempData: raw input recorded by OnRender (the only place ImGui item geometry exists) and consumed by OnUpdate.
   // OnRender performs no logic and mutates no state -- it just records what the user did, exactly like the demo's
@@ -814,6 +825,9 @@ namespace
     bool  ToggleScrub;         // transport overlay: "App time" freeze button clicked (OnUpdate derives the new state)
     bool  ScrubIdxSet;         // transport overlay: frame scrubber moved this frame
     int   ScrubIdx;            // target app-state snapshot index
+    bool  InspGripActivated;   // inspector splitter drag started this frame
+    float BodyMaxX;            // body row right edge (screen) -- the inspector width derives from it
+    bool  ProjLoadGraph;       // Project tab: load the graph file
   };
   struct EditorBodyControl : ImGuiAppControl<EditorBodyData, EditorBodyTempData>
   {
@@ -822,11 +836,12 @@ namespace
       data->Doc = GetGraphDoc(app);
       data->CodeSig = 0;
       data->CodeSel = -2;   // "never generated" (a real empty selection is -1)
+      data->InspDragging = false;
+      data->ProjRescan = 0.0f;
     }
 
     virtual void OnUpdate(float dt, EditorBodyData* data, const EditorBodyTempData* temp_data, const EditorBodyTempData* last_temp_data) const override final
     {
-      IM_UNUSED(dt);
       GraphDocData* doc = data->Doc;
 
       // Tree splitter FSM, driven entirely by input captured last render.
@@ -857,6 +872,48 @@ namespace
         doc->CodeH = 0.0f;
       }
 
+      // Inspector splitter: same FSM as the tree's, mirrored to the right edge.
+      if (temp_data->InspGripActivated)
+      {
+        data->InspDragging = true;
+      }
+      if (data->InspDragging)
+      {
+        if (!temp_data->MouseLeftDown)
+          data->InspDragging = false;
+        else
+          doc->InspW = temp_data->BodyMaxX - temp_data->MouseX;
+      }
+
+      // Project tab intents + slow directory rescan (the document's files: graph, header, WALs).
+      if (temp_data->ProjLoadGraph)
+      {
+        ImGui::LoadAppGraph(doc->GraphPath, &doc->Graph);
+        ImGui::AppGraphEnsureFoundation(&doc->Graph);
+      }
+      data->ProjRescan -= dt;
+      if (data->ProjRescan <= 0.0f)
+      {
+        data->ProjRescan = 2.0f;
+        data->ProjFiles.resize(0);
+        std::error_code fs_ec;
+        for (const auto& entry : std::filesystem::directory_iterator(".", fs_ec))
+        {
+          if (data->ProjFiles.Size >= 64 || !entry.is_regular_file(fs_ec))
+            continue;
+          const std::filesystem::path& p = entry.path();
+          const std::string ext = p.extension().string();
+          if (ext != ".txt" && ext != ".h" && ext != ".wal" && ext != ".ini")
+            continue;
+          EditorBodyData::ProjFile f;
+          ImFormatString(f.Name, IM_ARRAYSIZE(f.Name), "%s", p.filename().string().c_str());
+          f.Size = (unsigned long long)entry.file_size(fs_ec);
+          f.IsGraph  = strcmp(f.Name, doc->GraphPath) == 0;
+          f.IsHeader = strcmp(f.Name, doc->HeaderPath) == 0;
+          data->ProjFiles.push_back(f);
+        }
+      }
+
       if (temp_data->SelectionChanged)
       {
         doc->Selection = temp_data->Selection;
@@ -879,7 +936,7 @@ namespace
       // state lives in PersistData, computed here, drawn from const data in OnRender. A closed panel keeps
       // its stale buffers -- the signature gate makes them correct again the moment they are next needed.
       const ImGuiID gsig = ImGui::AppGraphSignature(&doc->Graph);
-      if (doc->CodeH > 0.0f && (gsig != data->CodeSig || doc->Selection != data->CodeSel))
+      if (gsig != data->CodeSig || doc->Selection != data->CodeSel)   // inspector + code tab both feed off these
       {
         data->CodeSig = gsig;
         data->CodeSel = doc->Selection;
@@ -944,8 +1001,10 @@ namespace
       const float    code_max      = ImMax(0.0f, body.y - min_canvas_h - code_grip);
       const float    code_h        = ImClamp(doc->CodeH, 0.0f, code_max);
       const float    canvas_h      = ImMax(0.0f, body.y - code_h - code_grip);
+      const float    insp_grip     = em * 0.5f;
       const float    tree_w        = ImClamp((doc->TreeW > 0.0f) ? doc->TreeW : em * 16.0f, em * 9.0f, ImMax(em * 9.0f, body.x - tree_grip - min_canvas_w));
-      const float    right_w       = ImMax(0.0f, body.x - tree_w - tree_grip);
+      const float    insp_w        = ImClamp((doc->InspW > 0.0f) ? doc->InspW : em * 22.0f, em * 14.0f, ImMax(em * 14.0f, body.x - tree_w - tree_grip - insp_grip - min_canvas_w));
+      const float    right_w       = ImMax(0.0f, body.x - tree_w - tree_grip - insp_grip - insp_w);
       int            selection     = doc->Selection;
       float          col_w         = 0.0f;     // assigned once inside ##Right (needs that child's content region)
 
@@ -1038,11 +1097,6 @@ namespace
           {
             if (ImGui::BeginTabBar("##bottomtabs"))
             {
-              if (ImGui::BeginTabItem("Inspector"))
-              {
-                ImGui::EditAppNodeInspector(graph, selection);   // edit the selected node's data (name / fields / props)
-                ImGui::EndTabItem();
-              }
               // Code: the whole generated program, source-mapped -- the selection's lines highlight and
               // scroll into view, hover brushes both ways, clicking a line selects the node. Scopes are
               // TABS (the idiom this panel already speaks), so the focused view is its own tab below.
@@ -1073,24 +1127,58 @@ namespace
                 }
                 ImGui::EndTabItem();
               }
-              // The selected node's contribution, as its own named tab -- present exactly while a node with
-              // code is selected ("###nodecode" keeps the tab's identity stable across selection changes).
-              if (data->HasNodeCode)
+              // Project: the document's files on disk (Unity/UE "Project" scoped to what the Composer
+              // produces): the graph file, the generated header (freshness-chipped), and the WAL logs.
+              if (ImGui::BeginTabItem("Project"))
               {
-                char node_tab[IM_LABEL_SIZE + 16];
-                ImFormatString(node_tab, IM_ARRAYSIZE(node_tab), "%s###nodecode", data->CodeName);
-                if (ImGui::BeginTabItem(node_tab))
+                temp_data->ProjLoadGraph = false;
+                if (data->ProjFiles.Size == 0)
                 {
-                  ImGui::AlignTextToFramePadding();
-                  ImGui::TextDisabled("Selected node's contribution");
-                  ImGui::SameLine();
-                  if (ImGui::Button("Copy"))
-                  {
-                    ImGui::SetClipboardText(data->CodeNodeText.c_str());
-                  }
-                  ShowGeneratedCodeView("##codenode", data->CodeNodeText, data->NodeLines, nullptr, nullptr);
-                  ImGui::EndTabItem();
+                  ImGui::TextDisabled("No document files yet -- Save the graph or Generate the header.");
                 }
+                else if (ImGui::BeginTable("##proj", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
+                {
+                  ImGui::TableSetupColumn("File", ImGuiTableColumnFlags_WidthStretch, 0.6f);
+                  ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthStretch, 0.15f);
+                  ImGui::TableSetupColumn("##act", ImGuiTableColumnFlags_WidthStretch, 0.25f);
+                  ImGui::TableHeadersRow();
+                  const bool fresh = doc->WrittenSig != 0 && doc->WrittenSig == ImGui::AppGraphSignature(&doc->Graph);
+                  for (int i = 0; i < data->ProjFiles.Size; i++)
+                  {
+                    const EditorBodyData::ProjFile& f = data->ProjFiles.Data[i];
+                    ImGui::PushID(i);
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    const char* icon = f.IsGraph ? ICON_FA_CIRCLE_NODES : f.IsHeader ? ICON_FA_CODE : ICON_FA_FILE_LINES;
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::Text("%s  %s", icon, f.Name);
+                    ImGui::TableNextColumn();
+                    ImGui::AlignTextToFramePadding();
+                    if (f.Size >= 1024)
+                      ImGui::TextDisabled("%.1f KB", (double)f.Size / 1024.0);
+                    else
+                      ImGui::TextDisabled("%llu B", f.Size);
+                    ImGui::TableNextColumn();
+                    if (f.IsGraph)
+                    {
+                      if (ImGui::SmallButton("Load"))
+                        temp_data->ProjLoadGraph = true;
+                      ImGui::SetItemTooltip("Load this graph into the Composer");
+                    }
+                    else if (f.IsHeader)
+                    {
+                      ImGui::TextColored(fresh ? ImVec4(0.45f, 0.85f, 0.45f, 1.0f) : ImVec4(0.90f, 0.75f, 0.35f, 1.0f),
+                                         fresh ? ICON_FA_CHECK "  matches graph" : ICON_FA_TRIANGLE_EXCLAMATION "  stale");
+                    }
+                    else
+                    {
+                      ImGui::TextDisabled("write-ahead log");
+                    }
+                    ImGui::PopID();
+                  }
+                  ImGui::EndTable();
+                }
+                ImGui::EndTabItem();
               }
               // Preview ("Play"): render the selected control's fields as a live mock UI.
               if (ImGui::BeginTabItem("Preview"))
@@ -1142,6 +1230,49 @@ namespace
             }
           }
           ImGui::EndChild();
+        }
+      }
+      ImGui::EndChild();
+
+      // Inspector splitter: record raw input; the drag resolves in OnUpdate (tree-splitter FSM, mirrored).
+      ImGui::SameLine(0.0f, 0.0f);
+      ImGui::InvisibleButton("##isplit", ImVec2(insp_grip, body.y));
+      temp_data->InspGripActivated = ImGui::IsItemActivated();
+      temp_data->BodyMaxX          = ImGui::GetItemRectMax().x + insp_w;
+      if (data->InspDragging || ImGui::IsItemHovered())
+      {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+      }
+      ImGui::SameLine(0.0f, 0.0f);
+
+      // Right: the Inspector column (Unity/UE): selection header, editable properties, and the selected
+      // node's generated C++ -- everything about ONE node, always in the same place.
+      if (ImGui::BeginChild("##Inspector", ImVec2(insp_w, body.y), ImGuiChildFlags_Borders))
+      {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(ICON_FA_CIRCLE_INFO "  Inspector");
+        ImGui::Separator();
+        if (selection < 0)
+        {
+          ImGui::TextDisabled("Select a node.");
+          ImGui::Spacing();
+          ImGui::TextDisabled("The canvas, outliner, code lines and");
+          ImGui::TextDisabled("problem rows all select into here.");
+        }
+        else
+        {
+          ImGui::EditAppNodeInspector(graph, selection);
+          if (data->HasNodeCode)
+          {
+            ImGui::SeparatorText("Generated C++");
+            ImGui::TextDisabled("%s", data->CodeName);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Copy"))
+            {
+              ImGui::SetClipboardText(data->CodeNodeText.c_str());
+            }
+            ShowGeneratedCodeView("##inspcode", data->CodeNodeText, data->NodeLines, nullptr, nullptr);
+          }
         }
       }
       ImGui::EndChild();
