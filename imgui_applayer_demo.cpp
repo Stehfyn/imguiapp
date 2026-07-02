@@ -341,7 +341,7 @@ namespace
     {
       IM_UNUSED(app);
       data->Selection   = -1;
-      data->ShowLive    = true;
+      data->ShowLive    = false;   // live mirror is opt-in (the toolbar eye): the outliner + canvas start with the DESIGN only
       data->TreeW       = 0.0f;          // 0 -> EditorBody picks a default on first layout
       data->CodeH       = 0.0f;          // collapsed
       data->WriteMsg[0] = 0;
@@ -952,7 +952,7 @@ namespace
       // Left: tree sidebar (full height above the status bar).
       if (ImGui::BeginChild("##Tree", ImVec2(tree_w, body.y), ImGuiChildFlags_Borders))
       {
-        ImGui::ShowAppGraphTree(app, graph, &selection);
+        ImGui::ShowAppGraphTree(app, graph, &selection, doc->ShowLive);
       }
       ImGui::EndChild();
 

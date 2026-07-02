@@ -546,7 +546,8 @@ namespace ImGui
   // Scene-hierarchy / outliner panel (call inside your own child/window): a tree of the running app's
   // composition -- Layers, Windows, Sidebars, Controls -- plus the graph's authored nodes. Clicking a graph
   // row selects that node in the editor. *selected_node_id is caller-owned selection state (-1 = none).
-  IMGUI_API void                ShowAppGraphTree(const ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id);
+  // show_live mirrors the canvas toggle: when false, live-mirror rows are not listed (never deleted).
+  IMGUI_API void                ShowAppGraphTree(const ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, bool show_live = true);
 
   // Topologically order the Control nodes by data dependency (producers before consumers). Returns false and
   // writes err on a cycle. out_control_ids receives node ids in push order.

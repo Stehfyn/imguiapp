@@ -8455,6 +8455,7 @@ namespace ImGui
     int   ActList;
     int   ActTarget;  // reparent destination
     int   SetOpen;    // -1 none, 0 collapse-all, 1 expand-all (applied via SetNextItemOpen for one frame)
+    bool  ShowLive;   // false: live-mirror rows are not listed (same toggle as the canvas)
   };
 
   // Right-aligned metadata for a tree row: a count of what the node holds (fields, hosted controls, commands).
@@ -8620,6 +8621,8 @@ namespace ImGui
     ImGuiAppNode* n = AppGraphFindNode(g, node_id);
     if (n == nullptr || !c->KindVisible[n->Kind])
       return;
+    if (!c->ShowLive && n->IsLive)
+      return;   // live mirror hidden: the outliner obeys the same toggle as the canvas
 
     // Structural children = nodes whose tree-parent is this node.
     ImVector<int> kids;
@@ -8825,7 +8828,7 @@ namespace ImGui
     ImGui::PopID();
   }
 
-  void ShowAppGraphTree(const ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id)
+  void ShowAppGraphTree(const ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, bool show_live)
   {
     IM_ASSERT(g != nullptr);
     IM_UNUSED(app);   // the graph already mirrors the live app, so it is the single outliner source (#16)
@@ -8844,12 +8847,17 @@ namespace ImGui
     ctx.ActTarget = -1;
     ctx.SetOpen = -1;
 
-    // Per-kind node counts (drive the filter chips' badges); also tally hidden nodes for a "show all" affordance.
+    ctx.ShowLive = show_live;
+
+    // Per-kind node counts (drive the filter chips' badges); also tally hidden nodes for a "show all"
+    // affordance. Hidden live rows are not listed, so they are not counted either.
     int kind_count[ImGuiAppNodeKind_COUNT] = { 0 };
     int total_nodes = 0;
     int hidden_count = 0;
     for (int i = 0; i < g->Nodes.Size; i++)
     {
+      if (!show_live && g->Nodes.Data[i].IsLive)
+        continue;
       kind_count[g->Nodes.Data[i].Kind]++;
       total_nodes++;
       if (g->Nodes.Data[i].Hidden)
@@ -8930,6 +8938,8 @@ namespace ImGui
       {
         ImGuiAppNode* n = &g->Nodes.Data[i];
         if (!ctx.KindVisible[n->Kind] || !filter.PassFilter(n->Draft.Name))
+          continue;
+        if (!show_live && n->IsLive)
           continue;
         ImGui::PushID(n->Id);
         const ImU32 tint = AppGraphOriginColor(n);
