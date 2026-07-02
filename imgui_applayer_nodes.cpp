@@ -4675,7 +4675,13 @@ namespace ImGui
         if (AppNodeModelSize(n->Id, &m))
           w = ImMax(w, m.x - pad2);
       }
-      g_app_layer_uniform_w = w;
+      // [Phase-coherence: MEASUREMENT FEEDBACK LOOP] The width we render is measured back next frame: text
+      // rasterization and pixel snapping under zoom make that round-trip slightly non-idempotent, so a naive
+      // assignment ANIMATES the shared width for several frames after every zoom change (each frame
+      // re-measures its own rounded output and grows by a hair). A deadband gives the loop a true fixed
+      // point -- only real content growth (> ~2 model units) moves the width. docs/phase-coherence.md §1b.
+      if (w > g_app_layer_uniform_w + 2.0f)
+        g_app_layer_uniform_w = w;
     }
 
     // Scale the pixel-flavored ImNodes style scalars for this frame (grid, pins, links, node padding), and

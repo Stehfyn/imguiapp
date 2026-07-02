@@ -27,6 +27,33 @@ command -> publish -> render, with OnUpdate as the sole state mutator and OnRend
 derived data to be computed once, in phase, before anything draws. A feature that bypasses the
 pipeline and mixes phases has not just added a bug — it has contradicted the framework's thesis.
 
+## 1b. The measurement feedback loop (second species of the class)
+
+The stale-frame mix (§1) is the FIRST species: a one-frame flash. The SECOND species is the
+**measurement feedback loop**: a value that is *applied* one frame and *measured back* the next,
+where the apply→measure round-trip is not exactly idempotent. Instead of a single-frame settle, the
+value drifts a little every frame — the UI visibly **animates** toward (or past) its fixed point.
+
+```
+v(T+1) = measure( apply( v(T) ) )        // stable ONLY if measure∘apply is the identity
+```
+
+`measure∘apply` stops being the identity whenever a lossy channel sits in the loop: pixel snapping
+under a zoom transform, glyph rasterization widths, rounding to ints, clamping. Each pass through
+the loop adds a hair of error; combined with a max/ratchet the value stair-climbs for many frames.
+
+**Rule: every measure→apply loop must have an explicit fixed point.** Either make the round-trip
+exact (measure in the same invariant units you apply), or add a **deadband/hysteresis** so loop
+noise cannot move the value — only real input changes can. If you cannot name the fixed point, the
+loop is a bug waiting for a transform to excite it.
+
+Canonical example: the uniform layer-column width. The shared width is rendered as a Dummy, imnodes
+measures the node, the cache stores `pixels / zoom`, and next frame's width takes the max. At a
+fixed zoom the loop is exactly idempotent; a zoom change perturbs text/pixel rounding, and the width
+visibly animated across frames on every wheel tick. Fix: the width only moves when the measurement
+exceeds it by ~2 model units (deadband) — the loop has a fixed point again, and genuine content
+growth still propagates in one settle.
+
 ## 2. The rules
 
 1. **Cache in invariant units.** When a measurement must cross a frame boundary, divide out every
@@ -72,3 +99,5 @@ cluster (foreground list), and the demo's `##canvas_health` / `##canvas_transpor
 - [ ] Do draw-list decorations read geometry from the frame they draw in?
 - [ ] If zoom/DPI/font changed THIS frame, is every pixel this feature emits still correct THIS frame?
 - [ ] Is any deliberate T+1 settling in invariant units (no visual jump), and is it commented as such?
+- [ ] Does any value flow measure -> apply -> measure (a feedback loop)? Name its fixed point: either
+      the round-trip is exact in invariant units, or a deadband/hysteresis absorbs loop noise (§1b).
