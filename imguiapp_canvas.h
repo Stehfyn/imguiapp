@@ -123,11 +123,19 @@ namespace ImGui
   IMGUI_API void   CanvasSetNodeDraggable(ImGuiCanvasState* c, int node_id, bool draggable);
 
   // ---- pins + wires -----------------------------------------------------------------------------
+  // Kind is the interaction role (which end pairs with which when wiring). Side is the node edge the
+  // pin sits on and the direction its wire leaves -- orthogonal to Kind. Left/Right give the classic
+  // horizontal data read; Top/Bottom give a vertical owner-over-child containment read.
   enum ImGuiCanvasPinKind_ { ImGuiCanvasPin_In = 0, ImGuiCanvasPin_Out = 1 };
   enum ImGuiCanvasPinShape_ { ImGuiCanvasPinShape_Circle = 0, ImGuiCanvasPinShape_Square = 1 };
+  enum ImGuiCanvasPinSide_ { ImGuiCanvasPinSide_Left = 0, ImGuiCanvasPinSide_Right = 1, ImGuiCanvasPinSide_Top = 2, ImGuiCanvasPinSide_Bottom = 3 };
   IMGUI_API void   CanvasNextPinColor(ImU32 color);   // 0 -> style (by shape); consumed by the next CanvasBeginPin
+  IMGUI_API void   CanvasNextPinSide(ImGuiCanvasState* c, int side);   // override the next pin's edge; default derives from Kind (In->Left, Out->Right)
   IMGUI_API void   CanvasBeginPin(ImGuiCanvasState* c, int pin_id, int kind /*In|Out*/, int shape);
   IMGUI_API void   CanvasEndPin(ImGuiCanvasState* c);
+  // Row-less edge pin: an at-most-one-per-edge singleton (e.g. containment parent/children) placed at
+  // the center of its Side edge. Submits no widget and consumes no cursor -- call between BeginNode/EndNode.
+  IMGUI_API void   CanvasEdgePin(ImGuiCanvasState* c, int pin_id, int kind /*In|Out*/, int shape, int side);
   IMGUI_API void   CanvasWire(ImGuiCanvasState* c, int wire_id, int pin_a, int pin_b, ImU32 color /*= 0 -> style*/);
   IMGUI_API ImVec2 CanvasPinPos(const ImGuiCanvasState* c, int pin_id);           // model
 

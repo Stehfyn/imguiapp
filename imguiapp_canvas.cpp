@@ -35,7 +35,8 @@ struct ImGuiCanvasPinRec
 {
   int    Id;
   int    NodeId;
-  int    Kind;       // ImGuiCanvasPin_In / _Out
+  int    Kind;       // ImGuiCanvasPin_In / _Out (interaction role)
+  int    Side;       // ImGuiCanvasPinSide_ (which node edge; Left/Right = data, Top/Bottom = containment)
   int    Shape;      // circle (data) / square (containment)
   ImU32  Color;      // 0 = style (by shape); set via CanvasNextPinColor
   ImVec2 Anchor;     // MODEL units: pin center at the node edge, row-centered
@@ -229,12 +230,44 @@ static float CanvasScale(const ImGuiCanvasState* c)
   return c->Zoom * c->FontRatio;
 }
 
-// Wire bezier controls: horizontal tangents leaving each pin toward its natural side (out -> +x, in -> -x).
-static void CanvasWireControls(const ImGuiCanvasState* c, ImVec2 a, int kind_a, ImVec2 b, int kind_b, ImVec2* c0, ImVec2* c1)
+// Outward normal of a pin's edge: the direction its wire leaves the node.
+static ImVec2 CanvasSideNormal(int side)
 {
-  const float dx = ImMax(50.0f * CanvasScale(c), ImFabs(b.x - a.x) * 0.5f);
-  *c0 = ImVec2(a.x + (kind_a == ImGui::ImGuiCanvasPin_In ? -dx : dx), a.y);
-  *c1 = ImVec2(b.x + (kind_b == ImGui::ImGuiCanvasPin_In ? -dx : dx), b.y);
+  switch (side)
+  {
+  case ImGui::ImGuiCanvasPinSide_Left:   return ImVec2(-1.0f, 0.0f);
+  case ImGui::ImGuiCanvasPinSide_Top:    return ImVec2(0.0f, -1.0f);
+  case ImGui::ImGuiCanvasPinSide_Bottom: return ImVec2(0.0f, 1.0f);
+  case ImGui::ImGuiCanvasPinSide_Right:
+  default:                               return ImVec2(1.0f, 0.0f);
+  }
+}
+
+// The facing edge (used for the free end of a drag preview, which has no real pin).
+static int CanvasOppositeSide(int side)
+{
+  switch (side)
+  {
+  case ImGui::ImGuiCanvasPinSide_Left:   return ImGui::ImGuiCanvasPinSide_Right;
+  case ImGui::ImGuiCanvasPinSide_Right:  return ImGui::ImGuiCanvasPinSide_Left;
+  case ImGui::ImGuiCanvasPinSide_Top:    return ImGui::ImGuiCanvasPinSide_Bottom;
+  case ImGui::ImGuiCanvasPinSide_Bottom:
+  default:                               return ImGui::ImGuiCanvasPinSide_Top;
+  }
+}
+
+// Wire bezier controls: tangents leave each pin along its edge's outward normal. Distance is measured
+// along each pin's own axis, so a Left/Right pair reproduces the classic horizontal S-curve exactly and
+// a Top/Bottom pair bows vertically.
+static void CanvasWireControls(const ImGuiCanvasState* c, ImVec2 a, int side_a, ImVec2 b, int side_b, ImVec2* c0, ImVec2* c1)
+{
+  const ImVec2 na = CanvasSideNormal(side_a);
+  const ImVec2 nb = CanvasSideNormal(side_b);
+  const float  min_d = 50.0f * CanvasScale(c);
+  const float  da = ImMax(min_d, ImFabs((b.x - a.x) * na.x + (b.y - a.y) * na.y) * 0.5f);
+  const float  db = ImMax(min_d, ImFabs((a.x - b.x) * nb.x + (a.y - b.y) * nb.y) * 0.5f);
+  *c0 = ImVec2(a.x + na.x * da, a.y + na.y * da);
+  *c1 = ImVec2(b.x + nb.x * db, b.y + nb.y * db);
 }
 
 static float CanvasWireDistanceSq(ImVec2 p, ImVec2 a, ImVec2 c0, ImVec2 c1, ImVec2 b)
@@ -857,12 +890,19 @@ namespace ImGui
     n->Size.x = (content_px.x + c->Style.NodePadding.x * z * 2.0f) / z;
     n->Size.y = (content_px.y + c->Style.NodePadding.y * z * 2.0f + title_h) / z;
 
-    // Pin anchors resolve NOW, with the final node width known: In pins on the left edge, Out pins
-    // on the right, at their row's vertical center; model units, this frame.
+    // Pin anchors resolve NOW, with the final node size known; model units, this frame. Left/Right sit on
+    // a vertical edge at their row's center (y already set by CanvasEndPin). Top/Bottom are edge-centered
+    // singletons (row-less CanvasEdgePin): centered on x, pinned to the top/bottom edge on y.
     for (int i = 0; i < c->CurNodePins.Size; i++)
     {
       ImGuiCanvasPinRec* p = &c->Pins.Data[c->CurNodePins.Data[i]];
-      p->Anchor.x = p->Kind == ImGuiCanvasPin_In ? n->Pos.x : n->Pos.x + n->Size.x;
+      switch (p->Side)
+      {
+      case ImGuiCanvasPinSide_Left:   p->Anchor.x = n->Pos.x; break;
+      case ImGuiCanvasPinSide_Right:  p->Anchor.x = n->Pos.x + n->Size.x; break;
+      case ImGuiCanvasPinSide_Top:    p->Anchor.x = n->Pos.x + n->Size.x * 0.5f; p->Anchor.y = n->Pos.y; break;
+      case ImGuiCanvasPinSide_Bottom: p->Anchor.x = n->Pos.x + n->Size.x * 0.5f; p->Anchor.y = n->Pos.y + n->Size.y; break;
+      }
     }
 
     // Plate + title into the plate channel, under the content.
@@ -917,10 +957,27 @@ namespace ImGui
   static int   s_cur_pin = -1;
   static float s_cur_pin_y0 = 0.0f;
   static ImU32 s_next_pin_color = 0;
+  static int   s_next_pin_side = -1;   // -1 -> derive from Kind (In->Left, Out->Right)
 
   void CanvasNextPinColor(ImU32 color)
   {
     s_next_pin_color = color;
+  }
+
+  void CanvasNextPinSide(ImGuiCanvasState* c, int side)
+  {
+    IM_UNUSED(c);
+    s_next_pin_side = side;
+  }
+
+  // Side default: In->Left, Out->Right unless CanvasNextPinSide overrode it. Back-compat: every existing
+  // In/Out caller stays on its Left/Right edge with no change.
+  static int CanvasResolvePinSide(int kind)
+  {
+    const int side = s_next_pin_side >= 0 ? s_next_pin_side
+                   : (kind == ImGuiCanvasPin_In ? ImGuiCanvasPinSide_Left : ImGuiCanvasPinSide_Right);
+    s_next_pin_side = -1;
+    return side;
   }
 
   void CanvasBeginPin(ImGuiCanvasState* c, int pin_id, int kind, int shape)
@@ -929,12 +986,30 @@ namespace ImGui
     ImGuiCanvasPinRec* p = CanvasFindOrCreatePin(c, pin_id);
     p->NodeId = c->Nodes.Data[c->CurNode].Id;
     p->Kind = kind;
+    p->Side = CanvasResolvePinSide(kind);
     p->Shape = shape;
     p->Color = s_next_pin_color;
     s_next_pin_color = 0;
     p->LastFrame = GetFrameCount();
     s_cur_pin = c->PinIdx.GetInt((ImGuiID)pin_id, 0) - 1;
     s_cur_pin_y0 = GetCursorScreenPos().y;
+  }
+
+  // Row-less edge pin: no widget, no cursor use. Anchor.y for Top/Bottom is filled in CanvasEndNode once
+  // the node's size is known; here we only record identity + side and enlist it for that resolution.
+  void CanvasEdgePin(ImGuiCanvasState* c, int pin_id, int kind, int shape, int side)
+  {
+    IM_ASSERT(c->InsideCanvas && c->CurNode >= 0);
+    ImGuiCanvasPinRec* p = CanvasFindOrCreatePin(c, pin_id);
+    p->NodeId = c->Nodes.Data[c->CurNode].Id;
+    p->Kind = kind;
+    p->Side = side;
+    p->Shape = shape;
+    p->Color = s_next_pin_color;
+    s_next_pin_color = 0;
+    s_next_pin_side = -1;
+    p->LastFrame = GetFrameCount();
+    c->CurNodePins.push_back(c->PinIdx.GetInt((ImGuiID)pin_id, 0) - 1);
   }
 
   void CanvasEndPin(ImGuiCanvasState* c)
@@ -1019,7 +1094,7 @@ namespace ImGui
         const ImVec2 a = CanvasToScreen(c, pa->Anchor);
         const ImVec2 b = CanvasToScreen(c, pb->Anchor);
         ImVec2 c0, c1;
-        CanvasWireControls(c, a, pa->Kind, b, pb->Kind, &c0, &c1);
+        CanvasWireControls(c, a, pa->Side, b, pb->Side, &c0, &c1);
         const float d2 = CanvasWireDistanceSq(mouse, a, c0, c1, b);
         if (d2 <= best)
         {
@@ -1041,7 +1116,7 @@ namespace ImGui
       const ImVec2 a = CanvasToScreen(c, pa->Anchor);
       const ImVec2 b = CanvasToScreen(c, pb->Anchor);
       ImVec2 c0, c1;
-      CanvasWireControls(c, a, pa->Kind, b, pb->Kind, &c0, &c1);
+      CanvasWireControls(c, a, pa->Side, b, pb->Side, &c0, &c1);
       const bool hov = w->Id == c->HoveredWire;
       const bool sel = w->Id == c->SelectedWire;
       const ImU32 col = sel ? c->Style.WireSelected : hov ? c->Style.WireHovered : (w->Color != 0 ? w->Color : c->Style.Wire);
@@ -1088,15 +1163,15 @@ namespace ImGui
       {
         const ImVec2 a = CanvasToScreen(c, pf->Anchor);
         ImVec2 b = mouse;
-        int kind_b = pf->Kind == ImGuiCanvasPin_In ? ImGuiCanvasPin_Out : ImGuiCanvasPin_In;
+        int side_b = CanvasOppositeSide(pf->Side);   // free (mouse) end faces the source edge so the preview bows correctly
         if (c->HoveredPin >= 0 && c->HoveredPin != c->DragWireFromPin)
           if (const ImGuiCanvasPinRec* pt = CanvasFindPin(c, c->HoveredPin))
           {
             b = CanvasToScreen(c, pt->Anchor);
-            kind_b = pt->Kind;
+            side_b = pt->Side;
           }
         ImVec2 c0, c1;
-        CanvasWireControls(c, a, pf->Kind, b, kind_b, &c0, &c1);
+        CanvasWireControls(c, a, pf->Side, b, side_b, &c0, &c1);
         c->DrawList->AddBezierCubic(a, c0, c1, b, c->Style.WireHovered, ImMax(1.0f, c->Style.WireThickness * z));
       }
     }

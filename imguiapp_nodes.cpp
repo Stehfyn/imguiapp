@@ -1392,17 +1392,18 @@ namespace ImGui
     ImVec2 start = preferred;
     if (!has_preferred)
     {
-      // Default columns follow the tidy DAG's reading order: [layer stack] | windows | controls | structs | fields.
+      // Default seats follow the tidy tree's reading order: the layer rail is the left column; the containment
+      // tree runs top-down right of it -- windows/sidebars on top, then controls, then structs, then fields.
       if (n->Kind == ImGuiAppNodeKind_Layer || n->Kind == ImGuiAppNodeKind_App)
       {
         start = ImVec2(kAppGraphX0, kAppGraphY0 + AppGraphPlacementRowHint(n) * kAppGraphLayerRowH);
       }
       else
       {
-        const int col = (n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar) ? 0
+        const int row = (n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar) ? 0
                       : (n->Kind == ImGuiAppNodeKind_Control) ? 1
                       : (n->Kind == ImGuiAppNodeKind_Struct) ? 2 : 3;
-        start = ImVec2(AppLayoutContentX0() + (float)col * 480.0f, kAppGraphY0);
+        start = ImVec2(AppLayoutContentX0(), kAppGraphY0 + (float)row * 220.0f);
       }
     }
 
@@ -4258,56 +4259,57 @@ namespace ImGui
 
   static const int kAppLayoutMaxDepth = 12;
 
-  // Pass 1: per-depth column widths from MEASURED node sizes (the widest node in a depth sets its column).
-  static void AppLayoutMeasure(const ImGuiAppGraph* g, int id, int depth, float* max_w)
+  // Pass 1: per-depth ROW heights from MEASURED node sizes (the tallest node in a depth sets its row). The
+  // containment tree runs top-down: depth advances on Y, siblings spread on X.
+  static void AppLayoutMeasure(const ImGuiAppGraph* g, int id, int depth, float* max_h)
   {
     const ImGuiAppNode* n = AppGraphFindNodeConst(g, id);
     if (n == nullptr)
       return;
     const int d = ImMin(depth, kAppLayoutMaxDepth - 1);
-    max_w[d] = ImMax(max_w[d], AppLayoutNodeSize(g, n).x);
+    max_h[d] = ImMax(max_h[d], AppLayoutNodeSize(g, n).y);
     ImVector<int> kids;
     AppLayoutKids(g, n, &kids);
     for (int k = 0; k < kids.Size; k++)
-      AppLayoutMeasure(g, kids.Data[k], depth + 1, max_w);
+      AppLayoutMeasure(g, kids.Data[k], depth + 1, max_h);
   }
 
-  // Pass 2: layered tree placement with MEASURED sizes -- siblings stack by their real heights, parents center
-  // on their children's span, and every depth keeps its own cursor so no column can ever overlap itself.
-  // Returns the placed node's vertical CENTER.
-  static float AppLayoutPlace(ImGuiAppGraph* g, int id, int depth, const float* col_x, float* col_cur)
+  // Pass 2: layered tree placement with MEASURED sizes -- siblings spread by their real widths, parents center
+  // on their children's span, and every depth keeps its own cursor so no row can ever overlap itself.
+  // Returns the placed node's horizontal CENTER.
+  static float AppLayoutPlace(ImGuiAppGraph* g, int id, int depth, const float* row_y, float* row_cur)
   {
     ImGuiAppNode* n = AppGraphFindNode(g, id);
     if (n == nullptr)
-      return col_cur[0];
+      return row_cur[0];
     const int d = ImMin(depth, kAppLayoutMaxDepth - 1);
     const ImVec2 sz = AppLayoutNodeSize(g, n);
-    const float kGapY = 46.0f;
+    const float kGapX = 60.0f;
 
     ImVector<int> kids;
     AppLayoutKids(g, n, &kids);
-    float y;
+    float x;
     if (kids.Size == 0)
     {
-      y = col_cur[d];
+      x = row_cur[d];
     }
     else
     {
       float c_first = 0.0f, c_last = 0.0f;
       for (int k = 0; k < kids.Size; k++)
       {
-        const float c = AppLayoutPlace(g, kids.Data[k], depth + 1, col_x, col_cur);
+        const float c = AppLayoutPlace(g, kids.Data[k], depth + 1, row_y, row_cur);
         if (k == 0) c_first = c;
         c_last = c;
       }
       n = AppGraphFindNode(g, id);   // recursion only repositions (never adds), but re-find to be safe
-      y = ImMax((c_first + c_last) * 0.5f - sz.y * 0.5f, col_cur[d]);
+      x = ImMax((c_first + c_last) * 0.5f - sz.x * 0.5f, row_cur[d]);
     }
-    n->GridPos = ImVec2(col_x[d], y);
+    n->GridPos = ImVec2(x, row_y[d]);
     n->HasGridPos = true;
     n->_NeedsPlace = true;
-    col_cur[d] = y + sz.y + kGapY;
-    return y + sz.y * 0.5f;
+    row_cur[d] = x + sz.x + kGapX;
+    return x + sz.x * 0.5f;
   }
 
   void AppGraphAutoLayout(ImGuiAppGraph* g, bool show_live)
@@ -4348,32 +4350,32 @@ namespace ImGui
         roots.push_back(n->Id);
     }
 
-    // Column x-offsets from MEASURED widths (pass 1), shared across all roots so the depth columns line up
+    // Row y-offsets from MEASURED heights (pass 1), shared across all roots so the depth rows line up
     // graph-wide; the trees themselves start clear of the layer pipeline column at the root scope.
-    float max_w[kAppLayoutMaxDepth] = {};
+    float max_h[kAppLayoutMaxDepth] = {};
     for (int r = 0; r < roots.Size; r++)
-      AppLayoutMeasure(g, roots.Data[r], 0, max_w);
+      AppLayoutMeasure(g, roots.Data[r], 0, max_h);
 
-    const float kGapX = 100.0f;
+    const float kGapY = 80.0f;
     const bool  scoped = AppScopeCurrent(g) >= 0;
-    float col_x[kAppLayoutMaxDepth];
-    col_x[0] = scoped ? 80.0f : AppLayoutContentX0();
+    float row_y[kAppLayoutMaxDepth];
+    row_y[0] = scoped ? 60.0f : kAppGraphY0;
     for (int d = 1; d < kAppLayoutMaxDepth; d++)
-      col_x[d] = col_x[d - 1] + (max_w[d - 1] > 0.0f ? max_w[d - 1] + kGapX : 0.0f);
+      row_y[d] = row_y[d - 1] + (max_h[d - 1] > 0.0f ? max_h[d - 1] + kGapY : 0.0f);
 
-    // Place each root's tree (pass 2); between roots every column cursor advances past the deepest one so
-    // group frames of adjacent trees can never interleave.
-    float col_cur[kAppLayoutMaxDepth];
+    // Place each root's tree (pass 2); trees start right of the layer rail and, between roots, every row
+    // cursor advances past the widest one so group frames of adjacent trees can never interleave.
+    float row_cur[kAppLayoutMaxDepth];
     for (int d = 0; d < kAppLayoutMaxDepth; d++)
-      col_cur[d] = scoped ? 60.0f : kAppGraphY0;
+      row_cur[d] = scoped ? 80.0f : AppLayoutContentX0();
     for (int r = 0; r < roots.Size; r++)
     {
-      AppLayoutPlace(g, roots.Data[r], 0, col_x, col_cur);
-      float deepest = 0.0f;
+      AppLayoutPlace(g, roots.Data[r], 0, row_y, row_cur);
+      float widest = 0.0f;
       for (int d = 0; d < kAppLayoutMaxDepth; d++)
-        deepest = ImMax(deepest, col_cur[d]);
+        widest = ImMax(widest, row_cur[d]);
       for (int d = 0; d < kAppLayoutMaxDepth; d++)
-        col_cur[d] = deepest + 34.0f;
+        row_cur[d] = widest + 34.0f;
     }
   }
 
@@ -5073,22 +5075,37 @@ namespace ImGui
       }
       ImGui::CanvasBeginNode(cv, n->Id);
 
-      // Input-side ports first (left). For a control, the "persist"/"temp" tie pins are NOT drawn here -- they are
-      // drawn at their own body rows below (so an exploded PersistData/TempData wire enters lower than "deps").
-      // Containment reads as a DAG, parent -> child, left -> right: the child's "parent" pin RECEIVES on the
-      // left (ChildOut is model-outgoing but visually an input), the parent's "children" pin EMITS on the right.
+      // Containment reads vertically, owner over child: the child's "parent" pin (ChildOut) sits on its TOP
+      // edge and RECEIVES from above; the owner's "children" pin (ChildIn) sits on its BOTTOM edge and EMITS
+      // downward. Row-less edge pins (at-most-one per edge) -- submit them before the body; order is free.
+      for (int p = 0; p < n->Ports.Size; p++)
+      {
+        ImGuiAppNodePort* port = &n->Ports.Data[p];
+        if (port->Kind == ImGuiAppPortKind_ChildOut)
+        {
+          ImGui::CanvasNextPinColor(AppPinColor(port->Kind));
+          ImGui::CanvasEdgePin(cv, port->Id, ImGui::ImGuiCanvasPin_In, ImGui::ImGuiCanvasPinShape_Square, ImGui::ImGuiCanvasPinSide_Top);
+        }
+        else if (port->Kind == ImGuiAppPortKind_ChildIn)
+        {
+          ImGui::CanvasNextPinColor(AppPinColor(port->Kind));
+          ImGui::CanvasEdgePin(cv, port->Id, ImGui::ImGuiCanvasPin_Out, ImGui::ImGuiCanvasPinShape_Square, ImGui::ImGuiCanvasPinSide_Bottom);
+        }
+      }
+
+      // Input-side data ports (left). For a control, the "persist"/"temp" tie pins are NOT drawn here -- they
+      // are drawn at their own body rows below (so an exploded PersistData/TempData wire enters lower than "deps").
       for (int p = 0; p < n->Ports.Size; p++)
       {
         ImGuiAppNodePort* port = &n->Ports.Data[p];
         const bool is_tie_pin = n->Kind == ImGuiAppNodeKind_Control && (strcmp(port->Name, "persist") == 0 || strcmp(port->Name, "temp") == 0);
         if (is_tie_pin)
           continue;
-        if (port->Kind != ImGuiAppPortKind_DataIn && port->Kind != ImGuiAppPortKind_ChildOut)
+        if (port->Kind != ImGuiAppPortKind_DataIn)
           continue;
-        // Containment pins render square (kind legibility), data pins circular -- the engine draws pins.
+        // Data pins circular -- the engine draws pins.
         ImGui::CanvasNextPinColor(AppPinColor(port->Kind));
-        ImGui::CanvasBeginPin(cv, port->Id, ImGui::ImGuiCanvasPin_In,
-                              port->Kind == ImGuiAppPortKind_ChildOut ? ImGui::ImGuiCanvasPinShape_Square : ImGui::ImGuiCanvasPinShape_Circle);
+        ImGui::CanvasBeginPin(cv, port->Id, ImGui::ImGuiCanvasPin_In, ImGui::ImGuiCanvasPinShape_Circle);
         ImGui::TextUnformatted(port->Name);
         ImGui::CanvasEndPin(cv);
       }
@@ -5292,16 +5309,15 @@ namespace ImGui
       }
       ImGui::PopID();
 
-      // Output-side ports (right). The parent's "children" pin sits here so containment wires leave the
-      // parent's right edge and land on the child's left -- the tree read (see the input loop's note).
+      // Output-side data ports (right). The "children" containment pin is NOT here -- it renders on the
+      // bottom edge as an edge pin above (vertical containment read).
       for (int p = 0; p < n->Ports.Size; p++)
       {
         ImGuiAppNodePort* port = &n->Ports.Data[p];
-        if (port->Kind != ImGuiAppPortKind_DataOut && port->Kind != ImGuiAppPortKind_ChildIn)
+        if (port->Kind != ImGuiAppPortKind_DataOut)
           continue;
         ImGui::CanvasNextPinColor(AppPinColor(port->Kind));
-        ImGui::CanvasBeginPin(cv, port->Id, ImGui::ImGuiCanvasPin_Out,
-                              port->Kind == ImGuiAppPortKind_ChildIn ? ImGui::ImGuiCanvasPinShape_Square : ImGui::ImGuiCanvasPinShape_Circle);
+        ImGui::CanvasBeginPin(cv, port->Id, ImGui::ImGuiCanvasPin_Out, ImGui::ImGuiCanvasPinShape_Circle);
         ImGui::TextUnformatted(port->Name);
         ImGui::CanvasEndPin(cv);
       }
