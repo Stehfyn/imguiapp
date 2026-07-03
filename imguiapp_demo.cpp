@@ -11,9 +11,9 @@
 // [SECTION] Demo bring-up (ShowAppLayerDemo: sample app + editor app composition)
 
 #define IMGUI_DEFINE_MATH_OPERATORS
-#include "imgui_applayer.h"
-#include "imgui_applayer_nodes.h"
-#include "imgui_applayer_canvas.h"
+#include "imguiapp.h"
+#include "imguiapp_nodes.h"
+#include "imguiapp_canvas.h"
 #include "imgui_internal.h"
 #include "IconsFontAwesome6.h"
 
@@ -29,7 +29,7 @@ namespace
   // Set via ImGui::SetAppCodeFont; null -> UI font.
   static ImFont* g_AppCodeFont = nullptr;
 
-  // Theme-derived colors (same vocabulary as CanvasStyleFromTheme, imgui_applayer_canvas.cpp):
+  // Theme-derived colors (same vocabulary as CanvasStyleFromTheme, imguiapp_canvas.cpp):
   // neutrals blend WindowBg toward Text; semantic hues pull toward Text for light-theme legibility.
   static ImU32 DemoThemeMix(ImVec4 a, ImVec4 b, float t, float alpha)
   {

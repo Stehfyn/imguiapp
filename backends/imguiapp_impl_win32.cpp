@@ -1,8 +1,8 @@
 // Shared win32 platform layer: window procedure + message-pump main loop.
 // Renderer-agnostic; linked alongside whichever win32 renderer backend the build selects.
 
-#include "imgui_applayer.h"
-#include "imapp_impl_win32_state.h"
+#include "imguiapp.h"
+#include "imguiapp_impl_win32_state.h"
 
 #include "imgui_impl_win32.h"
 #ifndef WIN32_LEAN_AND_MEAN

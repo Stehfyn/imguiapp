@@ -48,4 +48,4 @@ algebra and generates the C++ back out.
 
 - **[docs/big-idea.md](docs/big-idea.md)** — the concepts and why they're orthogonal.
 - **[docs/up-next.md](docs/up-next.md)** — living priorities; rewritten constantly.
-- `imgui_applayer_demo.cpp` — full demo, including the dogfooded Composer (Tools → Composer).
+- `imguiapp_demo.cpp` — full demo, including the dogfooded Composer (Tools → Composer).

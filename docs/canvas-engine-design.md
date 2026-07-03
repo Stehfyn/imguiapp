@@ -68,7 +68,7 @@ their deadband (§1b of phase-coherence.md); the engine gives them exact model m
 loop noise shrinks to glyph rounding only.
 
 ### 2.5 Files + naming
-`imgui_applayer_canvas.h/.cpp`, namespace ImGui, prefix `Canvas*` (`ImGuiCanvasStyle`,
+`imguiapp_canvas.h/.cpp`, namespace ImGui, prefix `Canvas*` (`ImGuiCanvasStyle`,
 `ImGuiCanvasIO`). No imnodes includes. nodes.cpp migrates behind a thin call-site adapter so the
 diff stays reviewable; imnodes include + vendored dir dependency drop at the end.
 

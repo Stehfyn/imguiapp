@@ -106,7 +106,7 @@ of the USER'S composed app:
   then that header is COMPILED and RUN: the `^` event mutates PersistData, the rising event
   dispatches a real AppCommand. First catch: emitter now qualifies `ImGui::Push*` so output
   compiles standalone.
-- **Executable contract** — `tests/imgui_applayer_core_tests.cpp`: the pipeline semantics as checks
+- **Executable contract** — `tests/imguiapp_core_tests.cpp`: the pipeline semantics as checks
   (UCR phase order, edge-once, same-frame command latch, dedup dispatch, pop symmetry, render
   purity, time travel). Standalone runner; the ODR collision with the test engine's sample
   `ImGuiApp` is resolved for real by renaming that identifier in exactly the two sample TUs

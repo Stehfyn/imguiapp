@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include "imgui_applayer.h"
+#include "imguiapp.h"
 
 //-----------------------------------------------------------------------------
 // [SECTION] Timing
@@ -118,7 +118,7 @@ namespace ImGui
   IMGUI_API bool AppAVMetaDump(const char* avmeta_path);
 
   // Load a persisted run for reproduction: restore the snapshot, then AppInputReplay
-  // (imgui_applayer.h) -- its divergence check pinpoints any non-determinism.
+  // (imguiapp.h) -- its divergence check pinpoints any non-determinism.
   IMGUI_API bool AppAVMetaReadInputLog(const char* avmeta_path, ImGuiAppInputLog* out_log);
   IMGUI_API bool AppAVMetaReadStateSnapshot(const char* avmeta_path, ImVector<char>* out_bytes, ImGuiID* out_composition_id);
 

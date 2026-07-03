@@ -1,7 +1,7 @@
-﻿#include "imapp_impl_sdl2_wgpu.h"
+﻿#include "imguiapp_impl_sdl2_wgpu.h"
 
-#include "imapp_impl_sdl2_state.h"
-#include "imgui_applayer.h"
+#include "imguiapp_impl_sdl2_state.h"
+#include "imguiapp.h"
 
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_wgpu.h"
@@ -384,7 +384,7 @@ static bool ImGuiApp_Sdl2WGPU_Init(const ImGuiApp_Sdl2WGPU_InitInfo* init_info)
     GBackend.RendererBackendInitialized = true;
 
     ImGuiXInitInfo imguix_init_info;
-    imguix_init_info.Backend.Name = "imapp_impl_sdl2_wgpu";
+    imguix_init_info.Backend.Name = "imguiapp_impl_sdl2_wgpu";
     imguix_init_info.Backend.UserData = &GBackend;
     imguix_init_info.Backend.Shutdown = ShutdownBackend;
     imguix_init_info.Backend.NewFrame = NewFrame;

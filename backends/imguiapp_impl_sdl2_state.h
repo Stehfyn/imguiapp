@@ -10,5 +10,5 @@ struct ImGuiAppPlatformState
     bool          Running;
 };
 
-// Shared SDL2/emscripten main loop (renderer-agnostic). Defined in imapp_impl_sdl2.cpp.
+// Shared SDL2/emscripten main loop (renderer-agnostic). Defined in imguiapp_impl_sdl2.cpp.
 int ImGuiApp_ImplSDL2_RunLoop(ImGuiApp* app);

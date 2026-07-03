@@ -441,5 +441,5 @@ shippable.
 
 ---
 
-*Relevant files:* `imgui_applayer_demo.cpp`, `imgui_applayer_nodes.cpp`, `imgui_applayer_nodes.h`,
-`imgui_applayer.h`, `imnodes.cpp`/`imnodes.h`, `docs/node-editor-upgrade-design.md`.
+*Relevant files:* `imguiapp_demo.cpp`, `imguiapp_nodes.cpp`, `imguiapp_nodes.h`,
+`imguiapp.h`, `imnodes.cpp`/`imnodes.h`, `docs/node-editor-upgrade-design.md`.

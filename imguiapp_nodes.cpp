@@ -1,6 +1,6 @@
-// ImGuiAppLayer data-driven node tooling, on the canvas engine (imgui_applayer_canvas.h):
+// ImGuiAppLayer data-driven node tooling, on the canvas engine (imguiapp_canvas.h):
 // model-unit geometry, native camera, same-frame measurement. The engine dependency stays confined
-// to this translation unit; imgui_applayer_nodes.h only forward-declares the canvas state.
+// to this translation unit; imguiapp_nodes.h only forward-declares the canvas state.
 //
 // Index of this file (search for "[SECTION]"):
 // [SECTION] Blender-style field widgets (node body)
@@ -24,8 +24,8 @@
 // [SECTION] Scene-hierarchy tree (ECS-style outliner)
 
 #define IMGUI_DEFINE_MATH_OPERATORS
-#include "imgui_applayer_nodes.h"
-#include "imgui_applayer_canvas.h"
+#include "imguiapp_nodes.h"
+#include "imguiapp_canvas.h"
 #include "IconsFontAwesome6.h"             // Font Awesome glyphs for layer roles (font merged by the host app)
 
 #include <stdio.h>                         // sscanf (graph text parse)
@@ -1177,7 +1177,7 @@ namespace ImGui
   // [SECTION] Typed node graph: allocation, factory, lookup
   //-----------------------------------------------------------------------------
 
-  // Mirror of ImGuiStatic::_ConstantHash (imgui_applayer.h): a design port must carry the exact runtime
+  // Mirror of ImGuiStatic::_ConstantHash (imguiapp.h): a design port must carry the exact runtime
   // data-flow key ImGuiType<PersistData>::ID.
   static ImGuiID AppConstantHash(const char* s)
   {
@@ -1296,7 +1296,7 @@ namespace ImGui
   static const ImGuiAppGraph* g_editor_pool_graph = nullptr;   // the graph whose ids the editor canvas holds
 
   // The Composer's single canvas instance, created on first use. The engine stores node geometry in
-  // MODEL units and measures it the same frame it renders (imgui_applayer_canvas.h).
+  // MODEL units and measures it the same frame it renders (imguiapp_canvas.h).
   static ImGuiCanvasState* g_app_canvas = nullptr;
 
   static ImGuiCanvasState* AppEditorCanvas()

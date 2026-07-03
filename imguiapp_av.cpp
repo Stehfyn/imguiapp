@@ -39,7 +39,7 @@ static ImU64 AvClockTsc()
 #ifdef _WIN32
   return (ImU64)__rdtsc();
 #else
-  // Must share a domain with AppClockTsc (imgui_applayer.cpp) -- sidecar StartTsc and
+  // Must share a domain with AppClockTsc (imguiapp.cpp) -- sidecar StartTsc and
   // FrameID.Tsc are compared: both fall back to CLOCK_MONOTONIC nanoseconds.
   timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);

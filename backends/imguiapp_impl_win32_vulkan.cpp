@@ -1,8 +1,8 @@
 ﻿
-#include "imapp_impl_win32_vulkan.h"
-#include "imgui_applayer.h"
+#include "imguiapp_impl_win32_vulkan.h"
+#include "imguiapp.h"
 #include "imguiapp_av.h"          // ImGuiAppAVFrame (CaptureFrame payload)
-#include "imapp_impl_win32_state.h"
+#include "imguiapp_impl_win32_state.h"
 
 #include "imgui_impl_win32.h"
 
@@ -1287,7 +1287,7 @@ static bool ImGuiApp_Win32Vulkan_Init(const ImGuiApp_Win32Vulkan_InitInfo* init_
     GBackend.RendererBackendInitialized = true;
 
     ImGuiXInitInfo imguix_init_info;
-    imguix_init_info.Backend.Name = "imapp_impl_win32_vulkan";
+    imguix_init_info.Backend.Name = "imguiapp_impl_win32_vulkan";
     imguix_init_info.Backend.UserData = &GBackend;
     imguix_init_info.Backend.Shutdown = ShutdownBackend;
     imguix_init_info.Backend.NewFrame = NewFrame;

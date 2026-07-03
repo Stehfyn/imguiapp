@@ -11,7 +11,7 @@
 // [SECTION] App bring-up (InitializeApp / UpdateApp / RenderApp / storage)
 
 #define IMGUI_DEFINE_MATH_OPERATORS
-#include "imgui_applayer.h"
+#include "imguiapp.h"
 #include "imguiapp_av.h"   // AppRecordPump (OnEncodeFrame)
 #include "imgui_internal.h"
 #include "imguix.h"

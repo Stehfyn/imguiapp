@@ -11,7 +11,7 @@
 // [SECTION] Frame end + queries
 
 #define IMGUI_DEFINE_MATH_OPERATORS
-#include "imgui_applayer_canvas.h"
+#include "imguiapp_canvas.h"
 #include "imgui_internal.h"
 
 #include <string.h>

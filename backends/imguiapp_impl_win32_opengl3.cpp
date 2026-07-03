@@ -1,4 +1,4 @@
-﻿#include "imapp_impl_win32_opengl3.h"
+﻿#include "imguiapp_impl_win32_opengl3.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_win32.h"
 
@@ -8,8 +8,8 @@
 #include <windows.h>
 #include <GL/gl.h>
 
-#include "imapp_impl_win32_state.h"
-#include "imgui_applayer.h"
+#include "imguiapp_impl_win32_state.h"
+#include "imguiapp.h"
 
 namespace
 {
@@ -225,7 +225,7 @@ static bool ImGuiApp_Win32OpenGL3_Init(const ImGuiApp_Win32OpenGL3_InitInfo* ini
     GBackend.RendererBackendInitialized = true;
 
     ImGuiXInitInfo imguix_init_info;
-    imguix_init_info.Backend.Name = "imapp_impl_win32_opengl3";
+    imguix_init_info.Backend.Name = "imguiapp_impl_win32_opengl3";
     imguix_init_info.Backend.UserData = &GBackend;
     imguix_init_info.Backend.Shutdown = ShutdownBackend;
     imguix_init_info.Backend.NewFrame = NewFrame;

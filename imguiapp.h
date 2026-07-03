@@ -16,7 +16,7 @@ Index of this file:
 
 #include "imgui.h" 										    // IMGUI_API, ImGuiID, ImGuiStorage, ImBitArray, ImGuiTextIndex, ImChunkStream
 #include "imgui_internal.h"               // ImStrncpy
-#include "imapp_config.h"
+#include "imguiapp_config.h"
 
 // Keep VERSION and VERSION_NUM in sync.
 #define IMGUI_APPLAYER_VERSION      "0.4.0"

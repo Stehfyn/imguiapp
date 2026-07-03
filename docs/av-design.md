@@ -211,7 +211,7 @@ IMGUI_API void AppRecordSnapshotState(ImGuiAppRecorder* rec, ImGuiApp* app);
 
 The framework already has record/replay at the right level: `ImGuiAppInputLog` records
 every control's TempData + dt per frame with a post-update state hash, and
-`AppInputReplay` re-runs it with divergence detection (imgui_applayer.h). AV does not
+`AppInputReplay` re-runs it with divergence detection (imguiapp.h). AV does not
 reinvent this -- the sidecar PERSISTS it:
 
 ```cpp
@@ -372,10 +372,10 @@ wires a provider exactly like imgui apps wire imgui_impl_win32 + imgui_impl_vulk
 The harness is its own pair because it alone drags the test engine.
 
 ```
-imguix/ImGuiAppLayer/
-  imgui_applayer.h / .cpp                  P1: ImGuiAppFrameID, ImGuiAppPacer + AppPacerWait,
+imguix/imguiapp/
+  imguiapp.h / .cpp                  P1: ImGuiAppFrameID, ImGuiAppPacer + AppPacerWait,
                                            WAL frame-id source, CaptureFrame backend vtable slot
-  imapp_config.h                           P1: ImGuiAppHeadlessMode field on ImGuiAppConfig
+  imguiapp_config.h                           P1: ImGuiAppHeadlessMode field on ImGuiAppConfig
   imguiapp_av.h / imguiapp_av.cpp          AV seam: timing, ImGuiAppAVFrame, encoder vtable,
                                            recorder, ring, sidecar writer/reader
   imguiapp_testharness.h / .cpp            ImGuiAppTestHarness (gated on the test-engine
@@ -385,7 +385,7 @@ imguix/ImGuiAppLayer/
   backends/imguiapp_impl_mediafoundation.h / .cpp
                                            encoder backend: Media Foundation (compiled WIN32
                                            only; the only TU linking mfplat/mfreadwrite)
-  backends/imapp_impl_*                    platform backends: CaptureFrame impls,
+  backends/imguiapp_impl_*                    platform backends: CaptureFrame impls,
                                            Headless_Offscreen, the unconditional AppPacerWait
                                            call in RunLoop
 ```

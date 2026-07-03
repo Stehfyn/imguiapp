@@ -10,7 +10,7 @@ This upgrade makes the graph a **1:1 mirror of the `ImGuiApp` runtime object mod
 ports, and a single monotonic id allocator so identity survives reorder/delete. Codegen becomes
 whole-graph: it emits the data structs, derives each control's `DataDependencies` from incoming data
 edges, and emits `Push*` bring-up in Kahn topological order so every dependency's `InstanceData` exists
-in `app->Data` before its consumer's `OnInitialize` resolves it (`imgui_applayer.h:397`). Authoring all
+in `app->Data` before its consumer's `OnInitialize` resolves it (`imguiapp.h:397`). Authoring all
 four pillars buys a *complete, compilable app skeleton* from the canvas instead of isolated control stubs.
 
 **Spine:** the *object-model-fidelity* frame (mirror the runtime hierarchy, single `NextId`, embed
@@ -27,14 +27,14 @@ All structs are POD/`ImVector`-shaped and imnodes-free (header stays imnodes-fre
 ```cpp
 typedef int ImGuiAppNodeKind;
 enum ImGuiAppNodeKind_ {
-  ImGuiAppNodeKind_App = 0,   // singleton root; owns Layers/Windows/Sidebars/Controls (imgui_applayer.h:357-366)
+  ImGuiAppNodeKind_App = 0,   // singleton root; owns Layers/Windows/Sidebars/Controls (imguiapp.h:357-366)
   ImGuiAppNodeKind_Layer,     // FIXED C++ type (Task/Command/Status/Window) -> PushAppLayer<T>
   ImGuiAppNodeKind_Window,    // ImGuiAppWindow<T>  -> PushAppWindow<T>
   ImGuiAppNodeKind_Sidebar,   // ImGuiAppSidebar<T> -> PushAppSidebar<T>(app,vp,dir,size,flags)
   ImGuiAppNodeKind_Control,   // ImGuiAppControl<...> -> PushAppControl<T>   (draftable)
   ImGuiAppNodeKind_COUNT,
 };
-typedef int ImGuiAppLayerType;   // the 4 fixed layer classes (imgui_applayer.h:312-342)
+typedef int ImGuiAppLayerType;   // the 4 fixed layer classes (imguiapp.h:312-342)
 enum ImGuiAppLayerType_ { ImGuiAppLayerType_Task=0, ImGuiAppLayerType_Command,
                           ImGuiAppLayerType_Status, ImGuiAppLayerType_Window, ImGuiAppLayerType_COUNT };
 typedef int ImGuiAppPortKind;
@@ -152,7 +152,7 @@ int AppGraphAllocId(ImGuiAppGraph* g) { return g->NextId++; }
 
 **Data-flow id mapping.** A `DataOut`/`DataIn` port's `DataTypeId` is the PersistData type hash the
 runtime keys on. The design recomputes the *exact* runtime value via a local mirror of `_ConstantHash`
-over the scope-stripped display name (verified at imgui_applayer.h:143-148,186-189; for a global
+over the scope-stripped display name (verified at imguiapp.h:143-148,186-189; for a global
 `struct FooData`, `ImGuiType<FooData>::Name == "FooData"`):
 ```cpp
 static ImGuiID AppConstantHash(const char* s){ return *s ? (ImGuiID)*s + 33u*AppConstantHash(s+1) : 5381u; }
@@ -256,7 +256,7 @@ refactored into `AppEmitControl(draft, depNames, depCount, out)`; the legacy ent
 4. Emit one bring-up function: **Layers** first (`PushAppLayer<TypeName>`), then **Windows/Sidebars** with
    placement / `PushAppSidebar<T>(app,vp,dir,size,flags)` (h:561), then **Controls** in topo order. A
    Control with a Containment edge to a Sidebar emits `PushSidebarControl<T>(app, sidebar)` (h:652); to a
-   Window it emits `PushAppControl<T>` + `// TODO: PushWindowControl (runtime stub, imgui_applayer.h:625-650)`.
+   Window it emits `PushAppControl<T>` + `// TODO: PushWindowControl (runtime stub, imguiapp.h:625-650)`.
 
 **Worked example** — Layer(WindowLayer) + Sidebar(StatusBar) hosting `RandomTime`, and `Breathing`
 depending on `RandomTime` with a field binding `timer_secs ← max_timer_secs`:
@@ -412,5 +412,5 @@ identity rides in the parsed records, not in recomputed packed ints.
 
 ---
 
-*Relevant files:* `imgui_applayer_nodes.h`, `imgui_applayer_nodes.cpp`, `imgui_applayer_demo.cpp`,
-`imgui_applayer.h`, `../../tests/imgui_applayer_nodes_tests.cpp`.
+*Relevant files:* `imguiapp_nodes.h`, `imguiapp_nodes.cpp`, `imguiapp_demo.cpp`,
+`imguiapp.h`, `../../tests/imguiapp_nodes_tests.cpp`.

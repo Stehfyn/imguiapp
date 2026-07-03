@@ -11,7 +11,7 @@ Index of this file:
 // [SECTION] Code generation (GenerateAppControlCode)
 
 Reflection-driven node tooling. Pulls in the C++20 reflection library and some STL,
-kept out of imgui_applayer.h. Public entry points stay imgui-shaped: pointer parameters,
+kept out of imguiapp.h. Public entry points stay imgui-shaped: pointer parameters,
 char[] buffers, ImGuiID, ImVector.
 
 Reflection subset: the reflection library only reflects aggregates and miscounts raw
@@ -26,7 +26,7 @@ these helpers must be a plain-scalar aggregate; codegen emits exactly such aggre
 
 #include "imgui.h"
 #include "imgui_internal.h"               // ImFormatString
-#include "imgui_applayer.h"               // ImGuiApp, IM_LABEL_SIZE, ImGuiType<>
+#include "imguiapp.h"               // ImGuiApp, IM_LABEL_SIZE, ImGuiType<>
 #include "reflect/reflect"                // reflect::for_each, member_name, get, type_name
 
 #include <format>                         // std::format (field stringify, confined to this header)
@@ -34,7 +34,7 @@ these helpers must be a plain-scalar aggregate; codegen emits exactly such aggre
 #include <string_view>                    // reflect member/type names
 #include <type_traits>                    // dispatch traits
 
-struct ImGuiCanvasState;                  // canvas engine state (imgui_applayer_canvas.h), opaque here
+struct ImGuiCanvasState;                  // canvas engine state (imguiapp_canvas.h), opaque here
 
 //-----------------------------------------------------------------------------
 // [SECTION] Reflection field helpers (VisitAppFields, DrawAppField, EditAppField)
@@ -129,7 +129,7 @@ namespace ImGui
 
 namespace ImGui
 {
-  // Canvas-engine node scaffold (see imgui_applayer_canvas.h): titled node between CanvasBegin/End.
+  // Canvas-engine node scaffold (see imguiapp_canvas.h): titled node between CanvasBegin/End.
   IMGUI_API void BeginAppNode(::ImGuiCanvasState* c, int id, const char* title);
   IMGUI_API void EndAppNode(::ImGuiCanvasState* c);
 
@@ -235,7 +235,7 @@ namespace ImGui
 // [SECTION] Typed graph kinds (node/layer/port/edge discriminators)
 //-----------------------------------------------------------------------------
 
-// A node mirrors one slot of the live ImGuiApp object model (imgui_applayer.h). App is the singleton
+// A node mirrors one slot of the live ImGuiApp object model (imguiapp.h). App is the singleton
 // root; Layers push via PushAppLayer<T>, Windows/Sidebars via PushAppWindow/Sidebar<T>, Controls (the
 // only draftable kind) via PushAppControl<T>.
 typedef int ImGuiAppNodeKind;
@@ -677,7 +677,7 @@ namespace ImGui
   };
   IMGUI_API ImGuiAppGraphViewState* AppGraphViewState();
 
-  // The editor's canvas-engine state (single editor instance; see imgui_applayer_canvas.h): hosts and
+  // The editor's canvas-engine state (single editor instance; see imguiapp_canvas.h): hosts and
   // tests can query geometry or drive the camera.
   IMGUI_API ::ImGuiCanvasState* AppGraphEditorCanvas();
 

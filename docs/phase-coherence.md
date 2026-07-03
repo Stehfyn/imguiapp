@@ -86,7 +86,7 @@ under a zoomed font, style scalars scaled per frame. Three phase violations ship
 | Gizmo column / health chip drawn into the parent window's draw list, hit-tested with parent-window items | any node scrolled beneath them OCCLUDED the controls and KILLED their clicks (imnodes' inner child renders above the parent list and wins hover) | viewport chrome draws into the foreground draw list (clipped to the canvas) or is a real overlay window — both z-order and hit-testing stay above canvas content |
 | Group bounding boxes (`AppGroupAccumulate`) read the pool's screen rects while drawing BEFORE this frame's submission | group frames + caption chips flashed stale on every zoom change — found in review AFTER the "audit" claimed decorations were fixed: the first sweep fixed the layer box and sequence rail but asserted this one coherent without reading it | same model transform as the other decorations. Audit lesson: classify EVERY `GetNodeScreenSpacePos/Dimensions` call site by its draw phase (pre-submission = last frame's pixels; post-submission = coherent) — do not sample |
 
-Where it lives in code (see the [SECTION] index in `imgui_applayer_nodes.cpp`):
+Where it lives in code (see the [SECTION] index in `imguiapp_nodes.cpp`):
 `g_node_model_w/h` + `AppNodeModelSize` (the invariant cache), the capture in the post-submission
 read-back, `AppDrawLayerGroupBox` / `AppDrawScopeSequence` (transform-fresh decorations), the gizmo
 cluster (foreground list), and the demo's `##canvas_health` / `##canvas_transport` overlay windows.

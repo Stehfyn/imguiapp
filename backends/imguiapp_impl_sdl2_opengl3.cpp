@@ -1,7 +1,7 @@
-#include "imapp_impl_sdl2_opengl3.h"
+#include "imguiapp_impl_sdl2_opengl3.h"
 
-#include "imapp_impl_sdl2_state.h"
-#include "imgui_applayer.h"
+#include "imguiapp_impl_sdl2_state.h"
+#include "imguiapp.h"
 
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_sdl2.h"
@@ -125,7 +125,7 @@ static bool ImGuiApp_Sdl2OpenGL3_Init(const ImGuiApp_Sdl2OpenGL3_InitInfo* init_
     GBackend.RendererBackendInitialized = true;
 
     ImGuiXInitInfo imguix_init_info;
-    imguix_init_info.Backend.Name = "imapp_impl_sdl2_opengl3";
+    imguix_init_info.Backend.Name = "imguiapp_impl_sdl2_opengl3";
     imguix_init_info.Backend.UserData = &GBackend;
     imguix_init_info.Backend.Shutdown = ShutdownBackend;
     imguix_init_info.Backend.NewFrame = NewFrame;
