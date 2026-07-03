@@ -125,7 +125,7 @@ struct ImGuiAppWAL
   void*                  File;      // FILE*; typed void* to keep <cstdio> out of this header
   int                    Seq;       // monotonic record number
   ImGuiAppWALLevel       Level;
-  const ImGuiAppFrameID* FrameID;   // optional (point at ImGuiApp::FrameID): prefixes records "[f:N tsc:T]"
+  const ImGuiAppFrameID* FrameID;   // optional (point at ImGuiApp::FrameID): prefixes records "[tick:N tsc:T]"
   char                   Path[256];
 
   ImGuiAppWAL() { File = nullptr; Seq = 0; Level = ImGuiAppWALLevel_Off; FrameID = nullptr; Path[0] = 0; }

@@ -29,7 +29,7 @@ struct ImGuiAppFrameID
 ```
 
 WAL correlation: `ImGuiAppWAL` gains an optional frame-id source; when set, every record
-is prefixed `[f:%llu tsc:%llu]`. Null = today's behavior, so this is non-breaking.
+is prefixed `[tick:%llu tsc:%llu]`. Null = today's behavior, so this is non-breaking.
 
 ```cpp
 struct ImGuiAppWAL
@@ -360,7 +360,7 @@ IMGUI_API int AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessConfig* 
 Per frame the harness: `AppPacerWait` -> frame id -> `ImGui::NewFrame` -> app frame ->
 render -> `CaptureFrame` -> recorder (`WriteFrame` + sidecar) -> `PreSwap`/present/`PostSwap`.
 The WAL's frame-id source is set, so every event-source line carries the same frame index
-that names the video frame: *scrub the video to frame N, grep the WAL for `f:N`*.
+that names the video frame: *scrub the video to frame N, grep the WAL for `tick:N`*.
 
 Two harness postures, one knob pair:
 - **Reproduce** (default): `PacerMode = Fixed`, `Timing = Auto -> Constant`. The app

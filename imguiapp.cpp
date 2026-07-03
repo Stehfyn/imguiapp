@@ -938,7 +938,7 @@ namespace ImGui
       const int frame = ImGui::GetCurrentContext() != nullptr ? ImGui::GetFrameCount() : -1;
       FILE* f = (FILE*)wal->File;
       if (wal->FrameID != nullptr)
-        fprintf(f, "[%06d f%05d] [f:%llu tsc:%llu] %s\n", wal->Seq++, frame,
+        fprintf(f, "[%06d f%05d] [tick:%llu tsc:%llu] %s\n", wal->Seq++, frame,
                 (unsigned long long)wal->FrameID->FrameIndex, (unsigned long long)wal->FrameID->Tsc, msg);
       else
         fprintf(f, "[%06d f%05d] %s\n", wal->Seq++, frame, msg);
