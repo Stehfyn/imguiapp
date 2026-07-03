@@ -137,6 +137,7 @@ struct ImGuiAppRecorder
   bool                      EncoderOpen;
   int                       FixedWidth;    // 0 until the first captured frame locks the size
   int                       FixedHeight;
+  ImU64                     AcceptedFrames;   // captures accepted this take (video/sidecar ordinal)
 
   // Sidecar (normal mode; the ring writes its sidecar only at dump)
   FILE*                     Meta;
@@ -182,6 +183,7 @@ struct ImGuiAppRecorder
     EncoderOpen = false;
     FixedWidth = 0;
     FixedHeight = 0;
+    AcceptedFrames = 0;
     Meta = nullptr;
     memset(&MetaHeader, 0, sizeof(MetaHeader));
     PendingBlobSet = false;
@@ -481,6 +483,7 @@ IMGUI_API void ImGui::AppRecordPump(ImGuiAppRecorder* rec)
     entry->MetaRecords.swap(meta);
     rec->RingEntries.push_back(entry);
     rec->RingBytes += (size_t)entry->Qoi.Size + (size_t)entry->MetaRecords.Size;
+    rec->AcceptedFrames++;
 
     // Evict oldest while either bound binds.
     const double span_limit = (double)rec->Ring.Seconds;
@@ -501,6 +504,7 @@ IMGUI_API void ImGui::AppRecordPump(ImGuiAppRecorder* rec)
 
   // Normal mode: sidecar now (this thread owns the FILE*), pixels to the encoder thread.
   AvMetaWrite(rec, &meta);
+  rec->AcceptedFrames++;
 
   ImGuiAppAVJob* job = IM_NEW(ImGuiAppAVJob)();
   job->Width = captured.Width;
@@ -606,6 +610,11 @@ IMGUI_API ImGuiAppRecorder* AppRecordBegin(ImGuiApp* app, ImGuiAppAVEncoder* enc
 IMGUI_API bool AppRecordIsActive(const ImGuiAppRecorder* rec)
 {
   return rec != nullptr && rec->Active;
+}
+
+IMGUI_API ImU64 AppRecordFrameCount(const ImGuiAppRecorder* rec)
+{
+  return rec != nullptr ? rec->AcceptedFrames : 0;
 }
 
 IMGUI_API void AppRecordSetQueuePolicy(ImGuiAppRecorder* rec, ImGuiAppRecordQueuePolicy policy, int depth)

@@ -131,6 +131,7 @@ namespace ImGui
   // position forgiving). Null-safe; no-op when inactive.
   IMGUI_API void              AppRecordPump(ImGuiAppRecorder* rec);
   IMGUI_API bool              AppRecordIsActive(const ImGuiAppRecorder* rec);
+  IMGUI_API ImU64             AppRecordFrameCount(const ImGuiAppRecorder* rec);   // frames accepted this take (the video/sidecar ordinal); 0 on null
   IMGUI_API void              AppRecordSetQueuePolicy(ImGuiAppRecorder* rec, ImGuiAppRecordQueuePolicy policy, int depth /*= 3*/);
   IMGUI_API void              AppRecordEnd(ImGuiAppRecorder* rec);   // flush queue, Close provider, finalize sidecar, free rec
 
