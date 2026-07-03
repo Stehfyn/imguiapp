@@ -1,8 +1,11 @@
 // ImGuiAppAV encoder backend: ffmpeg process pipe (imguiapp_impl_ffmpeg.h).
 // Child ffmpeg reads rawvideo RGBA on stdin; its stdout/stderr land in
-// "<OutputPath>.ffmpeg.log". SupportsRealtimePts is false: rawvideo has no PTS
-// channel, so Realtime timing duplicates frames into a CFR stream (honest to within
-// 1/Fps) and Close leaves the exact-VFR remux recipe next to the output.
+// "<OutputPath>.ffmpeg.log". Realtime timing is TRUE VFR: every frame is written
+// exactly once and -use_wallclock_as_timestamps stamps it at pipe-read time (a fine
+// -framerate demuxer timebase + -video_track_timescale keep millisecond PTS
+// granularity; -fps_mode passthrough stops any resampling). PTS therefore reflect
+// WRITE time -- capture time plus bounded encoder-queue latency; the sidecar holds the
+// exact capture times and Close leaves the exact-VFR remux recipe next to the output.
 
 #include "imguiapp_impl_ffmpeg.h"
 
@@ -29,9 +32,7 @@ struct ImGuiAppFfmpegEncoderData
   bool                 OpenCalled;
   bool                 Spawned;
   bool                 Dead;          // broken pipe / spawn failure: every later WriteFrame no-ops false
-  bool                 HaveLastTime;
-  double               LastTimeSec;
-  ImU64                FramesEmitted; // raw frames written to the pipe, after duplication
+  ImU64                FramesEmitted; // frames written to the pipe (one per WriteFrame)
 #ifdef _WIN32
   HANDLE               ChildProcess;
   HANDLE               ChildStdinWrite;
@@ -49,8 +50,6 @@ struct ImGuiAppFfmpegEncoderData
     OpenCalled = false;
     Spawned = false;
     Dead = false;
-    HaveLastTime = false;
-    LastTimeSec = 0.0;
     FramesEmitted = 0;
 #ifdef _WIN32
     ChildProcess = nullptr;
@@ -83,8 +82,20 @@ static bool FfmpegSpawn(ImGuiAppFfmpegEncoderData* bd)
     log_file = nullptr;   // encoder chatter is diagnostics, not a reason to fail the recording
 
   char cmd[2600];
-  snprintf(cmd, sizeof(cmd), "\"%s\" -hide_banner -y -f rawvideo -pix_fmt rgba -s %dx%d -r %.6g -i - %s \"%s\"",
-           bd->Exe, bd->Width, bd->Height, (double)bd->Fps, bd->ExtraArgs, bd->OutputPath);
+  if (bd->Timing == ImGuiAppAVTimingMode_Realtime)
+  {
+    // VFR: PTS = wallclock at pipe read. -framerate 1000 only sets the demuxer timebase
+    // to 1ms (wallclock overrides the pacing it would imply); coarser default (25) would
+    // quantize PTS to 40ms and collide neighbors.
+    snprintf(cmd, sizeof(cmd),
+             "\"%s\" -hide_banner -y -f rawvideo -pix_fmt rgba -s %dx%d -framerate 1000 -use_wallclock_as_timestamps 1 -i - %s -fps_mode passthrough -video_track_timescale 1000000 \"%s\"",
+             bd->Exe, bd->Width, bd->Height, bd->ExtraArgs, bd->OutputPath);
+  }
+  else
+  {
+    snprintf(cmd, sizeof(cmd), "\"%s\" -hide_banner -y -f rawvideo -pix_fmt rgba -s %dx%d -r %.6g -i - %s \"%s\"",
+             bd->Exe, bd->Width, bd->Height, (double)bd->Fps, bd->ExtraArgs, bd->OutputPath);
+  }
 
   STARTUPINFOA si;
   memset(&si, 0, sizeof(si));
@@ -150,8 +161,6 @@ static bool ImGuiAppFfmpeg_Open(ImGuiAppAVEncoder* self, const ImGuiAppAVEncodeC
   // A previous take's failure must not latch this one dead: the flight recorder
   // re-opens the same encoder for every ring dump.
   bd->Dead = false;
-  bd->HaveLastTime = false;
-  bd->LastTimeSec = 0.0;
   bd->FramesEmitted = 0;
 
 #ifdef _WIN32
@@ -194,52 +203,29 @@ static bool ImGuiAppFfmpeg_WriteFrame(ImGuiAppAVEncoder* self, const ImGuiAppAVF
     return false;
   }
 
-  int repeats = 1;
-  if (bd->Timing == ImGuiAppAVTimingMode_Realtime)
-  {
-    // Cumulative CFR emission: the stream's frame count tracks wall time drift-free.
-    // Captures faster than Fps DROP (repeats 0); slower captures duplicate. A min-1
-    // clamp here made faster-than-Fps apps play slower than wall clock.
-    if (bd->HaveLastTime)
-    {
-      // Frames due through time t = output ticks 0..round(elapsed * fps), inclusive.
-      const long long target = llround((frame->FrameID.TimeSec - bd->LastTimeSec) * (double)bd->Fps) + 1;
-      const long long due = target - (long long)bd->FramesEmitted;
-      repeats = due < 0 ? 0 : (int)due;
-    }
-    else
-    {
-      bd->LastTimeSec = frame->FrameID.TimeSec;   // take epoch: first capture emits exactly one frame
-      bd->HaveLastTime = true;
-    }
-  }
-  if (repeats == 0)
-    return true;   // ahead of the output timeline: honest skip, not a failure
-
+  // Every frame exactly once, both modes: Constant is CFR by construction (Fixed-dt
+  // postures), Realtime carries VFR wallclock PTS stamped by the demuxer.
   const int row_bytes = bd->Width * 4;
-  for (int r = 0; r < repeats; r++)
+  bool ok;
+  if (frame->PitchBytes == row_bytes)
   {
-    bool ok;
-    if (frame->PitchBytes == row_bytes)
-    {
-      ok = FfmpegWriteBytes(bd, frame->Pixels, row_bytes * bd->Height);
-    }
-    else
-    {
-      ok = true;
-      const char* row = (const char*)frame->Pixels;
-      for (int y = 0; y < bd->Height && ok; y++, row += frame->PitchBytes)
-        ok = FfmpegWriteBytes(bd, row, row_bytes);
-    }
-    if (!ok)
-    {
-      bd->Dead = true;
-      ::CloseHandle(bd->ChildStdinWrite);
-      bd->ChildStdinWrite = nullptr;
-      return false;
-    }
-    bd->FramesEmitted++;
+    ok = FfmpegWriteBytes(bd, frame->Pixels, row_bytes * bd->Height);
   }
+  else
+  {
+    ok = true;
+    const char* row = (const char*)frame->Pixels;
+    for (int y = 0; y < bd->Height && ok; y++, row += frame->PitchBytes)
+      ok = FfmpegWriteBytes(bd, row, row_bytes);
+  }
+  if (!ok)
+  {
+    bd->Dead = true;
+    ::CloseHandle(bd->ChildStdinWrite);
+    bd->ChildStdinWrite = nullptr;
+    return false;
+  }
+  bd->FramesEmitted++;
   return true;
 #else
   return false;
@@ -275,26 +261,27 @@ static void ImGuiAppFfmpeg_Close(ImGuiAppAVEncoder* self)
     {
       fprintf(f,
         "# Exact-VFR rebuild of \"%s\".\n"
-        "# This file is CFR at %.6g fps with frames duplicated to approximate wall-clock\n"
-        "# timing; the true per-frame times live in the sidecar \"%s.avmeta\".\n"
+        "# The file is already VFR with every frame present once, but its PTS were\n"
+        "# stamped at pipe-READ time (capture time + bounded encoder-queue latency).\n"
+        "# When that latency matters, the sidecar \"%s.avmeta\" holds the exact capture\n"
+        "# times.\n"
         "#\n"
-        "# 1) Dump unique source frames (duplicates collapse in step 3):\n"
-        "#      ffmpeg -i \"%s\" -vsync vfr frames/%%06d.png\n"
+        "# 1) Dump the frames (already unique):\n"
+        "#      ffmpeg -i \"%s\" -fps_mode passthrough frames/%%06d.png\n"
         "# 2) Emit a concat list from the sidecar (ImGui::AppAVMetaDump prints TSV of\n"
-        "#    frame_index + time_sec) -- one entry per captured frame:\n"
+        "#    frame_index + time_sec) -- one entry per frame:\n"
         "#      file 'frames/000001.png'\n"
         "#      duration <time_sec[n+1] - time_sec[n]>\n"
         "#    (repeat; concat demuxer syntax, last entry listed twice per ffmpeg docs)\n"
         "# 3) Encode the exact-VFR file:\n"
-        "ffmpeg -f concat -safe 0 -i concat.txt -vsync vfr -c:v libx264 -crf 18 \"%s.vfr.mp4\"\n",
-        bd->OutputPath, (double)bd->Fps, bd->OutputPath, bd->OutputPath, bd->OutputPath);
+        "ffmpeg -f concat -safe 0 -i concat.txt -fps_mode passthrough -c:v libx264 -crf 18 \"%s.vfr.mp4\"\n",
+        bd->OutputPath, bd->OutputPath, bd->OutputPath, bd->OutputPath);
       fclose(f);
     }
   }
 
   bd->OpenCalled = false;
   bd->Spawned = false;
-  bd->HaveLastTime = false;
 }
 
 static void ImGuiAppFfmpeg_Destroy(ImGuiAppAVEncoder* self)
@@ -315,7 +302,7 @@ IMGUI_API ImGuiAppAVEncoder* ImGuiAppAV_CreateFfmpegEncoder(const char* ffmpeg_e
 
   ImGuiAppAVEncoder* enc = IM_NEW(ImGuiAppAVEncoder)();
   enc->Name = "ffmpeg-pipe";
-  enc->SupportsRealtimePts = false;
+  enc->SupportsRealtimePts = true;   // VFR wallclock PTS at pipe-read time (write-latency bounded; sidecar is exact)
   enc->Open = ImGuiAppFfmpeg_Open;
   enc->WriteFrame = ImGuiAppFfmpeg_WriteFrame;
   enc->Close = ImGuiAppFfmpeg_Close;

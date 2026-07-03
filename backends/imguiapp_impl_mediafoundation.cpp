@@ -1,7 +1,8 @@
 // ImGuiAppAV encoder backend: Windows Media Foundation mp4 (imguiapp_impl_mediafoundation.h).
 // IMFSinkWriter with an H.264 output stream and an RGB32 input type; the writer loads
-// the color-converter/encoder MFTs itself. Per-sample timestamps carry exact realtime
-// PTS (SupportsRealtimePts = true). Windows-only; the only TU linking mfplat/mfreadwrite.
+// the color-converter/encoder MFTs itself. Realtime output is duration-honest resampled
+// CFR -- true VFR is unreachable through the sink writer (see MfBeginWriting).
+// The only TU linking mfplat/mfreadwrite.
 
 #include "imguiapp_impl_mediafoundation.h"
 
@@ -82,6 +83,11 @@ static bool MfBeginWriting(ImGuiAppMfEncoderData* bd)
   DWORD          stream = 0;
   HRESULT hr = MFCreateSinkWriterFromURL(wpath, nullptr, nullptr, &writer);
 
+  // True VFR through IMFSinkWriter is NOT achievable (measured): the H.264 path
+  // requires MF_MT_FRAME_RATE on the output type (BeginWriting fails without it), and
+  // with any declared rate the writer resamples per-sample timestamps to CFR (90 VFR
+  // samples -> 208 CFR frames even with the INPUT rate omitted). Realtime here is
+  // therefore duration-honest resampled CFR; the ffmpeg pipe backend is the VFR one.
   if (SUCCEEDED(hr)) hr = MFCreateMediaType(&out_type);
   if (SUCCEEDED(hr)) hr = out_type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
   if (SUCCEEDED(hr)) hr = out_type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
@@ -303,7 +309,7 @@ IMGUI_API ImGuiAppAVEncoder* ImGuiAppAV_CreateMediaFoundationEncoder()
 {
   ImGuiAppAVEncoder* enc = IM_NEW(ImGuiAppAVEncoder)();
   enc->Name = "mediafoundation";
-  enc->SupportsRealtimePts = true;
+  enc->SupportsRealtimePts = false;   // sink writer resamples to CFR (see MfBeginWriting); duration honest, PTS quantized
   enc->Open = ImGuiAppMf_Open;
   enc->WriteFrame = ImGuiAppMf_WriteFrame;
   enc->Close = ImGuiAppMf_Close;
@@ -316,7 +322,7 @@ IMGUI_API ImGuiAppAVEncoder* ImGuiAppAV_CreateMediaFoundationEncoder()
 
 IMGUI_API ImGuiAppAVEncoder* ImGuiAppAV_CreateMediaFoundationEncoder()
 {
-  return nullptr;   // Media Foundation is Windows-only
+  return nullptr;
 }
 
 #endif // _WIN32

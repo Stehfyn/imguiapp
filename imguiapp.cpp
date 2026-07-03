@@ -752,6 +752,14 @@ namespace ImGui
   // Lifecycle level = composition changes only; Frame level = per-frame records.
   //-----------------------------------------------------------------------------
 
+  IMGUI_API float AppPacerResolveHz(const ImGuiApp* app)
+  {
+      IM_ASSERT(app != nullptr);
+      if (app == nullptr)
+        return 60.0f;
+      return app->Pacer.TargetHz > 0.0f ? app->Pacer.TargetHz : AppPacerPrimaryRefreshHz();
+  }
+
   IMGUI_API void AppPacerWait(ImGuiApp* app)
   {
       IM_ASSERT(app != nullptr);

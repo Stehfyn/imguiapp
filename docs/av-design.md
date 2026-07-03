@@ -144,11 +144,15 @@ struct ImGuiAppAVEncoder
 
 ### Timing honesty per provider
 
-| Provider | Realtime (VFR) | How |
+Realtime contract, all providers: EVERY frame is present exactly once; PTS are honest
+(exactness is method-specific, below). Stepping frame-by-frame in a player walks
+consecutive capture frames with no gaps and no duplicates.
+
+| Provider | Realtime PTS | How |
 |---|---|---|
+| ffmpeg pipe | wallclock VFR | true VFR: one pipe write per frame, `-use_wallclock_as_timestamps 1` stamps each at pipe-READ time (`-framerate 1000` gives the demuxer a 1ms timebase -- the default 25 quantizes PTS to 40ms and collides neighbors; `-fps_mode passthrough -video_track_timescale 1000000` preserve them). PTS = capture time + bounded encoder-queue latency; when that latency matters, the sidecar holds exact capture times and Close writes `<OutputPath>.remux.txt` with the concat-demuxer rebuild recipe |
 | QOI sequence | exact | index.tsv carries `FrameID.TimeSec` per frame; inherently timestamped |
-| Media Foundation | quantized | per-sample timestamps go to IMFSinkWriter, but with MF_MT_FRAME_RATE declared MF resamples to CFR at Fps -- duration honest, PTS quantized to 1/Fps (true VFR may be possible by omitting the declared frame rate: untried) |
-| ffmpeg pipe | quantized | rawvideo stdin has no PTS channel: Realtime mode emits frames CUMULATIVELY against the take's wall clock (round(elapsed * Fps) + 1 - emitted) -- slower captures duplicate, faster-than-Fps captures drop, so duration tracks wall time drift-free in both directions, honest to within 1/Fps. Exact VFR from a pipe run is an offline remux: the sidecar has the true timestamps, and Close writes `<OutputPath>.remux.txt` with the ffmpeg concat-demuxer command that rebuilds an exact-VFR file |
+| Media Foundation | resampled CFR | true VFR through IMFSinkWriter is NOT achievable (measured): the H.264 path requires a declared MF_MT_FRAME_RATE (BeginWriting fails without one) and resamples per-sample timestamps to CFR at that rate even with the input rate omitted (90 VFR samples -> 208 CFR frames). Duration honest, frames duplicated to fill -- violates one-frame-once; prefer the ffmpeg pipe for Realtime |
 
 The sidecar always records real TSC/QPC times regardless of mode -- ground truth
 survives even a Constant-mode encode.
@@ -169,7 +173,7 @@ IMGUI_API ImGuiAppAVEncoder* ImGuiAppAV_CreateQoiSequenceEncoder();
 IMGUI_API ImGuiAppAVEncoder* ImGuiAppAV_CreateFfmpegEncoder(const char* ffmpeg_exe, const char* extra_args);
 
 // backends/imguiapp_impl_mediafoundation.h -- Windows Media Foundation mp4
-// (H.264/HEVC), no external exe needed. Windows-only; explicit choice, never a silent
+// (H.264/HEVC), no external exe needed. Explicit choice, never a silent
 // default (lossy + driver-variant output is wrong for test artifacts).
 IMGUI_API ImGuiAppAVEncoder* ImGuiAppAV_CreateMediaFoundationEncoder();
 

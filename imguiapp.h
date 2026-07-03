@@ -359,6 +359,11 @@ namespace ImGui
   // spins the rest on QPC; Fixed mode also forces io.DeltaTime to exactly 1/TargetHz.
   IMGUI_API void AppPacerWait(ImGuiApp* app);
 
+  // The rate the pacer actually paces at: TargetHz when positive, else the primary
+  // monitor's refresh rate (the same resolution AppPacerWait performs). Callers that
+  // need the frame rate (e.g. an encode config) read it here instead of guessing.
+  IMGUI_API float AppPacerResolveHz(const ImGuiApp* app);
+
   // Consulted by the backend's per-viewport present hook (Renderer_SwapBuffers /
   // Platform_RenderWindow). True = present this frame; false = skip (contents unchanged
   // on that monitor until its next deadline). Main viewport never skips; Off pacer never skips.
