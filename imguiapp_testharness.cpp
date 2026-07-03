@@ -128,6 +128,8 @@ IMGUI_API int ImGui::AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessC
     app_config.Headless = ImGuiAppHeadlessMode_None;
     initialized = app->Initialize(&app_config);
   }
+  if (config->EffectiveHeadless != nullptr)
+    *config->EffectiveHeadless = initialized ? app_config.Headless : ImGuiAppHeadlessMode_None;
   if (!initialized)
   {
     fprintf(stderr, "[harness] app initialization failed\n");
@@ -145,11 +147,13 @@ IMGUI_API int ImGui::AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessC
   bool encoder_owned = false;
   bool video_is_qoi_dir = false;
   ImGuiAppRecorder* recorder = nullptr;
+  int embed_rows = 0;
   if (config->RecordVideo)
   {
     ImGuiAppAVEncodeConfig enc_config;
     enc_config.Fps = config->Fps;
     enc_config.Timing = config->Timing;
+    embed_rows = enc_config.EmbedRows;
     if (encoder != nullptr)
     {
       ImFormatString(video_path, IM_ARRAYSIZE(video_path), "%s/%s.mp4", artifact_dir, config->Name);
@@ -278,11 +282,45 @@ IMGUI_API int ImGui::AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessC
            config->Name, count_success, count_tested, ft_ms.Size, p50, p95, p99, sorted[sorted.Size - 1]);
   }
 
+  // The recording verifies ITSELF: extract the embedded meta stream back out of the
+  // finalized take and recompute the integrity ladder. Headless verification is the
+  // default -- a failure here fails the run and pins the criterion in the WAL.
+  bool verify_failed = false;
+  if (config->VerifyRecording && video_path[0] != 0)
+  {
+    ImVector<char> meta;
+    bool extracted = false;
+    if (video_is_qoi_dir)
+      extracted = ImGuiApp_ImplQoi_ExtractEmbeddedMeta(video_path, embed_rows, &meta);
+#ifdef IMGUIX_HAS_LIBAV
+    else
+      extracted = ImGuiApp_ImplLibav_ExtractEmbeddedMeta(video_path, embed_rows, &meta);
+#endif
+    ImGuiAppAVStreamStats stats;
+    const bool verified = extracted && AppAVMetaVerify(meta.Data, meta.Size, &stats);
+    verify_failed = !verified;
+    printf("[harness] verify %s: frames=%d io_frames=%d ticks=%llu..%llu gaps=%d identities=%d "
+           "input_hdrs=%d input_frames=%d snapshots=%d chain=%s digest=%s\n",
+           verified ? "OK" : "FAILED",
+           stats.Frames, stats.IoFrames,
+           (unsigned long long)stats.FirstTick, (unsigned long long)stats.LastTick, stats.TickGaps,
+           stats.Identities, stats.InputHdrs, stats.InputFrames, stats.Snapshots,
+           stats.ChainOk ? "ok" : "BROKEN",
+           stats.DigestState == 0 ? "ok" : stats.DigestState == 1 ? "MISSING" : "MISMATCH");
+    if (!extracted)
+      AppWALWrite(&wal, ImGuiAppWALLevel_Lifecycle, "harness: verify FAILED -- no embedded meta stream extracted");
+    else if (verify_failed)
+      AppWALWrite(&wal, ImGuiAppWALLevel_Lifecycle,
+                  "harness: verify FAILED -- frames=%d io_frames=%d gaps=%d identities=%d chain_diverges_at=%d digest_state=%d",
+                  stats.Frames, stats.IoFrames, stats.TickGaps, stats.Identities, stats.ChainDivergesAt, stats.DigestState);
+  }
+  const bool run_passed = all_passed && !verify_failed;
+
   SetAppAssertWAL(nullptr);
   app->WAL = prev_wal;
   AppWALClose(&wal);
 
-  if (all_passed && !config->KeepArtifactsOnPass)
+  if (run_passed && !config->KeepArtifactsOnPass)
   {
     if (video_path[0] != 0)
       HarnessRemoveRecordingArtifacts(video_path, video_is_qoi_dir);
@@ -291,5 +329,5 @@ IMGUI_API int ImGui::AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessC
       remove(wal_path);
   }
 
-  return all_passed ? 0 : 1;
+  return run_passed ? 0 : 1;
 }

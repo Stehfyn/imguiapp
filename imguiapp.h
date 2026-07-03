@@ -27,6 +27,33 @@ Index of this file:
 #include <type_traits>
 #include <string_view>
 
+// Compile-time reflection (qlibs/reflect, vendored by ImStructTable): powers the live
+// mirror's field introspection. Absent -> GetControlFields degrades to zero fields.
+// NTEST: reflect self-verifies on include with static_asserts whose constexpr call
+// depth exceeds MSVC's default /constexpr:depth budget in heavy TUs -- the library's
+// own tests are not this codebase's to re-run per consumer.
+#if defined(__has_include)
+#if __has_include("reflect/reflect")
+#ifndef NTEST
+#define NTEST
+#define IMGUIAPP_DEFINED_NTEST
+#endif
+// windows.h's min/max macros (leaked by platform-backend TUs) break reflect's std::min.
+#pragma push_macro("min")
+#pragma push_macro("max")
+#undef min
+#undef max
+#include "reflect/reflect"
+#pragma pop_macro("max")
+#pragma pop_macro("min")
+#ifdef IMGUIAPP_DEFINED_NTEST
+#undef NTEST
+#undef IMGUIAPP_DEFINED_NTEST
+#endif
+#define IMGUIAPP_HAS_REFLECT 1
+#endif
+#endif
+
 #ifdef _MSC_VER
 #pragma warning (push)
 #pragma warning (disable: 26495)          // [Static Analyzer] Variable 'XXX' is uninitialized. Always initialize a member variable (type.6).
@@ -464,6 +491,31 @@ struct ImGuiAppSidebarBase : ImGuiAppWindowBase
   float    Size = 0.0f;
 };
 
+// One reflected member of a control's Persist/Temp aggregate (live-mirror introspection).
+// Name/TypeName point at static storage (reflect materializes null-terminated fixed_strings).
+typedef int ImGuiAppLiveFieldKind;
+enum ImGuiAppLiveFieldKind_
+{
+  ImGuiAppLiveFieldKind_Opaque = 0,   // unmapped type: Size bytes, TypeName from reflect
+  ImGuiAppLiveFieldKind_Bool,
+  ImGuiAppLiveFieldKind_S32,
+  ImGuiAppLiveFieldKind_U32,
+  ImGuiAppLiveFieldKind_F32,
+  ImGuiAppLiveFieldKind_F64,
+  ImGuiAppLiveFieldKind_Vec2,
+  ImGuiAppLiveFieldKind_Vec4,
+  ImGuiAppLiveFieldKind_CharArray,    // char[Size]
+};
+
+struct ImGuiAppLiveFieldDesc
+{
+  const char*             Name;
+  const char*             TypeName;
+  int                     Offset;   // within the Persist (or Temp) struct
+  int                     Size;
+  ImGuiAppLiveFieldKind   Kind;
+};
+
 struct ImGuiAppControlBase : ImGuiAppItemBase
 {
   // Re-expose the compile-time-erased data identity for live mirrors. Defaults inert; ImGuiAppControl<>
@@ -471,7 +523,70 @@ struct ImGuiAppControlBase : ImGuiAppItemBase
   virtual ImGuiID GetControlDataID()                              const { return 0; }
   virtual int     GetControlDependencyIDs(ImGuiID* out, int cap)  const { IM_UNUSED(out); IM_UNUSED(cap); return 0; }
   virtual void    GetControlDataTypeName(char* out, int out_size) const { if (out && out_size > 0) out[0] = 0; }
+  virtual void    GetControlTempDataTypeName(char* out, int out_size) const { if (out && out_size > 0) out[0] = 0; }
+  // Reflected members of PersistDataT (temp_data false) or TempDataT (true). out null = count only.
+  virtual int     GetControlFields(ImGuiAppLiveFieldDesc* out, int cap, bool temp_data) const { IM_UNUSED(out); IM_UNUSED(cap); IM_UNUSED(temp_data); return 0; }
+  // Live instance memory of the RUNNING control (read-only by contract). False before initialization.
+  virtual bool    GetControlLiveData(const void** out_persist, const void** out_temp) const { IM_UNUSED(out_persist); IM_UNUSED(out_temp); return false; }
+  // False = outside the reflectable contract (not trivially copyable): opaque, exactly like snapshots.
+  virtual bool    IsControlDataReflectable(bool temp_data) const { IM_UNUSED(temp_data); return false; }
 };
+
+// Reflectability = the SAME constraint the snapshot machinery imposes (aggregate +
+// trivially copyable): byte-snapshottable data is build-time reflectable, no schema.
+// Owning containers make a type opaque to both, by one rule. Two additional guards keep
+// reflect's arity probe inside MSVC's recursion limit (C1202) -- the probe brace-elides
+// one level PER LEAF, and C arrays elide element-wise, so `char buf[512]` alone is 512
+// levels: (1) sizeof(T) <= 256 caps the worst-case leaf count; (2) a member tag
+// `using ImGuiAppOpaque = void;` opts a type out explicitly at any scope.
+template <typename T>
+inline constexpr bool ImGuiAppDataReflectable = std::is_aggregate_v<T>
+                                             && std::is_trivially_copyable_v<T>
+                                             && sizeof(T) <= 256
+                                             && !requires { typename T::ImGuiAppOpaque; };
+
+#ifdef IMGUIAPP_HAS_REFLECT
+// Aggregate walk shared by every ImGuiAppControl<> instantiation. Types outside the
+// reflectable contract yield zero fields rather than failing to compile.
+template <typename T>
+inline int ImGuiAppReflectFields(ImGuiAppLiveFieldDesc* out, int cap)
+{
+  if constexpr (ImGuiAppDataReflectable<T>)
+  {
+    constexpr int n = (int)reflect::size<T>();
+    if (out == nullptr || cap <= 0)
+      return n;
+    int written = 0;
+    reflect::for_each<T>([&](auto I)
+    {
+      constexpr auto i = decltype(I)::value;
+      using M = std::remove_cvref_t<decltype(reflect::get<i>(std::declval<T&>()))>;
+      if (written >= cap)
+        return;
+      ImGuiAppLiveFieldDesc* d = &out[written++];
+      d->Name = reflect::member_name<i, T>().data();
+      d->Offset = (int)reflect::offset_of<i, T>();
+      d->Size = (int)sizeof(M);
+      if constexpr (std::is_same_v<M, bool>)                                        { d->Kind = ImGuiAppLiveFieldKind_Bool;      d->TypeName = "bool"; }
+      else if constexpr (std::is_same_v<M, float>)                                  { d->Kind = ImGuiAppLiveFieldKind_F32;       d->TypeName = "float"; }
+      else if constexpr (std::is_same_v<M, double>)                                 { d->Kind = ImGuiAppLiveFieldKind_F64;       d->TypeName = "double"; }
+      else if constexpr (std::is_same_v<M, ImVec2>)                                 { d->Kind = ImGuiAppLiveFieldKind_Vec2;      d->TypeName = "ImVec2"; }
+      else if constexpr (std::is_same_v<M, ImVec4>)                                 { d->Kind = ImGuiAppLiveFieldKind_Vec4;      d->TypeName = "ImVec4"; }
+      else if constexpr (std::is_array_v<M> && std::is_same_v<std::remove_extent_t<M>, char>) { d->Kind = ImGuiAppLiveFieldKind_CharArray; d->TypeName = "char"; }
+      else if constexpr (std::is_integral_v<M> && std::is_signed_v<M> && sizeof(M) == 4)   { d->Kind = ImGuiAppLiveFieldKind_S32; d->TypeName = "int"; }
+      else if constexpr (std::is_integral_v<M> && std::is_unsigned_v<M> && sizeof(M) == 4) { d->Kind = ImGuiAppLiveFieldKind_U32; d->TypeName = "unsigned int"; }
+      else                                                                          { d->Kind = ImGuiAppLiveFieldKind_Opaque;    d->TypeName = reflect::type_name<M>().data(); }
+    });
+    return written;
+  }
+  else
+  {
+    IM_UNUSED(out);
+    IM_UNUSED(cap);
+    return 0;
+  }
+}
+#endif
 
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
 struct ImGuiInterfaceAdapterBase : ImGuiInterface
@@ -681,6 +796,33 @@ struct ImGuiAppControl : ImGuiInterfaceAdapter<ImGuiAppControlBase, PersistDataT
   }
 
   virtual void GetControlDataTypeName(char* out, int out_size) const override final { GenerateLabel<PersistDataT>(out, (size_t)out_size); }
+  virtual void GetControlTempDataTypeName(char* out, int out_size) const override final { GenerateLabel<TempDataT>(out, (size_t)out_size); }
+
+  virtual int GetControlFields(ImGuiAppLiveFieldDesc* out, int cap, bool temp_data) const override final
+  {
+#ifdef IMGUIAPP_HAS_REFLECT
+    return temp_data ? ImGuiAppReflectFields<TempDataT>(out, cap) : ImGuiAppReflectFields<PersistDataT>(out, cap);
+#else
+    IM_UNUSED(out); IM_UNUSED(cap); IM_UNUSED(temp_data);
+    return 0;
+#endif
+  }
+
+  virtual bool IsControlDataReflectable(bool temp_data) const override final
+  {
+    return temp_data ? ImGuiAppDataReflectable<TempDataT> : ImGuiAppDataReflectable<PersistDataT>;
+  }
+
+  virtual bool GetControlLiveData(const void** out_persist, const void** out_temp) const override final
+  {
+    if (this->_InstanceData == nullptr)
+      return false;
+    if (out_persist != nullptr)
+      *out_persist = &this->_InstanceData->PersistData;
+    if (out_temp != nullptr)
+      *out_temp = &this->_InstanceData->TempData;
+    return true;
+  }
 };
 
 template <typename T>

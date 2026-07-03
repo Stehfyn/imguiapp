@@ -3556,6 +3556,73 @@ namespace ImGui
   // [SECTION] Inspector (component sections, style/color descs, project + multi-select)
   //-----------------------------------------------------------------------------
 
+  // One reflected field's LIVE value as text (base = the running Persist/Temp struct).
+  static void AppLiveFieldValueText(const ImGuiAppLiveFieldDesc* f, const void* base, char* out, int out_size)
+  {
+    if (base == nullptr)
+    {
+      ImStrncpy(out, "?", (size_t)out_size);
+      return;
+    }
+    const char* p = (const char*)base + f->Offset;
+    switch (f->Kind)
+    {
+    case ImGuiAppLiveFieldKind_Bool:      ImFormatString(out, (size_t)out_size, "%s", *(const bool*)p ? "true" : "false"); break;
+    case ImGuiAppLiveFieldKind_S32:       ImFormatString(out, (size_t)out_size, "%d", *(const int*)p); break;
+    case ImGuiAppLiveFieldKind_U32:       ImFormatString(out, (size_t)out_size, "%u", *(const unsigned int*)p); break;
+    case ImGuiAppLiveFieldKind_F32:       ImFormatString(out, (size_t)out_size, "%.4f", *(const float*)p); break;
+    case ImGuiAppLiveFieldKind_F64:       ImFormatString(out, (size_t)out_size, "%.6f", *(const double*)p); break;
+    case ImGuiAppLiveFieldKind_Vec2:      { const ImVec2* v = (const ImVec2*)p; ImFormatString(out, (size_t)out_size, "%.2f, %.2f", v->x, v->y); } break;
+    case ImGuiAppLiveFieldKind_Vec4:      { const ImVec4* v = (const ImVec4*)p; ImFormatString(out, (size_t)out_size, "%.2f, %.2f, %.2f, %.2f", v->x, v->y, v->z, v->w); } break;
+    case ImGuiAppLiveFieldKind_CharArray: { const int n = f->Size < out_size - 3 ? f->Size : out_size - 3; ImFormatString(out, (size_t)out_size, "\"%.*s\"", n, p); } break;
+    default:
+    {
+      int len = ImFormatString(out, (size_t)out_size, "%d bytes:", f->Size);
+      for (int i = 0; i < f->Size && i < 16 && len + 3 < out_size; i++)
+        len += ImFormatString(out + len, (size_t)(out_size - len), " %02X", (unsigned char)p[i]);
+      break;
+    }
+    }
+  }
+
+  // Read-only live field table for one struct (Persist or Temp) of a RUNNING control.
+  // Values are read from the live instance every frame -- they change as the app runs.
+  static void AppLiveFieldsTable(const char* str_id, const ImGuiAppControlBase* ctrl, bool temp_data, const void* base)
+  {
+    if (!ctrl->IsControlDataReflectable(temp_data))
+    {
+      // Same boundary as snapshots: owning containers are opaque bytes, not fields.
+      ImGui::TextDisabled("(not trivially copyable -- opaque, like snapshots)");
+      return;
+    }
+    ImGuiAppLiveFieldDesc fields[64];
+    const int n = ctrl->GetControlFields(fields, IM_ARRAYSIZE(fields), temp_data);
+    if (n <= 0)
+    {
+      ImGui::TextDisabled("(no members)");
+      return;
+    }
+    if (ImGui::BeginTable(str_id, 3, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
+    {
+      char val[256];
+      for (int i = 0; i < n; i++)
+      {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(fields[i].Name);
+        ImGui::TableNextColumn();
+        if (fields[i].Kind == ImGuiAppLiveFieldKind_CharArray)
+          ImGui::TextDisabled("char[%d]", fields[i].Size);
+        else
+          ImGui::TextDisabled("%s", fields[i].TypeName);
+        ImGui::TableNextColumn();
+        AppLiveFieldValueText(&fields[i], base, val, IM_ARRAYSIZE(val));
+        ImGui::TextUnformatted(val);
+      }
+      ImGui::EndTable();
+    }
+  }
+
   // Resolve a live mirror node back to the runtime object it reflects (the inverse of BuildAppLiveGraph's
   // keying: windows by label hash, sidebars by label hash + 1, controls by PersistData id).
   static ImGuiAppItemBase* AppGraphFindLiveItem(ImGuiApp* app, const ImGuiAppNode* n)
@@ -3753,6 +3820,20 @@ namespace ImGui
       // flip a checkbox, watch the app restyle, no regeneration. Falls back to the plain echo when the host
       // didn't pass its mirrored app (or the item vanished between frames).
       ImGuiAppItemBase* item = AppGraphFindLiveItem(live_app, n);
+
+      // Live data: the RUNNING control's reflected members with their current values,
+      // re-read every frame (this is the running binary's memory, not a draft).
+      if (n->Kind == ImGuiAppNodeKind_Control && item != nullptr)
+      {
+        const ImGuiAppControlBase* ctrl = (const ImGuiAppControlBase*)item;
+        const void* live_persist = nullptr;
+        const void* live_temp = nullptr;
+        ctrl->GetControlLiveData(&live_persist, &live_temp);
+        if (AppInspectorSection("##sec_live_data", ICON_FA_DATABASE, "Data (live)", nullptr, nullptr))
+          AppLiveFieldsTable("##live_persist", ctrl, false, live_persist);
+        if (AppInspectorSection("##sec_live_temp", ICON_FA_BOLT, "Temp (live)", nullptr, nullptr))
+          AppLiveFieldsTable("##live_temp", ctrl, true, live_temp);
+      }
       if (item != nullptr && (item->StyleMods.Size > 0 || item->ColorMods.Size > 0))
       {
         if (AppInspectorSection("##sec_style_live", ICON_FA_PALETTE, "Style (live)", nullptr, nullptr))
@@ -6887,7 +6968,7 @@ namespace ImGui
     }
   }
 
-  void AppGraphRenderMockPanel(ImGuiAppGraph* g, int node_id)
+  void AppGraphRenderMockPanel(ImGuiAppGraph* g, int node_id, ImGuiApp* live_app)
   {
     IM_ASSERT(g != nullptr);
 
@@ -6900,6 +6981,28 @@ namespace ImGui
     if (n->Kind != ImGuiAppNodeKind_Control)
     {
       ImGui::TextDisabled("Preview is for Control nodes (%s selected).", AppNodeKindName(n->Kind));
+      return;
+    }
+
+    // Live node: no mock -- the control is RUNNING; show its reflected members with
+    // current values instead of draft placeholders.
+    if (n->IsLive)
+    {
+      ImGuiAppItemBase* item = AppGraphFindLiveItem(live_app, n);
+      const ImGuiAppControlBase* ctrl = item != nullptr ? (const ImGuiAppControlBase*)item : nullptr;
+      ImGui::TextDisabled("live: %s", n->DataTypeName[0] ? n->DataTypeName : n->Draft.Name);
+      ImGui::Separator();
+      if (ctrl == nullptr)
+      {
+        ImGui::TextDisabled("(running control not reachable -- no mirrored app)");
+        return;
+      }
+      const void* live_persist = nullptr;
+      const void* live_temp = nullptr;
+      ctrl->GetControlLiveData(&live_persist, &live_temp);
+      AppLiveFieldsTable("##mock_live_persist", ctrl, false, live_persist);
+      ImGui::SeparatorText("temp");
+      AppLiveFieldsTable("##mock_live_temp", ctrl, true, live_temp);
       return;
     }
 
@@ -8301,13 +8404,54 @@ namespace ImGui
     out->appendf("}\n");
   }
 
-  void GenerateAppNodeCode(const ImGuiAppGraph* g, const ImGuiAppNode* n, ImGuiTextBuffer* out)
+  static void AppEmitLiveFieldDecl(ImGuiTextBuffer* out, const ImGuiAppLiveFieldDesc* f)
+  {
+    if (f->Kind == ImGuiAppLiveFieldKind_CharArray)
+      out->appendf("  char %s[%d];\n", f->Name, f->Size);
+    else if (f->Kind == ImGuiAppLiveFieldKind_Opaque)
+      out->appendf("  unsigned char %s[%d];   // %s\n", f->Name, f->Size, f->TypeName);
+    else
+      out->appendf("  %s %s;\n", f->TypeName, f->Name);
+  }
+
+  // Live control codegen is REFLECTION, not a draft: the real compiled struct shapes.
+  static bool AppEmitReflectedControlCode(ImGuiApp* live_app, const ImGuiAppNode* n, ImGuiTextBuffer* out)
+  {
+    ImGuiAppItemBase* item = AppGraphFindLiveItem(live_app, n);
+    if (item == nullptr)
+      return false;
+    const ImGuiAppControlBase* ctrl = (const ImGuiAppControlBase*)item;
+
+    char pname[IM_LABEL_SIZE];
+    char tname[IM_LABEL_SIZE];
+    ctrl->GetControlDataTypeName(pname, IM_ARRAYSIZE(pname));
+    ctrl->GetControlTempDataTypeName(tname, IM_ARRAYSIZE(tname));
+    if (pname[0] == 0)
+      return false;
+
+    ImGuiAppLiveFieldDesc fields[64];
+    out->appendf("// reflected from the running control\n");
+    out->appendf("struct %s\n{\n", pname);
+    int nf = ctrl->GetControlFields(fields, IM_ARRAYSIZE(fields), false);
+    for (int i = 0; i < nf; i++)
+      AppEmitLiveFieldDecl(out, &fields[i]);
+    out->appendf("};\n\nstruct %s\n{\n", tname[0] ? tname : "TempData");
+    nf = ctrl->GetControlFields(fields, IM_ARRAYSIZE(fields), true);
+    for (int i = 0; i < nf; i++)
+      AppEmitLiveFieldDecl(out, &fields[i]);
+    out->appendf("};\n\n// control implementation: compiled into the running binary (not a draft).\n");
+    return true;
+  }
+
+  void GenerateAppNodeCode(const ImGuiAppGraph* g, const ImGuiAppNode* n, ImGuiTextBuffer* out, ImGuiApp* live_app)
   {
     IM_ASSERT(g != nullptr && n != nullptr && out != nullptr);
 
     switch (n->Kind)
     {
     case ImGuiAppNodeKind_Control:
+      if (n->IsLive && AppEmitReflectedControlCode(live_app, n, out))
+        break;                                      // live: the real compiled shape, never a TODO template
       AppEmitControlWithDeps(g, n, out);            // data structs + control struct with derived deps/bindings
       break;
     case ImGuiAppNodeKind_Layer:

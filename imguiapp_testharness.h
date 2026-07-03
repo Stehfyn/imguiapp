@@ -23,6 +23,13 @@ struct ImGuiAppTestHarnessConfig
   ImGuiAppWALLevel     WALLevel;
   const char*          TestFilter;           // test-engine filter; null = all
   void (*RegisterTests)(ImGuiTestEngine* engine);   // required
+  // After the take closes, extract the embedded meta stream from the recording and run
+  // the full integrity ladder (AppAVMetaVerify). A verification failure fails the run
+  // and the artifacts survive regardless of KeepArtifactsOnPass.
+  bool                 VerifyRecording;
+  // Written by the run with the mode that actually initialized (headless init can fall
+  // back to windowed). Null ok. Callers gating on GPU availability read it.
+  ImGuiAppHeadlessMode* EffectiveHeadless;
 
   ImGuiAppTestHarnessConfig()
   {
@@ -38,6 +45,8 @@ struct ImGuiAppTestHarnessConfig
     WALLevel = ImGuiAppWALLevel_Frame;
     TestFilter = nullptr;
     RegisterTests = nullptr;
+    VerifyRecording = true;
+    EffectiveHeadless = nullptr;
   }
 };
 

@@ -1375,6 +1375,101 @@ IMGUI_API bool AppAVMetaDump(const void* meta, int meta_size)
   return true;
 }
 
+IMGUI_API bool AppAVMetaVerify(const void* meta, int meta_size, ImGuiAppAVStreamStats* out_stats)
+{
+  ImGuiAppAVStreamStats stats;
+  bool header_ok = false;
+  ImGuiAppAVMetaReader r;
+  if (AvMetaInit(meta, meta_size, &r))
+  {
+    header_ok = true;
+    ImU32 chain = 0;          // recomputed from the Identity seed across IoFrames
+    bool chain_seeded = false;
+    ImU32 type = 0;
+    const char* p = nullptr;
+    ImU32 size = 0;
+    while (AvMetaNext(&r, &type, &p, &size))
+    {
+      switch (type)
+      {
+      case ImGuiAppAVMetaRecordType_Frame:
+      {
+        ImU64 tick = 0;
+        memcpy(&tick, p, 8);
+        if (tick == (ImU64)-1)
+          break;   // ring-dump reason marker
+        if (stats.Frames > 0 && tick != stats.LastTick + 1)
+          stats.TickGaps++;
+        if (stats.Frames == 0)
+          stats.FirstTick = tick;
+        stats.LastTick = tick;
+        stats.Frames++;
+        break;
+      }
+      case ImGuiAppAVMetaRecordType_Identity:
+      {
+        if (size >= 24 && stats.Identities == 0)
+        {
+          ImU32 schema_hash = 0;
+          memcpy(&schema_hash, p + 12, 4);
+          chain = schema_hash;   // the io chain's seed
+          chain_seeded = true;
+        }
+        stats.Identities++;
+        break;
+      }
+      case ImGuiAppAVMetaRecordType_Digest:
+      {
+        if (size >= 12)
+        {
+          ImU64 digest_bytes = 0;
+          ImU32 stored = 0;
+          memcpy(&digest_bytes, p, 8);
+          memcpy(&stored, p + 8, 4);
+          // The record's own start offset: everything before it is covered.
+          const ImS64 record_at = (ImS64)r.Cursor - 8 - (ImS64)size;
+          stats.DigestState = 2;
+          if ((ImS64)digest_bytes == record_at)
+          {
+            const ImU32 computed = (ImU32)ImHashData(r.Bytes.Data, (size_t)digest_bytes, 0);
+            stats.DigestState = computed == stored ? 0 : 2;
+          }
+        }
+        break;
+      }
+      case ImGuiAppAVMetaRecordType_InputHdr:      stats.InputHdrs++;   break;
+      case ImGuiAppAVMetaRecordType_InputFrame:    stats.InputFrames++; break;
+      case ImGuiAppAVMetaRecordType_StateSnapshot: stats.Snapshots++;   break;
+      case ImGuiAppAVMetaRecordType_IoFrame:
+      {
+        // payload: u64 tick | 2*f32 mouse | u8 buttons | 2*f32 wheel | u32 state_hash | u32 chain | ...
+        if (size >= 33)
+        {
+          ImU32 state_hash = 0;
+          ImU32 stored_chain = 0;
+          memcpy(&state_hash, p + 25, 4);
+          memcpy(&stored_chain, p + 29, 4);
+          chain = (ImU32)ImHashData(&state_hash, sizeof(ImU32), chain);
+          if (stored_chain != chain && stats.ChainDivergesAt < 0)
+            stats.ChainDivergesAt = stats.IoFrames;
+        }
+        stats.IoFrames++;
+        break;
+      }
+      default: break;
+      }
+    }
+    stats.ChainOk = chain_seeded && stats.ChainDivergesAt < 0 && stats.IoFrames > 0;
+  }
+
+  const bool contiguous = stats.TickGaps == 0 && stats.Frames > 0 && (ImU64)stats.Frames == stats.LastTick - stats.FirstTick + 1;
+  const bool io_complete = stats.IoFrames == stats.Frames;   // the every-frame contract extends to input
+  const bool pass = header_ok && contiguous && io_complete && stats.ChainOk && stats.Identities > 0 && stats.DigestState == 0;
+  if (out_stats != nullptr)
+    *out_stats = stats;
+  return pass;
+}
+
 IMGUI_API bool AppAVMetaReadInputLog(const void* meta, int meta_size, ImGuiAppInputLog* out_log)
 {
   IM_ASSERT(out_log != nullptr);

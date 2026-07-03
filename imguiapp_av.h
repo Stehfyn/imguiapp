@@ -143,10 +143,37 @@ struct ImGuiAppRingConfig
   ImGuiAppRingConfig() { Seconds = 10.0f; MaxMemoryMB = 256; Fps = 0.0f; }
 };
 
+// Result of AppAVMetaVerify: the full integrity ladder recomputed from a reconstructed
+// meta stream. CorruptFrames is extraction-level knowledge (the stream walk cannot see
+// frames the extractor dropped) -- callers with an extractor count overwrite it.
+struct ImGuiAppAVStreamStats
+{
+  int   Frames;
+  int   IoFrames;
+  int   InputHdrs;
+  int   InputFrames;
+  int   Snapshots;
+  int   Identities;
+  ImU64 FirstTick;
+  ImU64 LastTick;
+  int   TickGaps;
+  bool  ChainOk;
+  int   ChainDivergesAt;   // io-frame ordinal of the first divergence; -1 = none
+  int   DigestState;       // 0 ok, 1 missing (truncated take), 2 mismatch (corruption)
+  int   CorruptFrames;
+
+  ImGuiAppAVStreamStats() { Frames = 0; IoFrames = 0; InputHdrs = 0; InputFrames = 0; Snapshots = 0; Identities = 0; FirstTick = 0; LastTick = 0; TickGaps = 0; ChainOk = false; ChainDivergesAt = -1; DigestState = 1; CorruptFrames = 0; }
+};
+
 namespace ImGui
 {
   // Close (if open) then Destroy any provider's encoder via its vtable. Null-safe.
   IMGUI_API void AppAVDestroyEncoder(ImGuiAppAVEncoder* encoder);
+
+  // Recompute the integrity ladder over a reconstructed meta stream: tick contiguity
+  // (Frame records), io completeness (IoFrames == Frames), hash chain from the
+  // Identity seed, end-of-stream digest. True only when every criterion holds.
+  IMGUI_API bool AppAVMetaVerify(const void* meta, int meta_size, ImGuiAppAVStreamStats* out_stats);
 
   // Memory-stream parsers over a reconstructed meta stream (40-byte header + framed
   // records). Extraction from a recording is per-backend:

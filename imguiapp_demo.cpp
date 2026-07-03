@@ -333,6 +333,10 @@ namespace
 
   struct GraphDocData
   {
+    // Leads with the whole ImGuiAppGraph: reflect's arity probe brace-elides into nested
+    // aggregates and explodes MSVC's recursion limit (C1202). Opaque to reflection.
+    using ImGuiAppOpaque = void;
+
     ImGuiAppGraph   Graph;
     int             Selection;        // node selection shared by tree + canvas
     bool            ShowLive;         // show vs hide (never delete) live-mirror nodes
@@ -1400,7 +1404,7 @@ namespace
         data->CodeName[0] = 0;
         if (ImGuiAppNode* seln = doc->Selection >= 0 ? ImGui::AppGraphFindNode(&doc->Graph, doc->Selection) : nullptr)
         {
-          ImGui::GenerateAppNodeCode(&doc->Graph, seln, &data->CodeNodeText);
+          ImGui::GenerateAppNodeCode(&doc->Graph, seln, &data->CodeNodeText, doc->Mirror);
           ImStrncpy(data->CodeName, seln->Draft.Name, sizeof(data->CodeName));
           data->HasNodeCode = data->CodeNodeText.size() > 0;
         }
@@ -1839,7 +1843,7 @@ namespace
         {
           ImGui::EditAppNodeInspectorEx(graph, selection, doc->Mirror);
           if (ImGui::AppInspectorSection("##sec_preview", ICON_FA_PLAY, "Preview", nullptr, nullptr))
-            ImGui::AppGraphRenderMockPanel(graph, selection);
+            ImGui::AppGraphRenderMockPanel(graph, selection, doc->Mirror);
           if (data->HasNodeCode)
           {
             ImGui::SeparatorText("Generated C++");
