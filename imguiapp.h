@@ -404,7 +404,10 @@ namespace ImGui
   template <typename T>
   IMGUI_API inline void PushSidebarControl(ImGuiApp* app, ImGuiAppSidebarBase* sidebar);
 
-  IMGUI_API void ShowAppLayerDemo(bool* p_open = nullptr);
+  // host: the PROCESS's real app, offered as the "Host app" live-mirror perspective
+  // (strictly read-only there: time scrub is disabled for the host -- restoring its
+  // state from inside its own render would mutate mid-frame).
+  IMGUI_API void ShowAppLayerDemo(bool* p_open = nullptr, ImGuiApp* host = nullptr);
 
   // Push every Active (in-range) entry; returns the number pushed -- pop with PopStyleVar/PopStyleColor(count).
   IMGUI_API int PushAppStyleMods(const ImGuiAppStyleModDesc* mods, int count);

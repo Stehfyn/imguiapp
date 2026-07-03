@@ -357,8 +357,9 @@ namespace
     float           LayoutSaveT;      // debounce: seconds until the next layout-save check
     ImGuiApp*       Mirror;           // the ACTIVE mirrored app (resolved each update from MirrorSource below)
     ImGuiApp*       MirrorSample;     // mirror source 0: the example app (RandomTime/Breathing)
-    ImGuiApp*       MirrorComposer;   // mirror source 1: the editor app hosting the Composer itself
-    int             MirrorSource;     // 0 = sample app, 1 = the Composer's own composition
+    ImGuiApp*       MirrorComposer;   // mirror source 1: the editor sub-app hosting the Composer's chrome
+    ImGuiApp*       MirrorHost;       // mirror source 2: the PROCESS's real app (read-only: no time scrub)
+    int             MirrorSource;     // 0 = sample app, 1 = editor sub-app, 2 = host app
     ImGuiAppStateHistory MirrorHistory;   // the mirrored app's recorded state ring (time travel)
     bool            TimeScrub;        // true: freeze the mirror at TimeScrubIndex instead of recording
     int             TimeScrubIndex;
@@ -485,6 +486,7 @@ namespace
       data->Mirror      = nullptr;       // set after push by ShowAppLayerDemo
       data->MirrorSample = nullptr;
       data->MirrorComposer = nullptr;
+      data->MirrorHost = nullptr;
       data->MirrorSource = 0;
       data->TimeScrub   = false;
       data->TimeScrubIndex = 0;
@@ -503,7 +505,11 @@ namespace
       ComposerLayoutSaveIfChanged(data, dt);
 
       // Self-mirroring from inside our own update is safe: BuildAppLiveGraph only reads the object model.
-      data->Mirror = (data->MirrorSource == 1 && data->MirrorComposer != nullptr) ? data->MirrorComposer : data->MirrorSample;
+      data->Mirror = data->MirrorSample;
+      if (data->MirrorSource == 1 && data->MirrorComposer != nullptr)
+        data->Mirror = data->MirrorComposer;
+      else if (data->MirrorSource == 2 && data->MirrorHost != nullptr)
+        data->Mirror = data->MirrorHost;
 
       // Build the live mirror first so every panel reads the reconciled graph this frame.
       if (data->Mirror != nullptr)
@@ -530,7 +536,11 @@ namespace
       }
 
       // While scrubbing, re-impose the chosen snapshot every frame (stable freeze); otherwise record.
-      if (data->Mirror != nullptr && data->Mirror->Layers.Size > 0)   // composed (IsInitialized == platform-only)
+      // The HOST perspective is strictly read-only: this update runs inside the host's own render, and
+      // restoring (or snapshotting mid-render) its state would mutate the frame under its feet.
+      if (data->Mirror == data->MirrorHost && data->MirrorHost != nullptr)
+        data->TimeScrub = false;
+      else if (data->Mirror != nullptr && data->Mirror->Layers.Size > 0)   // composed (IsInitialized == platform-only)
       {
         if (data->TimeScrub)
         {
@@ -660,7 +670,7 @@ namespace
       {
         doc->MirrorSource = temp_data->MirrorSource;
         doc->TimeScrub = false;   // old timeline belongs to the previous source
-        DocLog(doc, 0, "live mirror -> %s", doc->MirrorSource == 1 ? "the Composer itself" : "sample app");
+        DocLog(doc, 0, "live mirror -> %s", doc->MirrorSource == 2 ? "host app" : doc->MirrorSource == 1 ? "the Composer itself" : "sample app");
       }
       if (temp_data->Diff)
       {
@@ -792,7 +802,9 @@ namespace
         // -- observe (right-aligned): panel toggles + which app the Live eye reflects.
         const char* code_lbl = ICON_FA_CODE "  Code";
         const char* live_lbl = show_live ? ICON_FA_EYE "  Live###live" : ICON_FA_EYE_SLASH "  Live###live";
-        const char* src_lbl  = doc->MirrorSource == 1 ? ICON_FA_CIRCLE_NODES "  Composer###mirsrc" : ICON_FA_CUBE "  Sample###mirsrc";
+        const char* src_lbl  = doc->MirrorSource == 2 ? ICON_FA_HOUSE "  Host###mirsrc"
+                             : doc->MirrorSource == 1 ? ICON_FA_CIRCLE_NODES "  Composer###mirsrc"
+                             :                          ICON_FA_CUBE "  Sample###mirsrc";
         const float pad2 = style.FramePadding.x * 2.0f;
         const float cluster_w = ImGui::CalcTextSize(code_lbl).x + pad2
                               + ImGui::CalcTextSize(live_lbl, ImGui::FindRenderedTextEnd(live_lbl)).x + pad2 + style.ItemSpacing.x
@@ -815,6 +827,11 @@ namespace
           {
             temp_data->MirrorSourceSet = true;
             temp_data->MirrorSource = 1;
+          }
+          if (ImGui::MenuItem(ICON_FA_HOUSE "  Host app", nullptr, doc->MirrorSource == 2, doc->MirrorHost != nullptr))
+          {
+            temp_data->MirrorSourceSet = true;
+            temp_data->MirrorSource = 2;
           }
           ImGui::EndPopup();
         }
@@ -1970,7 +1987,7 @@ namespace ImGui
   // [SECTION] Demo bring-up (ShowAppLayerDemo: sample app + editor app composition)
   //-----------------------------------------------------------------------------
 
-  IMGUI_API void ShowAppLayerDemo(bool* p_open)
+  IMGUI_API void ShowAppLayerDemo(bool* p_open, ImGuiApp* host)
   {
       static ImGuiApp app;          // the mirrored "example" app the demo composes
 
@@ -2025,10 +2042,12 @@ namespace ImGui
         {
           d->Mirror = &app;
           d->MirrorSample = &app;            // perspective 0: the example app
-          d->MirrorComposer = &editor_app;   // perspective 1: the Composer's own composition (dogfood)
+          d->MirrorComposer = &editor_app;   // perspective 1: the editor sub-app hosting the Composer's chrome
         }
         editor_ready = true;
       }
+      if (GraphDocData* d = GetGraphDoc(&editor_app))
+        d->MirrorHost = host;                // perspective 2: the PROCESS's app (refreshed: host outlives nothing here)
 
       ImGuiAppWindowBase* panel   = editor_app.Windows[0];
       ImGuiAppWindowBase* metrics = editor_app.Windows[1];
