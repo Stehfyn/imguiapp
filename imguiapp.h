@@ -143,8 +143,9 @@ struct ImGuiAppPlatformBackend
   int  (*RunLoop)(ImGuiApp* app);
   // Optional (null = backend cannot capture; recording fails with a clear error). Readback of the
   // frame just rendered, called after render, before present. Double-buffered staging is expected:
-  // returning frame N-1's pixels is fine -- the FrameID travels inside ImGuiAppAVFrame, so latency
-  // never misaligns identity. Pixels stay valid until the next CaptureFrame call.
+  // returning frame N-1's pixels is fine PROVIDED the backend fills out_frame->FrameID with the id
+  // recorded at copy time (the pixels' true identity); a backend that leaves it zeroed gets the
+  // pumping frame's id stamped by the recorder. Pixels stay valid until the next CaptureFrame call.
   bool (*CaptureFrame)(ImGuiApp* app, ImGuiAppAVFrame* out_frame);
 };
 

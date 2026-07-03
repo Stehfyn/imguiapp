@@ -33,6 +33,7 @@ namespace
 
     struct ImGuiApp_Win32Vulkan_Data
     {
+        ImGuiApp*                      App;    // owner; source of FrameID at capture-copy time
         HWND                           Hwnd;
         VkAllocationCallbacks*         Allocator;
         VkInstance                     Instance;
@@ -84,6 +85,7 @@ namespace
         int                            CaptureCopyWidth[2];   // geometry/format of the copy each buffer holds; 0 = none yet
         int                            CaptureCopyHeight[2];
         VkFormat                       CaptureCopyFormat[2];
+        ImGuiAppFrameID                CaptureCopyId[2];      // FrameID at copy-record time: the pixels' TRUE identity under double-buffer latency
         VkFence                        CapturePendingFence[2];// fence of the submit containing the copy; null = data at rest
         ImVector<char>                 CaptureRgba;           // RGBA8 conversion buffer handed to CaptureFrame callers
     };
@@ -208,7 +210,14 @@ namespace
 
         VkMemoryRequirements req;
         vkGetBufferMemoryRequirements(bd->Device, bd->CaptureBuffer[index], &req);
-        const uint32_t type = FindMemoryType(bd->PhysicalDevice, req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        // Prefer HOST_CACHED: the CPU reads this memory back every frame, and reads from
+        // uncached (write-combined) mappings are ~100x slow. Coherent+cached exists on
+        // most desktop devices; plain coherent is the fallback (reads then go through the
+        // bulk memcpy in CaptureFrame, never per-byte).
+        uint32_t type = FindMemoryType(bd->PhysicalDevice, req.memoryTypeBits,
+                                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+        if (type == (uint32_t)-1)
+            type = FindMemoryType(bd->PhysicalDevice, req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         if (type == (uint32_t)-1)
             return false;
 
@@ -289,6 +298,7 @@ namespace
         bd->CaptureCopyWidth[w] = width;
         bd->CaptureCopyHeight[w] = height;
         bd->CaptureCopyFormat[w] = format;
+        bd->CaptureCopyId[w] = bd->App != nullptr ? bd->App->FrameID : ImGuiAppFrameID();
         bd->CapturePendingFence[w] = submit_fence;
         bd->CaptureWriteIndex = w ^ 1;
     }
@@ -1307,6 +1317,7 @@ bool ImGuiApp_Win32Vulkan_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
 {
     ImGuiAppPlatformState* state = IM_NEW(ImGuiAppPlatformState)();
     app->PlatformData = state;
+    GBackend.App = app;
 
     // Offscreen headless keeps a HIDDEN window: ImGui_ImplWin32 needs an HWND for input/DPI,
     // and the test engine synthesizes inputs through it. Nothing renders to it.
@@ -1402,8 +1413,11 @@ bool ImGuiApp_Win32Vulkan_CaptureFrame(ImGuiApp* app, ImGuiAppAVFrame* out_frame
         return false;
     }
 
-    // The most recent recorded copy landed in the buffer the write index just moved off.
-    const int r = bd->CaptureWriteIndex ^ 1;
+    // RecordCaptureCopy flips the write index AFTER writing, so write^1 holds THIS frame's
+    // copy (fence just submitted -- waiting it would sync the whole pipeline every frame).
+    // The PREVIOUS frame's retired copy sits at the un-flipped index: one frame of latency,
+    // zero steady-state stall. The FrameID travels with the pixels, so identity holds.
+    const int r = bd->CaptureWriteIndex;
     if (bd->CaptureCopyWidth[r] <= 0 || bd->CaptureMapped[r] == nullptr)
         return false;
 
@@ -1421,32 +1435,31 @@ bool ImGuiApp_Win32Vulkan_CaptureFrame(ImGuiApp* app, ImGuiAppAVFrame* out_frame
     const VkFormat format = bd->CaptureCopyFormat[r];
     const unsigned char* src = (const unsigned char*)bd->CaptureMapped[r];
 
+    if (format != VK_FORMAT_R8G8B8A8_UNORM && format != VK_FORMAT_R8G8B8A8_SRGB &&
+        format != VK_FORMAT_B8G8R8A8_UNORM && format != VK_FORMAT_B8G8R8A8_SRGB)
+        return false;   // non-32-bit swapchain format: capture unsupported
+
+    // The mapped staging memory is typically WRITE-COMBINED (uncached): per-byte reads
+    // from it are ~100x slow (observed 1.3s/frame). Bulk-copy into cached CPU memory
+    // FIRST, then swizzle in place with word ops.
     bd->CaptureRgba.resize(width * height * 4);
-    unsigned char* dst = (unsigned char*)bd->CaptureRgba.Data;
-    if (format == VK_FORMAT_R8G8B8A8_UNORM || format == VK_FORMAT_R8G8B8A8_SRGB)
+    memcpy(bd->CaptureRgba.Data, src, (size_t)width * (size_t)height * 4);
+    if (format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB)
     {
-        memcpy(dst, src, (size_t)width * (size_t)height * 4);
-    }
-    else if (format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB)
-    {
+        unsigned int* px = (unsigned int*)bd->CaptureRgba.Data;
         const size_t n = (size_t)width * (size_t)height;
         for (size_t i = 0; i < n; i++)
         {
-            dst[i * 4 + 0] = src[i * 4 + 2];
-            dst[i * 4 + 1] = src[i * 4 + 1];
-            dst[i * 4 + 2] = src[i * 4 + 0];
-            dst[i * 4 + 3] = src[i * 4 + 3];
+            const unsigned int v = px[i];
+            px[i] = (v & 0xFF00FF00u) | ((v & 0x000000FFu) << 16) | ((v >> 16) & 0x000000FFu);
         }
-    }
-    else
-    {
-        return false;   // non-32-bit swapchain format: capture unsupported
     }
 
     out_frame->Width = width;
     out_frame->Height = height;
     out_frame->PitchBytes = width * 4;
     out_frame->Pixels = bd->CaptureRgba.Data;
+    out_frame->FrameID = bd->CaptureCopyId[r];   // the pixels' identity, not the pumping frame's
     return true;
 }
 

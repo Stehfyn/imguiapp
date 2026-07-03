@@ -431,7 +431,10 @@ IMGUI_API void ImGui::AppRecordPump(ImGuiAppRecorder* rec)
     return;
   }
 
-  captured.FrameID = rec->App->FrameID;
+  // A double-buffered backend returns frame N-1's pixels WITH their true id; only a
+  // backend that left the id empty gets stamped with the pumping frame's.
+  if (captured.FrameID.FrameIndex == 0)
+    captured.FrameID = rec->App->FrameID;
 
   // Ring subsample decides BEFORE any record is consumed: skipped frames drop their
   // frame-scoped blob/snapshot, but the input-log backlog stays unconsumed and lands
@@ -546,6 +549,15 @@ static ImGuiAppRecorder* AvBeginCommon(ImGuiApp* app, ImGuiAppAVEncoder* encoder
   rec->Config.OutputPath = rec->OutputPath;   // config copy must not dangle on the caller's string
   if (rec->Config.Timing == ImGuiAppAVTimingMode_Auto)
     rec->Config.Timing = app->Pacer.Mode == ImGuiAppPacerMode_Fixed ? ImGuiAppAVTimingMode_Constant : ImGuiAppAVTimingMode_Realtime;
+
+  // Realtime = live witnessing: the app must NEVER stall on the encoder, because the
+  // stall would distort the very timeline being recorded. A Block queue plus realtime
+  // frame duplication is a feedback loop -- one hitch grows the next frame's delta,
+  // which duplicates more frames into the pipe, which blocks the app longer (observed
+  // steady state: app at ~1 fps). Constant keeps Block: synthetic timelines must never
+  // drop. AppRecordSetQueuePolicy still overrides either way.
+  rec->QueuePolicy = rec->Config.Timing == ImGuiAppAVTimingMode_Realtime
+                   ? ImGuiAppRecordQueuePolicy_DropNewest : ImGuiAppRecordQueuePolicy_Block;
 
   rec->MetaHeader.Version = 1;
   memcpy(rec->MetaHeader.Magic, kAvMetaMagic, 8);
