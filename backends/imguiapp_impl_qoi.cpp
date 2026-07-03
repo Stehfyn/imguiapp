@@ -159,3 +159,78 @@ IMGUI_API ImGuiAppAVEncoder* ImGuiApp_ImplQoi_CreateEncoder()
   enc->UserData = IM_NEW(ImGuiAppQoiSeqEncoderData)();
   return enc;
 }
+
+// Strip chunk reader over decoded RGBA (the stamp writes R=G=B, so R is the luma).
+// Block grid per the frozen contract in imguiapp_av.h; per-frame framing
+// 'IMIL' | u32 chunk_size | chunk | u32 ImHashData(chunk).
+static bool QoiSeqReadStripChunk(const unsigned char* rgba, int w, int h, int embed_rows, ImVector<char>* scratch, ImVector<char>* out_meta)
+{
+  if (embed_rows > h)
+    return false;
+  const int blocks_x = w / 4;
+  const int blocks_y = embed_rows / 4;
+  const int base_row = h - embed_rows;
+  scratch->resize(blocks_x * blocks_y / 8);
+  memset(scratch->Data, 0, (size_t)scratch->Size);
+  for (int b = 0; b < scratch->Size * 8; b++)
+  {
+    const int bx = b % blocks_x;
+    const int by = b / blocks_x;
+    int sum = 0;
+    for (int y = 0; y < 4; y++)
+      for (int x = 0; x < 4; x++)
+        sum += rgba[(((size_t)(base_row + by * 4 + y) * w) + (size_t)(bx * 4 + x)) * 4];
+    if (sum >= 128 * 16)
+      scratch->Data[b / 8] |= (char)(0x80 >> (b % 8));
+  }
+
+  if (scratch->Size < 12)
+    return false;
+  const char* d = scratch->Data;
+  if (d[0] != 'I' || d[1] != 'M' || d[2] != 'I' || d[3] != 'L')
+    return false;
+  ImU32 size = 0;
+  memcpy(&size, d + 4, 4);
+  if ((ImS64)size > (ImS64)scratch->Size - 12)
+    return false;
+  ImU32 check = 0;
+  memcpy(&check, d + 8 + size, 4);
+  if (check != (ImU32)ImHashData(d + 8, (size_t)size, 0))
+    return false;
+  if (size > 0)
+  {
+    const int base = out_meta->Size;
+    out_meta->resize(base + (int)size);
+    memcpy(out_meta->Data + base, d + 8, (size_t)size);
+  }
+  return true;
+}
+
+IMGUI_API bool ImGuiApp_ImplQoi_ExtractEmbeddedMeta(const char* dir, int embed_rows, ImVector<char>* out_meta)
+{
+  IM_ASSERT(dir != nullptr && out_meta != nullptr && embed_rows >= 4);
+  if (dir == nullptr || out_meta == nullptr || embed_rows < 4)
+    return false;
+  out_meta->clear();
+
+  ImVector<char> rgba;
+  ImVector<char> scratch;
+  for (int i = 0; ; i++)
+  {
+    char path[560];
+    ImFormatString(path, IM_ARRAYSIZE(path), "%s/%06d.qoi", dir, i);
+    size_t size = 0;
+    void* bytes = ImFileLoadToMemory(path, "rb", &size);
+    if (bytes == nullptr)
+      break;   // sequence end (or a missing frame: the stream truncates here)
+    int w = 0;
+    int h = 0;
+    const bool decoded = ImQoiDecode(bytes, (int)size, &rgba, &w, &h);
+    IM_FREE(bytes);
+    if (!decoded)
+      return out_meta->Size > 0;
+    if (!QoiSeqReadStripChunk((const unsigned char*)rgba.Data, w, h, embed_rows, &scratch, out_meta))
+      return i > 0 && out_meta->Size > 0;   // frame 0 without magic = no embedded stream
+  }
+  return out_meta->Size > 0;
+}

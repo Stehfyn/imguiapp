@@ -354,6 +354,10 @@ namespace ImGui
   IMGUI_API bool AppInputReplay(ImGuiApp* app, const ImGuiAppInputLog* log, int* out_first_divergence);
   IMGUI_API void AppInputLogClear(ImGuiAppInputLog* log);
 
+  // Hash of the Persist + LastTemp prefix of every snapshottable instance -- the same
+  // per-frame fingerprint AppInputRecord stores. 0 when nothing snapshottable exists.
+  IMGUI_API ImGuiID AppStateHash(const ImGuiApp* app);
+
   // Advisory frame pacing. Backend run loops call this once per iteration before OnDrawFrame; Off
   // returns immediately (the call is unconditional in the loops). Sleeps until deadline - SleepSlackMs,
   // spins the rest on QPC; Fixed mode also forces io.DeltaTime to exactly 1/TargetHz.

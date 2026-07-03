@@ -9,3 +9,8 @@
 #include "imguiapp_av.h"
 
 IMGUI_API ImGuiAppAVEncoder* ImGuiApp_ImplQoi_CreateEncoder();
+
+// Reassemble the meta stream chunked across a take's frame strips: walks
+// <dir>/NNNNNN.qoi in order, decodes, reads each strip. Lossless frames make the
+// stream byte-exact; a corrupt/missing frame truncates it at that point.
+IMGUI_API bool ImGuiApp_ImplQoi_ExtractEmbeddedMeta(const char* dir, int embed_rows, ImVector<char>* out_meta);

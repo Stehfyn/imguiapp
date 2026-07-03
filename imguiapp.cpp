@@ -1052,8 +1052,11 @@ namespace ImGui
 
   // Hash of the Persist + LastTemp prefix of every snapshottable instance. TempData is this
   // frame's raw input, not state: excluded so record-time and replay-time hashes align.
-  static ImGuiID AppStateHash(ImGuiApp* app)
+  IMGUI_API ImGuiID AppStateHash(const ImGuiApp* app)
   {
+      IM_ASSERT(app != nullptr);
+      if (app == nullptr)
+        return 0;
       ImGuiID h = 0;
       for (int i = 0; i < app->StorageEntries.Size; i++)
       {

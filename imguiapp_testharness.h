@@ -12,7 +12,7 @@ struct ImGuiTestEngine;
 struct ImGuiAppTestHarnessConfig
 {
   const char*          Name;                 // artifact base name
-  const char*          ArtifactDir;          // receives <Name>.mp4/.avmeta/.wal/.frametimes.csv
+  const char*          ArtifactDir;          // receives <Name>.mp4/.wal/.frametimes.csv
   ImGuiAppHeadlessMode Headless;             // Offscreen = GPU pixels without a window (video on CI)
   bool                 RecordVideo;          // requires Offscreen or a windowed app
   bool                 KeepArtifactsOnPass;  // false: artifacts survive only failures

@@ -11,7 +11,11 @@
 
 IMGUI_API ImGuiAppAVEncoder* ImGuiApp_ImplLibav_CreateEncoder();
 
-// Decode a recording and reassemble the input log stamped into its frames
-// (ImGuiAppAVEncodeConfig::EmbedInputLog). Frames whose checksum fails are skipped and
-// counted in out_corrupt_frames (null ok). False when the file has no embedded log.
+// Decode a recording and reassemble the meta stream chunked across its frames'
+// strips (40-byte header + framed records; parse with the ImGui::AppAVMeta* seam
+// readers). A corrupt frame truncates the stream at that point -- crash-honest.
+IMGUI_API bool ImGuiApp_ImplLibav_ExtractEmbeddedMeta(const char* video_path, int embed_rows, ImVector<char>* out_meta);
+
+// Extract + parse the input log in one call; out_corrupt_frames (null ok) counts
+// checksum-failed frames. False when the file carries no embedded stream or no log.
 IMGUI_API bool ImGuiApp_ImplLibav_ReadEmbeddedInputLog(const char* video_path, int embed_rows, ImGuiAppInputLog* out_log, int* out_corrupt_frames);

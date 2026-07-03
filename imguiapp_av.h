@@ -33,7 +33,7 @@ struct ImGuiAppAVFrame
   int             PitchBytes;     // row stride; encoders must honor it
   const void*     Pixels;         // RGBA8
   ImGuiAppFrameID FrameID;
-  const void*     UserData;       // optional per-frame blob (sidecar, never the video)
+  const void*     UserData;       // optional per-frame blob (meta stream record, never visible pixels)
   int             UserDataSize;
 
   ImGuiAppAVFrame() { Width = 0; Height = 0; PitchBytes = 0; Pixels = nullptr; UserData = nullptr; UserDataSize = 0; }
@@ -47,18 +47,18 @@ struct ImGuiAppAVEncodeConfig
   int                  Width;         // 0 = first frame's size (fixed thereafter; resize aborts recording)
   int                  Height;
   int                  BitrateKbps;   // hint; lossless providers ignore
-  bool                 WriteSidecar;  // "<OutputPath>.avmeta" written by the recorder
-  // Embedded input log: each frame's input-log records are stamped into the frame's
-  // BOTTOM EmbedRows pixel rows as 4x4-pixel luma blocks (black 16 / white 235,
-  // read threshold 128 -- survives lossy encode), row-major bitstream per frame:
-  // u32 magic 'IMIL' | u32 payload_size | payload (this frame's InputHdr-if-changed +
-  // InputFrame records, sidecar framing) | u32 ImHashData checksum. Capacity per frame
-  // = floor(W/4) * floor(EmbedRows/4) bits. Requires AppRecordAttachInputLog; a frame
-  // whose records exceed capacity stamps magic + size + checksum only and WAL-logs once.
-  bool                 EmbedInputLog;
+  // Metadata lives IN the video: while recording, the meta record stream (40-byte
+  // header first, then framed records in emission order) is chunked across the frames'
+  // BOTTOM EmbedRows pixel rows as 4x4-pixel luma blocks (black 16 / white 235, read
+  // threshold 128 -- survives lossy encode). Per frame: u32 magic 'IMIL' |
+  // u32 chunk_size | chunk (the stream's next bytes, up to capacity) | u32 ImHashData
+  // checksum (CRC32c). Records self-describe, so reassembly is chunk concatenation in
+  // frame order; a large record (state snapshot) legitimately spans frames. The only
+  // loss mode is a corrupt frame, which truncates the stream at that point on read.
+  // Capacity per frame = floor(W/4) * floor(EmbedRows/4) / 8 - 12 bytes.
   int                  EmbedRows;     // reserved bottom rows; multiple of 4
 
-  ImGuiAppAVEncodeConfig() { OutputPath = nullptr; Fps = 60.0f; Timing = ImGuiAppAVTimingMode_Auto; Width = 0; Height = 0; BitrateKbps = 0; WriteSidecar = true; EmbedInputLog = false; EmbedRows = 32; }
+  ImGuiAppAVEncodeConfig() { OutputPath = nullptr; Fps = 60.0f; Timing = ImGuiAppAVTimingMode_Auto; Width = 0; Height = 0; BitrateKbps = 0; EmbedRows = 32; }
 };
 
 // Encoder provider vtable. Implementations allocate themselves (Create* in their own
@@ -78,7 +78,7 @@ struct ImGuiAppAVEncoder
 
 
 //-----------------------------------------------------------------------------
-// [SECTION] Sidecar track (.avmeta)
+// [SECTION] Meta stream (embedded in the video)
 //-----------------------------------------------------------------------------
 
 // Typed-record stream written by the recorder (uniform across providers): fixed header
@@ -87,10 +87,34 @@ typedef int ImGuiAppAVMetaRecordType;
 enum ImGuiAppAVMetaRecordType_
 {
   ImGuiAppAVMetaRecordType_Frame = 1,      // frame_index, tsc, time_sec, user blob
-  ImGuiAppAVMetaRecordType_InputHdr,       // ImGuiAppInputLog layout (composition id, slot table); once per take
-  ImGuiAppAVMetaRecordType_InputFrame,     // frame_index + one input-log frame (TempData + dt) + state hash
+  ImGuiAppAVMetaRecordType_InputHdr,       // ImGuiAppInputLog layout (composition id, slot table); once per take. OPT-IN (AppRecordAttachInputLog)
+  ImGuiAppAVMetaRecordType_InputFrame,     // frame_index + one input-log frame (TempData + dt) + state hash. OPT-IN derived checkpoint
   ImGuiAppAVMetaRecordType_StateSnapshot,  // composition id + snapshottable-state bytes (ImGuiAppStateHistory layout)
-  ImGuiAppAVMetaRecordType_AudioPcm,       // RESERVED in v1: frame_index + sample format header + PCM chunk (no producer yet)
+  // Raw input, recorded EVERY frame by default (the source events; O(1) per frame):
+  // u64 tick | f32 mouse_x | f32 mouse_y (main-viewport-relative) | u8 mouse_buttons |
+  // f32 wheel | f32 wheel_h | u32 state_hash (AppStateHash) |
+  // u32 chain (chain_k = ImHashData(&state_hash_k, 4, chain_{k-1}), seeded by the
+  // Identity schema hash: the hash SEQUENCE is reorder/splice-evident; ring dumps
+  // recompute it over the surviving entries) |
+  // u16 key_transition_count | {u16 imgui_key, u8 down}* | u16 char_count | {u16 utf16_unit}*
+  ImGuiAppAVMetaRecordType_IoFrame,
+  // Take identity, emitted ONCE immediately after the stream header (before any
+  // Frame/IoFrame). Replay classifies hash mismatches against it: identity differs
+  // from the replaying build -> declared version/schema mismatch (refuse before
+  // replay); identity matches but the per-frame hash chain diverges at frame k ->
+  // nondeterminism or corruption at k. Payload:
+  // u32 applayer_version_num | u32 imgui_version_num | u32 composition_id |
+  // u32 schema_hash (ImHashData over the snapshottable slot table: id + size +
+  // temp_offset + temp_size per entry, StorageEntries order -- the layout state
+  // hashes and snapshots depend on) | u32 embed_rows | u16 block_size | u16 reserved
+  ImGuiAppAVMetaRecordType_Identity,
+  // Take completeness proof, the stream's FINAL record (AppRecordEnd / each ring dump):
+  // u64 stream_bytes (all logical-stream bytes preceding this record, header included) |
+  // u32 digest (ImHashData over exactly those bytes, seed 0). Presence = complete take;
+  // absence = truncation (crash) -- WAL-style honesty made checkable. Rides the final
+  // frame's chunk: a take whose last frame lacks chunk room truncates it like any tail.
+  ImGuiAppAVMetaRecordType_Digest,
+  ImGuiAppAVMetaRecordType_AudioPcm,       // RESERVED: frame_index + sample format header + PCM chunk (no producer yet)
 };
 
 //-----------------------------------------------------------------------------
@@ -109,7 +133,7 @@ enum ImGuiAppRecordQueuePolicy_
 };
 
 // Always-on in-memory ring of the last N seconds (frames QOI-compressed on capture,
-// plus sidecar records and input frames); encoded to disk only on dump.
+// plus their meta records); the stream is chunked across the frames at dump time.
 struct ImGuiAppRingConfig
 {
   float Seconds;       // ring span
@@ -124,42 +148,48 @@ namespace ImGui
   // Close (if open) then Destroy any provider's encoder via its vtable. Null-safe.
   IMGUI_API void AppAVDestroyEncoder(ImGuiAppAVEncoder* encoder);
 
-  // Print a sidecar as TSV to stdout (debug helper).
-  IMGUI_API bool AppAVMetaDump(const char* avmeta_path);
+  // Memory-stream parsers over a reconstructed meta stream (40-byte header + framed
+  // records). Extraction from a recording is per-backend:
+  // ImGuiApp_ImplLibav_ExtractEmbeddedMeta (mp4), ImGuiApp_ImplQoi_ExtractEmbeddedMeta
+  // (frame sequence). A truncated tail parses as end-of-stream.
+  IMGUI_API bool AppAVMetaDump(const void* meta, int meta_size);   // TSV to stdout (debug helper)
 
-  // Load a persisted run for reproduction: restore the snapshot, then AppInputReplay
-  // (imguiapp.h) -- its divergence check pinpoints any non-determinism.
-  IMGUI_API bool AppAVMetaReadInputLog(const char* avmeta_path, ImGuiAppInputLog* out_log);
-  IMGUI_API bool AppAVMetaReadStateSnapshot(const char* avmeta_path, ImVector<char>* out_bytes, ImGuiID* out_composition_id);
+  // Reproduction: restore the snapshot, then AppInputReplay (imguiapp.h) -- its
+  // divergence check pinpoints any non-determinism.
+  IMGUI_API bool AppAVMetaReadInputLog(const void* meta, int meta_size, ImGuiAppInputLog* out_log);
+  IMGUI_API bool AppAVMetaReadStateSnapshot(const void* meta, int meta_size, ImVector<char>* out_bytes, ImGuiID* out_composition_id);
 
   // encoder is REQUIRED (providers live in backends/imguiapp_impl_*.h; the core seam
   // cannot pick one). Fails (null) when the platform backend has no CaptureFrame.
   IMGUI_API ImGuiAppRecorder* AppRecordBegin(ImGuiApp* app, ImGuiAppAVEncoder* encoder, const ImGuiAppAVEncodeConfig* config);
 
-  // Per-frame pump: capture -> queue for encode -> sidecar records. Call once per frame
+  // Per-frame pump: capture -> queue for encode -> meta stream chunk. Call once per frame
   // between render and present (the double-buffered CaptureFrame makes the exact
   // position forgiving). Null-safe; no-op when inactive.
   IMGUI_API void              AppRecordPump(ImGuiAppRecorder* rec);
   IMGUI_API bool              AppRecordIsActive(const ImGuiAppRecorder* rec);
-  IMGUI_API ImU64             AppRecordFrameCount(const ImGuiAppRecorder* rec);   // frames accepted this take (the video/sidecar ordinal); 0 on null
+  IMGUI_API ImU64             AppRecordFrameCount(const ImGuiAppRecorder* rec);   // frames accepted this take (the video frame ordinal); 0 on null
   IMGUI_API void              AppRecordSetQueuePolicy(ImGuiAppRecorder* rec, ImGuiAppRecordQueuePolicy policy, int depth /*= 3*/);
-  IMGUI_API void              AppRecordEnd(ImGuiAppRecorder* rec);   // flush queue, Close provider, finalize sidecar, free rec
+  IMGUI_API void              AppRecordEnd(ImGuiAppRecorder* rec);   // flush queue, Close provider, free rec
 
-  // This frame's user blob (copied immediately; lands in the sidecar Frame record).
+  // This frame's user blob (copied immediately; lands in the meta stream Frame record).
   IMGUI_API void AppRecordSetFrameData(ImGuiAppRecorder* rec, const void* data, int size);
 
   // Serialize the app's snapshottable state (ImGuiAppStateHistory byte layout) as this
   // frame's blob: video frame N <-> app state N; restoring the bytes IS time travel.
   IMGUI_API void AppRecordSnapshotState(ImGuiAppRecorder* rec, ImGuiApp* app);
 
-  // Attach a live input log: the recorder serializes its frames into the sidecar as
-  // they are recorded (keep calling AppInputRecord once per frame as usual).
+  // OPT-IN derived checkpoint layer: raw io records by default (IoFrame); attaching a
+  // live input log ADDITIONALLY serializes its TempData frames (InputHdr/InputFrame)
+  // into the stream, enabling render-free replay + per-control divergence attribution.
+  // Cost is O(sum of TempData) per frame -- attach deliberately. Keep calling
+  // AppInputRecord once per frame as usual.
   IMGUI_API void AppRecordAttachInputLog(ImGuiAppRecorder* rec, const ImGuiAppInputLog* log);
 
   IMGUI_API ImGuiAppRecorder* AppRecordBeginRing(ImGuiApp* app, ImGuiAppAVEncoder* encoder, const ImGuiAppAVEncodeConfig* config, const ImGuiAppRingConfig* ring);
 
   // Encode the ring's contents to disk NOW (assert hook, test failure, hotkey, user
-  // code); reason lands in the WAL and the sidecar header. The ring keeps recording;
+  // code); reason lands in the WAL and a stream marker record. The ring keeps recording;
   // repeated dumps get "-2", "-3" path suffixes. When a ring recorder exists, the
   // IM_ASSERT sink (ImGuiAppAssertFail) dumps it with the failed expression as reason.
   IMGUI_API bool AppRecordDumpRing(ImGuiAppRecorder* rec, const char* reason);

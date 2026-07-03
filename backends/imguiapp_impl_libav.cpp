@@ -1,7 +1,7 @@
 // ImGuiAppAV encoder backend: libav* (imguiapp_impl_libav.h). Exact per-frame PTS:
 // AVFrame->pts carries FrameID.TimeSec in a 1/1000000 timebase, rebased to the first
 // frame -- no wallclock residual. Also hosts the embedded-input-log reader (the decode
-// half of ImGuiAppAVEncodeConfig::EmbedInputLog; format spec lives on that field).
+// half of the embedded meta stream; format spec lives on ImGuiAppAVEncodeConfig::EmbedRows).
 
 #include "imguiapp_impl_libav.h"
 #include "imgui_internal.h"   // ImHashData (embed checksum)
@@ -117,6 +117,11 @@ static bool LibavPumpPackets(ImGuiAppLibavEncoderData* bd)
     av_packet_unref(bd->Packet);
     if (w < 0)
       return false;
+    // Crash-honesty: the fragmented container only protects bytes that reached disk.
+    // Without this, a short take sits entirely in the avio buffer (init segment
+    // included) and a killed process leaves an unreadable file.
+    if (bd->Format->pb != nullptr)
+      avio_flush(bd->Format->pb);
   }
 }
 
@@ -145,6 +150,9 @@ static bool LibavOpenPipeline(ImGuiAppLibavEncoderData* bd)
   else
     av_opt_set(bd->Codec->priv_data, "crf", "18", 0);
   av_opt_set(bd->Codec->priv_data, "preset", "veryfast", 0);
+  // Crash-honesty lives in the container: fragments close at keyframes, so a killed
+  // process still yields every completed fragment. Bounded gop keeps fragments short.
+  bd->Codec->gop_size = 30;
   if ((bd->Format->oformat->flags & AVFMT_GLOBALHEADER) != 0)
     bd->Codec->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 
@@ -176,7 +184,11 @@ static bool LibavOpenPipeline(ImGuiAppLibavEncoderData* bd)
 
   if (avio_open(&bd->Format->pb, bd->OutputPath, AVIO_FLAG_WRITE) < 0)
     return false;
-  if (avformat_write_header(bd->Format, nullptr) < 0)
+  AVDictionary* mux_opts = nullptr;
+  av_dict_set(&mux_opts, "movflags", "+frag_keyframe+empty_moov+default_base_moof", 0);
+  const int header_rc = avformat_write_header(bd->Format, &mux_opts);
+  av_dict_free(&mux_opts);
+  if (header_rc < 0)
     return false;
 
   bd->PipelineOpen = true;
@@ -329,7 +341,7 @@ IMGUI_API ImGuiAppAVEncoder* ImGuiApp_ImplLibav_CreateEncoder()
 
 // Extract the embedded byte stream from one decoded frame's GRAY8 luma. Block value =
 // mean of the 16 pixels; bit = mean >= 128; blocks row-major topmost-first within the
-// bottom embed_rows; bits fill bytes MSB-first (spec: ImGuiAppAVEncodeConfig::EmbedInputLog).
+// bottom embed_rows; bits fill bytes MSB-first (spec: ImGuiAppAVEncodeConfig::EmbedRows).
 static void LibavExtractStripBytes(const unsigned char* luma, int stride, int width, int height, int embed_rows, ImVector<char>* out)
 {
   const int base_row = height - embed_rows;
@@ -375,72 +387,17 @@ static bool LibavParseStrip(const ImVector<char>* bytes, const char** out_payloa
   return true;
 }
 
-// Feed one frame's payload (a sequence of sidecar-framed records) into the log.
-// Mirrors AppAVMetaReadInputLog's InputHdr/InputFrame handling.
-static bool LibavConsumeRecords(const char* p, ImU32 total, ImGuiAppInputLog* log, bool* have_hdr)
+// Decode every frame, parse its strip chunk, concatenate: the reconstructed meta
+// stream. A corrupt frame truncates the stream at that point (chunks are positional);
+// frame 1 without the magic = the file carries no embedded stream.
+static bool LibavExtractMetaInternal(const char* video_path, int embed_rows, ImVector<char>* out_meta, int* out_corrupt_frames)
 {
-  ImS64 cursor = 0;
-  while (cursor + 8 <= (ImS64)total)
-  {
-    ImU32 type = 0;
-    ImU32 size = 0;
-    memcpy(&type, p + cursor, 4);
-    memcpy(&size, p + cursor + 4, 4);
-    if (cursor + 8 + (ImS64)size > (ImS64)total)
-      return false;
-    const char* payload = p + cursor + 8;
-    cursor += 8 + (ImS64)size;
-
-    if (type == ImGuiAppAVMetaRecordType_InputHdr)
-    {
-      ImGui::AppInputLogClear(log);
-      ImU32 comp = 0;
-      ImU32 frame_size = 0;
-      ImU32 slots = 0;
-      if (size < 12)
-        return false;
-      memcpy(&comp, payload, 4); memcpy(&frame_size, payload + 4, 4); memcpy(&slots, payload + 8, 4);
-      if ((ImS64)size < 12 + (ImS64)slots * 12)
-        return false;
-      log->CompositionID = (ImGuiID)comp;
-      log->FrameSize = (int)frame_size;
-      const char* s = payload + 12;
-      for (ImU32 i = 0; i < slots; i++)
-      {
-        ImU32 id = 0;
-        ImS32 off = 0;
-        ImS32 sz = 0;
-        memcpy(&id, s, 4); memcpy(&off, s + 4, 4); memcpy(&sz, s + 8, 4);
-        s += 12;
-        log->SlotIds.push_back((ImGuiID)id);
-        log->SlotOffsets.push_back((int)off);
-        log->SlotSizes.push_back((int)sz);
-      }
-      *have_hdr = true;
-    }
-    else if (type == ImGuiAppAVMetaRecordType_InputFrame && *have_hdr)
-    {
-      if ((int)size != 12 + log->FrameSize)
-        return false;
-      ImU32 hash = 0;
-      memcpy(&hash, payload + 8, 4);
-      const int base = log->Frames.Size;
-      log->Frames.resize(base + log->FrameSize);
-      memcpy(log->Frames.Data + base, payload + 12, (size_t)log->FrameSize);
-      log->StateHashes.push_back((ImGuiID)hash);
-      log->Count++;
-    }
-  }
-  return true;
-}
-
-IMGUI_API bool ImGuiApp_ImplLibav_ReadEmbeddedInputLog(const char* video_path, int embed_rows, ImGuiAppInputLog* out_log, int* out_corrupt_frames)
-{
-  IM_ASSERT(video_path != nullptr && out_log != nullptr && embed_rows >= 4);
+  IM_ASSERT(video_path != nullptr && out_meta != nullptr && embed_rows >= 4);
   if (out_corrupt_frames != nullptr)
     *out_corrupt_frames = 0;
-  if (video_path == nullptr || out_log == nullptr || embed_rows < 4)
+  if (video_path == nullptr || out_meta == nullptr || embed_rows < 4)
     return false;
+  out_meta->clear();
 
   AVFormatContext* fmt = nullptr;
   if (avformat_open_input(&fmt, video_path, nullptr, nullptr) < 0)
@@ -453,7 +410,6 @@ IMGUI_API bool ImGuiApp_ImplLibav_ReadEmbeddedInputLog(const char* video_path, i
   AVFrame* gray = av_frame_alloc();
   AVPacket* pkt = av_packet_alloc();
   int stream_index = -1;
-  bool have_hdr = false;
   bool first_frame = true;
   ImVector<char> strip;
 
@@ -474,8 +430,6 @@ IMGUI_API bool ImGuiApp_ImplLibav_ReadEmbeddedInputLog(const char* video_path, i
       break;
     if (avcodec_open2(dec, codec, nullptr) < 0)
       break;
-
-    ImGui::AppInputLogClear(out_log);
 
     bool draining = false;
     bool failed = false;
@@ -542,28 +496,32 @@ IMGUI_API bool ImGuiApp_ImplLibav_ReadEmbeddedInputLog(const char* video_path, i
         ImU32 size = 0;
         if (LibavParseStrip(&strip, &payload, &size))
         {
-          if (!LibavConsumeRecords(payload, size, out_log, &have_hdr))
+          if (size > 0)
           {
-            failed = true;
-            break;
+            const int base = out_meta->Size;
+            out_meta->resize(base + (int)size);
+            memcpy(out_meta->Data + base, payload, (size_t)size);
           }
         }
         else
         {
           if (first_frame)
           {
-            failed = true;   // frame 1 without magic = no embedded log in this file
+            failed = true;   // frame 1 without magic = no embedded stream in this file
             break;
           }
+          // Chunks are positional: a corrupt frame ends the reconstructable stream.
           if (out_corrupt_frames != nullptr)
             (*out_corrupt_frames)++;
+          av_frame_unref(frame);
+          goto decoded_all;
         }
         first_frame = false;
         av_frame_unref(frame);
       }
     }
 decoded_all:
-    ok = !failed && have_hdr && out_log->Count > 0;
+    ok = !failed && out_meta->Size > 0;
   } while (false);
 
   if (to_gray != nullptr)
@@ -575,4 +533,20 @@ decoded_all:
     avcodec_free_context(&dec);
   avformat_close_input(&fmt);
   return ok;
+}
+
+IMGUI_API bool ImGuiApp_ImplLibav_ExtractEmbeddedMeta(const char* video_path, int embed_rows, ImVector<char>* out_meta)
+{
+  return LibavExtractMetaInternal(video_path, embed_rows, out_meta, nullptr);
+}
+
+IMGUI_API bool ImGuiApp_ImplLibav_ReadEmbeddedInputLog(const char* video_path, int embed_rows, ImGuiAppInputLog* out_log, int* out_corrupt_frames)
+{
+  IM_ASSERT(out_log != nullptr);
+  if (out_log == nullptr)
+    return false;
+  ImVector<char> meta;
+  if (!LibavExtractMetaInternal(video_path, embed_rows, &meta, out_corrupt_frames))
+    return false;
+  return ImGui::AppAVMetaReadInputLog(meta.Data, meta.Size, out_log);
 }

@@ -79,12 +79,6 @@ namespace
     {
       remove(video_path);
     }
-    snprintf(path, sizeof(path), "%s.avmeta", video_path);
-    remove(path);
-    snprintf(path, sizeof(path), "%s.ffmpeg.log", video_path);
-    remove(path);
-    snprintf(path, sizeof(path), "%s.remux.txt", video_path);
-    remove(path);
   }
 }
 
