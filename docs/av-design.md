@@ -147,8 +147,8 @@ struct ImGuiAppAVEncoder
 | Provider | Realtime (VFR) | How |
 |---|---|---|
 | QOI sequence | exact | index.tsv carries `FrameID.TimeSec` per frame; inherently timestamped |
-| Media Foundation | exact | per-sample timestamps are native to IMFSinkWriter |
-| ffmpeg pipe | quantized | rawvideo stdin has no PTS channel: Realtime mode emits each captured frame `round(real_delta * Fps)` times into a CFR stream -- honest to within 1/Fps (raise Fps to tighten). Exact VFR from a pipe run is an offline remux: the sidecar has the true timestamps, and Close writes `<OutputPath>.remux.txt` with the ffmpeg concat-demuxer command that rebuilds an exact-VFR file |
+| Media Foundation | quantized | per-sample timestamps go to IMFSinkWriter, but with MF_MT_FRAME_RATE declared MF resamples to CFR at Fps -- duration honest, PTS quantized to 1/Fps (true VFR may be possible by omitting the declared frame rate: untried) |
+| ffmpeg pipe | quantized | rawvideo stdin has no PTS channel: Realtime mode emits frames CUMULATIVELY against the take's wall clock (round(elapsed * Fps) + 1 - emitted) -- slower captures duplicate, faster-than-Fps captures drop, so duration tracks wall time drift-free in both directions, honest to within 1/Fps. Exact VFR from a pipe run is an offline remux: the sidecar has the true timestamps, and Close writes `<OutputPath>.remux.txt` with the ffmpeg concat-demuxer command that rebuilds an exact-VFR file |
 
 The sidecar always records real TSC/QPC times regardless of mode -- ground truth
 survives even a Constant-mode encode.
