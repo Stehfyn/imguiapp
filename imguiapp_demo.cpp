@@ -1797,7 +1797,7 @@ namespace
     ComposerWindow()
     {
       // Fixed label (not type-derived) so the saved .ini dock binding still matches.
-      ImStrncpy(this->Label, "ImGuiApp Composer", sizeof(this->Label));
+      ImStrncpy(this->Label, "ImGuiAppComposer", sizeof(this->Label));
       // The composition fills the window exactly; a window scrollbar is always a layout bug.
       this->Flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
     }
@@ -1989,7 +1989,7 @@ namespace ImGui
       {
         if (strcmp(app->Windows.Data[i]->Label, "ImGuiAppLayer Demo") == 0)
           panel = app->Windows.Data[i];
-        else if (strcmp(app->Windows.Data[i]->Label, "ImGuiApp Composer") == 0)
+        else if (strcmp(app->Windows.Data[i]->Label, "ImGuiAppComposer") == 0)
           metrics = app->Windows.Data[i];
       }
       DemoMenuData* st = GetDemoMenu(app);
