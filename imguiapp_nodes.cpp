@@ -1296,8 +1296,7 @@ namespace ImGui
   // everyone (floor = kAppGraphLayerNodeWidth). Recomputed each editor frame from last frame's measurements.
   static float g_app_layer_uniform_w = kAppGraphLayerNodeWidth;
 
-  static float AppCanvasZoom();                    // fwd (defined with the view state)
-  static float AppGraphLayerNodeHeight(int node_id);   // fwd (defined with the layer column packer)
+  static float AppCanvasZoom();   // fwd (defined with the view state)
 
   static int AppGraphPlacementRowHint(const ImGuiAppNode* n)
   {
@@ -1387,6 +1386,80 @@ namespace ImGui
     return live;
   }
 
+  //-----------------------------------------------------------------------------
+  // [SECTION] Window section (windows compose INTO the Window layer)
+  //-----------------------------------------------------------------------------
+  // Window nodes are CONTAINED by the Window layer's pipeline section: the section packer owns
+  // their positions (the same ownership the column packer has over layer Y), flowing them inside
+  // the layer column's width directly beneath the WindowLayer node. The column reserves the
+  // section's extent so the next row seats below it, and the phase band stretches down over it,
+  // so a window node can never exist outside the section.
+
+  static const float kAppGraphWindowSectionIndent = 24.0f;   // section inset from the layer column's left edge (model units)
+  static const float kAppGraphWindowSectionGap = 16.0f;      // gap between seated windows and below the layer node (model units)
+
+  static bool AppNodeHiddenByCollapse(const ImGuiAppGraph* g, int id);                     // fwd (defined with the scope helpers)
+  static const ImGuiAppNode* AppGraphFindNodeConst(const ImGuiAppGraph* g, int node_id);   // fwd
+
+  // The window nodes the section contains, in graph order (stable seat order across frames).
+  static void AppGraphCollectSectionWindows(const ImGuiAppGraph* g, bool show_live, const ImGuiAppNode* skip, ImVector<int>* out_node_ids)
+  {
+    out_node_ids->clear();
+    for (int i = 0; i < g->Nodes.Size; i++)
+    {
+      const ImGuiAppNode* n = &g->Nodes.Data[i];
+      if (n->Kind != ImGuiAppNodeKind_Window || n == skip)
+        continue;
+      if (!show_live && n->IsLive)
+        continue;
+      if (AppNodeHiddenByCollapse(g, n->Id))
+        continue;
+      out_node_ids->push_back(n->Id);
+    }
+  }
+
+  // Flow-pack `ids` left-to-right from `origin`, wrapping at `avail_w`, one slot per id into
+  // `out_positions` (when non-null). Returns the flow's extent below origin.y (0 when empty).
+  static float AppGraphWindowSectionFlow(const ImGuiAppGraph* g, const ImVector<int>* ids, const ImVec2& origin, float avail_w, ImVector<ImVec2>* out_positions)
+  {
+    float x = origin.x;
+    float y = origin.y;
+    float line_h = 0.0f;
+    float extent = 0.0f;
+    for (int i = 0; i < ids->Size; i++)
+    {
+      const ImGuiAppNode* n = AppGraphFindNodeConst(g, ids->Data[i]);
+      if (n == nullptr)
+        continue;
+      const ImVec2 sz = AppLayoutNodeSize(g, n);
+      if (x > origin.x && x + sz.x > origin.x + avail_w)
+      {
+        x = origin.x;
+        y += line_h + kAppGraphWindowSectionGap;
+        line_h = 0.0f;
+      }
+      if (out_positions != nullptr)
+        out_positions->push_back(ImVec2(x, y));
+      x += sz.x + kAppGraphWindowSectionGap;
+      line_h = ImMax(line_h, sz.y);
+      extent = ImMax(extent, y + sz.y - origin.y);
+    }
+    return extent;
+  }
+
+  // The section's flow origin and available width against a given Window layer height (callers
+  // off the editor canvas pass the guarded AppLayoutNodeSize height; the editor passes the
+  // measured one).
+  static ImVec2 AppGraphWindowSectionOrigin(const ImGuiAppNode* wl, float wl_h)
+  {
+    return ImVec2(wl->GridPos.x + kAppGraphWindowSectionIndent, wl->GridPos.y + wl_h + kAppGraphWindowSectionGap);
+  }
+
+  static float AppGraphWindowSectionAvailW(const ImGuiAppGraph* g, const ImGuiAppNode* wl)
+  {
+    return ImMax(AppLayoutNodeSize(g, wl).x - kAppGraphWindowSectionIndent * 2.0f, 200.0f);
+  }
+
   static bool AppGraphPlacementOccupied(const ImGuiAppGraph* g, const ImGuiAppNode* self, const ImVec2& pos)
   {
     const float margin = 28.0f;
@@ -1418,22 +1491,23 @@ namespace ImGui
       }
       else
       {
-        // Windows compose into the Window layer (the outliner already nests them there): seat each
-        // one in that layer's pipeline row, marching RIGHT so the row reads as one section of window
-        // nodes. Falls through to the generic default only when no Window layer node exists.
+        // Windows are contained by the Window layer's section: the new node's seat is its slot in
+        // the section flow (appended after the windows already there -- graph order IS flow order,
+        // and this node is last). The editor's section packer re-flows every frame; this seat only
+        // has to agree with it. Falls through to the generic default only when no Window layer
+        // node exists.
         if (n->Kind == ImGuiAppNodeKind_Window)
         {
           if (const ImGuiAppNode* wl = AppGraphLayerOfType(g, ImGuiAppLayerType_Window))
           {
-            const ImVec2 ws = AppLayoutNodeSize(g, n);
-            const float row_h = AppGraphLayerNodeHeight(wl->Id);
-            const float row_y = wl->GridPos.y + ImMax(0.0f, (row_h - ws.y) * 0.5f);
-            for (int col = 0; col < 24; col++)
-            {
-              const ImVec2 pos(AppLayoutContentX0() + (float)col * (ws.x + 40.0f), row_y);
-              if (!AppGraphPlacementOccupied(g, n, pos))
-                return pos;
-            }
+            ImVector<int> ids;
+            AppGraphCollectSectionWindows(g, true, nullptr, &ids);   // includes n (already in Nodes)
+            ImVector<ImVec2> slots;
+            const ImVec2 origin = AppGraphWindowSectionOrigin(wl, AppLayoutNodeSize(g, wl).y);
+            AppGraphWindowSectionFlow(g, &ids, origin, AppGraphWindowSectionAvailW(g, wl), &slots);
+            for (int i = 0; i < ids.Size; i++)
+              if (ids.Data[i] == n->Id)
+                return slots.Data[i];
           }
         }
         const int row = (n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar) ? 0
@@ -1494,6 +1568,52 @@ namespace ImGui
     return h > 1.0f ? h : kAppGraphLayerRowH;
   }
 
+  // A layer row's FOOTPRINT in the column: the node plus, for the canonical Window layer, the
+  // window section packed beneath it -- the column reserves the section's space so the next row
+  // seats below the contained windows, not through them.
+  static float AppGraphLayerRowFootprint(const ImGuiAppGraph* g, bool show_live, int node_id)
+  {
+    float h = AppGraphLayerNodeHeight(node_id);
+    const ImGuiAppNode* n = AppGraphFindNodeConst(g, node_id);
+    if (n != nullptr && n == AppGraphLayerOfType(g, ImGuiAppLayerType_Window))
+    {
+      ImVector<int> ids;
+      AppGraphCollectSectionWindows(g, show_live, nullptr, &ids);
+      const float extent = AppGraphWindowSectionFlow(g, &ids, ImVec2(0.0f, 0.0f), AppGraphWindowSectionAvailW(g, n), nullptr);
+      if (extent > 0.0f)
+        h += kAppGraphWindowSectionGap + extent;
+    }
+    return h;
+  }
+
+  // The section packer: assigns every contained window its flow slot beneath the (already packed)
+  // WindowLayer row. Runs each root-scope editor frame right after the column pack, so windows
+  // track the row through provisional packs and anchor drags -- position is OWNED here, the nodes
+  // are not user-draggable.
+  static void AppGraphSeatWindowSection(ImGuiAppGraph* g, bool show_live)
+  {
+    const ImGuiAppNode* wl = AppGraphLayerOfType(g, ImGuiAppLayerType_Window);
+    if (wl == nullptr)
+      return;
+    ImVector<int> ids;
+    AppGraphCollectSectionWindows(g, show_live, nullptr, &ids);
+    if (ids.Size == 0)
+      return;
+    ImVector<ImVec2> slots;
+    const ImVec2 origin = AppGraphWindowSectionOrigin(wl, AppGraphLayerNodeHeight(wl->Id));
+    AppGraphWindowSectionFlow(g, &ids, origin, AppGraphWindowSectionAvailW(g, wl), &slots);
+    for (int i = 0; i < ids.Size; i++)
+    {
+      ImGuiAppNode* n = AppGraphFindNodeById(g, ids.Data[i]);
+      if (n == nullptr)
+        continue;
+      n->GridPos = slots.Data[i];
+      n->HasGridPos = true;
+      n->_NeedsPlace = true;
+      AppCanvasSetNodePos(n->Id, n->GridPos);
+    }
+  }
+
   static void AppGraphConstrainLayerColumn(ImGuiAppGraph* g, bool show_live, int anchor_node_id, const ImVec2* anchor_pos)
   {
     ImVector<int> ids;
@@ -1530,7 +1650,7 @@ namespace ImGui
         if (all_heights_known)
           n->HasGridPos = true;
       }
-      pack_y = n->GridPos.y + AppGraphLayerNodeHeight(n->Id) + gap;
+      pack_y = n->GridPos.y + AppGraphLayerRowFootprint(g, show_live, n->Id) + gap;
     }
 
     for (int i = 1; i < ids.Size; i++)
@@ -1570,8 +1690,8 @@ namespace ImGui
         float y = anchor_pos->y;
         if (prev != nullptr && next != nullptr)
         {
-          const float min_y = prev->GridPos.y + AppGraphLayerNodeHeight(prev->Id) + gap;
-          const float max_y = next->GridPos.y - AppGraphLayerNodeHeight(anchor->Id) - gap;
+          const float min_y = prev->GridPos.y + AppGraphLayerRowFootprint(g, show_live, prev->Id) + gap;
+          const float max_y = next->GridPos.y - AppGraphLayerRowFootprint(g, show_live, anchor->Id) - gap;
           if (min_y <= max_y)
           {
             if (y < min_y) y = min_y;
@@ -1598,7 +1718,7 @@ namespace ImGui
         ImGuiAppNode* next = AppGraphFindNodeById(g, ids.Data[i + 1]);
         if (n == nullptr || next == nullptr)
           continue;
-        const float max_y = next->GridPos.y - AppGraphLayerNodeHeight(n->Id) - gap;
+        const float max_y = next->GridPos.y - AppGraphLayerRowFootprint(g, show_live, n->Id) - gap;
         if (n->GridPos.y > max_y)
           n->GridPos.y = max_y;
       }
@@ -1608,7 +1728,7 @@ namespace ImGui
         ImGuiAppNode* prev = AppGraphFindNodeById(g, ids.Data[i - 1]);
         if (n == nullptr || prev == nullptr)
           continue;
-        const float min_y = prev->GridPos.y + AppGraphLayerNodeHeight(prev->Id) + gap;
+        const float min_y = prev->GridPos.y + AppGraphLayerRowFootprint(g, show_live, prev->Id) + gap;
         if (n->GridPos.y < min_y)
           n->GridPos.y = min_y;
       }
@@ -3167,9 +3287,9 @@ namespace ImGui
     ImGuiCanvasState* cv = AppEditorCanvas();
     const float  z = AppCanvasScale();
 
-    // Top/Bot span the LAYER node (rail badge geometry); BandTop/BandBot span the whole section
-    // including member nodes folded in below (phase-band geometry).
-    struct LRow { float Top; float Bot; float BandTop; float BandBot; ImU32 Accent; ImGuiAppLayerType LT; };
+    // Top/Bot span the LAYER node (rail badge geometry); BandBot extends to the bottom of member
+    // nodes folded into the section (phase-band geometry).
+    struct LRow { float Top; float Bot; float BandBot; ImU32 Accent; ImGuiAppLayerType LT; };
     ImVector<LRow> rows;
     bool any = false;
     ImVec2 bb_min(FLT_MAX, FLT_MAX);
@@ -3193,7 +3313,7 @@ namespace ImGui
       bb_max.x = ImMax(bb_max.x, pos.x + size.x);
       bb_max.y = ImMax(bb_max.y, pos.y + size.y);
       node_left = ImMin(node_left, pos.x);
-      LRow r; r.Top = pos.y; r.Bot = pos.y + size.y; r.BandTop = r.Top; r.BandBot = r.Bot; r.Accent = AppLayerAccent(n->LayerType); r.LT = n->LayerType;
+      LRow r; r.Top = pos.y; r.Bot = pos.y + size.y; r.BandBot = r.Bot; r.Accent = AppLayerAccent(n->LayerType); r.LT = n->LayerType;
       rows.push_back(r);
       any = true;
     }
@@ -3210,34 +3330,35 @@ namespace ImGui
           rows.Data[b] = t;
         }
 
-    // Window nodes compose into the Window layer: fold each visible one's rect into that layer's
-    // row span and the box, so the Window band reads as the SECTION CONTAINING the window nodes,
-    // not a strip beside them. The rail gutter keeps its layer-column x (node_left untouched).
-    for (int i = 0; i < g->Nodes.Size; i++)
+    // Window nodes compose into the Window layer: fold each window SEATED in a Window layer row
+    // (rect overlapping that row's y-span) into the row's band and the box, so the band reads as
+    // the SECTION CONTAINING the window nodes, not a strip beside them. A window dragged out of
+    // the row is free content again -- folding it from anywhere would drag the band across the
+    // rows in between. The rail gutter keeps its layer-column x (node_left untouched).
+    LRow* wr = nullptr;
+    for (int r = 0; r < rows.Size && wr == nullptr; r++)
+      if (rows.Data[r].LT == ImGuiAppLayerType_Window)
+        wr = &rows.Data[r];
+    if (wr != nullptr)
     {
-      const ImGuiAppNode* n = &g->Nodes.Data[i];
-      if (n->Kind != ImGuiAppNodeKind_Window)
-        continue;
-      if ((!show_live && n->IsLive) || AppNodeHiddenByCollapse(g, n->Id))
-        continue;
-      if (!n->HasGridPos && !AppEditorNodeWasSubmitted(n->Id))
-        continue;
-      LRow* wr = nullptr;
-      for (int r = 0; r < rows.Size && wr == nullptr; r++)
-        if (rows.Data[r].LT == ImGuiAppLayerType_Window)
-          wr = &rows.Data[r];
-      if (wr == nullptr)
-        continue;
-      const ImVec2 pos = ImGui::CanvasToScreen(cv, n->GridPos);
-      ImVec2 m;
-      if (!AppNodeModelSize(n->Id, &m))
-        m = AppLayoutNodeSize(g, n);
-      const ImVec2 size = m * z;
-      wr->BandTop = ImMin(wr->BandTop, pos.y);
-      wr->BandBot = ImMax(wr->BandBot, pos.y + size.y);
-      bb_min.y = ImMin(bb_min.y, pos.y);
-      bb_max.x = ImMax(bb_max.x, pos.x + size.x);
-      bb_max.y = ImMax(bb_max.y, pos.y + size.y);
+      for (int i = 0; i < g->Nodes.Size; i++)
+      {
+        const ImGuiAppNode* n = &g->Nodes.Data[i];
+        if (n->Kind != ImGuiAppNodeKind_Window)
+          continue;
+        if ((!show_live && n->IsLive) || AppNodeHiddenByCollapse(g, n->Id))
+          continue;
+        if (!n->HasGridPos && !AppEditorNodeWasSubmitted(n->Id))
+          continue;
+        const ImVec2 pos = ImGui::CanvasToScreen(cv, n->GridPos);
+        ImVec2 m;
+        if (!AppNodeModelSize(n->Id, &m))
+          m = AppLayoutNodeSize(g, n);
+        const ImVec2 size = m * z;
+        wr->BandBot = ImMax(wr->BandBot, pos.y + size.y);
+        bb_max.x = ImMax(bb_max.x, pos.x + size.x);
+        bb_max.y = ImMax(bb_max.y, pos.y + size.y);
+      }
     }
 
     const float em = ImGui::GetFontSize();   // already zoom-scaled: this draws under the canvas content font
@@ -3268,8 +3389,8 @@ namespace ImGui
     for (int i = 0; i < rows.Size; i++)
     {
       const ImU32 band = (rows.Data[i].Accent & 0x00FFFFFF) | (IM_COL32(0, 0, 0, 26) & 0xFF000000);
-      const float y0 = rows.Data[i].BandTop - em * 0.125f;
-      const float y1 = i + 1 < rows.Size ? rows.Data[i + 1].BandTop - em * 0.125f : rows.Data[i].BandBot + em * 0.125f;
+      const float y0 = rows.Data[i].Top - em * 0.125f;
+      const float y1 = i + 1 < rows.Size ? rows.Data[i + 1].Top - em * 0.125f : rows.Data[i].BandBot + em * 0.125f;
       ImDrawFlags rf = ImDrawFlags_RoundCornersNone;
       if (i == 0)
         rf |= ImDrawFlags_RoundCornersTop;
@@ -4385,6 +4506,12 @@ namespace ImGui
   {
     IM_ASSERT(g != nullptr);
 
+    // Window section is active only at root scope with a Window layer present: there the section
+    // packer owns window positions, so tidy leaves windows out and their hosted controls tidy as
+    // their own free trees. Without a section (drilled in, or no Window layer) containment tidies
+    // as the classic vertical tree (window over its children).
+    const bool section_active = AppScopeCurrent(g) < 0 && AppGraphLayerOfType(g, ImGuiAppLayerType_Window) != nullptr;
+
     // Layout roots (containment tree tops in the current scope).
     ImVector<int> roots;
     for (int i = 0; i < g->Nodes.Size; i++)
@@ -4392,6 +4519,8 @@ namespace ImGui
       const ImGuiAppNode* n = &g->Nodes.Data[i];
       if (n->Kind == ImGuiAppNodeKind_Layer)      // layers keep their own tight column packer
         continue;
+      if (n->Kind == ImGuiAppNodeKind_Window && section_active)
+        continue;                                 // windows are owned by the section packer
       if (!show_live && n->IsLive)
         continue;
       if (!AppNodeInScope(g, n->Id))              // scoped tidy arranges only what the scope shows
@@ -4400,7 +4529,13 @@ namespace ImGui
       bool is_root = true;
       if (n->Kind == ImGuiAppNodeKind_Control || n->Kind == ImGuiAppNodeKind_Field)
       {
-        is_root = AppGraphParentOf(g, n->Id) < 0;
+        const int parent = AppGraphParentOf(g, n->Id);
+        // With the section active, a window-hosted control's parent (the window) is off the tidy
+        // tree -- so the control is a root, laid out as its own free tree instead of hung under the
+        // window. Without the section, it hangs under its window as before.
+        const ImGuiAppNode* p = parent >= 0 ? AppGraphFindNodeConst(g, parent) : nullptr;
+        const bool parent_is_sectioned_window = p != nullptr && p->Kind == ImGuiAppNodeKind_Window && section_active;
+        is_root = parent < 0 || parent_is_sectioned_window;
       }
       else if (n->Kind == ImGuiAppNodeKind_Struct)
       {
@@ -4432,28 +4567,15 @@ namespace ImGui
     for (int d = 1; d < kAppLayoutMaxDepth; d++)
       row_y[d] = row_y[d - 1] + (max_h[d - 1] > 0.0f ? max_h[d - 1] + kGapY : 0.0f);
 
-    // Window-rooted trees seat their root row in the Window layer's pipeline row (windows compose
-    // into that layer -- same nesting the outliner shows); deeper rows keep the shared deltas so
-    // depth rows still line up graph-wide. Root scope only: a drilled-in scope has no pipeline column.
-    const ImGuiAppNode* wl = scoped ? nullptr : AppGraphLayerOfType(g, ImGuiAppLayerType_Window);
-    float row_y_w[kAppLayoutMaxDepth];
-    if (wl != nullptr)
-    {
-      row_y_w[0] = wl->GridPos.y + 12.0f;
-      for (int d = 1; d < kAppLayoutMaxDepth; d++)
-        row_y_w[d] = row_y_w[d - 1] + (row_y[d] - row_y[d - 1]);
-    }
-
     // Place each root's tree (pass 2); trees start right of the layer rail and, between roots, every row
     // cursor advances past the widest one so group frames of adjacent trees can never interleave.
+    // (Window nodes are excluded above -- the section packer owns their positions.)
     float row_cur[kAppLayoutMaxDepth];
     for (int d = 0; d < kAppLayoutMaxDepth; d++)
       row_cur[d] = scoped ? 80.0f : AppLayoutContentX0();
     for (int r = 0; r < roots.Size; r++)
     {
-      const ImGuiAppNode* rn = AppGraphFindNodeConst(g, roots.Data[r]);
-      const bool in_wl_row = wl != nullptr && rn != nullptr && rn->Kind == ImGuiAppNodeKind_Window;
-      AppLayoutPlace(g, roots.Data[r], 0, in_wl_row ? row_y_w : row_y, row_cur);
+      AppLayoutPlace(g, roots.Data[r], 0, row_y, row_cur);
       float widest = 0.0f;
       for (int d = 0; d < kAppLayoutMaxDepth; d++)
         widest = ImMax(widest, row_cur[d]);
@@ -5130,7 +5252,10 @@ namespace ImGui
       if (n->HasGridPos && !n->_NeedsPlace && !AppIdInSet(s_editor_prev_pool_ids, n->Id))
         n->_NeedsPlace = true;
 
-      ImGui::CanvasSetNodeDraggable(cv, n->Id, n->Kind != ImGuiAppNodeKind_Layer);
+      // Layer nodes (column packer) and window nodes (section packer) are position-owned: not draggable.
+      const bool at_root_scope = g->ViewScope.Size == 0;
+      const bool owned = n->Kind == ImGuiAppNodeKind_Layer || (n->Kind == ImGuiAppNodeKind_Window && at_root_scope);
+      ImGui::CanvasSetNodeDraggable(cv, n->Id, !owned);
 
       if (n->_NeedsPlace)
       {
@@ -5543,6 +5668,7 @@ namespace ImGui
     if (at_root)
     {
       AppGraphConstrainLayerColumn(g, show_live, moved_layer_id, moved_layer_id != 0 ? &moved_layer_pos : nullptr);
+      AppGraphSeatWindowSection(g, show_live);   // flow contained windows beneath the packed Window layer row
     }
     else
     {
