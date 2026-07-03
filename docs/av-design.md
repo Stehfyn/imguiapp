@@ -68,7 +68,10 @@ IMGUI_API void AppPacerWait(ImGuiApp* app);
 
 - `Fixed` is the determinism mode: constant dt feeds the replay theorem (OnUpdate as a
   pure function of state + input + dt), so an encoded run and its WAL are reproducible.
-  The harness (section 5) uses it; encoders assume its rate for PTS.
+- Pacer dt and video timing are DECOUPLED (section 3, "Timing"): the pacer decides what
+  time the app simulates; the encoder decides what time the video claims. A video is
+  honest about realtime only when its PTS come from the real clock (`FrameID.TimeSec`),
+  never from counting pacer ticks.
 - Windows implementation raises timer resolution (`timeBeginPeriod(1)`) while a
   non-Off pacer exists, sleeps until `deadline - SleepSlackMs`, spins the rest on QPC.
 
@@ -107,10 +110,20 @@ struct ImGuiAppAVFrame
 ### Provider vtable
 
 ```cpp
+// What time the video claims. A video is honest about realtime only under Realtime.
+typedef int ImGuiAppAVTimingMode;
+enum ImGuiAppAVTimingMode_
+{
+  ImGuiAppAVTimingMode_Auto = 0,   // follow the pacer: Fixed pacer -> Constant, else Realtime
+  ImGuiAppAVTimingMode_Constant,   // CFR: frame N plays at N/Fps (synthetic timeline; matches Fixed dt)
+  ImGuiAppAVTimingMode_Realtime,   // VFR: PTS = FrameID.TimeSec (wall clock; a 50ms hitch plays as 50ms)
+};
+
 struct ImGuiAppAVEncodeConfig
 {
   const char* OutputPath;      // container path, or directory for sequence providers
-  float       Fps;             // PTS rate; match the pacer's Fixed rate
+  float       Fps;             // Constant mode: the frame rate. Realtime mode: nominal rate hint only
+  ImGuiAppAVTimingMode Timing; // default Auto
   int         Width;           // 0 = first frame's size (fixed thereafter; resize aborts with error)
   int         Height;
   int         BitrateKbps;     // hint; lossless providers ignore
@@ -120,12 +133,24 @@ struct ImGuiAppAVEncodeConfig
 struct ImGuiAppAVEncoder
 {
   const char* Name;
+  bool        SupportsRealtimePts;   // provider can carry per-frame wall-clock PTS (true VFR)
   bool (*Open)(ImGuiAppAVEncoder* self, const ImGuiAppAVEncodeConfig* config);
-  bool (*WriteFrame)(ImGuiAppAVEncoder* self, const ImGuiAppAVFrame* frame);
+  bool (*WriteFrame)(ImGuiAppAVEncoder* self, const ImGuiAppAVFrame* frame);   // PTS from frame->FrameID.TimeSec in Realtime mode
   void (*Close)(ImGuiAppAVEncoder* self);
   void* UserData;              // provider state
 };
 ```
+
+### Timing honesty per provider
+
+| Provider | Realtime (VFR) | How |
+|---|---|---|
+| QOI sequence | exact | index.tsv carries `FrameID.TimeSec` per frame; inherently timestamped |
+| Media Foundation | exact | per-sample timestamps are native to IMFSinkWriter |
+| ffmpeg pipe | quantized | rawvideo stdin has no PTS channel: Realtime mode emits each captured frame `round(real_delta * Fps)` times into a CFR stream -- honest to within 1/Fps (raise Fps to tighten). Exact VFR from a pipe run is an offline remux: the sidecar has the true timestamps, and Close writes `<OutputPath>.remux.txt` with the ffmpeg concat-demuxer command that rebuilds an exact-VFR file |
+
+The sidecar always records real TSC/QPC times regardless of mode -- ground truth
+survives even a Constant-mode encode.
 
 ### Built-in providers (all ship by default)
 
@@ -164,6 +189,32 @@ u64 frame_index | u64 tsc | f64 time_sec | u32 user_size | user_size bytes
 TSC is the *default* per-frame payload (always present); `user_size` covers the optional
 arbitrary blob. A tiny `AppAVMetaDump(path)` debug helper prints it as TSV.
 
+The user blob is OPAQUE BYTES by contract -- the sidecar format knows nothing of app
+types. One typed helper rides on top:
+
+```cpp
+// Serialize app->Data (the ImGuiType-keyed persist storage) as this frame's blob.
+// Restoring those bytes IS time travel (see imgui_applayer.h state snapshots), so a
+// recording made with this helper scrubs: video frame N <-> app state N.
+IMGUI_API void AppRecordSnapshotAppData(ImGuiAppRecorder* rec, ImGuiApp* app);
+```
+
+### Input track
+
+Raw input is recorded per frame so a run can be REPLAYED, not just watched: the sidecar
+carries an event list per FrameID record (mouse pos/buttons/wheel, key events, text
+input -- the io event queue, captured before NewFrame consumes it).
+
+```cpp
+// Feed a recorded input track back into io, frame by frame. With PacerMode_Fixed and
+// randomness kept in state (ImAppRandom), this reproduces the recorded run exactly --
+// the input half of the replay theorem.
+struct ImGuiAppInputReplay;   // opaque; reads <path>.avmeta
+IMGUI_API ImGuiAppInputReplay* AppInputReplayOpen(const char* avmeta_path);
+IMGUI_API bool                 AppInputReplayFrame(ImGuiAppInputReplay* rp, ImU64 frame_index);   // false past end
+IMGUI_API void                 AppInputReplayClose(ImGuiAppInputReplay* rp);
+```
+
 ### Recorder (glue between app, backend capture, and provider)
 
 ```cpp
@@ -179,6 +230,30 @@ Threading: `WriteFrame` runs on a single encoder thread behind a bounded queue
 (default depth 3). Queue-full policy is configurable: `Block` (benchmarks/tests: never
 drop) or `DropNewest` (live capture: never stall the app). Drops are counted and
 WAL-logged.
+
+### Flight recorder (ring mode)
+
+The WAL's crash-forensics philosophy applied to pixels: an always-on in-memory ring of
+the last N seconds (frames QOI-compressed on capture, plus their sidecar records and
+input events), dumped to disk through the provider only when something goes wrong.
+
+```cpp
+struct ImGuiAppRingConfig
+{
+  float  Seconds;        // ring span; default 10
+  int    MaxMemoryMB;    // hard cap; oldest frames evicted when either bound binds. default 256
+  float  Fps;            // ring sampling rate (may be below the app rate); default 30
+};
+
+IMGUI_API ImGuiAppRecorder* AppRecordBeginRing(ImGuiApp* app, ImGuiAppAVEncoder* encoder, const ImGuiAppAVEncodeConfig* config, const ImGuiAppRingConfig* ring);
+// Encode the ring's contents to disk NOW (assert hook, test failure, hotkey, user code).
+// The ring keeps recording; repeated dumps get "-2", "-3" suffixes.
+IMGUI_API bool              AppRecordDumpRing(ImGuiAppRecorder* rec, const char* reason);   // reason lands in the WAL + sidecar header
+```
+
+The assert path wires itself: when a ring recorder exists, `ImGuiAppAssertFail` (the
+IM_ASSERT sink that already writes the WAL) also calls `AppRecordDumpRing(rec, expr)` --
+a failed assert leaves a video of the last N seconds next to the WAL that names it.
 
 ## 4. Capture: backend readback hook
 
@@ -201,6 +276,11 @@ struct ImGuiAppPlatformBackend
 Vulkan first: copy swapchain image to a host-visible staging buffer at
 `ImGuiAppFrameFlags` time, map the previous one. OpenGL3: PBO ring. Headless capture
 needs an offscreen target -- see below.
+
+Multi-viewport: the video captures the MAIN viewport only. Secondary platform windows
+are not readback targets (their swapchains belong to the viewport hooks); their events
+still land in the WAL under the same FrameID, so they stay debuggable, just not
+pictured. The harness never spawns secondary viewports, so use case 3 is unaffected.
 
 ### Headless rendering
 
@@ -235,7 +315,9 @@ struct ImGuiAppTestHarnessConfig
   ImGuiAppHeadlessMode Headless;                      // default Offscreen
   bool        RecordVideo;                            // requires Offscreen (or windowed)
   bool        KeepArtifactsOnPass;                    // default false: artifacts survive only failures
-  float       Fps;                                    // pacer Fixed rate + encode PTS rate; default 60
+  ImGuiAppPacerMode PacerMode;                        // default Fixed (reproducible tests); Target/Off for honest-clock benchmark captures
+  float       Fps;                                    // Fixed pacer rate / Constant-timing rate; default 60
+  ImGuiAppAVTimingMode Timing;                        // default Auto: Fixed pacer -> Constant video, else Realtime (honest) video
   ImGuiAppAVEncoder* Encoder;                         // null = ImGuiAppAV_CreateDefaultEncoder()
   ImGuiAppWALLevel   WALLevel;                        // default Frame
   const char* TestFilter;                             // test-engine filter; null = all
@@ -246,24 +328,34 @@ struct ImGuiAppTestHarnessConfig
 IMGUI_API int AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessConfig* config);
 ```
 
-Per frame the harness: `AppPacerWait` (Fixed) -> frame id -> `ImGui::NewFrame` -> app frame ->
+Per frame the harness: `AppPacerWait` -> frame id -> `ImGui::NewFrame` -> app frame ->
 render -> `CaptureFrame` -> recorder (`WriteFrame` + sidecar) -> `PreSwap`/present/`PostSwap`.
 The WAL's frame-id source is set, so every event-source line carries the same frame index
 that names the video frame: *scrub the video to frame N, grep the WAL for `f:N`*.
 
-Benchmarking falls out of the same artifacts: the sidecar's TSC deltas are exact
-per-frame costs under a deterministic dt; the harness additionally emits
+Two harness postures, one knob pair:
+- **Reproduce** (default): `PacerMode = Fixed`, `Timing = Auto -> Constant`. The app
+  simulates a synthetic timeline and the video plays that timeline -- reruns are
+  bit-comparable.
+- **Witness**: `PacerMode = Target` (or Off), `Timing = Auto -> Realtime`. The video is
+  honest realtime -- hitches, stalls, and pacing misses play back at their true
+  duration. This is the benchmark-capture posture.
+
+Benchmarking falls out of the same artifacts either way: the sidecar's TSC deltas are
+real per-frame costs regardless of timing mode; the harness additionally emits
 `<Name>.frametimes.csv` (frame_index, tsc_delta, ms) and prints p50/p95/p99/max.
 
 ## 6. Phasing
 
 - **P1** — FrameID on ImGuiApp; WAL frame-id prefix; ImGuiAppPacer + `AppPacerWait`
   in both win32 run loops (message-pump loop calls it unconditionally).
-- **P2** — Encoder seam; QOI-sequence + ffmpeg-pipe providers; recorder + sidecar;
-  `CaptureFrame` for win32-vulkan; `Headless_Offscreen` for vulkan.
-- **P3** — ImGuiAppTestHarness + tests_main migration; Media Foundation provider;
-  per-viewport pacing (`AppPacerViewportShouldPresent` wired into the viewport
-  present hooks); OpenGL3 capture.
+- **P2** — Encoder seam; QOI-sequence + ffmpeg-pipe providers; recorder + sidecar
+  (input events recorded from day one -- the format is v1); `CaptureFrame` for
+  win32-vulkan; `Headless_Offscreen` for vulkan; `AppRecordSnapshotAppData`.
+- **P3** — ImGuiAppTestHarness + tests_main migration; flight recorder ring + assert
+  hook; input replay (`AppInputReplay*`); Media Foundation provider; per-viewport
+  pacing (`AppPacerViewportShouldPresent` wired into the viewport present hooks);
+  OpenGL3 capture.
 
 ## 7. Non-goals / constraints
 
