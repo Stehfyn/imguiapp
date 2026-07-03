@@ -197,14 +197,24 @@ static bool ImGuiAppFfmpeg_WriteFrame(ImGuiAppAVEncoder* self, const ImGuiAppAVF
   int repeats = 1;
   if (bd->Timing == ImGuiAppAVTimingMode_Realtime)
   {
+    // Cumulative CFR emission: the stream's frame count tracks wall time drift-free.
+    // Captures faster than Fps DROP (repeats 0); slower captures duplicate. A min-1
+    // clamp here made faster-than-Fps apps play slower than wall clock.
     if (bd->HaveLastTime)
     {
-      const long r = lround((frame->FrameID.TimeSec - bd->LastTimeSec) * (double)bd->Fps);
-      repeats = r < 1 ? 1 : (int)r;
+      // Frames due through time t = output ticks 0..round(elapsed * fps), inclusive.
+      const long long target = llround((frame->FrameID.TimeSec - bd->LastTimeSec) * (double)bd->Fps) + 1;
+      const long long due = target - (long long)bd->FramesEmitted;
+      repeats = due < 0 ? 0 : (int)due;
     }
-    bd->LastTimeSec = frame->FrameID.TimeSec;
-    bd->HaveLastTime = true;
+    else
+    {
+      bd->LastTimeSec = frame->FrameID.TimeSec;   // take epoch: first capture emits exactly one frame
+      bd->HaveLastTime = true;
+    }
   }
+  if (repeats == 0)
+    return true;   // ahead of the output timeline: honest skip, not a failure
 
   const int row_bytes = bd->Width * 4;
   for (int r = 0; r < repeats; r++)
