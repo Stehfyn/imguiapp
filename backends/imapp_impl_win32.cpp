@@ -65,6 +65,7 @@ int ImGuiApp_ImplWin32_RunLoop(ImGuiApp* app)
             ::Sleep(10);
             continue;
         }
+        ImGui::AppPacerWait(app);   // unconditional; Off returns immediately. Modal WM_TIMER repaints stay unpaced.
         app->OnDrawFrame();
     }
 

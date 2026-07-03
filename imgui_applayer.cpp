@@ -26,7 +26,12 @@
 #endif
 #include <windows.h>                      // CaptureStackBackTrace, IsDebuggerPresent
 #include <dbghelp.h>                      // SymInitialize, SymFromAddr, SymGetLineFromAddr64
+#include <avrt.h>                         // MMCSS thread class (pacer wakeup QoS)
+#include <intrin.h>                       // __rdtsc (frame id)
 #pragma comment(lib, "dbghelp.lib")
+#pragma comment(lib, "avrt.lib")
+#else
+#include <time.h>                         // clock_gettime (pacer/frame-id monotonic clock)
 #endif
 
 //-----------------------------------------------------------------------------
@@ -159,6 +164,62 @@ int ImGuiApp::Run(int argc, char** argv)
     return ImGuiApp_GetPlatformBackend()->RunLoop(this);
 }
 
+// Pacer bookkeeping the ImGuiAppPacer struct doesn't carry. Single slot: one paced app
+// per process; the deadline chain re-anchors when a different app starts pacing.
+struct ImGuiAppPacerState
+{
+  const ImGuiApp* App;
+  double          NextDeadline;   // on the monotonic app clock; < 0 = chain not started
+  double          LastEnter;      // previous AppPacerWait entry (feeds LastFrameMs)
+};
+static ImGuiAppPacerState s_app_pacer = { nullptr, -1.0, -1.0 };
+
+#ifdef _WIN32
+// High-resolution waitable timer (Win10 1803+): sub-millisecond waits with no change to
+// global scheduler resolution (never timeBeginPeriod: system-wide + power-hostile).
+// Creation failure (older Windows) falls back to a coarse Sleep loop; the spin phase
+// still lands the deadline exactly, just spinning longer.
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+static HANDLE s_app_pacer_timer = nullptr;
+static bool   s_app_pacer_timer_failed = false;
+// MMCSS "Games" registration for the paced thread: scheduling QoS once the timed wait
+// expires (the timer decides WHEN the thread is ready; MMCSS makes the scheduler run it
+// promptly under contention). Best-effort; null = unregistered.
+static HANDLE s_app_pacer_mmcss = nullptr;
+static bool   s_app_pacer_mmcss_failed = false;
+#endif
+
+static void AppPacerShutdownTimer()
+{
+#ifdef _WIN32
+    if (s_app_pacer_timer != nullptr)
+    {
+        ::CloseHandle(s_app_pacer_timer);
+        s_app_pacer_timer = nullptr;
+    }
+    s_app_pacer_timer_failed = false;
+    if (s_app_pacer_mmcss != nullptr)
+    {
+        ::AvRevertMmThreadCharacteristics(s_app_pacer_mmcss);
+        s_app_pacer_mmcss = nullptr;
+    }
+    s_app_pacer_mmcss_failed = false;
+#endif
+}
+
+static float AppPacerPrimaryRefreshHz()
+{
+#ifdef _WIN32
+    DEVMODEA dm = {};
+    dm.dmSize = sizeof(dm);
+    if (::EnumDisplaySettingsA(nullptr, ENUM_CURRENT_SETTINGS, &dm) && dm.dmDisplayFrequency > 1)
+        return (float)dm.dmDisplayFrequency;
+#endif
+    return 60.0f;
+}
+
 bool ImGuiApp::Initialize(const ImGuiAppConfig* config)
 {
     IM_ASSERT(config != nullptr);
@@ -183,6 +244,14 @@ void ImGuiApp::Shutdown()
     if (!Initialized && PlatformData == nullptr && Layers.empty() && Windows.empty() && Sidebars.empty() && StorageEntries.empty())
         return;
 
+    // One paced app per process by design: the timer/MMCSS teardown is unconditional, so
+    // another live app's pacing hiccups for one frame and self-heals on its next wait.
+    // AvRevertMmThreadCharacteristics is only valid on the thread that registered --
+    // Shutdown must run on the paced (main) thread.
+    if (s_app_pacer.App == this)
+        s_app_pacer = { nullptr, -1.0, -1.0 };
+    AppPacerShutdownTimer();
+
     ImGui::ShutdownApp(this);
     OnShutdownPlatform();
 
@@ -191,8 +260,46 @@ void ImGuiApp::Shutdown()
     ShutdownPending = false;
 }
 
+// Monotonic wall clock in seconds; self-contained (must work without an ImGui context).
+static double AppClockNowSec()
+{
+#ifdef _WIN32
+    static LARGE_INTEGER s_freq = {};
+    if (s_freq.QuadPart == 0)
+        ::QueryPerformanceFrequency(&s_freq);
+    LARGE_INTEGER now;
+    ::QueryPerformanceCounter(&now);
+    return (double)now.QuadPart / (double)s_freq.QuadPart;
+#else
+    timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+#endif
+}
+
+static ImU64 AppClockTsc()
+{
+#if defined(_WIN32) || defined(__x86_64__) || defined(__i386__)
+    return (ImU64)__rdtsc();
+#else
+    return (ImU64)(AppClockNowSec() * 1e9);
+#endif
+}
+
+// Process-wide run epoch: FrameID.TimeSec is seconds since the first stamped frame of
+// any app in the process, so multiple apps share one timeline.
+static double s_app_run_epoch = -1.0;
+
 void ImGuiApp::OnDrawFrame()
 {
+    // Frame identity first: everything this frame emits (WAL lines, captured video
+    // frames, sidecar records) correlates through this id.
+    if (s_app_run_epoch < 0.0)
+        s_app_run_epoch = AppClockNowSec();
+    FrameID.FrameIndex++;
+    FrameID.Tsc = AppClockTsc();
+    FrameID.TimeSec = AppClockNowSec() - s_app_run_epoch;
+
     ImGuiAppFrameConfig frame_config;
     frame_config.ClearColor = ClearColor;
     ImGuiX::BeginFrame();
@@ -212,7 +319,13 @@ void ImGuiApp::DrawFrame(ImGuiApp* app)
     if (app == nullptr)
         return;
 
-    ImGui::UpdateApp(app);
+    // Fixed pacing feeds the exact timestep through the explicit-dt overload -- the
+    // same injection seam replay uses -- so io.DeltaTime (set by the platform backend)
+    // never leaks wall-clock jitter into a deterministic run.
+    if (app->Pacer.Mode == ImGuiAppPacerMode_Fixed && app->Pacer.TargetHz > 0.0f)
+        ImGui::UpdateApp(app, 1.0f / app->Pacer.TargetHz);
+    else
+        ImGui::UpdateApp(app);
     ImGui::RenderApp(app);
 }
 
@@ -555,6 +668,94 @@ namespace ImGui
   // Lifecycle level = composition changes only; Frame level = per-frame records.
   //-----------------------------------------------------------------------------
 
+  IMGUI_API void AppPacerWait(ImGuiApp* app)
+  {
+      IM_ASSERT(app != nullptr);
+      if (app == nullptr || app->Pacer.Mode == ImGuiAppPacerMode_Off)
+        return;
+
+      ImGuiAppPacer* p = &app->Pacer;
+      float hz = p->TargetHz;
+      if (hz <= 0.0f)
+      {
+        hz = AppPacerPrimaryRefreshHz();
+        // Fixed mode's dt injection (DrawFrame) reads TargetHz; resolve it ONCE so the
+        // deterministic timestep exists and never re-tracks a monitor change mid-run.
+        if (p->Mode == ImGuiAppPacerMode_Fixed)
+          p->TargetHz = hz;
+      }
+      const double period = 1.0 / (double)hz;
+
+      const double now = AppClockNowSec();
+      if (s_app_pacer.App != app || s_app_pacer.NextDeadline < 0.0)
+      {
+        // First paced frame (or the paced app changed): establish the deadline chain, no wait.
+        s_app_pacer.App = app;
+        s_app_pacer.NextDeadline = now + period;
+        s_app_pacer.LastEnter = now;
+        return;
+      }
+
+      p->LastFrameMs = (now - s_app_pacer.LastEnter) * 1000.0;
+      s_app_pacer.LastEnter = now;
+
+      // Deadline chain (previous deadline + period), never now + period: chaining absorbs
+      // jitter without drifting. Arriving late is a miss; re-anchor so one long frame
+      // doesn't cascade into a chase.
+      double deadline = s_app_pacer.NextDeadline;
+      if (now > deadline)
+      {
+        p->MissedDeadlines++;
+        deadline = now;
+      }
+
+      // Wait to deadline - slack without touching global scheduler state, spin the
+      // remainder on the monotonic clock to land the deadline exactly.
+      const double slack = (double)p->SleepSlackMs * 0.001;
+      const double sleep_until = deadline - slack;
+      double t = now;
+#ifdef _WIN32
+      if (s_app_pacer_timer == nullptr && !s_app_pacer_timer_failed)
+      {
+        s_app_pacer_timer = ::CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+        if (s_app_pacer_timer == nullptr)
+          s_app_pacer_timer_failed = true;
+      }
+      if (s_app_pacer_mmcss == nullptr && !s_app_pacer_mmcss_failed)
+      {
+        DWORD mmcss_task_index = 0;
+        s_app_pacer_mmcss = ::AvSetMmThreadCharacteristicsW(L"Games", &mmcss_task_index);
+        if (s_app_pacer_mmcss == nullptr)
+          s_app_pacer_mmcss_failed = true;
+      }
+      if (s_app_pacer_timer != nullptr && t < sleep_until)
+      {
+        LARGE_INTEGER due;
+        due.QuadPart = -(LONGLONG)((sleep_until - t) * 1e7);   // negative = relative, 100ns units
+        if (due.QuadPart < 0 && ::SetWaitableTimer(s_app_pacer_timer, &due, 0, nullptr, nullptr, FALSE))
+          ::WaitForSingleObject(s_app_pacer_timer, INFINITE);
+        t = AppClockNowSec();
+      }
+      while (t < sleep_until)   // fallback (timer unavailable) or residual: coarse sleep
+      {
+        ::Sleep(1);
+        t = AppClockNowSec();
+      }
+#else
+      while (t < sleep_until)
+      {
+        timespec req = { 0, 1000000 };
+        nanosleep(&req, nullptr);
+        t = AppClockNowSec();
+      }
+#endif
+      while (t < deadline)
+        t = AppClockNowSec();
+
+      p->LastWaitMs = (t - now) * 1000.0;
+      s_app_pacer.NextDeadline = deadline + period;
+  }
+
   IMGUI_API bool AppWALOpen(ImGuiAppWAL* wal, const char* path, ImGuiAppWALLevel level)
   {
       IM_ASSERT(wal != nullptr && path != nullptr);
@@ -597,7 +798,11 @@ namespace ImGui
       // WAL must also work before/after the ImGui context's lifetime.
       const int frame = ImGui::GetCurrentContext() != nullptr ? ImGui::GetFrameCount() : -1;
       FILE* f = (FILE*)wal->File;
-      fprintf(f, "[%06d f%05d] %s\n", wal->Seq++, frame, msg);
+      if (wal->FrameID != nullptr)
+        fprintf(f, "[%06d f%05d] [f:%llu tsc:%llu] %s\n", wal->Seq++, frame,
+                (unsigned long long)wal->FrameID->FrameIndex, (unsigned long long)wal->FrameID->Tsc, msg);
+      else
+        fprintf(f, "[%06d f%05d] %s\n", wal->Seq++, frame, msg);
       fflush(f);   // write-ahead guarantee
   }
 
