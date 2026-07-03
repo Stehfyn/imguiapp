@@ -164,17 +164,77 @@ namespace ImGui
   }
 
   //-----------------------------------------------------------------------------
+  // [SECTION] Theme-derived colors
+  // All chrome colors derive from the current ImGuiStyle per call (live theme switches follow).
+  // Neutrals ride the WindowBg -> Text axis; semantic hues are pulled toward Text so they stay
+  // legible on light themes.
+  //-----------------------------------------------------------------------------
+
+  static ImU32 AppThemeMix(ImVec4 a, ImVec4 b, float t, float alpha)
+  {
+    ImVec4 c = ImLerp(a, b, t);
+    c.w = alpha;
+    return ColorConvertFloat4ToU32(c);
+  }
+
+  static ImU32 AppThemeCol(ImVec4 c, float alpha)
+  {
+    c.w = alpha;
+    return ColorConvertFloat4ToU32(c);
+  }
+
+  // t = 0 -> WindowBg, t = 1 -> Text.
+  static ImU32 AppThemeNeutral(float t, float alpha = 1.0f)
+  {
+    return AppThemeMix(GetStyleColorVec4(ImGuiCol_WindowBg), GetStyleColorVec4(ImGuiCol_Text), t, alpha);
+  }
+
+  // Near-black on any theme: dark text/outlines over accent fills.
+  static ImU32 AppThemeDark(float alpha = 1.0f)
+  {
+    return AppThemeMix(ImVec4(0.0f, 0.0f, 0.0f, 1.0f), GetStyleColorVec4(ImGuiCol_WindowBg), 0.07f, alpha);
+  }
+
+  static ImU32 AppThemeAccent(ImVec4 hue, float alpha = 1.0f)
+  {
+    return AppThemeCol(ImLerp(hue, GetStyleColorVec4(ImGuiCol_Text), 0.15f), alpha);
+  }
+
+  // Semantic accent hues (final color via AppThemeAccent).
+  static const ImVec4 kAppHueTask       = ImVec4(0.43f, 0.59f, 0.80f, 1.0f);   // blue: logic
+  static const ImVec4 kAppHueCommand    = ImVec4(0.82f, 0.59f, 0.35f, 1.0f);   // amber: commands + hidden markers
+  static const ImVec4 kAppHueStatus     = ImVec4(0.55f, 0.73f, 0.47f, 1.0f);   // green: status
+  static const ImVec4 kAppHueWindowLayer= ImVec4(0.65f, 0.53f, 0.82f, 1.0f);   // violet: windows
+  static const ImVec4 kAppHueWindow     = ImVec4(0.47f, 0.67f, 0.90f, 1.0f);   // window kind + data pins
+  static const ImVec4 kAppHueSidebar    = ImVec4(0.47f, 0.78f, 0.78f, 1.0f);
+  static const ImVec4 kAppHueControl    = ImVec4(0.84f, 0.65f, 0.37f, 1.0f);
+  static const ImVec4 kAppHueStruct     = ImVec4(0.67f, 0.57f, 0.86f, 1.0f);
+  static const ImVec4 kAppHueField      = ImVec4(0.55f, 0.80f, 0.55f, 1.0f);
+  static const ImVec4 kAppHuePinChild   = ImVec4(0.90f, 0.67f, 0.43f, 1.0f);   // containment pins
+  static const ImVec4 kAppHuePinTie     = ImVec4(0.55f, 0.78f, 0.55f, 1.0f);   // tie pins
+  static const ImVec4 kAppHueSevError   = ImVec4(0.88f, 0.36f, 0.32f, 1.0f);
+  static const ImVec4 kAppHueSevWarn    = ImVec4(0.87f, 0.66f, 0.24f, 1.0f);
+  static const ImVec4 kAppHueErrorText  = ImVec4(0.92f, 0.43f, 0.37f, 1.0f);
+  static const ImVec4 kAppHueDanger     = ImVec4(0.83f, 0.43f, 0.43f, 1.0f);   // destructive row icons
+  static const ImVec4 kAppHueLive       = ImVec4(0.35f, 0.47f, 0.65f, 1.0f);   // steel-blue: read-only live mirror
+  static const ImVec4 kAppHuePromoted   = ImVec4(0.31f, 0.59f, 0.35f, 1.0f);   // green: design matches a live type
+  static const ImVec4 kAppHueDotLive    = ImVec4(0.35f, 0.59f, 0.90f, 1.0f);   // diff dots: running mirror
+  static const ImVec4 kAppHueDotPromoted= ImVec4(0.43f, 0.78f, 0.47f, 1.0f);   // diff dots: promoted
+  static const ImVec4 kAppHueDotDrift   = ImVec4(0.88f, 0.71f, 0.35f, 1.0f);   // diff dots: design-only drift
+  static const ImVec4 kAppHueGold       = ImVec4(0.86f, 0.67f, 0.35f, 1.0f);   // overlay accents (gizmos, hint panels)
+
+  //-----------------------------------------------------------------------------
   // [SECTION] Blender-style field widgets (node body)
   // Text: click to edit in place. Enum: hover step arrows + dropdown. Int: drag to scrub (Shift = fine),
   // click to type, arrows to step.
   //-----------------------------------------------------------------------------
   namespace
   {
-    const ImU32 kBlFill      = IM_COL32( 88,  88,  88, 255);  // field at rest
-    const ImU32 kBlFillHover = IM_COL32(112, 112, 112, 255);
-    const ImU32 kBlFillEdit  = IM_COL32( 46,  46,  46, 255);  // recessed while typing
-    const ImU32 kBlBorder    = IM_COL32(  0,   0,   0,  60);  // faint outline
-    const ImU32 kBlText      = IM_COL32(229, 229, 229, 255);
+    ImU32 AppBlFill()      { return AppThemeNeutral(0.30f); }          // field at rest
+    ImU32 AppBlFillHover() { return AppThemeNeutral(0.40f); }
+    ImU32 AppBlFillEdit()  { return AppThemeNeutral(0.13f); }          // recessed while typing
+    ImU32 AppBlBorder()    { return AppThemeCol(ImVec4(0.0f, 0.0f, 0.0f, 1.0f), 0.235f); }   // faint outline
+    ImU32 AppBlText()      { return AppThemeNeutral(0.89f); }
 
     // Applied as GetFrameHeight * kBlRounding, materialized per scope.
     const float kBlRounding = 0.28f;
@@ -186,20 +246,20 @@ namespace ImGui
     static ImGuiAppChromeTheme t =
     {
       {   // dropdown fields (AppBlEnum, struct picker): field + popup + rows
-        ImGuiAppColorModDesc(ImGuiCol_FrameBg,        kBlFill),
-        ImGuiAppColorModDesc(ImGuiCol_FrameBgHovered, kBlFillHover),
-        ImGuiAppColorModDesc(ImGuiCol_FrameBgActive,  kBlFillHover),
-        ImGuiAppColorModDesc(ImGuiCol_Text,           kBlText),
-        ImGuiAppColorModDesc(ImGuiCol_PopupBg,        kBlFillEdit),
-        ImGuiAppColorModDesc(ImGuiCol_Header,         kBlFillHover),
-        ImGuiAppColorModDesc(ImGuiCol_HeaderHovered,  kBlFillHover),
-        ImGuiAppColorModDesc(ImGuiCol_Border,         kBlBorder),
+        ImGuiAppColorModDesc(ImGuiCol_FrameBg,        AppBlFill()),
+        ImGuiAppColorModDesc(ImGuiCol_FrameBgHovered, AppBlFillHover()),
+        ImGuiAppColorModDesc(ImGuiCol_FrameBgActive,  AppBlFillHover()),
+        ImGuiAppColorModDesc(ImGuiCol_Text,           AppBlText()),
+        ImGuiAppColorModDesc(ImGuiCol_PopupBg,        AppBlFillEdit()),
+        ImGuiAppColorModDesc(ImGuiCol_Header,         AppBlFillHover()),
+        ImGuiAppColorModDesc(ImGuiCol_HeaderHovered,  AppBlFillHover()),
+        ImGuiAppColorModDesc(ImGuiCol_Border,         AppBlBorder()),
       },
       {   // in-place editors (InputText/InputInt): transparent frame over the self-drawn bg
         ImGuiAppColorModDesc(ImGuiCol_FrameBg,        0),
         ImGuiAppColorModDesc(ImGuiCol_FrameBgHovered, 0),
         ImGuiAppColorModDesc(ImGuiCol_FrameBgActive,  0),
-        ImGuiAppColorModDesc(ImGuiCol_Text,           kBlText),
+        ImGuiAppColorModDesc(ImGuiCol_Text,           AppBlText()),
       },
     };
     return &t;
@@ -290,7 +350,7 @@ namespace ImGui
     const ImVec2 after = ImGui::GetCursorScreenPos();   // restored below: the right-cluster items move the cursor
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(mn, mx, hov ? kBlFillHover : kBlFill, h * 0.22f);
+    dl->AddRectFilled(mn, mx, hov ? AppBlFillHover() : AppBlFill(), h * 0.22f);
     const ImVec2 tc(mn.x + em * 0.55f, (mn.y + mx.y) * 0.5f);
     const float a = em * 0.24f;
     const ImU32 tri = ImGui::GetColorU32(ImGuiCol_Text, 0.7f);
@@ -329,8 +389,8 @@ namespace ImGui
   static float AppBlFieldBg(ImDrawList* dl, ImVec2 mn, ImVec2 mx, bool hovered, bool editing)
   {
     const float r = (mx.y - mn.y) * 0.28f;
-    dl->AddRectFilled(mn, mx, editing ? kBlFillEdit : (hovered ? kBlFillHover : kBlFill), r);
-    dl->AddRect(mn, mx, kBlBorder, r);
+    dl->AddRectFilled(mn, mx, editing ? AppBlFillEdit() : (hovered ? AppBlFillHover() : AppBlFill()), r);
+    dl->AddRect(mn, mx, AppBlBorder(), r);
     return r;
   }
 
@@ -352,8 +412,8 @@ namespace ImGui
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float r = h * 0.28f;
-    dl->AddRectFilled(mn, mx, held ? kBlFillEdit : hovered ? kBlFillHover : kBlFill, r);
-    dl->AddRect(mn, mx, kBlBorder, r);
+    dl->AddRectFilled(mn, mx, held ? AppBlFillEdit() : hovered ? AppBlFillHover() : AppBlFill(), r);
+    dl->AddRect(mn, mx, AppBlBorder(), r);
 
     const ImU32 col = ImGui::GetColorU32(ImGuiCol_Text, hovered || held ? 1.0f : 0.8f);
     const ImVec2 pc(mn.x + pad + plus_w * 0.5f, (mn.y + mx.y) * 0.5f);
@@ -388,13 +448,13 @@ namespace ImGui
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float r = sz * 0.22f;
-    ImU32 fill = on ? accent : kBlFill;
+    ImU32 fill = on ? accent : AppBlFill();
     if (hovered)
-      fill = on ? accent : kBlFillHover;
+      fill = on ? accent : AppBlFillHover();
     dl->AddRectFilled(mn, mx, fill, r);
-    dl->AddRect(mn, mx, on ? (accent & 0x00FFFFFF) | 0xFF000000 : kBlBorder, r);
+    dl->AddRect(mn, mx, on ? (accent & 0x00FFFFFF) | 0xFF000000 : AppBlBorder(), r);
 
-    const ImU32 tc = on ? IM_COL32(20, 20, 20, 255) : ImGui::GetColorU32(ImGuiCol_Text, hovered ? 0.9f : 0.55f);
+    const ImU32 tc = on ? AppThemeDark() : ImGui::GetColorU32(ImGuiCol_Text, hovered ? 0.9f : 0.55f);
     const ImVec2 ts = ImGui::CalcTextSize(label);
     dl->AddText(ImVec2(mn.x + (sz - ts.x) * 0.5f, mn.y + (sz - ts.y) * 0.5f), tc, label);
     if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
@@ -417,10 +477,10 @@ namespace ImGui
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float r = h * 0.24f;
-    dl->AddRectFilled(mn, mx, on ? accent : (hov ? kBlFillHover : kBlFill), r);
-    dl->AddRect(mn, mx, on ? (accent & 0x00FFFFFF) | 0xFF000000 : kBlBorder, r);
+    dl->AddRectFilled(mn, mx, on ? accent : (hov ? AppBlFillHover() : AppBlFill()), r);
+    dl->AddRect(mn, mx, on ? (accent & 0x00FFFFFF) | 0xFF000000 : AppBlBorder(), r);
     const float dim = (count == 0 && !on) ? 0.4f : 1.0f;
-    const ImU32 tc = on ? IM_COL32(20, 20, 20, 255) : ImGui::GetColorU32(ImGuiCol_Text, dim * (hov ? 1.0f : 0.85f));
+    const ImU32 tc = on ? AppThemeDark() : ImGui::GetColorU32(ImGuiCol_Text, dim * (hov ? 1.0f : 0.85f));
     dl->AddText(ImVec2(mn.x + em * 0.35f, mn.y + (h - ts.y) * 0.5f), tc, lbl);
     if (hov) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     return hov && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
@@ -434,7 +494,7 @@ namespace ImGui
               mn.y + ((mx.y - mn.y) - ts.y) * 0.5f);
     if (tp.x < mn.x + pad) tp.x = mn.x + pad;
     dl->PushClipRect(mn, mx, true);
-    dl->AddText(tp, kBlText, text);
+    dl->AddText(tp, AppBlText(), text);
     dl->PopClipRect();
   }
 
@@ -443,8 +503,8 @@ namespace ImGui
     const float cy = (mn.y + mx.y) * 0.5f;
     const float a = (mx.y - mn.y) * 0.16f;
     const float lx = mn.x + arrow_w * 0.5f, rx = mx.x - arrow_w * 0.5f;
-    dl->AddTriangleFilled(ImVec2(lx + a, cy - a), ImVec2(lx + a, cy + a), ImVec2(lx - a, cy), kBlText);
-    dl->AddTriangleFilled(ImVec2(rx - a, cy - a), ImVec2(rx - a, cy + a), ImVec2(rx + a, cy), kBlText);
+    dl->AddTriangleFilled(ImVec2(lx + a, cy - a), ImVec2(lx + a, cy + a), ImVec2(lx - a, cy), AppBlText());
+    dl->AddTriangleFilled(ImVec2(rx - a, cy - a), ImVec2(rx - a, cy + a), ImVec2(rx + a, cy), AppBlText());
   }
 
   static bool AppBlDisclosure(const char* str_id, bool expanded)
@@ -456,7 +516,7 @@ namespace ImGui
     const bool hovered = ImGui::IsItemHovered();
     const bool clicked = ImGui::IsItemActivated();
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImU32 col = hovered ? kBlText : IM_COL32(160, 160, 160, 255);
+    const ImU32 col = hovered ? AppBlText() : AppThemeNeutral(0.60f);
     const ImVec2 c(mn.x + sz * 0.5f, mn.y + sz * 0.5f);
     const float a = sz * 0.26f;
     if (expanded)
@@ -2240,7 +2300,7 @@ namespace ImGui
         {
           ImGui::Dummy(ImVec2(em * 1.6f, 0.0f));
           ImGui::SameLine();
-          ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(235, 110, 95, 255));
+          ImGui::PushStyleColor(ImGuiCol_Text, AppThemeAccent(kAppHueErrorText));
           ImGui::TextWrapped("%s", eerr);
           ImGui::PopStyleColor();
         }
@@ -2768,7 +2828,7 @@ namespace ImGui
   // Shared severity accents: same hue in canvas, outliner, and inspector.
   static ImU32 AppSeverityColor(int severity)
   {
-    return severity >= 2 ? IM_COL32(224, 92, 82, 255) : IM_COL32(222, 168, 62, 255);
+    return AppThemeAccent(severity >= 2 ? kAppHueSevError : kAppHueSevWarn);
   }
 
   //-----------------------------------------------------------------------------
@@ -2842,11 +2902,11 @@ namespace ImGui
   {
     switch (t)
     {
-    case ImGuiAppLayerType_Task:    return IM_COL32(110, 150, 205, 255);   // blue: logic
-    case ImGuiAppLayerType_Command: return IM_COL32(210, 150, 90, 255);    // amber: commands
-    case ImGuiAppLayerType_Status:  return IM_COL32(140, 185, 120, 255);   // green: status
-    case ImGuiAppLayerType_Window:  return IM_COL32(165, 135, 210, 255);   // violet: windows
-    default:                        return IM_COL32(165, 165, 170, 255);
+    case ImGuiAppLayerType_Task:    return AppThemeAccent(kAppHueTask);
+    case ImGuiAppLayerType_Command: return AppThemeAccent(kAppHueCommand);
+    case ImGuiAppLayerType_Status:  return AppThemeAccent(kAppHueStatus);
+    case ImGuiAppLayerType_Window:  return AppThemeAccent(kAppHueWindowLayer);
+    default:                        return AppThemeNeutral(0.63f);
     }
   }
 
@@ -2903,13 +2963,10 @@ namespace ImGui
 
   // One origin vocabulary shared by the canvas title-bar tint, the tree text tint, and the demo legend, so the
   // three surfaces cannot drift. design = default (no push).
-  static const ImU32 kAppLiveTint     = IM_COL32(90, 120, 165, 255);   // steel-blue: read-only live mirror
-  static const ImU32 kAppPromotedTint = IM_COL32(80, 150, 90, 255);    // green: design matches a live type
-
   ImU32 AppGraphOriginColor(const ImGuiAppNode* n)   // exposed so the demo legend reads the same constants
   {
-    if (n->IsLive)     return kAppLiveTint;
-    if (n->IsPromoted) return kAppPromotedTint;
+    if (n->IsLive)     return AppThemeAccent(kAppHueLive);
+    if (n->IsPromoted) return AppThemeAccent(kAppHuePromoted);
     return 0;
   }
 
@@ -3026,9 +3083,9 @@ namespace ImGui
     bb_max.y += pad;
 
     ImDrawList* dl = ImGui::CanvasBackgroundDrawList(cv);
-    const ImU32 fill = ImGui::GetColorU32(ImVec4(0.32f, 0.32f, 0.34f, 0.14f));
-    const ImU32 outline = ImGui::GetColorU32(ImVec4(0.70f, 0.70f, 0.70f, 0.55f));
-    const ImU32 title_bg = ImGui::GetColorU32(ImVec4(0.14f, 0.14f, 0.16f, 1.00f));   // opaque: grid must not bleed through text
+    const ImU32 fill = AppThemeNeutral(0.28f, 0.14f);
+    const ImU32 outline = AppThemeNeutral(0.68f, 0.55f);
+    const ImU32 title_bg = AppThemeNeutral(0.09f);   // opaque: grid must not bleed through text
     const ImU32 title_fg = ImGui::GetColorU32(ImGuiCol_Text);
     const float rounding = 4.0f;
 
@@ -3052,7 +3109,7 @@ namespace ImGui
     {
       const float y0 = (rows.Data[0].Top + rows.Data[0].Bot) * 0.5f;
       const float y1 = (rows.Data[rows.Size - 1].Top + rows.Data[rows.Size - 1].Bot) * 0.5f;
-      dl->AddLine(ImVec2(rail_cx, y0), ImVec2(rail_cx, y1), ImGui::GetColorU32(ImVec4(0.6f, 0.6f, 0.64f, 0.55f)), 2.0f);
+      dl->AddLine(ImVec2(rail_cx, y0), ImVec2(rail_cx, y1), AppThemeNeutral(0.58f, 0.55f), 2.0f);
     }
     for (int i = 0; i < rows.Size; i++)
     {
@@ -3062,15 +3119,15 @@ namespace ImGui
       {
         const float ay = (rows.Data[i].Bot + rows.Data[i + 1].Top) * 0.5f;
         const float s = em * 0.26f;
-        const ImU32 arr = ImGui::GetColorU32(ImVec4(0.6f, 0.6f, 0.64f, 0.7f));
+        const ImU32 arr = AppThemeNeutral(0.58f, 0.70f);
         dl->AddTriangleFilled(ImVec2(rail_cx - s, ay - s), ImVec2(rail_cx + s, ay - s), ImVec2(rail_cx, ay + s), arr);
       }
       dl->AddCircleFilled(ImVec2(rail_cx, cy), r, AppScaleRGB(rows.Data[i].Accent, 0.85f));
-      dl->AddCircle(ImVec2(rail_cx, cy), r, IM_COL32(20, 20, 22, 220), 0, 1.5f);
+      dl->AddCircle(ImVec2(rail_cx, cy), r, AppThemeDark(0.86f), 0, 1.5f);
       char num[8];
       ImFormatString(num, IM_ARRAYSIZE(num), "%d", i + 1);
       const ImVec2 ns = ImGui::CalcTextSize(num);
-      dl->AddText(ImVec2(rail_cx - ns.x * 0.5f, cy - ns.y * 0.5f), IM_COL32(20, 20, 22, 255), num);
+      dl->AddText(ImVec2(rail_cx - ns.x * 0.5f, cy - ns.y * 0.5f), AppThemeDark(), num);
     }
 
     const char* title = ICON_FA_LAYER_GROUP "  App Layers";
@@ -3713,13 +3770,13 @@ namespace ImGui
   {
     switch (k)
     {
-    case ImGuiAppNodeKind_Layer:   return IM_COL32(155, 155, 155, 255);
-    case ImGuiAppNodeKind_Window:  return IM_COL32(120, 170, 230, 255);
-    case ImGuiAppNodeKind_Sidebar: return IM_COL32(120, 200, 200, 255);
-    case ImGuiAppNodeKind_Control: return IM_COL32(215, 165, 95, 255);
-    case ImGuiAppNodeKind_Struct:  return IM_COL32(170, 145, 220, 255);
-    case ImGuiAppNodeKind_Field:   return IM_COL32(140, 205, 140, 255);
-    default:                       return IM_COL32(205, 205, 205, 255);
+    case ImGuiAppNodeKind_Layer:   return AppThemeNeutral(0.58f);
+    case ImGuiAppNodeKind_Window:  return AppThemeAccent(kAppHueWindow);
+    case ImGuiAppNodeKind_Sidebar: return AppThemeAccent(kAppHueSidebar);
+    case ImGuiAppNodeKind_Control: return AppThemeAccent(kAppHueControl);
+    case ImGuiAppNodeKind_Struct:  return AppThemeAccent(kAppHueStruct);
+    case ImGuiAppNodeKind_Field:   return AppThemeAccent(kAppHueField);
+    default:                       return AppThemeNeutral(0.79f);
     }
   }
 
@@ -4184,7 +4241,7 @@ namespace ImGui
     const int top = AppScopeCurrent(g);
     const ImGuiAppNode* tn = top >= 0 ? AppGraphFindNodeConst(g, top) : nullptr;
     if (tn == nullptr)
-      return IM_COL32(165, 165, 170, 255);
+      return AppThemeNeutral(0.63f);
     return tn->Kind == ImGuiAppNodeKind_Layer ? AppLayerAccent(tn->LayerType) : AppKindColor(tn->Kind);
   }
 
@@ -4277,29 +4334,29 @@ namespace ImGui
       geom(seq.Data[i], &p, &d);
       const ImVec2 c(p.x, p.y);   // top-left corner, half overlapping the node like a slate marker
       dl->AddCircleFilled(c, r, AppScaleRGB(accent, 0.85f));
-      dl->AddCircle(c, r, IM_COL32(20, 20, 22, 220), 0, 1.5f);
+      dl->AddCircle(c, r, AppThemeDark(0.86f), 0, 1.5f);
       char num[8];
       ImFormatString(num, IM_ARRAYSIZE(num), "%d", i + 1);
       ImGui::PushFont(nullptr, em);   // badge numerals track the zoomed badge size
       const ImVec2 ns = ImGui::CalcTextSize(num);
-      dl->AddText(ImVec2(c.x - ns.x * 0.5f, c.y - ns.y * 0.5f), IM_COL32(20, 20, 22, 255), num);
+      dl->AddText(ImVec2(c.x - ns.x * 0.5f, c.y - ns.y * 0.5f), AppThemeDark(), num);
       ImGui::PopFont();
     }
   }
 
-  // Pin color by port kind: data pins blue, containment pins orange (tie pins use kAppPinTie green).
+  // Pin color by port kind: data pins blue, containment pins orange (tie pins use AppPinTieColor green).
   static ImU32 AppPinColor(ImGuiAppPortKind kind)
   {
     switch (kind)
     {
     case ImGuiAppPortKind_DataIn:
-    case ImGuiAppPortKind_DataOut:  return IM_COL32(120, 170, 230, 255);
+    case ImGuiAppPortKind_DataOut:  return AppThemeAccent(kAppHueWindow);
     case ImGuiAppPortKind_ChildIn:
-    case ImGuiAppPortKind_ChildOut: return IM_COL32(230, 170, 110, 255);
-    default:                        return IM_COL32(160, 160, 160, 255);
+    case ImGuiAppPortKind_ChildOut: return AppThemeAccent(kAppHuePinChild);
+    default:                        return AppThemeNeutral(0.60f);
     }
   }
-  static const ImU32 kAppPinTie = IM_COL32(140, 200, 140, 255);
+  static ImU32 AppPinTieColor() { return AppThemeAccent(kAppHuePinTie); }
 
   // Editor path while drilled in: "App > WindowLayer > Mixer" chips at the canvas top-left. Clicking a
   // segment jumps back to that depth (selecting the scope just exited); the tail chip is the current
@@ -4321,7 +4378,7 @@ namespace ImGui
     {
       const bool is_tail = i == g->ViewScope.Size;
       char label[IM_LABEL_SIZE + 8];
-      ImU32 accent = IM_COL32(165, 165, 170, 255);
+      ImU32 accent = AppThemeNeutral(0.63f);
       if (i == 0)
         ImStrncpy(label, ICON_FA_CIRCLE_NODES "  App", IM_ARRAYSIZE(label));
       else
@@ -4356,7 +4413,7 @@ namespace ImGui
       if (is_tail)
         dl->AddRect(mn, mx, (accent & 0x00FFFFFF) | 0xC8000000, 4.0f);
       dl->AddText(ImVec2(mn.x + em * 0.45f, y + (h - ts.y) * 0.5f),
-                  is_tail ? IM_COL32(240, 240, 240, 255) : ImGui::GetColorU32(ImGuiCol_Text, hov ? 1.0f : 0.75f), label);
+                  is_tail ? AppThemeNeutral(0.94f) : ImGui::GetColorU32(ImGuiCol_Text, hov ? 1.0f : 0.75f), label);
       x = mx.x + em * 0.25f;
       if (!is_tail)
       {
@@ -4424,9 +4481,9 @@ namespace ImGui
     const ImVec2 mx(cen.x + pw * 0.5f, cen.y + ph * 0.5f);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImU32 accent = AppScopeAccent(g);
-    dl->AddRectFilled(mn, mx, IM_COL32(28, 28, 31, 240), 8.0f);
+    dl->AddRectFilled(mn, mx, AppThemeNeutral(0.06f, 0.94f), 8.0f);
     dl->AddRect(mn, mx, (accent & 0x00FFFFFF) | 0xC8000000, 8.0f, 0, 1.5f);
-    dl->AddText(ImVec2(cen.x - hs.x * 0.5f, mn.y + em * 1.0f), IM_COL32(235, 235, 235, 255), head);
+    dl->AddText(ImVec2(cen.x - hs.x * 0.5f, mn.y + em * 1.0f), AppThemeNeutral(0.92f), head);
     dl->AddText(ImVec2(cen.x - ss.x * 0.5f, mn.y + em * 2.6f), ImGui::GetColorU32(ImGuiCol_TextDisabled), sub);
 
     if (action != nullptr)
@@ -4671,10 +4728,10 @@ namespace ImGui
           ImGui::PopID();
 
           const ImU32 chip_bg = (hov || act) ? ((line & 0x00FFFFFF) | 0xFF000000) : line;
-          dl->AddRectFilled(chip_mn, chip_mx, IM_COL32(26, 27, 30, 255), 3.0f);   // opaque plate under the tint
+          dl->AddRectFilled(chip_mn, chip_mx, AppThemeNeutral(0.05f), 3.0f);   // opaque plate under the tint
           dl->AddRectFilled(chip_mn, chip_mx, chip_bg, 3.0f);
           // Disclosure triangle: right-pointing when folded, down-pointing when open.
-          const ImU32 glyph = IM_COL32(235, 235, 235, 255);
+          const ImU32 glyph = AppThemeNeutral(0.92f);
           const ImVec2 tc(chip_mn.x + tri_w * 0.5f, (chip_mn.y + chip_mx.y) * 0.5f);
           const float a = em * 0.22f;
           if (owner->GroupCollapsed)
@@ -4792,7 +4849,7 @@ namespace ImGui
           if (sid < 0)
             continue;
           const int pin = AppNodePortByName(n, temp ? "temp" : "persist");
-          ImGui::CanvasNextPinColor(kAppPinTie);
+          ImGui::CanvasNextPinColor(AppPinTieColor());
           ImGui::CanvasBeginPin(cv, pin, ImGui::ImGuiCanvasPin_In, ImGui::ImGuiCanvasPinShape_Circle);
           ImGui::PushID(100 + list);
           if (AppBlDisclosure("##tie", true))
@@ -5019,7 +5076,7 @@ namespace ImGui
       ImGuiAppHoverSource lsrc = ImGuiAppHoverSource_None;
       const bool brushed = g->Links.Data[li].Id == AppGraphHoveredLink(&lsrc) && lsrc != ImGuiAppHoverSource_Canvas && lsrc != ImGuiAppHoverSource_None;
       ImGui::CanvasWire(cv, g->Links.Data[li].Id, g->Links.Data[li].StartAttr, g->Links.Data[li].EndAttr,
-                        brushed ? IM_COL32(250, 250, 252, 220) : 0);
+                        brushed ? AppThemeNeutral(0.98f, 0.86f) : 0);
     }
 
     // Overview minimap (engine inset, bottom-right; click/drag to jump). Lets the user see and reach
@@ -5047,17 +5104,17 @@ namespace ImGui
         const char* tip = nullptr;
         if (n->IsLive)
         {
-          dot = IM_COL32(90, 150, 230, 255);
+          dot = AppThemeAccent(kAppHueDotLive);
           tip = "running (live mirror)";
         }
         else if (n->IsPromoted)
         {
-          dot = IM_COL32(110, 200, 120, 255);
+          dot = AppThemeAccent(kAppHueDotPromoted);
           tip = "matches a running control";
         }
         else if (app_running && (n->Kind == ImGuiAppNodeKind_Control))
         {
-          dot = IM_COL32(225, 180, 90, 255);
+          dot = AppThemeAccent(kAppHueDotDrift);
           tip = "design-only -- not in the running app yet";
         }
         if (dot == 0)
@@ -5067,7 +5124,7 @@ namespace ImGui
         const ImVec2 d = ImGui::CanvasNodeSize(cv, n->Id) * AppCanvasZoom();
         const ImVec2 c(p.x + d.x - r * 1.6f, p.y + r * 1.6f);
         dl->AddCircleFilled(c, r, dot);
-        dl->AddCircle(c, r, IM_COL32(20, 20, 20, 160));
+        dl->AddCircle(c, r, AppThemeDark(0.63f));
         if (tip != nullptr)
         {
           const ImVec2 m = ImGui::GetIO().MousePos;
@@ -5511,9 +5568,9 @@ namespace ImGui
         const ImVec2 mn(cen.x - pw * 0.5f, cen.y - ph * 0.5f);
         const ImVec2 mx(cen.x + pw * 0.5f, cen.y + ph * 0.5f);
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        dl->AddRectFilled(mn, mx, IM_COL32(28, 28, 31, 240), 8.0f);
-        dl->AddRect(mn, mx, IM_COL32(220, 170, 90, 200), 8.0f, 0, 1.5f);
-        dl->AddText(ImVec2(cen.x - hs.x * 0.5f, mn.y + em * 1.0f), IM_COL32(235, 235, 235, 255), head);
+        dl->AddRectFilled(mn, mx, AppThemeNeutral(0.06f, 0.94f), 8.0f);
+        dl->AddRect(mn, mx, AppThemeAccent(kAppHueGold, 0.78f), 8.0f, 0, 1.5f);
+        dl->AddText(ImVec2(cen.x - hs.x * 0.5f, mn.y + em * 1.0f), AppThemeNeutral(0.92f), head);
         dl->AddText(ImVec2(cen.x - ss.x * 0.5f, mn.y + em * 2.6f), ImGui::GetColorU32(ImGuiCol_TextDisabled), sub);
         ImGui::SetCursorScreenPos(ImVec2(cen.x - bw * 0.5f, mx.y - em * 2.6f));
         if (ImGui::Button("Scaffold foundation", ImVec2(bw, em * 1.7f)))
@@ -5994,7 +6051,7 @@ namespace ImGui
         const float r = em * 0.22f;
         const ImVec2 c(p.x + d.x - r - em * 0.3f, p.y + em * 0.55f);
         dl->AddCircleFilled(c, r, AppSeverityColor(sev));
-        dl->AddCircle(c, r, IM_COL32(20, 20, 22, 220), 0, 1.0f);
+        dl->AddCircle(c, r, AppThemeDark(0.86f), 0, 1.0f);
       }
     }
 
@@ -6048,11 +6105,11 @@ namespace ImGui
       const ImVec2 col_c(editor_min.x + editor_size.x - em * 1.2f, editor_min.y + em * 1.2f);
       dl->AddRectFilled(ImVec2(col_c.x - r - em * 0.25f, col_c.y - r - em * 0.25f),
                         ImVec2(col_c.x + r + em * 0.25f, col_c.y + (count - 1) * step + r + em * 0.25f),
-                        IM_COL32(24, 25, 28, 252), r + em * 0.25f);
+                        AppThemeNeutral(0.04f, 0.99f), r + em * 0.25f);
 
       float gy = col_c.y;
       const ImU32 dim = ImGui::GetColorU32(ImGuiCol_Text, 0.55f);
-      const ImU32 lit = IM_COL32(220, 170, 90, 255);
+      const ImU32 lit = AppThemeAccent(kAppHueGold);
       auto gizmo = [&](const char* icon, const char* tip, bool on) -> bool
       {
         const ImVec2 c(col_c.x, gy);
@@ -6177,14 +6234,14 @@ namespace ImGui
         w = ImMax(w, ImGui::CalcTextSize(lines[i]).x);
       const ImVec2 mx(mn.x + w + em * 1.4f, mn.y + (float)IM_ARRAYSIZE(lines) * ImGui::GetTextLineHeightWithSpacing() + em * 1.4f);
       ImDrawList* dl = ImGui::GetWindowDrawList();
-      dl->AddRectFilled(mn, mx, IM_COL32(24, 24, 26, 235), 6.0f);
-      dl->AddRect(mn, mx, IM_COL32(220, 170, 90, 200), 6.0f, 0, 1.5f);
+      dl->AddRectFilled(mn, mx, AppThemeNeutral(0.04f, 0.92f), 6.0f);
+      dl->AddRect(mn, mx, AppThemeAccent(kAppHueGold, 0.78f), 6.0f, 0, 1.5f);
       ImVec2 tp(mn.x + em * 0.7f, mn.y + em * 0.7f);
-      dl->AddText(tp, IM_COL32(220, 170, 90, 255), "Shortcuts");
+      dl->AddText(tp, AppThemeAccent(kAppHueGold), "Shortcuts");
       tp.y += ImGui::GetTextLineHeightWithSpacing();
       for (int i = 0; i < IM_ARRAYSIZE(lines); i++)
       {
-        dl->AddText(tp, IM_COL32(220, 220, 222, 255), lines[i]);
+        dl->AddText(tp, AppThemeNeutral(0.86f), lines[i]);
         tp.y += ImGui::GetTextLineHeightWithSpacing();
       }
     }
@@ -6286,7 +6343,7 @@ namespace ImGui
         char msg[IM_LABEL_SIZE + 32];
         ImFormatString(msg, IM_ARRAYSIZE(msg), "link refused: %s", g->LastLinkErr);
         const ImVec2 ts = ImGui::CalcTextSize(msg);
-        const ImU32 col = ImGui::GetColorU32(ImVec4(0.90f, 0.45f, 0.45f, 1.0f - age / kFade));
+        const ImU32 col = AppThemeAccent(kAppHueDanger, 1.0f - age / kFade);
         ImGui::GetWindowDrawList()->AddText(ImVec2(mn.x + em * 0.6f, mx.y - em * 0.6f - ts.y), col, msg);
       }
     }
@@ -9720,7 +9777,7 @@ namespace ImGui
       ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     }
     const ImVec2 ts = ImGui::CalcTextSize(icon);
-    dl->AddText(ImVec2(center.x - ts.x * 0.5f, center.y - ts.y * 0.5f), hov ? IM_COL32(245, 245, 245, 255) : col, icon);
+    dl->AddText(ImVec2(center.x - ts.x * 0.5f, center.y - ts.y * 0.5f), hov ? AppThemeNeutral(0.96f) : col, icon);
     return hov && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
   }
 
@@ -9898,7 +9955,7 @@ namespace ImGui
       if (n->Kind != ImGuiAppNodeKind_Layer)
       {
         const char* eye_icon = n->Hidden ? ICON_FA_EYE_SLASH : ICON_FA_EYE;
-        const ImU32 eye_col = n->Hidden ? IM_COL32(210, 150, 90, 255) : ImGui::GetColorU32(ImGuiCol_Text, row_hovered ? 0.85f : 0.3f);
+        const ImU32 eye_col = n->Hidden ? AppThemeAccent(kAppHueCommand) : ImGui::GetColorU32(ImGuiCol_Text, row_hovered ? 0.85f : 0.3f);
         if (AppTreeRowIcon(eye_icon, ImVec2(x, cy), r, eye_col))
         {
           n->Hidden = !n->Hidden;
@@ -9909,7 +9966,7 @@ namespace ImGui
 
       if (row_hovered && !n->IsLive)
       {
-        if (AppTreeRowIcon(ICON_FA_TRASH, ImVec2(x, cy), r, IM_COL32(212, 110, 110, 255)))
+        if (AppTreeRowIcon(ICON_FA_TRASH, ImVec2(x, cy), r, AppThemeAccent(kAppHueDanger)))
         {
           c->Act = 1;
           c->ActNode = n->Id;
@@ -10058,7 +10115,7 @@ namespace ImGui
     if (hidden_count > 0)
     {
       ImGui::SameLine();
-      if (AppBlFilterChip("##showhidden", ICON_FA_EYE_SLASH, hidden_count, true, IM_COL32(210, 150, 90, 255)))
+      if (AppBlFilterChip("##showhidden", ICON_FA_EYE_SLASH, hidden_count, true, AppThemeAccent(kAppHueCommand)))
         for (int i = 0; i < g->Nodes.Size; i++)
           g->Nodes.Data[i].Hidden = false;
       ImGui::SetItemTooltip("%d hidden -- click to show all", hidden_count);

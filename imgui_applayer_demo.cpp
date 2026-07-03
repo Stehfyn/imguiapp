@@ -29,6 +29,26 @@ namespace
   // Set via ImGui::SetAppCodeFont; null -> UI font.
   static ImFont* g_AppCodeFont = nullptr;
 
+  // Theme-derived colors (same vocabulary as CanvasStyleFromTheme, imgui_applayer_canvas.cpp):
+  // neutrals blend WindowBg toward Text; semantic hues pull toward Text for light-theme legibility.
+  static ImU32 DemoThemeMix(ImVec4 a, ImVec4 b, float t, float alpha)
+  {
+    ImVec4 c = ImLerp(a, b, t);
+    c.w = alpha;
+    return ImGui::ColorConvertFloat4ToU32(c);
+  }
+
+  static ImU32 DemoThemeCol(ImVec4 c, float alpha)
+  {
+    c.w = alpha;
+    return ImGui::ColorConvertFloat4ToU32(c);
+  }
+
+  static const ImVec4 kDemoGold   = ImVec4(0.88f, 0.72f, 0.40f, 1.0f);   // selection / focus accent
+  static const ImVec4 kDemoRed    = ImVec4(0.90f, 0.45f, 0.42f, 1.0f);   // errors
+  static const ImVec4 kDemoYellow = ImVec4(0.90f, 0.75f, 0.35f, 1.0f);   // warnings
+  static const ImVec4 kDemoGreen  = ImVec4(0.50f, 0.75f, 0.50f, 1.0f);   // healthy
+
   static void RenderTextT(const char* text, ImVec2 text_size, ImVec2 pos, ImVec2 avail, float t_value)
   {
     // Draws into the window draw list; must not move the layout cursor (SetCursorScreenPos past
@@ -972,6 +992,8 @@ namespace
         digits++;
       const float gutter_w = ImGui::CalcTextSize("0").x * (float)digits;
       const ImU32 gutter_col = ImGui::GetColorU32(ImGuiCol_TextDisabled, 0.75f);
+      const ImVec4 row_ink  = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+      const ImVec4 row_gold = ImLerp(kDemoGold, row_ink, 0.15f);
 
       ImGui::ImGuiAppHoverSource hsrc = ImGui::ImGuiAppHoverSource_None;
       const int brushed_node = spans != nullptr ? ImGui::AppGraphHoveredNode(&hsrc) : -1;
@@ -1019,8 +1041,8 @@ namespace
           if (hl_sel || hl_brush)
           {
             const ImVec2 row_max(row_min.x + ImGui::GetContentRegionAvail().x, row_min.y + line_h);
-            dl->AddRectFilled(row_min, row_max, hl_sel ? IM_COL32(220, 170, 90, 34) : IM_COL32(235, 235, 240, 16));
-            dl->AddRectFilled(row_min, ImVec2(row_min.x + 3.0f, row_max.y), hl_sel ? IM_COL32(220, 170, 90, 220) : IM_COL32(235, 235, 240, 90));
+            dl->AddRectFilled(row_min, row_max, hl_sel ? DemoThemeCol(row_gold, 0.13f) : DemoThemeCol(row_ink, 0.06f));
+            dl->AddRectFilled(row_min, ImVec2(row_min.x + 3.0f, row_max.y), hl_sel ? DemoThemeCol(row_gold, 0.86f) : DemoThemeCol(row_ink, 0.35f));
           }
 
           char num[16];
@@ -1495,13 +1517,15 @@ namespace
             ImGui::SetNextWindowPos(s_min);
             ImGui::SetNextWindowBgAlpha(0.99f);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, em * 0.35f);
-            ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(24, 25, 28, 252));
+            ImGui::PushStyleColor(ImGuiCol_WindowBg,
+                DemoThemeMix(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg), ImGui::GetStyleColorVec4(ImGuiCol_Text), 0.04f, 0.99f));
             temp_data->OpenOutput = false;
             if (ImGui::Begin("##canvas_health", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
                              ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
                              ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollbar))
             {
-              const ImU32 health_col = nerr > 0 ? IM_COL32(230, 115, 108, 255) : nwarn > 0 ? IM_COL32(230, 191, 89, 255) : IM_COL32(128, 191, 128, 255);
+              const ImVec4 health_ink = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+              const ImU32 health_col = DemoThemeCol(ImLerp(nerr > 0 ? kDemoRed : nwarn > 0 ? kDemoYellow : kDemoGreen, health_ink, 0.15f), 1.0f);
               ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(health_col), "%s", health);
               if (last_log[0])
               {
@@ -1538,7 +1562,8 @@ namespace
             // Real overlay window, same reason as the health chip.
             ImGui::SetNextWindowPos(ImVec2(t_pos.x - em * 0.4f, t_pos.y - em * 0.25f));
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, em * 0.5f);
-            ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(24, 25, 28, 252));
+            ImGui::PushStyleColor(ImGuiCol_WindowBg,
+                DemoThemeMix(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg), ImGui::GetStyleColorVec4(ImGuiCol_Text), 0.04f, 0.99f));
             if (ImGui::Begin("##canvas_transport", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
                              ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
                              ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollbar))
@@ -1953,17 +1978,11 @@ namespace ImGui
       static bool canvas_theme_ready = false;
       if (!canvas_theme_ready)
       {
+        // Neutrals come from CanvasStyleFromTheme (CanvasCreate); the demo only accents wires gold.
         ImGuiCanvasStyle* cs = ImGui::CanvasGetStyle(ImGui::AppGraphEditorCanvas());
-        cs->GridBg          = IM_COL32(30, 30, 32, 255);
-        cs->GridLine        = IM_COL32(42, 42, 45, 255);
-        cs->GridLinePrimary = IM_COL32(52, 52, 56, 255);
-        cs->NodeBg          = IM_COL32(48, 48, 50, 255);
-        cs->NodeBgHovered   = IM_COL32(56, 56, 58, 255);
-        cs->NodeBgSelected  = IM_COL32(60, 60, 62, 255);
-        cs->NodeOutline     = IM_COL32(28, 28, 30, 255);
-        cs->Wire            = IM_COL32(170, 170, 175, 200);
-        cs->WireHovered     = IM_COL32(220, 180, 100, 255);
-        cs->WireSelected    = IM_COL32(230, 190, 110, 255);
+        const ImVec4 wire_ink = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+        cs->WireHovered     = DemoThemeCol(ImLerp(kDemoGold, wire_ink, 0.10f), 1.0f);
+        cs->WireSelected    = DemoThemeCol(ImLerp(kDemoGold, wire_ink, 0.18f), 1.0f);
         cs->NodeRounding    = 5.0f;
         cs->NodePadding     = ImVec2(9.0f, 7.0f);
         cs->NodeBorder      = 1.0f;

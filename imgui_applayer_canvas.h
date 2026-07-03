@@ -8,7 +8,8 @@
 
 struct ImGuiCanvasStyle
 {
-  // Colors: set directly, no push/pop stack.
+  // Colors: set directly, no push/pop stack. CanvasCreate derives them from the current
+  // ImGuiStyle theme (CanvasStyleFromTheme); hosts may overwrite after.
   ImU32 GridBg;
   ImU32 GridLine;
   ImU32 GridLinePrimary;
@@ -16,9 +17,12 @@ struct ImGuiCanvasStyle
   ImU32 NodeBgHovered;
   ImU32 NodeBgSelected;
   ImU32 NodeOutline;
+  ImU32 NodeOutlineSelected;
   ImU32 TitleBar;          // per-node override via CanvasNextNodeTitleColor
   ImU32 TitleBarHovered;
   ImU32 TitleBarSelected;
+  ImU32 TitleText;
+  ImU32 TitleEditBg;       // InputText field bg while renaming a node title
   ImU32 Wire;
   ImU32 WireHovered;
   ImU32 WireSelected;
@@ -66,6 +70,9 @@ namespace ImGui
   IMGUI_API void              CanvasDestroy(ImGuiCanvasState* c);
   IMGUI_API ImGuiCanvasStyle* CanvasGetStyle(ImGuiCanvasState* c);
   IMGUI_API ImGuiCanvasIO*    CanvasGetIO(ImGuiCanvasState* c);
+  // Recompute all style colors from the current ImGuiStyle theme (requires a live context).
+  // Called by CanvasCreate; call again after switching themes.
+  IMGUI_API void              CanvasStyleFromTheme(ImGuiCanvasStyle* style);
 
   // ---- frame ----------------------------------------------------------------------------------
   // CanvasBegin opens the child (fills the available region unless size is given), draws the grid,

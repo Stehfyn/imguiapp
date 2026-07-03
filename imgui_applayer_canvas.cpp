@@ -148,33 +148,7 @@ struct ImGuiCanvasState
 
   ImGuiCanvasState()
   {
-    memset(&Style, 0, sizeof(Style));
-    Style.GridBg          = IM_COL32(28, 29, 32, 255);
-    Style.GridLine        = IM_COL32(52, 53, 58, 110);
-    Style.GridLinePrimary = IM_COL32(64, 66, 72, 140);
-    Style.NodeBg          = IM_COL32(46, 47, 52, 255);
-    Style.NodeBgHovered   = IM_COL32(52, 54, 60, 255);
-    Style.NodeBgSelected  = IM_COL32(54, 56, 63, 255);
-    Style.NodeOutline     = IM_COL32(18, 18, 20, 200);
-    Style.TitleBar        = IM_COL32(66, 68, 76, 255);
-    Style.TitleBarHovered = IM_COL32(76, 79, 88, 255);
-    Style.TitleBarSelected= IM_COL32(88, 92, 104, 255);
-    Style.Wire            = IM_COL32(160, 165, 175, 220);
-    Style.WireHovered     = IM_COL32(230, 232, 238, 255);
-    Style.WireSelected    = IM_COL32(230, 200, 120, 255);
-    Style.PinData         = IM_COL32(120, 170, 230, 255);
-    Style.PinContainment  = IM_COL32(230, 170, 110, 255);
-    Style.PinHovered      = IM_COL32(250, 250, 252, 255);
-    Style.MiniMapBg              = IM_COL32(25, 25, 25, 150);
-    Style.MiniMapBgHovered       = IM_COL32(25, 25, 25, 200);
-    Style.MiniMapOutline         = IM_COL32(150, 150, 150, 100);
-    Style.MiniMapNodeBg          = IM_COL32(200, 200, 200, 100);
-    Style.MiniMapNodeBgHovered   = IM_COL32(200, 200, 200, 255);
-    Style.MiniMapNodeBgSelected  = IM_COL32(200, 200, 240, 255);
-    Style.MiniMapNodeOutline     = IM_COL32(200, 200, 200, 100);
-    Style.MiniMapLink            = IM_COL32(160, 165, 175, 200);
-    Style.MiniMapCanvas          = IM_COL32(200, 200, 200, 25);
-    Style.MiniMapCanvasOutline   = IM_COL32(200, 200, 200, 200);
+    memset(&Style, 0, sizeof(Style));   // colors filled by CanvasStyleFromTheme in CanvasCreate
     Style.GridSpacing     = 24.0f;
     Style.NodeRounding    = 4.0f;
     Style.NodePadding     = ImVec2(8.0f, 6.0f);
@@ -296,12 +270,74 @@ static ImGuiCanvasNodeRec* CanvasFindOrCreateNode(ImGuiCanvasState* c, int node_
 // [SECTION] Camera + spaces
 //-----------------------------------------------------------------------------
 
+// Blend of two theme anchors with an explicit alpha.
+static ImU32 CanvasThemeMix(ImVec4 a, ImVec4 b, float t, float alpha)
+{
+  ImVec4 c = ImLerp(a, b, t);
+  c.w = alpha;
+  return ImGui::ColorConvertFloat4ToU32(c);
+}
+
+static ImU32 CanvasThemeCol(ImVec4 c, float alpha)
+{
+  c.w = alpha;
+  return ImGui::ColorConvertFloat4ToU32(c);
+}
+
 namespace ImGui
 {
-  ImGuiCanvasState* CanvasCreate()                       { return IM_NEW(ImGuiCanvasState)(); }
+  ImGuiCanvasState* CanvasCreate()
+  {
+    ImGuiCanvasState* c = IM_NEW(ImGuiCanvasState)();
+    CanvasStyleFromTheme(&c->Style);
+    return c;
+  }
   void              CanvasDestroy(ImGuiCanvasState* c)   { IM_DELETE(c); }
   ImGuiCanvasStyle* CanvasGetStyle(ImGuiCanvasState* c)  { return &c->Style; }
   ImGuiCanvasIO*    CanvasGetIO(ImGuiCanvasState* c)     { return &c->IO; }
+
+  void CanvasStyleFromTheme(ImGuiCanvasStyle* style)
+  {
+    IM_ASSERT(GetCurrentContext() != nullptr && "CanvasStyleFromTheme reads the current ImGuiStyle");
+    const ImVec4 bg    = GetStyleColorVec4(ImGuiCol_WindowBg);
+    const ImVec4 ink   = GetStyleColorVec4(ImGuiCol_Text);
+    const ImVec4 dark  = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);
+
+    // Semantic accents, pulled toward ink so they stay legible on light themes.
+    const ImVec4 sel  = ImLerp(ImVec4(0.90f, 0.78f, 0.47f, 1.0f), ink, 0.15f);   // selection (gold)
+    const ImVec4 data = ImLerp(ImVec4(0.47f, 0.67f, 0.90f, 1.0f), ink, 0.15f);   // data pins (circle)
+    const ImVec4 cont = ImLerp(ImVec4(0.90f, 0.67f, 0.43f, 1.0f), ink, 0.15f);   // containment pins (square)
+
+    style->GridBg              = CanvasThemeMix(bg, ink, 0.06f,  1.00f);
+    style->GridLine            = CanvasThemeMix(bg, ink, 0.16f,  0.43f);
+    style->GridLinePrimary     = CanvasThemeMix(bg, ink, 0.21f,  0.55f);
+    style->NodeBg              = CanvasThemeMix(bg, ink, 0.135f, 1.00f);
+    style->NodeBgHovered       = CanvasThemeMix(bg, ink, 0.16f,  1.00f);
+    style->NodeBgSelected      = CanvasThemeMix(bg, ink, 0.175f, 1.00f);
+    style->NodeOutline         = CanvasThemeMix(dark, bg, 0.07f, 0.78f);
+    style->NodeOutlineSelected = CanvasThemeCol(sel, 1.00f);
+    style->TitleBar            = CanvasThemeMix(bg, ink, 0.215f, 1.00f);
+    style->TitleBarHovered     = CanvasThemeMix(bg, ink, 0.26f,  1.00f);
+    style->TitleBarSelected    = CanvasThemeMix(bg, ink, 0.31f,  1.00f);
+    style->TitleText           = CanvasThemeMix(bg, ink, 0.95f,  1.00f);
+    style->TitleEditBg         = CanvasThemeMix(bg, ink, 0.02f,  1.00f);
+    style->Wire                = CanvasThemeMix(bg, ink, 0.61f,  0.86f);
+    style->WireHovered         = CanvasThemeMix(bg, ink, 0.92f,  1.00f);
+    style->WireSelected        = CanvasThemeCol(sel, 1.00f);
+    style->PinData             = CanvasThemeCol(data, 1.00f);
+    style->PinContainment      = CanvasThemeCol(cont, 1.00f);
+    style->PinHovered          = CanvasThemeMix(bg, ink, 0.98f,  1.00f);
+    style->MiniMapBg           = CanvasThemeMix(bg, ink, 0.04f,  0.59f);
+    style->MiniMapBgHovered    = CanvasThemeMix(bg, ink, 0.04f,  0.78f);
+    style->MiniMapOutline      = CanvasThemeMix(bg, ink, 0.56f,  0.39f);
+    style->MiniMapNodeBg       = CanvasThemeMix(bg, ink, 0.77f,  0.39f);
+    style->MiniMapNodeBgHovered  = CanvasThemeMix(bg, ink, 0.77f, 1.00f);
+    style->MiniMapNodeBgSelected = CanvasThemeMix(ImLerp(bg, ink, 0.77f), data, 0.35f, 1.00f);
+    style->MiniMapNodeOutline  = CanvasThemeMix(bg, ink, 0.77f,  0.39f);
+    style->MiniMapLink         = CanvasThemeMix(bg, ink, 0.61f,  0.78f);
+    style->MiniMapCanvas       = CanvasThemeMix(bg, ink, 0.77f,  0.10f);
+    style->MiniMapCanvasOutline= CanvasThemeMix(bg, ink, 0.77f,  0.78f);
+  }
 
   ImVec2 CanvasGetPan(const ImGuiCanvasState* c)              { return c->Pan; }
   void   CanvasSetPan(ImGuiCanvasState* c, ImVec2 pan)        { c->Pan = pan; }
@@ -824,9 +860,9 @@ namespace ImGui
       c->DrawList->AddRectFilled(mn, ImVec2(mx.x, mn.y + title_h), tb, rounding, ImDrawFlags_RoundCornersTop);
       if (!editing_title)
         c->DrawList->AddText(ImVec2(mn.x + c->Style.NodePadding.x * z, mn.y + (title_h - GetFontSize()) * 0.5f),
-                             IM_COL32(235, 236, 240, 255), n->Title);
+                             c->Style.TitleText, n->Title);
     }
-    c->DrawList->AddRect(mn, mx, selected ? IM_COL32(230, 200, 120, 255) : c->Style.NodeOutline, rounding, 0,
+    c->DrawList->AddRect(mn, mx, selected ? c->Style.NodeOutlineSelected : c->Style.NodeOutline, rounding, 0,
                          ImMax(1.0f, c->Style.NodeBorder * z));
     c->Splitter.SetCurrentChannel(c->DrawList, 2);
 
@@ -841,7 +877,7 @@ namespace ImGui
         SetKeyboardFocusHere();
         c->EditFocusPending = false;
       }
-      PushStyleColor(ImGuiCol_FrameBg, IM_COL32(20, 20, 24, 255));
+      PushStyleColor(ImGuiCol_FrameBg, c->Style.TitleEditBg);
       InputText("##canvas_title_edit", c->EditBuf, (size_t)c->EditBufSize, ImGuiInputTextFlags_AutoSelectAll);
       const bool done = IsItemDeactivated();
       PopStyleColor();
