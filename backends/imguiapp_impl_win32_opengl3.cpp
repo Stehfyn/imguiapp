@@ -33,8 +33,8 @@ namespace
         bool  PlatformBackendInitialized;
         bool  RendererBackendInitialized;
 
-        // Frame capture (AV readback): armed by the first CaptureFrame call.
-        bool           CaptureArmed;
+        // Frame capture (AV readback).
+        ImU64          CaptureLastReturned;   // highest FrameID.FrameIndex handed out; a repeat call with no new frame returns false
         ImVector<char> CaptureRead;   // glReadPixels scratch, GL's bottom-up row order
         ImVector<char> CaptureRgba;   // top-down RGBA handed to callers; valid until the next capture
     };
@@ -227,19 +227,15 @@ namespace
 
     // Synchronous backbuffer readback: this TU links only GL 1.1 entry points (no
     // loader), so no PBO ring -- glReadPixels stalls the pipeline for the transfer.
-    // First call arms and returns false (same contract as the vulkan backend). The
-    // encode phase runs before present, so GL_BACK still holds the rendered frame.
+    // Every call returns the CURRENT frame (encode phase runs before present, so
+    // GL_BACK still holds it); a repeat call with no new frame rendered returns false.
     bool CaptureFrame(ImGuiApp* app, ImGuiAppAVFrame* out_frame)
     {
-        IM_UNUSED(app);
         ImGuiApp_Win32OpenGL3_Data* bd = &GBackend;
         if (out_frame == nullptr || bd->MainDC == nullptr || bd->MainGLRC == nullptr)
             return false;
-        if (!bd->CaptureArmed)
-        {
-            bd->CaptureArmed = true;
-            return false;
-        }
+        if (app != nullptr && app->FrameID.FrameIndex <= bd->CaptureLastReturned)
+            return false;   // drain/gap call: this frame was already handed out
 
         int width = 0;
         int height = 0;
@@ -266,7 +262,12 @@ namespace
         out_frame->Height = height;
         out_frame->PitchBytes = row_bytes;
         out_frame->Pixels = bd->CaptureRgba.Data;
-        return true;   // FrameID is the recorder's to fill
+        if (app != nullptr)
+        {
+            out_frame->FrameID = app->FrameID;   // synchronous path: pixels ARE the current frame
+            bd->CaptureLastReturned = app->FrameID.FrameIndex;
+        }
+        return true;
     }
 }
 

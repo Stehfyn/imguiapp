@@ -60,7 +60,9 @@ int ImGuiApp_ImplWin32_RunLoop(ImGuiApp* app)
         }
         if (done)
             break;
-        if (hwnd && ::IsIconic(hwnd))
+        // Recording must encode every frame -- a minimized app keeps running so the
+        // recorder can synthesize pause frames (the backend renders nothing at 0 size).
+        if (hwnd && ::IsIconic(hwnd) && app->Recorder == nullptr)
         {
             ::Sleep(10);
             continue;

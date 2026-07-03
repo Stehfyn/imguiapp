@@ -244,9 +244,17 @@ IMGUI_API void              AppRecordEnd(ImGuiAppRecorder* rec);   // flush queu
 ```
 
 Threading: `WriteFrame` runs on a single encoder thread behind a bounded queue
-(default depth 3). Queue-full policy is configurable: `Block` (benchmarks/tests: never
-drop) or `DropNewest` (live capture: never stall the app). Drops are counted and
-WAL-logged.
+(default depth 3). Queue-full policy defaults to `Block` in every mode -- ENCODE EVERY
+FRAME is the contract; `DropNewest` (never stall the app, drops counted + WAL-logged)
+is an explicit opt-in via `AppRecordSetQueuePolicy`.
+
+Encode-every-frame guarantees: the take's frame ids are contiguous. The first pump
+captures the current frame synchronously (no pipeline-priming loss); `AppRecordEnd`
+drains the pipelined tail so the final frame lands; any frame that produced no pixels
+mid-take (minimized window, capture hiccup) is synthesized as a pause-glyph placeholder
+frame carrying its real frame id. The win32 run loop keeps frames running while
+minimized whenever a recorder is active, so the pause span is encoded rather than
+skipped.
 
 ### Flight recorder (ring mode)
 
@@ -259,7 +267,7 @@ struct ImGuiAppRingConfig
 {
   float  Seconds;        // ring span; default 10
   int    MaxMemoryMB;    // hard cap; oldest frames evicted when either bound binds. default 256
-  float  Fps;            // ring sampling rate (may be below the app rate); default 30
+  float  Fps;            // <= 0 (default) = every frame; > 0 = explicit subsample opt-out of encode-every-frame
 };
 
 IMGUI_API ImGuiAppRecorder* AppRecordBeginRing(ImGuiApp* app, ImGuiAppAVEncoder* encoder, const ImGuiAppAVEncodeConfig* config, const ImGuiAppRingConfig* ring);

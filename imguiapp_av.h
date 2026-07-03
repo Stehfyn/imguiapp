@@ -107,9 +107,9 @@ struct ImGuiAppRingConfig
 {
   float Seconds;       // ring span
   int   MaxMemoryMB;   // hard cap; oldest frames evicted when either bound binds
-  float Fps;           // ring sampling rate (may be below the app rate)
+  float Fps;           // <= 0 (default) = keep EVERY frame; > 0 = explicit subsample opt-out of the encode-every-frame contract
 
-  ImGuiAppRingConfig() { Seconds = 10.0f; MaxMemoryMB = 256; Fps = 30.0f; }
+  ImGuiAppRingConfig() { Seconds = 10.0f; MaxMemoryMB = 256; Fps = 0.0f; }
 };
 
 namespace ImGui

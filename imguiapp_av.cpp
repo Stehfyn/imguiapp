@@ -18,6 +18,7 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <chrono>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -26,7 +27,6 @@
 #include <windows.h>
 #include <intrin.h>
 #else
-#include <chrono>
 #include <time.h>
 #endif
 
@@ -137,7 +137,10 @@ struct ImGuiAppRecorder
   bool                      EncoderOpen;
   int                       FixedWidth;    // 0 until the first captured frame locks the size
   int                       FixedHeight;
-  ImU64                     AcceptedFrames;   // captures accepted this take (video/sidecar ordinal)
+  ImU64                     AcceptedFrames;    // frames emitted this take (video/sidecar ordinal), placeholders included
+  ImU64                     LastEmittedIndex;  // FrameID.FrameIndex of the last emitted frame; 0 = none. Gap fill + duplicate guard
+  bool                      NoSizeWarned;      // pre-first-capture miss with no size to synthesize at: WAL once
+  ImVector<char>            PlaceholderPixels; // pause-glyph frame at the locked size, built lazily
 
   // Sidecar (normal mode; the ring writes its sidecar only at dump)
   FILE*                     Meta;
@@ -184,6 +187,8 @@ struct ImGuiAppRecorder
     FixedWidth = 0;
     FixedHeight = 0;
     AcceptedFrames = 0;
+    LastEmittedIndex = 0;
+    NoSizeWarned = false;
     Meta = nullptr;
     memset(&MetaHeader, 0, sizeof(MetaHeader));
     PendingBlobSet = false;
@@ -395,6 +400,132 @@ static void AvMetaWrite(ImGuiAppRecorder* rec, const ImVector<char>* framed)
 // [SECTION] Per-frame pump
 //-----------------------------------------------------------------------------
 
+// Emits one frame: sidecar records built on the app thread, pixels to the ring or the
+// encoder thread. consume_pendings binds the caller-set blob/snapshot to this frame
+// (real current frames only; placeholders and backlog frames must not steal them).
+static void AvEmitFrame(ImGuiAppRecorder* rec, const ImGuiAppAVFrame* frame, bool consume_pendings)
+{
+  ImVector<char> meta;
+  const bool with_blob = consume_pendings && rec->PendingBlobSet;
+  const void* user = with_blob ? (const void*)rec->PendingBlob.Data : nullptr;
+  const ImU32 user_size = with_blob ? (ImU32)rec->PendingBlob.Size : 0;
+  AvBuildFrameRecord(&meta, &frame->FrameID, user, user_size);
+  AvCollectInputRecords(rec, &meta);
+  if (consume_pendings && rec->PendingSnapshotRecord.Size > 0)
+  {
+    AvPut(&meta, rec->PendingSnapshotRecord.Data, rec->PendingSnapshotRecord.Size);
+    rec->PendingSnapshotRecord.clear();
+  }
+  if (consume_pendings)
+  {
+    rec->PendingBlobSet = false;
+    rec->PendingBlob.clear();
+  }
+
+  if (rec->IsRing)
+  {
+    rec->RingLastAcceptSec = frame->FrameID.TimeSec;
+
+    ImGuiAppAVRingEntry* entry = IM_NEW(ImGuiAppAVRingEntry)();
+    entry->Width = frame->Width;
+    entry->Height = frame->Height;
+    entry->FrameID = frame->FrameID;
+    if (!ImGuiAppAV_QoiEncode(frame->Pixels, frame->Width, frame->Height, frame->PitchBytes, &entry->Qoi))
+    {
+      IM_DELETE(entry);
+      return;
+    }
+    entry->MetaRecords.swap(meta);
+    rec->RingEntries.push_back(entry);
+    rec->RingBytes += (size_t)entry->Qoi.Size + (size_t)entry->MetaRecords.Size;
+
+    // Evict oldest while either bound binds.
+    const double span_limit = (double)rec->Ring.Seconds;
+    const size_t byte_limit = (size_t)rec->Ring.MaxMemoryMB * 1024u * 1024u;
+    while (rec->RingEntries.Size > 1)
+    {
+      ImGuiAppAVRingEntry* oldest = rec->RingEntries.Data[0];
+      const bool too_old = frame->FrameID.TimeSec - oldest->FrameID.TimeSec > span_limit;
+      const bool too_big = rec->RingBytes > byte_limit;
+      if (!too_old && !too_big)
+        break;
+      rec->RingBytes -= (size_t)oldest->Qoi.Size + (size_t)oldest->MetaRecords.Size;
+      IM_DELETE(oldest);
+      rec->RingEntries.erase(rec->RingEntries.begin());
+    }
+  }
+  else
+  {
+    // Sidecar now (this thread owns the FILE*), pixels to the encoder thread.
+    AvMetaWrite(rec, &meta);
+
+    ImGuiAppAVJob* job = IM_NEW(ImGuiAppAVJob)();
+    job->Width = frame->Width;
+    job->Height = frame->Height;
+    job->FrameID = frame->FrameID;
+    job->Pixels.resize(frame->Width * frame->Height * 4);
+    const char* src = (const char*)frame->Pixels;
+    char* dst = job->Pixels.Data;
+    const int row = frame->Width * 4;
+    for (int y = 0; y < frame->Height; y++)
+    {
+      memcpy(dst, src, (size_t)row);
+      src += frame->PitchBytes;
+      dst += row;
+    }
+
+    const ImU64 drops_before = rec->DroppedFrames;
+    if (!AvQueuePush(rec, job) && rec->DroppedFrames == drops_before + 1 && drops_before == 0)
+      ImGui::AppWALWrite(rec->App->WAL, ImGuiAppWALLevel_Lifecycle, "av: encoder queue full, dropping frames (DropNewest)");
+  }
+
+  rec->AcceptedFrames++;
+  rec->LastEmittedIndex = frame->FrameID.FrameIndex;
+}
+
+// Pause-glyph frame at the locked size: dark gray field, two centered light bars. Encodes
+// "the app produced no pixels for this frame" (minimized, capture gap) without breaking
+// the take's frame-id contiguity.
+static void AvEmitPlaceholder(ImGuiAppRecorder* rec, ImU64 frame_index)
+{
+  const int w = rec->FixedWidth;
+  const int h = rec->FixedHeight;
+  if (w <= 0 || h <= 0)
+    return;
+
+  if (rec->PlaceholderPixels.Size != w * h * 4)
+  {
+    rec->PlaceholderPixels.resize(w * h * 4);
+    unsigned int* px = (unsigned int*)rec->PlaceholderPixels.Data;
+    const unsigned int bg = IM_COL32(32, 32, 36, 255);
+    const unsigned int bar = IM_COL32(200, 200, 205, 255);
+    const int bar_w = w * 8 / 100;
+    const int bar_h = h * 40 / 100;
+    const int gap = w * 8 / 100;
+    const int y0 = (h - bar_h) / 2;
+    const int lx0 = w / 2 - gap / 2 - bar_w;
+    const int rx0 = w / 2 + gap / 2;
+    for (int y = 0; y < h; y++)
+      for (int x = 0; x < w; x++)
+      {
+        const bool in_bar = y >= y0 && y < y0 + bar_h &&
+                            ((x >= lx0 && x < lx0 + bar_w) || (x >= rx0 && x < rx0 + bar_w));
+        px[(size_t)y * w + x] = in_bar ? bar : bg;
+      }
+  }
+
+  ImGuiAppAVFrame frame;
+  frame.Width = w;
+  frame.Height = h;
+  frame.PitchBytes = w * 4;
+  frame.Pixels = rec->PlaceholderPixels.Data;
+  // The frame never rendered, so it has no measured clocks: synthesis-time timestamps
+  // under its REAL index keep the id sequence contiguous and the timeline monotonic.
+  frame.FrameID = rec->App->FrameID;
+  frame.FrameID.FrameIndex = frame_index;
+  AvEmitFrame(rec, &frame, false);
+}
+
 IMGUI_API void ImGui::AppRecordPump(ImGuiAppRecorder* rec)
 {
   if (rec == nullptr || !rec->Active)
@@ -404,18 +535,46 @@ IMGUI_API void ImGui::AppRecordPump(ImGuiAppRecorder* rec)
   if (backend->CaptureFrame == nullptr)
     return;
 
-  // Ring subsampling happens before the (expensive) readback decision would matter;
-  // capture still runs so the staging chain stays warm and frame-paced.
+  // Explicit ring subsampling (Ring.Fps > 0) opts OUT of the encode-every-frame
+  // contract: no gap synthesis there, sparse is the point.
+  const bool subsampled = rec->IsRing && rec->Ring.Fps > 0.0f;
+
   ImGuiAppAVFrame captured;
   const bool have_frame = backend->CaptureFrame(rec->App, &captured)
                        && captured.Pixels != nullptr && captured.Width > 0 && captured.Height > 0;
   if (!have_frame)
   {
-    // Frame-scoped records must not shift onto the NEXT frame's identity (the arm
-    // frame and any capture hiccup land here). Same discipline as the ring skip.
+    // No new pixels this pump. When the CURRENT frame's copy may still arrive through
+    // the pipelined path (bubble), synthesize nothing for it; fill only ids strictly
+    // below it. Frame-scoped pendings must not shift onto another frame's identity.
     rec->PendingBlobSet = false;
     rec->PendingBlob.clear();
     rec->PendingSnapshotRecord.clear();
+
+    if (rec->LastEmittedIndex == 0)
+    {
+      // Pre-first-capture: without a locked size there is nothing to synthesize at.
+      if (rec->FixedWidth == 0)
+      {
+        if (rec->Config.Width > 0 && rec->Config.Height > 0)
+        {
+          rec->FixedWidth = rec->Config.Width;
+          rec->FixedHeight = rec->Config.Height;
+          rec->LastEmittedIndex = rec->App->FrameID.FrameIndex > 0 ? rec->App->FrameID.FrameIndex - 1 : 0;
+        }
+        else if (!rec->NoSizeWarned)
+        {
+          rec->NoSizeWarned = true;
+          ImGui::AppWALWrite(rec->App->WAL, ImGuiAppWALLevel_Lifecycle, "av: capture not delivering and no size configured; frames before the first capture are not synthesized");
+        }
+        return;
+      }
+      return;
+    }
+
+    if (!subsampled)
+      while (rec->LastEmittedIndex + 1 < rec->App->FrameID.FrameIndex && rec->Active)
+        AvEmitPlaceholder(rec, rec->LastEmittedIndex + 1);
     return;
   }
 
@@ -433,17 +592,18 @@ IMGUI_API void ImGui::AppRecordPump(ImGuiAppRecorder* rec)
     return;
   }
 
-  // A double-buffered backend returns frame N-1's pixels WITH their true id; only a
-  // backend that left the id empty gets stamped with the pumping frame's.
+  // A backend that leaves the id empty gets stamped with the pumping frame's; pipelined
+  // backends return frame N-1's pixels WITH their true id.
   if (captured.FrameID.FrameIndex == 0)
     captured.FrameID = rec->App->FrameID;
 
-  // Ring subsample decides BEFORE any record is consumed: skipped frames drop their
-  // frame-scoped blob/snapshot, but the input-log backlog stays unconsumed and lands
-  // with the next accepted frame (replay needs every input frame).
-  if (rec->IsRing)
+  // Duplicate guard: ids must be strictly increasing.
+  if (rec->LastEmittedIndex > 0 && captured.FrameID.FrameIndex <= rec->LastEmittedIndex)
+    return;
+
+  if (rec->IsRing && subsampled)
   {
-    const double min_step = rec->Ring.Fps > 0.0f ? 1.0 / (double)rec->Ring.Fps : 0.0;
+    const double min_step = 1.0 / (double)rec->Ring.Fps;
     if (captured.FrameID.TimeSec - rec->RingLastAcceptSec + 1e-9 < min_step)
     {
       rec->PendingBlobSet = false;
@@ -453,77 +613,34 @@ IMGUI_API void ImGui::AppRecordPump(ImGuiAppRecorder* rec)
     }
   }
 
-  // Sidecar records for this frame (built on the app thread; pixel copy below).
-  ImVector<char> meta;
-  const void* user = rec->PendingBlobSet ? (const void*)rec->PendingBlob.Data : nullptr;
-  const ImU32 user_size = rec->PendingBlobSet ? (ImU32)rec->PendingBlob.Size : 0;
-  AvBuildFrameRecord(&meta, &captured.FrameID, user, user_size);
-  AvCollectInputRecords(rec, &meta);
-  if (rec->PendingSnapshotRecord.Size > 0)
-  {
-    AvPut(&meta, rec->PendingSnapshotRecord.Data, rec->PendingSnapshotRecord.Size);
-    rec->PendingSnapshotRecord.clear();
-  }
-  rec->PendingBlobSet = false;
-  rec->PendingBlob.clear();
+  // Fill any hole strictly below the real frame, then emit it.
+  if (!subsampled && rec->LastEmittedIndex > 0)
+    while (rec->LastEmittedIndex + 1 < captured.FrameID.FrameIndex && rec->Active)
+      AvEmitPlaceholder(rec, rec->LastEmittedIndex + 1);
+  AvEmitFrame(rec, &captured, true);
+}
 
-  if (rec->IsRing)
+// The final rendered frame's pipelined copy retires after the last pump: pump again
+// (bounded) until nothing new appears, then close the id sequence with placeholders for
+// any frames that never produced pixels.
+static void AvDrainCapture(ImGuiAppRecorder* rec)
+{
+  int idle_tries = 0;
+  for (int i = 0; i < 32 && rec->Active && idle_tries < 3; i++)
   {
-    rec->RingLastAcceptSec = captured.FrameID.TimeSec;
-
-    ImGuiAppAVRingEntry* entry = IM_NEW(ImGuiAppAVRingEntry)();
-    entry->Width = captured.Width;
-    entry->Height = captured.Height;
-    entry->FrameID = captured.FrameID;
-    if (!ImGuiAppAV_QoiEncode(captured.Pixels, captured.Width, captured.Height, captured.PitchBytes, &entry->Qoi))
+    const ImU64 before = rec->AcceptedFrames;
+    ImGui::AppRecordPump(rec);
+    if (rec->AcceptedFrames > before)
     {
-      IM_DELETE(entry);
-      return;
+      idle_tries = 0;
+      continue;
     }
-    entry->MetaRecords.swap(meta);
-    rec->RingEntries.push_back(entry);
-    rec->RingBytes += (size_t)entry->Qoi.Size + (size_t)entry->MetaRecords.Size;
-    rec->AcceptedFrames++;
-
-    // Evict oldest while either bound binds.
-    const double span_limit = (double)rec->Ring.Seconds;
-    const size_t byte_limit = (size_t)rec->Ring.MaxMemoryMB * 1024u * 1024u;
-    while (rec->RingEntries.Size > 1)
-    {
-      ImGuiAppAVRingEntry* oldest = rec->RingEntries.Data[0];
-      const bool too_old = captured.FrameID.TimeSec - oldest->FrameID.TimeSec > span_limit;
-      const bool too_big = rec->RingBytes > byte_limit;
-      if (!too_old && !too_big)
-        break;
-      rec->RingBytes -= (size_t)oldest->Qoi.Size + (size_t)oldest->MetaRecords.Size;
-      IM_DELETE(oldest);
-      rec->RingEntries.erase(rec->RingEntries.begin());
-    }
-    return;
+    idle_tries++;
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
-
-  // Normal mode: sidecar now (this thread owns the FILE*), pixels to the encoder thread.
-  AvMetaWrite(rec, &meta);
-  rec->AcceptedFrames++;
-
-  ImGuiAppAVJob* job = IM_NEW(ImGuiAppAVJob)();
-  job->Width = captured.Width;
-  job->Height = captured.Height;
-  job->FrameID = captured.FrameID;
-  job->Pixels.resize(captured.Width * captured.Height * 4);
-  const char* src = (const char*)captured.Pixels;
-  char* dst = job->Pixels.Data;
-  const int row = captured.Width * 4;
-  for (int y = 0; y < captured.Height; y++)
-  {
-    memcpy(dst, src, (size_t)row);
-    src += captured.PitchBytes;
-    dst += row;
-  }
-
-  const ImU64 drops_before = rec->DroppedFrames;
-  if (!AvQueuePush(rec, job) && rec->DroppedFrames == drops_before + 1 && drops_before == 0)
-    ImGui::AppWALWrite(rec->App->WAL, ImGuiAppWALLevel_Lifecycle, "av: encoder queue full, dropping frames (DropNewest)");
+  if (rec->Active && rec->LastEmittedIndex > 0 && !(rec->IsRing && rec->Ring.Fps > 0.0f))
+    while (rec->LastEmittedIndex < rec->App->FrameID.FrameIndex && rec->Active)
+      AvEmitPlaceholder(rec, rec->LastEmittedIndex + 1);
 }
 
 //-----------------------------------------------------------------------------
@@ -556,12 +673,10 @@ static ImGuiAppRecorder* AvBeginCommon(ImGuiApp* app, ImGuiAppAVEncoder* encoder
 
   // Realtime = live witnessing: the app must NEVER stall on the encoder, because the
   // stall would distort the very timeline being recorded. A Block queue plus realtime
-  // frame duplication is a feedback loop -- one hitch grows the next frame's delta,
-  // which duplicates more frames into the pipe, which blocks the app longer (observed
-  // steady state: app at ~1 fps). Constant keeps Block: synthetic timelines must never
-  // drop. AppRecordSetQueuePolicy still overrides either way.
-  rec->QueuePolicy = rec->Config.Timing == ImGuiAppAVTimingMode_Realtime
-                   ? ImGuiAppRecordQueuePolicy_DropNewest : ImGuiAppRecordQueuePolicy_Block;
+  // Encode every frame: Block for all timing modes (the readback slowness that once
+  // motivated a DropNewest default is fixed). DropNewest stays an explicit opt-in via
+  // AppRecordSetQueuePolicy for callers that prefer drops over any app stall.
+  rec->QueuePolicy = ImGuiAppRecordQueuePolicy_Block;
 
   rec->MetaHeader.Version = 1;
   memcpy(rec->MetaHeader.Magic, kAvMetaMagic, 8);
@@ -664,6 +779,8 @@ IMGUI_API void AppRecordEnd(ImGuiAppRecorder* rec)
   IM_ASSERT(rec != nullptr);
   if (rec == nullptr)
     return;
+  if (rec->Active)
+    AvDrainCapture(rec);   // the last rendered frame's copy retires after the last pump
   rec->Active = false;
 
   if (!rec->IsRing)
@@ -726,7 +843,10 @@ IMGUI_API ImGuiAppRecorder* AppRecordBeginRing(ImGuiApp* app, ImGuiAppAVEncoder*
 IMGUI_API bool AppRecordDumpRing(ImGuiAppRecorder* rec, const char* reason)
 {
   IM_ASSERT(rec != nullptr && rec->IsRing);
-  if (rec == nullptr || !rec->IsRing || rec->RingEntries.Size == 0)
+  if (rec == nullptr || !rec->IsRing)
+    return false;
+  AvDrainCapture(rec);   // pull the newest retired copy in before snapshotting the ring
+  if (rec->RingEntries.Size == 0)
     return false;
 
   rec->DumpCount++;

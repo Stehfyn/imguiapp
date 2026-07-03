@@ -141,11 +141,14 @@ struct ImGuiAppPlatformBackend
   bool (*InitPlatform)(ImGuiApp* app, ImGuiAppConfig& config);
   void (*ShutdownPlatform)(ImGuiApp* app);
   int  (*RunLoop)(ImGuiApp* app);
-  // Optional (null = backend cannot capture; recording fails with a clear error). Readback of the
-  // frame just rendered, called after render, before present. Double-buffered staging is expected:
-  // returning frame N-1's pixels is fine PROVIDED the backend fills out_frame->FrameID with the id
-  // recorded at copy time (the pixels' true identity); a backend that leaves it zeroed gets the
-  // pumping frame's id stamped by the recorder. Pixels stay valid until the next CaptureFrame call.
+  // Optional (null = backend cannot capture; recording fails with a clear error). Readback in the
+  // encode phase (after render, before present). Encode-every-frame contract: the FIRST call of a
+  // take returns the current frame (synchronously if the pipeline is unprimed); steady state may
+  // return frame N-1's pixels PROVIDED out_frame->FrameID carries the id recorded at copy time (a
+  // zeroed id gets the pumping frame's stamped by the recorder); a call with no new frame rendered
+  // since the last one returns the freshest unreturned copy if already GPU-complete (never block),
+  // else false -- callers drain the tail by re-calling after the GPU settles. Never return the
+  // same FrameIndex twice. Pixels stay valid until the next CaptureFrame call.
   bool (*CaptureFrame)(ImGuiApp* app, ImGuiAppAVFrame* out_frame);
 };
 

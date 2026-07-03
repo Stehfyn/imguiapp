@@ -87,6 +87,10 @@ namespace
         VkFormat                       CaptureCopyFormat[2];
         ImGuiAppFrameID                CaptureCopyId[2];      // FrameID at copy-record time: the pixels' TRUE identity under double-buffer latency
         VkFence                        CapturePendingFence[2];// fence of the submit containing the copy; null = data at rest
+        ImU64                          CaptureLastReturned;   // highest FrameID.FrameIndex handed to a caller; gates staleness/duplicates
+        VkCommandPool                  CaptureSyncPool;       // transient one-shot copy for the take's FIRST frame (pipeline not primed yet)
+        VkCommandBuffer                CaptureSyncCmd;
+        VkFence                        CaptureSyncFence;
         ImVector<char>                 CaptureRgba;           // RGBA8 conversion buffer handed to CaptureFrame callers
     };
 
@@ -136,6 +140,17 @@ namespace
     {
         if (bd == nullptr || bd->Device == VK_NULL_HANDLE)
             return;
+        if (bd->CaptureSyncFence != VK_NULL_HANDLE)
+        {
+            vkDestroyFence(bd->Device, bd->CaptureSyncFence, bd->Allocator);
+            bd->CaptureSyncFence = VK_NULL_HANDLE;
+        }
+        if (bd->CaptureSyncPool != VK_NULL_HANDLE)
+        {
+            vkDestroyCommandPool(bd->Device, bd->CaptureSyncPool, bd->Allocator);   // frees CaptureSyncCmd with it
+            bd->CaptureSyncPool = VK_NULL_HANDLE;
+            bd->CaptureSyncCmd = VK_NULL_HANDLE;
+        }
         for (int i = 0; i < 2; i++)
         {
             if (bd->CapturePendingFence[i] != VK_NULL_HANDLE)
@@ -1442,47 +1457,18 @@ void ImGuiApp_Win32Vulkan_ShutdownPlatform(ImGuiApp* app)
     app->PlatformData = nullptr;
 }
 
-// Readback of the frame just rendered. First call arms capture (copies start with the NEXT
-// recorded frame); afterwards returns the previous frame's pixels as tightly packed RGBA8.
-// The caller (recorder) fills out_frame->FrameID; pixels stay valid until the next call.
-bool ImGuiApp_Win32Vulkan_CaptureFrame(ImGuiApp* app, ImGuiAppAVFrame* out_frame)
+// Converts staging buffer `index` into CaptureRgba and fills out_frame. False on an
+// unsupported (non-32-bit) format.
+static bool CaptureConvertAndFill(ImGuiApp_Win32Vulkan_Data* bd, int index, ImGuiAppAVFrame* out_frame)
 {
-    IM_UNUSED(app);
-    ImGuiApp_Win32Vulkan_Data* bd = &GBackend;
-    if (out_frame == nullptr || !bd->VulkanInitialized || !bd->CaptureSupported)
-        return false;
-
-    if (!bd->CaptureArmed)
-    {
-        bd->CaptureArmed = true;
-        return false;
-    }
-
-    // RecordCaptureCopy flips the write index AFTER writing, so write^1 holds THIS frame's
-    // copy (fence just submitted -- waiting it would sync the whole pipeline every frame).
-    // The PREVIOUS frame's retired copy sits at the un-flipped index: one frame of latency,
-    // zero steady-state stall. The FrameID travels with the pixels, so identity holds.
-    const int r = bd->CaptureWriteIndex;
-    if (bd->CaptureCopyWidth[r] <= 0 || bd->CaptureMapped[r] == nullptr)
-        return false;
-
-    if (bd->CapturePendingFence[r] != VK_NULL_HANDLE)
-    {
-        // Submitted last frame; in steady state long signaled. If the swapchain reused the
-        // fence for a newer submit, the wait only lengthens -- this buffer's copy completed
-        // before the fence's first signal, so the data cannot be torn.
-        vkWaitForFences(bd->Device, 1, &bd->CapturePendingFence[r], VK_TRUE, UINT64_MAX);
-        bd->CapturePendingFence[r] = VK_NULL_HANDLE;
-    }
-
-    const int      width = bd->CaptureCopyWidth[r];
-    const int      height = bd->CaptureCopyHeight[r];
-    const VkFormat format = bd->CaptureCopyFormat[r];
-    const unsigned char* src = (const unsigned char*)bd->CaptureMapped[r];
+    const int      width = bd->CaptureCopyWidth[index];
+    const int      height = bd->CaptureCopyHeight[index];
+    const VkFormat format = bd->CaptureCopyFormat[index];
+    const unsigned char* src = (const unsigned char*)bd->CaptureMapped[index];
 
     if (format != VK_FORMAT_R8G8B8A8_UNORM && format != VK_FORMAT_R8G8B8A8_SRGB &&
         format != VK_FORMAT_B8G8R8A8_UNORM && format != VK_FORMAT_B8G8R8A8_SRGB)
-        return false;   // non-32-bit swapchain format: capture unsupported
+        return false;
 
     // The mapped staging memory is typically WRITE-COMBINED (uncached): per-byte reads
     // from it are ~100x slow (observed 1.3s/frame). Bulk-copy into cached CPU memory
@@ -1504,8 +1490,167 @@ bool ImGuiApp_Win32Vulkan_CaptureFrame(ImGuiApp* app, ImGuiAppAVFrame* out_frame
     out_frame->Height = height;
     out_frame->PitchBytes = width * 4;
     out_frame->Pixels = bd->CaptureRgba.Data;
-    out_frame->FrameID = bd->CaptureCopyId[r];   // the pixels' identity, not the pumping frame's
+    out_frame->FrameID = bd->CaptureCopyId[index];   // the pixels' identity, not the pumping frame's
+    bd->CaptureLastReturned = bd->CaptureCopyId[index].FrameIndex;
     return true;
+}
+
+// One-shot synchronous copy of the CURRENT image (valid only in the encode phase: rendered,
+// not yet presented). Fills staging slot CaptureWriteIndex WITHOUT flipping it -- the next
+// rendered frame overwrites the slot, whose content this call consumed.
+static bool CaptureSyncNow(ImGuiApp_Win32Vulkan_Data* bd, VkImage image, int width, int height, VkFormat format, VkImageLayout layout)
+{
+    if (image == VK_NULL_HANDLE || width <= 0 || height <= 0)
+        return false;
+
+    if (bd->CaptureSyncPool == VK_NULL_HANDLE)
+    {
+        VkCommandPoolCreateInfo pool_info = {};
+        pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT | VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        pool_info.queueFamilyIndex = bd->QueueFamily;
+        if (vkCreateCommandPool(bd->Device, &pool_info, bd->Allocator, &bd->CaptureSyncPool) != VK_SUCCESS)
+            return false;
+        VkCommandBufferAllocateInfo cmd_info = {};
+        cmd_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cmd_info.commandPool = bd->CaptureSyncPool;
+        cmd_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cmd_info.commandBufferCount = 1;
+        if (vkAllocateCommandBuffers(bd->Device, &cmd_info, &bd->CaptureSyncCmd) != VK_SUCCESS)
+            return false;
+        VkFenceCreateInfo fence_info = {};
+        fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        if (vkCreateFence(bd->Device, &fence_info, bd->Allocator, &bd->CaptureSyncFence) != VK_SUCCESS)
+            return false;
+    }
+
+    const int w = bd->CaptureWriteIndex;
+    if (!EnsureCaptureBuffer(bd, w, (VkDeviceSize)width * (VkDeviceSize)height * 4, VK_NULL_HANDLE))
+        return false;
+
+    vkResetCommandBuffer(bd->CaptureSyncCmd, 0);
+    VkCommandBufferBeginInfo begin_info = {};
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    if (vkBeginCommandBuffer(bd->CaptureSyncCmd, &begin_info) != VK_SUCCESS)
+        return false;
+
+    VkImageMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier.oldLayout = layout;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.layerCount = 1;
+    vkCmdPipelineBarrier(bd->CaptureSyncCmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    VkBufferImageCopy region = {};
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent.width = (uint32_t)width;
+    region.imageExtent.height = (uint32_t)height;
+    region.imageExtent.depth = 1;
+    vkCmdCopyImageToBuffer(bd->CaptureSyncCmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, bd->CaptureBuffer[w], 1, &region);
+
+    if (layout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+    {
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        barrier.dstAccessMask = 0;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrier.newLayout = layout;
+        vkCmdPipelineBarrier(bd->CaptureSyncCmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+    }
+
+    if (vkEndCommandBuffer(bd->CaptureSyncCmd) != VK_SUCCESS)
+        return false;
+
+    VkSubmitInfo submit = {};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &bd->CaptureSyncCmd;
+    vkResetFences(bd->Device, 1, &bd->CaptureSyncFence);
+    if (vkQueueSubmit(bd->Queue, 1, &submit, bd->CaptureSyncFence) != VK_SUCCESS)
+        return false;
+    vkWaitForFences(bd->Device, 1, &bd->CaptureSyncFence, VK_TRUE, UINT64_MAX);
+
+    bd->CaptureCopyWidth[w] = width;
+    bd->CaptureCopyHeight[w] = height;
+    bd->CaptureCopyFormat[w] = format;
+    bd->CaptureCopyId[w] = bd->App != nullptr ? bd->App->FrameID : ImGuiAppFrameID();
+    bd->CapturePendingFence[w] = VK_NULL_HANDLE;
+    return true;
+}
+
+// Readback contract (encode phase, i.e. after render, before present):
+// - FIRST call: one synchronous out-of-band copy of the frame just rendered -- frame 1 of a
+//   take is never lost to pipeline priming. Later frames use the in-frame pipelined copy.
+// - Steady state: returns the PREVIOUS frame's retired copy (one frame of latency, no stall);
+//   the FrameID travels with the pixels, so identity holds.
+// - No new retired copy (pipeline bubble, or nothing rendered since the last call): returns
+//   the freshest unreturned copy IF its fence already signaled (never blocks mid-take), else
+//   false. Callers drain the final frame by re-calling after the GPU settles.
+// - Never returns the same FrameIndex twice (CaptureLastReturned gate).
+bool ImGuiApp_Win32Vulkan_CaptureFrame(ImGuiApp* app, ImGuiAppAVFrame* out_frame)
+{
+    IM_UNUSED(app);
+    ImGuiApp_Win32Vulkan_Data* bd = &GBackend;
+    if (out_frame == nullptr || !bd->VulkanInitialized || !bd->CaptureSupported)
+        return false;
+
+    if (!bd->CaptureArmed)
+    {
+        bd->CaptureArmed = true;
+        if (bd->OffscreenActive)
+        {
+            if (CaptureSyncNow(bd, bd->OffscreenImage, bd->OffscreenWidth, bd->OffscreenHeight, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL))
+                return CaptureConvertAndFill(bd, bd->CaptureWriteIndex, out_frame);
+            return false;
+        }
+        ImGui_ImplVulkanH_Window* wd = &bd->MainWindow;
+        if (!bd->LastFrameRendered)
+            return false;   // minimized/unrendered first frame: nothing to copy yet
+        VkImage backbuffer = wd->Frames[wd->FrameIndex].Backbuffer;
+        if (CaptureSyncNow(bd, backbuffer, wd->Width, wd->Height, wd->SurfaceFormat.format, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR))
+            return CaptureConvertAndFill(bd, bd->CaptureWriteIndex, out_frame);
+        return false;
+    }
+
+    // Retired path: RecordCaptureCopy flips the write index AFTER writing, so the un-flipped
+    // index holds the previous frame's copy; its fence was submitted last frame (in steady
+    // state long signaled -- if the swapchain reused it for a newer submit the wait only
+    // lengthens; this buffer's copy completed before the fence's first signal, so no tearing).
+    const int r = bd->CaptureWriteIndex;
+    if (bd->CaptureCopyWidth[r] > 0 && bd->CaptureMapped[r] != nullptr &&
+        bd->CaptureCopyId[r].FrameIndex > bd->CaptureLastReturned)
+    {
+        if (bd->CapturePendingFence[r] != VK_NULL_HANDLE)
+        {
+            vkWaitForFences(bd->Device, 1, &bd->CapturePendingFence[r], VK_TRUE, UINT64_MAX);
+            bd->CapturePendingFence[r] = VK_NULL_HANDLE;
+        }
+        return CaptureConvertAndFill(bd, r, out_frame);
+    }
+
+    // Catch-up path: the fresh slot may hold an unreturned copy (final frame of a take, or a
+    // fast GPU that already signaled this frame's fence). STATUS check only -- never block.
+    const int f = r ^ 1;
+    if (bd->CaptureCopyWidth[f] > 0 && bd->CaptureMapped[f] != nullptr &&
+        bd->CaptureCopyId[f].FrameIndex > bd->CaptureLastReturned)
+    {
+        if (bd->CapturePendingFence[f] == VK_NULL_HANDLE ||
+            vkGetFenceStatus(bd->Device, bd->CapturePendingFence[f]) == VK_SUCCESS)
+        {
+            bd->CapturePendingFence[f] = VK_NULL_HANDLE;
+            return CaptureConvertAndFill(bd, f, out_frame);
+        }
+    }
+
+    return false;
 }
 
 static const ImGuiAppPlatformBackend GPlatformBackend =
