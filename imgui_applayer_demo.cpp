@@ -748,7 +748,7 @@ namespace
         temp_data->Save = ImGui::Button(ICON_FA_FLOPPY_DISK "  Save")
                        || (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false));
         ImGui::SetItemTooltip("Save graph -> %s (Ctrl+S)", doc->GraphPath);
-        ImGui::SameLine(0.0f, 1.0f);
+        ImGui::SameLine(0.0f, ImMax(1.0f, em * 0.0625f));
         if (ImGui::Button(ICON_FA_CHEVRON_DOWN "##savemenu"))
           ImGui::OpenPopup("##save_family");
         ImGui::SetItemTooltip("More file actions");
@@ -776,7 +776,7 @@ namespace
           ImGui::SetItemTooltip("%s matches the graph -- click to rewrite", doc->HeaderPath);
         else
           ImGui::SetItemTooltip("Graph changed -- write whole-graph C++ -> %s", doc->HeaderPath);
-        ImGui::SameLine(0.0f, 1.0f);
+        ImGui::SameLine(0.0f, ImMax(1.0f, em * 0.0625f));
         if (ImGui::Button(ICON_FA_CHEVRON_DOWN "##genmenu"))
           ImGui::OpenPopup("##generate_family");
         ImGui::SetItemTooltip("More generate actions");
@@ -1042,7 +1042,7 @@ namespace
           {
             const ImVec2 row_max(row_min.x + ImGui::GetContentRegionAvail().x, row_min.y + line_h);
             dl->AddRectFilled(row_min, row_max, hl_sel ? DemoThemeCol(row_gold, 0.13f) : DemoThemeCol(row_ink, 0.06f));
-            dl->AddRectFilled(row_min, ImVec2(row_min.x + 3.0f, row_max.y), hl_sel ? DemoThemeCol(row_gold, 0.86f) : DemoThemeCol(row_ink, 0.35f));
+            dl->AddRectFilled(row_min, ImVec2(row_min.x + ImGui::GetFontSize() * 0.1875f, row_max.y), hl_sel ? DemoThemeCol(row_gold, 0.86f) : DemoThemeCol(row_ink, 0.35f));
           }
 
           char num[16];

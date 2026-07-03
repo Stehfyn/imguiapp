@@ -813,6 +813,7 @@ bool ImGuiApp_Win32Vulkan_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
     ImGuiAppPlatformState* state = IM_NEW(ImGuiAppPlatformState)();
     app->PlatformData = state;
 
+    ImGui_ImplWin32_EnableDpiAwareness();
     const float main_scale    = ImGui_ImplWin32_GetDpiScaleForMonitor(::MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY));
     const int   window_width  = (int)(config.WindowWidth  * main_scale);
     const int   window_height = (int)(config.WindowHeight * main_scale);

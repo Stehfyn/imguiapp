@@ -633,7 +633,7 @@ namespace ImGui
     if (active && g_bl_drag_id == id)
     {
       const float dx = ImGui::GetIO().MouseDelta.x;
-      if (!g_bl_dragged && ImAbs(ImGui::GetIO().MousePos.x - mn.x - g_bl_press_x) > 3.0f) g_bl_dragged = true;
+      if (!g_bl_dragged && ImAbs(ImGui::GetIO().MousePos.x - mn.x - g_bl_press_x) > ImGui::GetFontSize() * 0.1875f) g_bl_dragged = true;
       if (g_bl_dragged && dx != 0.0f)
       {
         g_bl_drag_accum += dx * (ImGui::GetIO().KeyShift ? 0.05f : 0.25f);
@@ -737,7 +737,7 @@ namespace ImGui
         fields->Data[i - 1] = fields->Data[i];
         fields->Data[i] = tmp;
       }
-      ImGui::SameLine(0.0f, 2.0f);
+      ImGui::SameLine(0.0f, ImGui::GetFontSize() * 0.125f);
       if (AppRowReorderButton("##down", false, i < fields->Size - 1))
       {
         const ImGuiAppFieldDesc tmp = fields->Data[i + 1];
@@ -2280,7 +2280,7 @@ namespace ImGui
       {
         ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled("data->");
-        ImGui::SameLine(0.0f, 2.0f);
+        ImGui::SameLine(0.0f, em * 0.125f);
         ImGui::SetNextItemWidth(em * 6.0f);
         if (ImGui::BeginCombo("##dst", ev->DstField[0] ? ev->DstField : "<field>"))
         {
@@ -3087,10 +3087,10 @@ namespace ImGui
     const ImU32 outline = AppThemeNeutral(0.68f, 0.55f);
     const ImU32 title_bg = AppThemeNeutral(0.09f);   // opaque: grid must not bleed through text
     const ImU32 title_fg = ImGui::GetColorU32(ImGuiCol_Text);
-    const float rounding = 4.0f;
+    const float rounding = em * 0.25f;
 
     dl->AddRectFilled(bb_min, bb_max, fill, rounding);
-    dl->AddRect(bb_min, bb_max, outline, rounding, 0, 1.5f);
+    dl->AddRect(bb_min, bb_max, outline, rounding, 0, ImMax(1.0f, em * 0.09375f));
 
     // Phase bands: a faint accent-tinted strip behind each layer, spanning the WHOLE row -- rail badge
     // through node edge -- so badge + node read as one phase section.
@@ -3099,7 +3099,7 @@ namespace ImGui
     for (int i = 0; i < rows.Size; i++)
     {
       const ImU32 band = (rows.Data[i].Accent & 0x00FFFFFF) | (IM_COL32(0, 0, 0, 26) & 0xFF000000);
-      dl->AddRectFilled(ImVec2(band_x0, rows.Data[i].Top - 2.0f), ImVec2(band_x1, rows.Data[i].Bot + 2.0f), band, 3.0f);
+      dl->AddRectFilled(ImVec2(band_x0, rows.Data[i].Top - em * 0.125f), ImVec2(band_x1, rows.Data[i].Bot + em * 0.125f), band, em * 0.1875f);
     }
 
     // Execution-order rail: a vertical flow spine through numbered accent-filled circles at each layer's center.
@@ -3109,7 +3109,7 @@ namespace ImGui
     {
       const float y0 = (rows.Data[0].Top + rows.Data[0].Bot) * 0.5f;
       const float y1 = (rows.Data[rows.Size - 1].Top + rows.Data[rows.Size - 1].Bot) * 0.5f;
-      dl->AddLine(ImVec2(rail_cx, y0), ImVec2(rail_cx, y1), AppThemeNeutral(0.58f, 0.55f), 2.0f);
+      dl->AddLine(ImVec2(rail_cx, y0), ImVec2(rail_cx, y1), AppThemeNeutral(0.58f, 0.55f), ImMax(1.0f, em * 0.125f));
     }
     for (int i = 0; i < rows.Size; i++)
     {
@@ -3123,7 +3123,7 @@ namespace ImGui
         dl->AddTriangleFilled(ImVec2(rail_cx - s, ay - s), ImVec2(rail_cx + s, ay - s), ImVec2(rail_cx, ay + s), arr);
       }
       dl->AddCircleFilled(ImVec2(rail_cx, cy), r, AppScaleRGB(rows.Data[i].Accent, 0.85f));
-      dl->AddCircle(ImVec2(rail_cx, cy), r, AppThemeDark(0.86f), 0, 1.5f);
+      dl->AddCircle(ImVec2(rail_cx, cy), r, AppThemeDark(0.86f), 0, ImMax(1.0f, em * 0.09375f));
       char num[8];
       ImFormatString(num, IM_ARRAYSIZE(num), "%d", i + 1);
       const ImVec2 ns = ImGui::CalcTextSize(num);
@@ -3134,7 +3134,7 @@ namespace ImGui
     const ImVec2 text_size = ImGui::CalcTextSize(title);
     const ImVec2 title_min = ImVec2(bb_min.x + pad, bb_min.y);
     const ImVec2 title_max = ImVec2(title_min.x + text_size.x + pad * 1.0f, bb_min.y + title_h);
-    dl->AddRectFilled(title_min, title_max, title_bg, 3.0f);
+    dl->AddRectFilled(title_min, title_max, title_bg, em * 0.1875f);
     dl->AddText(ImVec2(title_min.x + pad * 0.5f, title_min.y + (title_h - text_size.y) * 0.5f), title_fg, title);
   }
 
@@ -4334,7 +4334,7 @@ namespace ImGui
       geom(seq.Data[i], &p, &d);
       const ImVec2 c(p.x, p.y);   // top-left corner, half overlapping the node like a slate marker
       dl->AddCircleFilled(c, r, AppScaleRGB(accent, 0.85f));
-      dl->AddCircle(c, r, AppThemeDark(0.86f), 0, 1.5f);
+      dl->AddCircle(c, r, AppThemeDark(0.86f), 0, ImMax(1.0f, em * 0.09375f));
       char num[8];
       ImFormatString(num, IM_ARRAYSIZE(num), "%d", i + 1);
       ImGui::PushFont(nullptr, em);   // badge numerals track the zoomed badge size
@@ -4409,9 +4409,9 @@ namespace ImGui
 
       const ImU32 bg = is_tail ? AppScaleRGB(accent, 0.45f)
                                : ImGui::GetColorU32(hov ? ImGuiCol_ButtonHovered : ImGuiCol_Button, 0.9f);
-      dl->AddRectFilled(mn, mx, bg, 4.0f);
+      dl->AddRectFilled(mn, mx, bg, em * 0.25f);
       if (is_tail)
-        dl->AddRect(mn, mx, (accent & 0x00FFFFFF) | 0xC8000000, 4.0f);
+        dl->AddRect(mn, mx, (accent & 0x00FFFFFF) | 0xC8000000, em * 0.25f);
       dl->AddText(ImVec2(mn.x + em * 0.45f, y + (h - ts.y) * 0.5f),
                   is_tail ? AppThemeNeutral(0.94f) : ImGui::GetColorU32(ImGuiCol_Text, hov ? 1.0f : 0.75f), label);
       x = mx.x + em * 0.25f;
@@ -4481,8 +4481,8 @@ namespace ImGui
     const ImVec2 mx(cen.x + pw * 0.5f, cen.y + ph * 0.5f);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImU32 accent = AppScopeAccent(g);
-    dl->AddRectFilled(mn, mx, AppThemeNeutral(0.06f, 0.94f), 8.0f);
-    dl->AddRect(mn, mx, (accent & 0x00FFFFFF) | 0xC8000000, 8.0f, 0, 1.5f);
+    dl->AddRectFilled(mn, mx, AppThemeNeutral(0.06f, 0.94f), em * 0.5f);
+    dl->AddRect(mn, mx, (accent & 0x00FFFFFF) | 0xC8000000, em * 0.5f, 0, ImMax(1.0f, em * 0.09375f));
     dl->AddText(ImVec2(cen.x - hs.x * 0.5f, mn.y + em * 1.0f), AppThemeNeutral(0.92f), head);
     dl->AddText(ImVec2(cen.x - ss.x * 0.5f, mn.y + em * 2.6f), ImGui::GetColorU32(ImGuiCol_TextDisabled), sub);
 
@@ -4654,8 +4654,8 @@ namespace ImGui
         ImDrawList* dl = ImGui::CanvasBackgroundDrawList(cv);
         const ImU32 fill = (kind_col & 0x00FFFFFF) | (IM_COL32(0, 0, 0, 18) & 0xFF000000);
         const ImU32 line = (kind_col & 0x00FFFFFF) | (IM_COL32(0, 0, 0, 130) & 0xFF000000);
-        dl->AddRectFilled(mn, mx, fill, 5.0f);
-        dl->AddRect(mn, mx, line, 5.0f, 0, 1.5f);
+        dl->AddRectFilled(mn, mx, fill, em * 0.3125f);
+        dl->AddRect(mn, mx, line, em * 0.3125f, 0, ImMax(1.0f, em * 0.09375f));
         if (owner != nullptr)
         {
           const char* title = owner->Draft.Name[0] ? owner->Draft.Name : AppNodeKindName(owner->Kind);
@@ -4728,8 +4728,8 @@ namespace ImGui
           ImGui::PopID();
 
           const ImU32 chip_bg = (hov || act) ? ((line & 0x00FFFFFF) | 0xFF000000) : line;
-          dl->AddRectFilled(chip_mn, chip_mx, AppThemeNeutral(0.05f), 3.0f);   // opaque plate under the tint
-          dl->AddRectFilled(chip_mn, chip_mx, chip_bg, 3.0f);
+          dl->AddRectFilled(chip_mn, chip_mx, AppThemeNeutral(0.05f), em * 0.1875f);   // opaque plate under the tint
+          dl->AddRectFilled(chip_mn, chip_mx, chip_bg, em * 0.1875f);
           // Disclosure triangle: right-pointing when folded, down-pointing when open.
           const ImU32 glyph = AppThemeNeutral(0.92f);
           const ImVec2 tc(chip_mn.x + tri_w * 0.5f, (chip_mn.y + chip_mx.y) * 0.5f);
@@ -5130,7 +5130,8 @@ namespace ImGui
           const ImVec2 m = ImGui::GetIO().MousePos;
           const float dx = m.x - c.x;
           const float dy = m.y - c.y;
-          if (dx * dx + dy * dy <= (r + 2.0f) * (r + 2.0f))
+          const float reach = r + ImGui::GetFontSize() * 0.125f;
+          if (dx * dx + dy * dy <= reach * reach)
             ImGui::SetTooltip("%s", tip);
         }
       }
@@ -5568,8 +5569,8 @@ namespace ImGui
         const ImVec2 mn(cen.x - pw * 0.5f, cen.y - ph * 0.5f);
         const ImVec2 mx(cen.x + pw * 0.5f, cen.y + ph * 0.5f);
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        dl->AddRectFilled(mn, mx, AppThemeNeutral(0.06f, 0.94f), 8.0f);
-        dl->AddRect(mn, mx, AppThemeAccent(kAppHueGold, 0.78f), 8.0f, 0, 1.5f);
+        dl->AddRectFilled(mn, mx, AppThemeNeutral(0.06f, 0.94f), em * 0.5f);
+        dl->AddRect(mn, mx, AppThemeAccent(kAppHueGold, 0.78f), em * 0.5f, 0, ImMax(1.0f, em * 0.09375f));
         dl->AddText(ImVec2(cen.x - hs.x * 0.5f, mn.y + em * 1.0f), AppThemeNeutral(0.92f), head);
         dl->AddText(ImVec2(cen.x - ss.x * 0.5f, mn.y + em * 2.6f), ImGui::GetColorU32(ImGuiCol_TextDisabled), sub);
         ImGui::SetCursorScreenPos(ImVec2(cen.x - bw * 0.5f, mx.y - em * 2.6f));
@@ -6234,8 +6235,8 @@ namespace ImGui
         w = ImMax(w, ImGui::CalcTextSize(lines[i]).x);
       const ImVec2 mx(mn.x + w + em * 1.4f, mn.y + (float)IM_ARRAYSIZE(lines) * ImGui::GetTextLineHeightWithSpacing() + em * 1.4f);
       ImDrawList* dl = ImGui::GetWindowDrawList();
-      dl->AddRectFilled(mn, mx, AppThemeNeutral(0.04f, 0.92f), 6.0f);
-      dl->AddRect(mn, mx, AppThemeAccent(kAppHueGold, 0.78f), 6.0f, 0, 1.5f);
+      dl->AddRectFilled(mn, mx, AppThemeNeutral(0.04f, 0.92f), em * 0.375f);
+      dl->AddRect(mn, mx, AppThemeAccent(kAppHueGold, 0.78f), em * 0.375f, 0, ImMax(1.0f, em * 0.09375f));
       ImVec2 tp(mn.x + em * 0.7f, mn.y + em * 0.7f);
       dl->AddText(tp, AppThemeAccent(kAppHueGold), "Shortcuts");
       tp.y += ImGui::GetTextLineHeightWithSpacing();
@@ -9934,12 +9935,15 @@ namespace ImGui
     {
       ImDrawList* bdl = ImGui::GetWindowDrawList();
       bdl->AddRectFilled(rmn, rmx, (row_col & 0x00FFFFFF) | 0x24000000);
-      bdl->AddRectFilled(rmn, ImVec2(rmn.x + 3.0f, rmx.y), row_col);
+      bdl->AddRectFilled(rmn, ImVec2(rmn.x + ImGui::GetFontSize() * 0.1875f, rmx.y), row_col);
     }
     // Ambient problem mark: severity underline along the row bottom (same hue as the canvas dot).
     if (const int row_sev = AppGraphNodeSeverity(g, n->Id))
-      ImGui::GetWindowDrawList()->AddLine(ImVec2(rmn.x, rmx.y - 1.0f), ImVec2(rmx.x, rmx.y - 1.0f),
-                                          (AppSeverityColor(row_sev) & 0x00FFFFFF) | 0xB4000000, 1.0f);
+    {
+      const float sev_th = ImMax(1.0f, ImGui::GetFontSize() * 0.0625f);
+      ImGui::GetWindowDrawList()->AddLine(ImVec2(rmn.x, rmx.y - sev_th), ImVec2(rmx.x, rmx.y - sev_th),
+                                          (AppSeverityColor(row_sev) & 0x00FFFFFF) | 0xB4000000, sev_th);
+    }
 
     // Right-edge overlay (pure draw-list, manual hit-test -- no ImGui items, so the layout cursor is untouched):
     // an always-on eye (hide/show this subtree), hover-revealed rename / duplicate / delete, else the meta count.

@@ -318,7 +318,7 @@ void ImGuiAppStatusLayer::OnRender(const ImGuiApp* app) const
     const char* renderer = io.BackendRendererName != nullptr ? io.BackendRendererName : "unknown";
 
     ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const ImVec2 padding = ImVec2(8.0f, 8.0f);
+    const ImVec2 padding = ImVec2(ImGui::GetFontSize() * 0.5f, ImGui::GetFontSize() * 0.5f);
     ImGui::SetNextWindowViewport(viewport->ID);
     ImGui::SetNextWindowPos(viewport->WorkPos + ImVec2(padding.x, viewport->WorkSize.y - padding.y), ImGuiCond_Always, ImVec2(0.0f, 1.0f));
     ImGui::SetNextWindowBgAlpha(0.65f);
@@ -932,6 +932,20 @@ namespace ImGui
         case ImGuiAppStyle_Classic: ImGui::StyleColorsClassic(); break;
         default:                    ImGui::StyleColorsDark();    break;
         }
+
+        // DPI: the platform backend fills DpiScale with the startup monitor's scale before this
+        // runs. Fonts rescale per monitor via ConfigDpiScaleFonts (Begin overwrites FontScaleDpi);
+        // ImGuiStyle metrics scale once here -- imgui does not rescale them on monitor change.
+        ImGuiStyle& style = ImGui::GetStyle();
+        if (config->FontScale > 0.0f)
+          style.FontScaleMain = config->FontScale;
+        if (config->DpiScale > 0.0f && config->DpiScale != 1.0f)
+        {
+          style.ScaleAllSizes(config->DpiScale);
+          style.FontScaleDpi = config->DpiScale;
+        }
+        io.ConfigDpiScaleFonts     = true;
+        io.ConfigDpiScaleViewports = true;
 
         app->ClearColor = config->ClearColor;
       }

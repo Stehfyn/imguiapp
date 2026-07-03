@@ -68,6 +68,7 @@ struct ImGuiCanvasState
   // Camera
   ImVec2 Pan;
   float  Zoom;
+  float  FontRatio;    // host font scale (DPI * user scale) captured at CanvasBegin; geometry scale = Zoom * FontRatio
 
   // Nodes
   ImVector<ImGuiCanvasNodeRec> Nodes;
@@ -167,6 +168,7 @@ struct ImGuiCanvasState
 
     Pan = ImVec2(0.0f, 0.0f);
     Zoom = 1.0f;
+    FontRatio = 1.0f;
     HoveredNode = HoveredPin = HoveredWire = SelectedWire = -1;
     Origin = CanvasSize = ImVec2(0.0f, 0.0f);
     DrawList = nullptr;
@@ -220,10 +222,17 @@ static ImGuiCanvasPinRec* CanvasFindOrCreatePin(ImGuiCanvasState* c, int pin_id)
   return &c->Pins.back();
 }
 
+// Model -> screen scale. Zoom is the logical camera; FontRatio folds in the host font's DPI/user
+// scale so model units stay DPI-invariant (persisted layouts render the same on any monitor).
+static float CanvasScale(const ImGuiCanvasState* c)
+{
+  return c->Zoom * c->FontRatio;
+}
+
 // Wire bezier controls: horizontal tangents leaving each pin toward its natural side (out -> +x, in -> -x).
 static void CanvasWireControls(const ImGuiCanvasState* c, ImVec2 a, int kind_a, ImVec2 b, int kind_b, ImVec2* c0, ImVec2* c1)
 {
-  const float dx = ImMax(50.0f * c->Zoom, ImFabs(b.x - a.x) * 0.5f);
+  const float dx = ImMax(50.0f * CanvasScale(c), ImFabs(b.x - a.x) * 0.5f);
   *c0 = ImVec2(a.x + (kind_a == ImGui::ImGuiCanvasPin_In ? -dx : dx), a.y);
   *c1 = ImVec2(b.x + (kind_b == ImGui::ImGuiCanvasPin_In ? -dx : dx), b.y);
 }
@@ -345,12 +354,12 @@ namespace ImGui
 
   ImVec2 CanvasToScreen(const ImGuiCanvasState* c, ImVec2 model)
   {
-    return c->Origin + c->Pan + model * c->Zoom;
+    return c->Origin + c->Pan + model * CanvasScale(c);
   }
 
   ImVec2 CanvasFromScreen(const ImGuiCanvasState* c, ImVec2 screen)
   {
-    return (screen - c->Origin - c->Pan) / c->Zoom;
+    return (screen - c->Origin - c->Pan) / CanvasScale(c);
   }
 
   void CanvasSetZoom(ImGuiCanvasState* c, float zoom, ImVec2 keep_screen_pos)
@@ -358,19 +367,19 @@ namespace ImGui
     zoom = ImClamp(zoom, c->IO.ZoomMin, c->IO.ZoomMax);
     const ImVec2 anchor_model = CanvasFromScreen(c, keep_screen_pos);
     c->Zoom = zoom;
-    c->Pan = keep_screen_pos - c->Origin - anchor_model * zoom;
+    c->Pan = keep_screen_pos - c->Origin - anchor_model * CanvasScale(c);
   }
 
   void CanvasCenterOn(ImGuiCanvasState* c, ImVec2 model_pos)
   {
-    c->Pan = c->CanvasSize * 0.5f - model_pos * c->Zoom;
+    c->Pan = c->CanvasSize * 0.5f - model_pos * CanvasScale(c);
   }
 
   void CanvasFitRect(ImGuiCanvasState* c, ImVec2 model_min, ImVec2 model_max, float margin_px)
   {
     const ImVec2 span(ImMax(1.0f, model_max.x - model_min.x), ImMax(1.0f, model_max.y - model_min.y));
     const ImVec2 avail(ImMax(1.0f, c->CanvasSize.x - margin_px * 2.0f), ImMax(1.0f, c->CanvasSize.y - margin_px * 2.0f));
-    c->Zoom = ImClamp(ImMin(avail.x / span.x, avail.y / span.y), c->IO.ZoomMin, c->IO.ZoomMax);
+    c->Zoom = ImClamp(ImMin(avail.x / span.x, avail.y / span.y) / c->FontRatio, c->IO.ZoomMin, c->IO.ZoomMax);
     CanvasCenterOn(c, (model_min + model_max) * 0.5f);
   }
 
@@ -426,7 +435,7 @@ static int CanvasHitNode(const ImGuiCanvasState* c, ImVec2 screen)
       continue;
     const ImGuiCanvasNodeRec* n = &c->Nodes.Data[idx];
     const ImVec2 mn = ImGui::CanvasToScreen(c, n->Pos);
-    const ImVec2 mx = mn + n->Size * c->Zoom;
+    const ImVec2 mx = mn + n->Size * CanvasScale(c);
     if (screen.x >= mn.x && screen.x < mx.x && screen.y >= mn.y && screen.y < mx.y)
       return n->Id;
   }
@@ -526,7 +535,7 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
             const ImVec2 sb = ImGui::CanvasToScreen(c, pb->Anchor);
             const float da = (mouse.x - sa.x) * (mouse.x - sa.x) + (mouse.y - sa.y) * (mouse.y - sa.y);
             const float db = (mouse.x - sb.x) * (mouse.x - sb.x) + (mouse.y - sb.y) * (mouse.y - sb.y);
-            const float grab = c->Style.PinHoverRadius * c->Zoom * 3.0f;
+            const float grab = c->Style.PinHoverRadius * CanvasScale(c) * 3.0f;
             if (ImMin(da, db) <= grab * grab)
             {
               const bool grab_a = da <= db;
@@ -594,7 +603,7 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
   case ImGuiCanvasInteraction_DragNodes:
     if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
     {
-      const ImVec2 delta_model = (mouse - c->GestureStartMouse) / c->Zoom;   // pixels -> model, once, here
+      const ImVec2 delta_model = (mouse - c->GestureStartMouse) / CanvasScale(c);   // pixels -> model, once, here
       for (int i = 0; i < c->DragNodes.Size; i++)
         if (ImGuiCanvasNodeRec* n = CanvasFindNode(c, c->DragNodes.Data[i]))
         {
@@ -644,16 +653,19 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
     break;
 
   case ImGuiCanvasInteraction_MenuPending:
+  {
+    // Click-vs-pan slop in screen px, font-derived so it tracks DPI/font scale.
+    const float slop = ImGui::GetFontSize() * 0.2f;
     if (c->IO.RmbPans && ImGui::IsMouseDown(ImGuiMouseButton_Right))
     {
       const ImVec2 travel = mouse - c->GestureStartMouse;
-      if (travel.x * travel.x + travel.y * travel.y > 9.0f)
+      if (travel.x * travel.x + travel.y * travel.y > slop * slop)
         c->Pan = c->GestureStartPan + travel;   // became a pan; stays in MenuPending, travel keeps panning
     }
     else if (ImGui::IsMouseReleased(ImGuiMouseButton_Right))
     {
       const ImVec2 travel = mouse - c->GestureStartMouse;
-      if (travel.x * travel.x + travel.y * travel.y <= 9.0f)
+      if (travel.x * travel.x + travel.y * travel.y <= slop * slop)
       {
         if (c->HoveredNode >= 0)      { c->MenuNodeReq = true; c->MenuNodeId = c->HoveredNode; }
         else if (c->HoveredWire >= 0) { c->MenuWireReq = true; c->MenuWireId = c->HoveredWire; }
@@ -666,6 +678,7 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
       c->Interaction = ImGuiCanvasInteraction_None;
     }
     break;
+  }
 
   default:
     break;
@@ -698,14 +711,17 @@ namespace ImGui
     c->Origin = GetCursorScreenPos();
     c->CanvasSize = GetWindowSize();
     c->DrawList = GetWindowDrawList();
+    // Captured once per frame: every camera conversion this frame uses the same scale, even if
+    // the window changed monitors this frame (docs/phase-coherence.md).
+    c->FontRatio = GetStyle().FontSizeBase > 0.0f ? GetFontSize() / GetStyle().FontSizeBase : 1.0f;
     c->Splitter.Split(c->DrawList, 3);   // 0 = grid + wires, 1 = node plates, 2 = node content
     c->Splitter.SetCurrentChannel(c->DrawList, 0);
 
     // Grid: model spacing x zoom, offset by pan; all current-frame values.
     if (c->Style.GridLines && c->Style.GridSpacing > 0.0f)
     {
-      const float step = c->Style.GridSpacing * c->Zoom;
-      if (step >= 4.0f)
+      const float step = c->Style.GridSpacing * CanvasScale(c);
+      if (step >= GetFontSize() * 0.25f)   // hide the grid when lines would pack too densely on screen
       {
         for (float x = ImFmod(c->Pan.x, step); x < c->CanvasSize.x; x += step)
           c->DrawList->AddLine(ImVec2(c->Origin.x + x, c->Origin.y), ImVec2(c->Origin.x + x, c->Origin.y + c->CanvasSize.y), c->Style.GridLine);
@@ -803,6 +819,8 @@ namespace ImGui
     // Content renders under the zoomed font + zoom-scaled layout metrics; the engine owns the
     // scaling, hosts submit plain widgets (docs/phase-coherence.md rule 1).
     c->Splitter.SetCurrentChannel(c->DrawList, 2);
+    // Host style metrics and font already carry the DPI/user font scale, so they take the LOGICAL
+    // zoom only; canvas-style model metrics take the full scale (Zoom * FontRatio).
     const float z = c->Zoom;
     const ImGuiStyle& gs = GetStyle();
     PushStyleVar(ImGuiStyleVar_FramePadding,     ImVec2(gs.FramePadding.x * z, gs.FramePadding.y * z));
@@ -813,7 +831,7 @@ namespace ImGui
     PushFont(nullptr, GetFontSize() * z);
 
     const float title_h = n->Title[0] ? GetFrameHeight() : 0.0f;
-    const ImVec2 content_origin = c->CurNodeScreen + c->Style.NodePadding * z + ImVec2(0.0f, title_h);
+    const ImVec2 content_origin = c->CurNodeScreen + c->Style.NodePadding * CanvasScale(c) + ImVec2(0.0f, title_h);
     SetCursorScreenPos(content_origin);
     PushID(node_id);
     BeginGroup();
@@ -828,7 +846,7 @@ namespace ImGui
     EndGroup();
     const ImVec2 content_mn = GetItemRectMin();
     const ImVec2 content_mx = GetItemRectMax();
-    const float  z = c->Zoom;
+    const float  z = CanvasScale(c);
     const float  title_h = n->Title[0] ? GetFrameHeight() : 0.0f;   // still under the zoomed font
 
     // Same-frame measurement in the same zoom the content rendered with; the model size is exact.
@@ -924,7 +942,7 @@ namespace ImGui
     if (y1 <= s_cur_pin_y0)
       y1 = s_cur_pin_y0 + GetTextLineHeight();
     const float yc = (s_cur_pin_y0 + y1 - GetStyle().ItemSpacing.y) * 0.5f;   // row center, minus the trailing spacing
-    p->Anchor.y = (yc - c->Origin.y - c->Pan.y) / c->Zoom;                    // screen -> model, this frame's camera
+    p->Anchor.y = (yc - c->Origin.y - c->Pan.y) / CanvasScale(c);             // screen -> model, this frame's camera
     c->CurNodePins.push_back(s_cur_pin);
     s_cur_pin = -1;
   }
@@ -955,7 +973,7 @@ namespace ImGui
   void CanvasEnd(ImGuiCanvasState* c)
   {
     IM_ASSERT(c->InsideCanvas && c->CurNode == -1 && s_cur_pin == -1);
-    const float  z = c->Zoom;
+    const float  z = CanvasScale(c);
     const ImVec2 mouse = GetIO().MousePos;
     const int    frame = GetFrameCount();
 
@@ -982,7 +1000,7 @@ namespace ImGui
     c->HoveredWire = -1;
     if (c->HoveredPin == -1 && c->HoveredNode == -1)
     {
-      float reach = ImMax(6.0f, c->Style.WireThickness * z * 2.0f);
+      float reach = ImMax(GetFontSize() * 0.375f, c->Style.WireThickness * z * 2.0f);
       reach *= reach;
       float best = reach;
       for (int i = 0; i < c->Wires.Size; i++)
@@ -1100,8 +1118,8 @@ namespace ImGui
         bmax = CanvasFromScreen(c, c->Origin + c->CanvasSize);
       }
       {
-        const ImVec2 border(8.0f, 8.0f);
-        const ImVec2 offset(4.0f, 4.0f);
+        const ImVec2 border(GetFontSize() * 0.5f, GetFontSize() * 0.5f);
+        const ImVec2 offset(GetFontSize() * 0.25f, GetFontSize() * 0.25f);
         const ImVec2 max_size = ImFloor(c->CanvasSize * c->MiniMapFraction - border * 2.0f);
         const ImVec2 content_size(ImMax(1.0f, ImFloor(bmax.x - bmin.x)), ImMax(1.0f, ImFloor(bmax.y - bmin.y)));
         const float  max_aspect = max_size.x / ImMax(1.0f, max_size.y);
