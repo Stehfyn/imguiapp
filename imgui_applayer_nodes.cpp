@@ -3171,13 +3171,22 @@ namespace ImGui
     dl->AddRect(bb_min, bb_max, outline, rounding, 0, ImMax(1.0f, em * 0.09375f));
 
     // Phase bands: a faint accent-tinted strip behind each layer, spanning the WHOLE row -- rail badge
-    // through node edge -- so badge + node read as one phase section.
+    // through node edge -- so badge + node read as one phase section. Bands tile: each section runs
+    // to the NEXT section's top (the last to its own bottom), so the column has no untinted holes
+    // however far apart the nodes sit. Only the outer corners round; seams stay square.
     const float band_x0 = bb_min.x + pad * 0.4f;
     const float band_x1 = bb_max.x - pad;
     for (int i = 0; i < rows.Size; i++)
     {
       const ImU32 band = (rows.Data[i].Accent & 0x00FFFFFF) | (IM_COL32(0, 0, 0, 26) & 0xFF000000);
-      dl->AddRectFilled(ImVec2(band_x0, rows.Data[i].Top - em * 0.125f), ImVec2(band_x1, rows.Data[i].Bot + em * 0.125f), band, em * 0.1875f);
+      const float y0 = rows.Data[i].Top - em * 0.125f;
+      const float y1 = i + 1 < rows.Size ? rows.Data[i + 1].Top - em * 0.125f : rows.Data[i].Bot + em * 0.125f;
+      ImDrawFlags rf = ImDrawFlags_RoundCornersNone;
+      if (i == 0)
+        rf |= ImDrawFlags_RoundCornersTop;
+      if (i == rows.Size - 1)
+        rf |= ImDrawFlags_RoundCornersBottom;
+      dl->AddRectFilled(ImVec2(band_x0, y0), ImVec2(band_x1, y1), band, em * 0.1875f, rf);
     }
 
     // Execution-order rail: a vertical flow spine through numbered accent-filled circles at each layer's center.
