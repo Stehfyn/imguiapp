@@ -3,7 +3,9 @@
 // (docs/av-design.md). The only applayer TU that links the imgui test engine.
 
 #include "imguiapp_testharness.h"
-#include "backends/imguiapp_impl_ffmpeg.h"
+#ifdef IMGUIX_HAS_LIBAV
+#include "backends/imguiapp_impl_libav.h"
+#endif
 #include "backends/imguiapp_impl_qoi.h"
 #include "imgui_te_engine.h"
 #include "imgui_te_ui.h"
@@ -162,14 +164,18 @@ IMGUI_API int ImGui::AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessC
     }
     else
     {
-      encoder = ImGuiAppAV_CreateFfmpegEncoder(nullptr, nullptr);
+      // Default: libav mp4 when the SDK was linked, else the zero-dependency QOI sequence.
       encoder_owned = true;
+#ifdef IMGUIX_HAS_LIBAV
+      encoder = ImGuiAppAV_CreateLibavEncoder();
       ImFormatString(video_path, IM_ARRAYSIZE(video_path), "%s/%s.mp4", artifact_dir, config->Name);
       enc_config.OutputPath = video_path;
       recorder = AppRecordBegin(app, encoder, &enc_config);
       if (recorder == nullptr)
-      {
         ImGuiAppAV_DestroyEncoder(encoder);
+#endif
+      if (recorder == nullptr)
+      {
         encoder = ImGuiAppAV_CreateQoiSequenceEncoder();
         ImFormatString(video_path, IM_ARRAYSIZE(video_path), "%s/%s", artifact_dir, config->Name);
         enc_config.OutputPath = video_path;

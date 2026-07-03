@@ -6,7 +6,7 @@ Design for three use cases:
 3. ImGui Test Engine + headless rendering + frame encoding + WAL/event-source logging in one harness, for ergonomic debugging, testing, and benchmarking.
 
 Decisions fixed with the owner (2026-07-02): encoder is a provider seam with built-ins
-(QOI sequence, ffmpeg pipe, Media Foundation); per-frame data lives in a sidecar track
+(QOI sequence, linked libav, Media Foundation); per-frame data lives in a sidecar track
 file; pacing is an advisory pacer called by the backend run loop; the use-case-3 entry
 point is named **ImGuiAppTestHarness**; an ffmpeg backend ships by default.
 
@@ -150,9 +150,9 @@ consecutive capture frames with no gaps and no duplicates.
 
 | Provider | Realtime PTS | How |
 |---|---|---|
-| ffmpeg pipe | wallclock VFR | true VFR: one pipe write per frame, `-use_wallclock_as_timestamps 1` stamps each at pipe-READ time (`-framerate 1000` gives the demuxer a 1ms timebase -- the default 25 quantizes PTS to 40ms and collides neighbors; `-fps_mode passthrough -video_track_timescale 1000000` preserve them). PTS = capture time + bounded encoder-queue latency; when that latency matters, the sidecar holds exact capture times and Close writes `<OutputPath>.remux.txt` with the concat-demuxer rebuild recipe |
+| libav (linked) | exact | true VFR: AVFrame->pts carries FrameID.TimeSec directly, microsecond timebase end-to-end through the mp4 muxer -- measured 0us error. The final sample gets a nominal duration at mux time (a zero-duration tail sample falls outside the edit list and decodes as DISCARD) |
 | QOI sequence | exact | index.tsv carries `FrameID.TimeSec` per frame; inherently timestamped |
-| Media Foundation | resampled CFR | true VFR through IMFSinkWriter is NOT achievable (measured): the H.264 path requires a declared MF_MT_FRAME_RATE (BeginWriting fails without one) and resamples per-sample timestamps to CFR at that rate even with the input rate omitted (90 VFR samples -> 208 CFR frames). Duration honest, frames duplicated to fill -- violates one-frame-once; prefer the ffmpeg pipe for Realtime |
+| Media Foundation | resampled CFR | true VFR through IMFSinkWriter is NOT achievable (measured): the H.264 path requires a declared MF_MT_FRAME_RATE (BeginWriting fails without one) and resamples per-sample timestamps to CFR at that rate even with the input rate omitted (90 VFR samples -> 208 CFR frames). Duration honest, frames duplicated to fill -- violates one-frame-once; prefer the libav backend for Realtime |
 
 The sidecar always records real TSC/QPC times regardless of mode -- ground truth
 survives even a Constant-mode encode.
@@ -165,12 +165,13 @@ survives even a Constant-mode encode.
 // CI/golden-image provider.
 IMGUI_API ImGuiAppAVEncoder* ImGuiAppAV_CreateQoiSequenceEncoder();
 
-// backends/imguiapp_impl_ffmpeg.h -- ffmpeg process pipe (DEFAULT video provider):
-// spawns ffmpeg, feeds rawvideo RGBA on stdin ("-f rawvideo -pix_fmt rgba -s WxH
-// -r <fps> -i - <extra_args> <OutputPath>"). No link-time dependency; Open fails
-// cleanly when the exe is absent. exe = nullptr searches PATH. extra_args = nullptr ->
-// "-c:v libx264 -preset veryfast -crf 18".
-IMGUI_API ImGuiAppAVEncoder* ImGuiAppAV_CreateFfmpegEncoder(const char* ffmpeg_exe, const char* extra_args);
+// backends/imguiapp_impl_libav.h -- linked ffmpeg SDK (DEFAULT video provider when the
+// SDK is present; scripts/get-ffmpeg.ps1 stages it, CMake gates the TU on it). mp4
+// H.264 via libx264, exact per-frame PTS, and the decode side for reading embedded
+// input logs back out of a recording. GPL SDK variant: distributing linked binaries
+// is GPL.
+IMGUI_API ImGuiAppAVEncoder* ImGuiAppAV_CreateLibavEncoder();
+IMGUI_API bool ImGuiAppAV_ReadEmbeddedInputLog(const char* video_path, int embed_rows, ImGuiAppInputLog* out_log, int* out_corrupt_frames);
 
 // backends/imguiapp_impl_mediafoundation.h -- Windows Media Foundation mp4
 // (H.264/HEVC), no external exe needed. Explicit choice, never a silent
@@ -381,7 +382,7 @@ struct ImGuiAppTestHarnessConfig
   ImGuiAppPacerMode PacerMode;                        // default Fixed (reproducible tests); Target/Off for honest-clock benchmark captures
   float       Fps;                                    // Fixed pacer rate / Constant-timing rate; default 60
   ImGuiAppAVTimingMode Timing;                        // default Auto: Fixed pacer -> Constant video, else Realtime (honest) video
-  ImGuiAppAVEncoder* Encoder;                         // null = harness default: ffmpeg on PATH, else QOI sequence
+  ImGuiAppAVEncoder* Encoder;                         // null = harness default: libav when the SDK is linked, else QOI sequence
   ImGuiAppWALLevel   WALLevel;                        // default Frame
   const char* TestFilter;                             // test-engine filter; null = all
   void (*RegisterTests)(ImGuiTestEngine* engine);     // required
@@ -438,7 +439,7 @@ imguix/imguiapp/
 
 Because core cannot reference providers, there is no CreateDefaultEncoder in the seam:
 `AppRecordBegin(encoder = null)` is an error, and the null-Encoder convenience default
-(ffmpeg on PATH -> QOI sequence) is implemented by the harness, which includes the
+(libav when linked -> QOI sequence) is implemented by the harness, which includes the
 provider headers it ships with.
 
 Interface-first: the headers above are written and committed BEFORE implementation so

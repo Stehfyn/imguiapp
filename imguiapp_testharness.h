@@ -19,7 +19,7 @@ struct ImGuiAppTestHarnessConfig
   ImGuiAppPacerMode    PacerMode;            // Fixed = Reproduce posture; Target/Off = Witness (honest-clock) posture
   float                Fps;                  // Fixed pacer rate / Constant-timing rate
   ImGuiAppAVTimingMode Timing;               // Auto: Fixed pacer -> Constant video, else Realtime
-  ImGuiAppAVEncoder*   Encoder;              // null = harness default: ffmpeg on PATH, else QOI sequence
+  ImGuiAppAVEncoder*   Encoder;              // null = harness default: libav when the SDK is linked, else QOI sequence
   ImGuiAppWALLevel     WALLevel;
   const char*          TestFilter;           // test-engine filter; null = all
   void (*RegisterTests)(ImGuiTestEngine* engine);   // required

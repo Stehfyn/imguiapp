@@ -5,6 +5,7 @@
 
 #include "imguiapp_impl_qoi.h"
 #include "imguiapp_qoi.h"
+#include "imgui_internal.h"   // ImFileOpen/ImFileWrite/ImFileClose, ImFormatString
 
 #include <cstdio>
 #include <cstring>
@@ -20,7 +21,7 @@
 struct ImGuiAppQoiSeqEncoderData
 {
   char           Dir[512];
-  FILE*          Index;
+  ImFileHandle   Index;
   int            FrameCounter;
   int            Width;          // 0 until fixed (config, else first frame)
   int            Height;
@@ -129,7 +130,7 @@ static void ImGuiAppQoiSeq_Close(ImGuiAppAVEncoder* self)
   ImGuiAppQoiSeqEncoderData* bd = (ImGuiAppQoiSeqEncoderData*)self->UserData;
   if (bd == nullptr || bd->Index == nullptr)
     return;
-  fclose(bd->Index);
+  ImFileClose(bd->Index);
   bd->Index = nullptr;
 }
 
@@ -139,7 +140,7 @@ static void ImGuiAppQoiSeq_Destroy(ImGuiAppAVEncoder* self)
   if (bd != nullptr)
   {
     if (bd->Index != nullptr)
-      fclose(bd->Index);
+      ImFileClose(bd->Index);
     IM_DELETE(bd);
   }
   self->UserData = nullptr;

@@ -396,6 +396,8 @@ static void AvCollectInputRecords(ImGuiAppRecorder* rec, ImVector<char>* out)
   rec->LastInputCount = log->Count;
 }
 
+// The sidecar writer stays on raw FILE*: crash-honesty requires fflush per record and
+// ImFileHandle exposes no flush. Readers and the encoder backends use the ImFile layer.
 static void AvMetaWrite(ImGuiAppRecorder* rec, const ImVector<char>* framed)
 {
   if (rec->Meta == nullptr || framed->Size == 0)
@@ -1087,22 +1089,18 @@ struct ImGuiAppAVMetaReader
 
 static bool AvMetaLoad(const char* path, ImGuiAppAVMetaReader* r)
 {
-  FILE* f = fopen(path, "rb");
-  if (f == nullptr)
+  size_t size = 0;
+  void* data = ImFileLoadToMemory(path, "rb", &size);
+  if (data == nullptr)
     return false;
-  fseek(f, 0, SEEK_END);
-  const long size = ftell(f);
-  fseek(f, 0, SEEK_SET);
-  if (size < (long)sizeof(ImGuiAppAVMetaHeader))
+  if (size < sizeof(ImGuiAppAVMetaHeader) || size > 0x7FFFFFF0u)
   {
-    fclose(f);
+    IM_FREE(data);
     return false;
   }
   r->Bytes.resize((int)size);
-  const bool read_ok = fread(r->Bytes.Data, 1, (size_t)size, f) == (size_t)size;
-  fclose(f);
-  if (!read_ok)
-    return false;
+  memcpy(r->Bytes.Data, data, size);
+  IM_FREE(data);
   memcpy(&r->Header, r->Bytes.Data, sizeof(r->Header));
   if (memcmp(r->Header.Magic, kAvMetaMagic, 8) != 0 || r->Header.Version != 1)
     return false;
