@@ -167,16 +167,16 @@ IMGUI_API int ImGui::AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessC
       // Default: libav mp4 when the SDK was linked, else the zero-dependency QOI sequence.
       encoder_owned = true;
 #ifdef IMGUIX_HAS_LIBAV
-      encoder = ImGuiAppAV_CreateLibavEncoder();
+      encoder = ImGuiApp_ImplLibav_CreateEncoder();
       ImFormatString(video_path, IM_ARRAYSIZE(video_path), "%s/%s.mp4", artifact_dir, config->Name);
       enc_config.OutputPath = video_path;
       recorder = AppRecordBegin(app, encoder, &enc_config);
       if (recorder == nullptr)
-        ImGuiAppAV_DestroyEncoder(encoder);
+        ImGui::AppAVDestroyEncoder(encoder);
 #endif
       if (recorder == nullptr)
       {
-        encoder = ImGuiAppAV_CreateQoiSequenceEncoder();
+        encoder = ImGuiApp_ImplQoi_CreateEncoder();
         ImFormatString(video_path, IM_ARRAYSIZE(video_path), "%s/%s", artifact_dir, config->Name);
         enc_config.OutputPath = video_path;
         recorder = AppRecordBegin(app, encoder, &enc_config);
@@ -187,7 +187,7 @@ IMGUI_API int ImGui::AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessC
     {
       AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "harness: video recording unavailable, running without");
       if (encoder_owned)
-        ImGuiAppAV_DestroyEncoder(encoder);
+        ImGui::AppAVDestroyEncoder(encoder);
       encoder = nullptr;
       encoder_owned = false;
       video_path[0] = 0;
@@ -259,7 +259,7 @@ IMGUI_API int ImGui::AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessC
   if (recorder != nullptr)
     AppRecordEnd(recorder);   // clears app->Recorder
   if (encoder_owned)
-    ImGuiAppAV_DestroyEncoder(encoder);
+    ImGui::AppAVDestroyEncoder(encoder);
   app->Shutdown();
   ImGuiTestEngine_DestroyContext(engine);
 

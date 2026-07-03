@@ -305,7 +305,7 @@ static void ImGuiAppMf_Destroy(ImGuiAppAVEncoder* self)
   IM_DELETE(self);
 }
 
-IMGUI_API ImGuiAppAVEncoder* ImGuiAppAV_CreateMediaFoundationEncoder()
+IMGUI_API ImGuiAppAVEncoder* ImGuiApp_ImplMediaFoundation_CreateEncoder()
 {
   ImGuiAppAVEncoder* enc = IM_NEW(ImGuiAppAVEncoder)();
   enc->Name = "mediafoundation";
@@ -320,7 +320,7 @@ IMGUI_API ImGuiAppAVEncoder* ImGuiAppAV_CreateMediaFoundationEncoder()
 
 #else // !_WIN32
 
-IMGUI_API ImGuiAppAVEncoder* ImGuiAppAV_CreateMediaFoundationEncoder()
+IMGUI_API ImGuiAppAVEncoder* ImGuiApp_ImplMediaFoundation_CreateEncoder()
 {
   return nullptr;
 }

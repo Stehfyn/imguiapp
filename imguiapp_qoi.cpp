@@ -24,7 +24,7 @@ static inline bool ImQoiEq(const ImQoiPx* x, const ImQoiPx* y)
   return x->r == y->r && x->g == y->g && x->b == y->b && x->a == y->a;
 }
 
-IMGUI_API bool ImGuiAppAV_QoiEncode(const void* rgba, int width, int height, int pitch_bytes, ImVector<char>* out)
+IMGUI_API bool ImQoiEncode(const void* rgba, int width, int height, int pitch_bytes, ImVector<char>* out)
 {
   if (rgba == nullptr || out == nullptr || width <= 0 || height <= 0)
     return false;
@@ -151,7 +151,7 @@ IMGUI_API bool ImGuiAppAV_QoiEncode(const void* rgba, int width, int height, int
   return true;
 }
 
-IMGUI_API bool ImGuiAppAV_QoiDecode(const void* qoi_bytes, int qoi_size, ImVector<char>* out_rgba, int* out_width, int* out_height)
+IMGUI_API bool ImQoiDecode(const void* qoi_bytes, int qoi_size, ImVector<char>* out_rgba, int* out_width, int* out_height)
 {
   if (qoi_bytes == nullptr || out_rgba == nullptr || out_width == nullptr || out_height == nullptr)
     return false;

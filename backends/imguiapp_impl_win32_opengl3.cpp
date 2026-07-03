@@ -17,7 +17,7 @@
 
 namespace
 {
-    struct ImGuiApp_Win32OpenGL3_InitInfo
+    struct ImGuiApp_ImplWin32OpenGL3_InitInfo
     {
         void*       Hwnd;
         void*       MainDC;
@@ -25,7 +25,7 @@ namespace
         const char* GlslVersion;
     };
 
-    struct ImGuiApp_Win32OpenGL3_Data
+    struct ImGuiApp_ImplWin32OpenGL3_Data
     {
         void* Hwnd;
         void* MainDC;
@@ -39,10 +39,10 @@ namespace
         ImVector<char> CaptureRgba;   // top-down RGBA handed to callers; valid until the next capture
     };
 
-    ImGuiApp_Win32OpenGL3_Data GBackend;
+    ImGuiApp_ImplWin32OpenGL3_Data GBackend;
     static ImGuiAppPlatformState* GState = nullptr;
 
-    bool IsInitInfoValid(const ImGuiApp_Win32OpenGL3_InitInfo* init_info)
+    bool IsInitInfoValid(const ImGuiApp_ImplWin32OpenGL3_InitInfo* init_info)
     {
         return init_info != nullptr &&
                init_info->Hwnd != nullptr &&
@@ -163,7 +163,7 @@ namespace
 
     void ShutdownBackend(void* user_data)
     {
-        ImGuiApp_Win32OpenGL3_Data* bd = (ImGuiApp_Win32OpenGL3_Data*)user_data;
+        ImGuiApp_ImplWin32OpenGL3_Data* bd = (ImGuiApp_ImplWin32OpenGL3_Data*)user_data;
         IM_ASSERT(bd != nullptr);
         if (bd == nullptr)
             return;
@@ -173,7 +173,7 @@ namespace
         if (bd->PlatformBackendInitialized)
             ImGui_ImplWin32_Shutdown();
 
-        *bd = ImGuiApp_Win32OpenGL3_Data();
+        *bd = ImGuiApp_ImplWin32OpenGL3_Data();
     }
 
     void NewFrame(void* user_data)
@@ -185,7 +185,7 @@ namespace
 
     void RenderDrawData(ImDrawData* draw_data, const ImGuiAppFrameConfig* config, void* user_data)
     {
-        ImGuiApp_Win32OpenGL3_Data* bd = (ImGuiApp_Win32OpenGL3_Data*)user_data;
+        ImGuiApp_ImplWin32OpenGL3_Data* bd = (ImGuiApp_ImplWin32OpenGL3_Data*)user_data;
         IM_ASSERT(bd != nullptr);
         if (bd == nullptr)
             return;
@@ -218,7 +218,7 @@ namespace
     // and this, reading back the frame just rendered before it goes on screen.
     void PresentFrame(const ImGuiAppFrameConfig* config, void* user_data)
     {
-        ImGuiApp_Win32OpenGL3_Data* bd = (ImGuiApp_Win32OpenGL3_Data*)user_data;
+        ImGuiApp_ImplWin32OpenGL3_Data* bd = (ImGuiApp_ImplWin32OpenGL3_Data*)user_data;
         if (bd == nullptr || config == nullptr)
             return;
         if ((config->Flags & ImGuiAppFrameFlags_NoPresent) == 0)
@@ -231,7 +231,7 @@ namespace
     // GL_BACK still holds it); a repeat call with no new frame rendered returns false.
     bool CaptureFrame(ImGuiApp* app, ImGuiAppAVFrame* out_frame)
     {
-        ImGuiApp_Win32OpenGL3_Data* bd = &GBackend;
+        ImGuiApp_ImplWin32OpenGL3_Data* bd = &GBackend;
         if (out_frame == nullptr || bd->MainDC == nullptr || bd->MainGLRC == nullptr)
             return false;
         if (app != nullptr && app->FrameID.FrameIndex <= bd->CaptureLastReturned)
@@ -271,12 +271,12 @@ namespace
     }
 }
 
-static bool ImGuiApp_Win32OpenGL3_Init(const ImGuiApp_Win32OpenGL3_InitInfo* init_info)
+static bool ImGuiApp_ImplWin32OpenGL3_Init(const ImGuiApp_ImplWin32OpenGL3_InitInfo* init_info)
 {
     if (ImGuiX::GetCurrentContext() == nullptr)
         ImGuiX::CreateContext();
 
-    IM_ASSERT(IsInitInfoValid(init_info) && "ImGuiApp_Win32OpenGL3_Init: invalid init_info.");
+    IM_ASSERT(IsInitInfoValid(init_info) && "ImGuiApp_ImplWin32OpenGL3_Init: invalid init_info.");
     if (!IsInitInfoValid(init_info))
         return false;
 
@@ -288,7 +288,7 @@ static bool ImGuiApp_Win32OpenGL3_Init(const ImGuiApp_Win32OpenGL3_InitInfo* ini
 
     if (!ImGui_ImplWin32_InitForOpenGL(init_info->Hwnd))
     {
-        GBackend = ImGuiApp_Win32OpenGL3_Data();
+        GBackend = ImGuiApp_ImplWin32OpenGL3_Data();
         return false;
     }
     GBackend.PlatformBackendInitialized = true;
@@ -317,7 +317,7 @@ static bool ImGuiApp_Win32OpenGL3_Init(const ImGuiApp_Win32OpenGL3_InitInfo* ini
     return true;
 }
 
-bool ImGuiApp_Win32OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
+bool ImGuiApp_ImplWin32OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
 {
     if (config.Headless != ImGuiAppHeadlessMode_None)
     {
@@ -361,12 +361,12 @@ bool ImGuiApp_Win32OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
 
     ImGuiX::CreateContext();
 
-    ImGuiApp_Win32OpenGL3_InitInfo init_info;
+    ImGuiApp_ImplWin32OpenGL3_InitInfo init_info;
     init_info.Hwnd        = state->Hwnd;
     init_info.MainDC      = state->MainWindow.hDC;
     init_info.MainGLRC    = state->MainGLRC;
     init_info.GlslVersion = nullptr;
-    if (!ImGuiApp_Win32OpenGL3_Init(&init_info))
+    if (!ImGuiApp_ImplWin32OpenGL3_Init(&init_info))
     {
         ImGuiX::DestroyContext();
         GState = nullptr;
@@ -400,7 +400,7 @@ bool ImGuiApp_Win32OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
     return true;
 }
 
-void ImGuiApp_Win32OpenGL3_ShutdownPlatform(ImGuiApp* app)
+void ImGuiApp_ImplWin32OpenGL3_ShutdownPlatform(ImGuiApp* app)
 {
     ImGuiAppPlatformState* state = static_cast<ImGuiAppPlatformState*>(app->PlatformData);
     if (state == nullptr)
@@ -436,8 +436,8 @@ void ImGuiApp_Win32OpenGL3_ShutdownPlatform(ImGuiApp* app)
 
 static const ImGuiAppPlatformBackend GPlatformBackend =
 {
-    ImGuiApp_Win32OpenGL3_InitPlatform,
-    ImGuiApp_Win32OpenGL3_ShutdownPlatform,
+    ImGuiApp_ImplWin32OpenGL3_InitPlatform,
+    ImGuiApp_ImplWin32OpenGL3_ShutdownPlatform,
     ImGuiApp_ImplWin32_RunLoop,
     CaptureFrame,
 };

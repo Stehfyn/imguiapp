@@ -163,23 +163,23 @@ survives even a Constant-mode encode.
 // backends/imguiapp_impl_qoi.h -- zero-dependency lossless sequence:
 // <dir>/NNNNNN.qoi + index.tsv. Deterministic, byte-stable across machines -- the
 // CI/golden-image provider.
-IMGUI_API ImGuiAppAVEncoder* ImGuiAppAV_CreateQoiSequenceEncoder();
+IMGUI_API ImGuiAppAVEncoder* ImGuiApp_ImplQoi_CreateEncoder();
 
 // backends/imguiapp_impl_libav.h -- linked ffmpeg SDK (DEFAULT video provider when the
 // SDK is present; scripts/get-ffmpeg.ps1 stages it, CMake gates the TU on it). mp4
 // H.264 via libx264, exact per-frame PTS, and the decode side for reading embedded
 // input logs back out of a recording. GPL SDK variant: distributing linked binaries
 // is GPL.
-IMGUI_API ImGuiAppAVEncoder* ImGuiAppAV_CreateLibavEncoder();
-IMGUI_API bool ImGuiAppAV_ReadEmbeddedInputLog(const char* video_path, int embed_rows, ImGuiAppInputLog* out_log, int* out_corrupt_frames);
+IMGUI_API ImGuiAppAVEncoder* ImGuiApp_ImplLibav_CreateEncoder();
+IMGUI_API bool ImGuiApp_ImplLibav_ReadEmbeddedInputLog(const char* video_path, int embed_rows, ImGuiAppInputLog* out_log, int* out_corrupt_frames);
 
 // backends/imguiapp_impl_mediafoundation.h -- Windows Media Foundation mp4
 // (H.264/HEVC), no external exe needed. Explicit choice, never a silent
 // default (lossy + driver-variant output is wrong for test artifacts).
-IMGUI_API ImGuiAppAVEncoder* ImGuiAppAV_CreateMediaFoundationEncoder();
+IMGUI_API ImGuiAppAVEncoder* ImGuiApp_ImplMediaFoundation_CreateEncoder();
 
 // core seam (imguiapp_av.h): frees any provider's encoder via its vtable Destroy.
-IMGUI_API void ImGuiAppAV_DestroyEncoder(ImGuiAppAVEncoder* encoder);
+IMGUI_API void ImGui::AppAVDestroyEncoder(ImGuiAppAVEncoder* encoder);
 ```
 
 ### Sidecar track: `<output>.avmeta`
@@ -269,7 +269,7 @@ records are byte-identical to what the same pump writes to the sidecar (one buff
 sinks). Requires `AppRecordAttachInputLog`; frames with no new records (placeholders
 included) stamp an empty marker.
 
-Format (frozen; the reader is `ImGuiAppAV_ReadEmbeddedInputLog` in
+Format (frozen; the reader is `ImGuiApp_ImplLibav_ReadEmbeddedInputLog` in
 backends/imguiapp_impl_libav.h):
 
 - Strip: the bottom `EmbedRows` rows (clamped at `AppRecordBegin` to a multiple of 4,

@@ -310,7 +310,7 @@ static void ImGuiAppLibav_Destroy(ImGuiAppAVEncoder* self)
   IM_DELETE(self);
 }
 
-IMGUI_API ImGuiAppAVEncoder* ImGuiAppAV_CreateLibavEncoder()
+IMGUI_API ImGuiAppAVEncoder* ImGuiApp_ImplLibav_CreateEncoder()
 {
   ImGuiAppAVEncoder* enc = IM_NEW(ImGuiAppAVEncoder)();
   enc->Name = "libav";
@@ -434,7 +434,7 @@ static bool LibavConsumeRecords(const char* p, ImU32 total, ImGuiAppInputLog* lo
   return true;
 }
 
-IMGUI_API bool ImGuiAppAV_ReadEmbeddedInputLog(const char* video_path, int embed_rows, ImGuiAppInputLog* out_log, int* out_corrupt_frames)
+IMGUI_API bool ImGuiApp_ImplLibav_ReadEmbeddedInputLog(const char* video_path, int embed_rows, ImGuiAppInputLog* out_log, int* out_corrupt_frames)
 {
   IM_ASSERT(video_path != nullptr && out_log != nullptr && embed_rows >= 4);
   if (out_corrupt_frames != nullptr)

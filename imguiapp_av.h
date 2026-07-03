@@ -76,8 +76,6 @@ struct ImGuiAppAVEncoder
   ImGuiAppAVEncoder() { Name = nullptr; SupportsRealtimePts = false; Open = nullptr; WriteFrame = nullptr; Close = nullptr; Destroy = nullptr; UserData = nullptr; }
 };
 
-// Close (if open) then Destroy. Null-safe.
-IMGUI_API void ImGuiAppAV_DestroyEncoder(ImGuiAppAVEncoder* encoder);
 
 //-----------------------------------------------------------------------------
 // [SECTION] Sidecar track (.avmeta)
@@ -123,6 +121,9 @@ struct ImGuiAppRingConfig
 
 namespace ImGui
 {
+  // Close (if open) then Destroy any provider's encoder via its vtable. Null-safe.
+  IMGUI_API void AppAVDestroyEncoder(ImGuiAppAVEncoder* encoder);
+
   // Print a sidecar as TSV to stdout (debug helper).
   IMGUI_API bool AppAVMetaDump(const char* avmeta_path);
 

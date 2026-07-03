@@ -103,7 +103,7 @@ static bool ImGuiAppQoiSeq_WriteFrame(ImGuiAppAVEncoder* self, const ImGuiAppAVF
   if (frame->Width != bd->Width || frame->Height != bd->Height || bd->Width <= 0 || bd->Height <= 0)
     return false;
 
-  if (!ImGuiAppAV_QoiEncode(frame->Pixels, frame->Width, frame->Height, frame->PitchBytes, &bd->Encoded))
+  if (!ImQoiEncode(frame->Pixels, frame->Width, frame->Height, frame->PitchBytes, &bd->Encoded))
     return false;
 
   char frame_path[560];
@@ -147,7 +147,7 @@ static void ImGuiAppQoiSeq_Destroy(ImGuiAppAVEncoder* self)
   IM_DELETE(self);
 }
 
-IMGUI_API ImGuiAppAVEncoder* ImGuiAppAV_CreateQoiSequenceEncoder()
+IMGUI_API ImGuiAppAVEncoder* ImGuiApp_ImplQoi_CreateEncoder()
 {
   ImGuiAppAVEncoder* enc = IM_NEW(ImGuiAppAVEncoder)();
   enc->Name = "qoi-sequence";

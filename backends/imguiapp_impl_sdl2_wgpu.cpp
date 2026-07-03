@@ -20,13 +20,13 @@
 
 namespace
 {
-    struct ImGuiApp_Sdl2WGPU_InitInfo
+    struct ImGuiApp_ImplSDL2WGPU_InitInfo
     {
         void*       Window;
         const char* CanvasSelector;
     };
 
-    struct ImGuiApp_Sdl2WGPU_Data
+    struct ImGuiApp_ImplSDL2WGPU_Data
     {
         SDL_Window* Window;
         const char* CanvasSelector;
@@ -41,14 +41,14 @@ namespace
         bool RendererBackendInitialized;
     };
 
-    ImGuiApp_Sdl2WGPU_Data GBackend;
+    ImGuiApp_ImplSDL2WGPU_Data GBackend;
 
-    bool IsInitInfoValid(const ImGuiApp_Sdl2WGPU_InitInfo* init_info)
+    bool IsInitInfoValid(const ImGuiApp_ImplSDL2WGPU_InitInfo* init_info)
     {
         return init_info != nullptr && init_info->Window != nullptr;
     }
 
-    void ReadCanvasSize(ImGuiApp_Sdl2WGPU_Data* bd, int* width, int* height)
+    void ReadCanvasSize(ImGuiApp_ImplSDL2WGPU_Data* bd, int* width, int* height)
     {
         IM_ASSERT(bd != nullptr);
         IM_ASSERT(width != nullptr);
@@ -143,7 +143,7 @@ namespace
     }
 #endif
 
-    bool ResizeSurface(ImGuiApp_Sdl2WGPU_Data* bd, int width, int height)
+    bool ResizeSurface(ImGuiApp_ImplSDL2WGPU_Data* bd, int width, int height)
     {
         if (bd == nullptr || bd->Surface == nullptr || bd->Device == nullptr)
             return false;
@@ -160,7 +160,7 @@ namespace
         return true;
     }
 
-    bool InitWGPU(ImGuiApp_Sdl2WGPU_Data* bd)
+    bool InitWGPU(ImGuiApp_ImplSDL2WGPU_Data* bd)
     {
         IM_ASSERT(bd != nullptr);
         if (bd == nullptr)
@@ -234,7 +234,7 @@ namespace
 
     void ShutdownBackend(void* user_data)
     {
-        ImGuiApp_Sdl2WGPU_Data* bd = (ImGuiApp_Sdl2WGPU_Data*)user_data;
+        ImGuiApp_ImplSDL2WGPU_Data* bd = (ImGuiApp_ImplSDL2WGPU_Data*)user_data;
         IM_ASSERT(bd != nullptr);
         if (bd == nullptr)
             return;
@@ -256,12 +256,12 @@ namespace
         if (bd->Instance != nullptr)
             wgpuInstanceRelease(bd->Instance);
 
-        *bd = ImGuiApp_Sdl2WGPU_Data();
+        *bd = ImGuiApp_ImplSDL2WGPU_Data();
     }
 
     void NewFrame(void* user_data)
     {
-        ImGuiApp_Sdl2WGPU_Data* bd = (ImGuiApp_Sdl2WGPU_Data*)user_data;
+        ImGuiApp_ImplSDL2WGPU_Data* bd = (ImGuiApp_ImplSDL2WGPU_Data*)user_data;
         IM_ASSERT(bd != nullptr);
         if (bd == nullptr)
             return;
@@ -277,7 +277,7 @@ namespace
 
     void RenderDrawData(ImDrawData* draw_data, const ImGuiAppFrameConfig* config, void* user_data)
     {
-        ImGuiApp_Sdl2WGPU_Data* bd = (ImGuiApp_Sdl2WGPU_Data*)user_data;
+        ImGuiApp_ImplSDL2WGPU_Data* bd = (ImGuiApp_ImplSDL2WGPU_Data*)user_data;
         IM_ASSERT(bd != nullptr);
         if (bd == nullptr || draw_data == nullptr || config == nullptr || bd->Surface == nullptr)
             return;
@@ -344,12 +344,12 @@ namespace
     }
 }
 
-static bool ImGuiApp_Sdl2WGPU_Init(const ImGuiApp_Sdl2WGPU_InitInfo* init_info)
+static bool ImGuiApp_ImplSDL2WGPU_Init(const ImGuiApp_ImplSDL2WGPU_InitInfo* init_info)
 {
     if (ImGuiX::GetCurrentContext() == nullptr)
         ImGuiX::CreateContext();
 
-    IM_ASSERT(IsInitInfoValid(init_info) && "ImGuiApp_Sdl2WGPU_Init: invalid init_info.");
+    IM_ASSERT(IsInitInfoValid(init_info) && "ImGuiApp_ImplSDL2WGPU_Init: invalid init_info.");
     if (!IsInitInfoValid(init_info))
         return false;
 
@@ -399,7 +399,7 @@ static bool ImGuiApp_Sdl2WGPU_Init(const ImGuiApp_Sdl2WGPU_InitInfo* init_info)
     return true;
 }
 
-bool ImGuiApp_Sdl2WGPU_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
+bool ImGuiApp_ImplSDL2WGPU_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
 {
     ImGuiAppPlatformState* state = IM_NEW(ImGuiAppPlatformState)();
     app->PlatformData = state;
@@ -420,10 +420,10 @@ bool ImGuiApp_Sdl2WGPU_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
 
     ImGuiX::CreateContext();
 
-    ImGuiApp_Sdl2WGPU_InitInfo init_info;
+    ImGuiApp_ImplSDL2WGPU_InitInfo init_info;
     init_info.Window         = state->Window;
     init_info.CanvasSelector = "#canvas";
-    if (!ImGuiApp_Sdl2WGPU_Init(&init_info))
+    if (!ImGuiApp_ImplSDL2WGPU_Init(&init_info))
     {
         ImGuiX::DestroyContext();
         SDL_DestroyWindow(state->Window);
@@ -439,7 +439,7 @@ bool ImGuiApp_Sdl2WGPU_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
     return true;
 }
 
-void ImGuiApp_Sdl2WGPU_ShutdownPlatform(ImGuiApp* app)
+void ImGuiApp_ImplSDL2WGPU_ShutdownPlatform(ImGuiApp* app)
 {
     ImGuiAppPlatformState* state = static_cast<ImGuiAppPlatformState*>(app->PlatformData);
     if (state == nullptr)
@@ -458,8 +458,8 @@ void ImGuiApp_Sdl2WGPU_ShutdownPlatform(ImGuiApp* app)
 
 static const ImGuiAppPlatformBackend GPlatformBackend =
 {
-    ImGuiApp_Sdl2WGPU_InitPlatform,
-    ImGuiApp_Sdl2WGPU_ShutdownPlatform,
+    ImGuiApp_ImplSDL2WGPU_InitPlatform,
+    ImGuiApp_ImplSDL2WGPU_ShutdownPlatform,
     ImGuiApp_ImplSDL2_RunLoop,
 };
 

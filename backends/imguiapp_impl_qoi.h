@@ -8,4 +8,4 @@
 
 #include "imguiapp_av.h"
 
-IMGUI_API ImGuiAppAVEncoder* ImGuiAppAV_CreateQoiSequenceEncoder();
+IMGUI_API ImGuiAppAVEncoder* ImGuiApp_ImplQoi_CreateEncoder();

@@ -215,7 +215,7 @@ struct ImGuiAppRecorder
   }
 };
 
-IMGUI_API void ImGuiAppAV_DestroyEncoder(ImGuiAppAVEncoder* encoder)
+IMGUI_API void ImGui::AppAVDestroyEncoder(ImGuiAppAVEncoder* encoder)
 {
   if (encoder == nullptr)
     return;
@@ -556,7 +556,7 @@ static void AvEmitFrame(ImGuiAppRecorder* rec, const ImGuiAppAVFrame* frame, boo
     entry->Width = frame->Width;
     entry->Height = frame->Height;
     entry->FrameID = frame->FrameID;
-    if (!ImGuiAppAV_QoiEncode(qoi_src, frame->Width, frame->Height, qoi_pitch, &entry->Qoi))
+    if (!ImQoiEncode(qoi_src, frame->Width, frame->Height, qoi_pitch, &entry->Qoi))
     {
       IM_DELETE(entry);
       return;
@@ -1051,7 +1051,7 @@ IMGUI_API bool AppRecordDumpRing(ImGuiAppRecorder* rec, const char* reason)
     ImGuiAppAVRingEntry* entry = rec->RingEntries.Data[i];
     int w = 0;
     int h = 0;
-    if (!ImGuiAppAV_QoiDecode(entry->Qoi.Data, entry->Qoi.Size, &rgba, &w, &h))
+    if (!ImQoiDecode(entry->Qoi.Data, entry->Qoi.Size, &rgba, &w, &h))
     {
       ok = false;
       break;

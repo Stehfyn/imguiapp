@@ -21,7 +21,7 @@
 
 namespace
 {
-    struct ImGuiApp_Win32Vulkan_InitInfo
+    struct ImGuiApp_ImplWin32Vulkan_InitInfo
     {
         void*                Hwnd;
         unsigned int         MinImageCount;
@@ -31,7 +31,7 @@ namespace
         int                  OffscreenHeight;
     };
 
-    struct ImGuiApp_Win32Vulkan_Data
+    struct ImGuiApp_ImplWin32Vulkan_Data
     {
         ImGuiApp*                      App;    // owner; source of FrameID at capture-copy time
         HWND                           Hwnd;
@@ -110,7 +110,7 @@ namespace
         }
     };
 
-    ImGuiApp_Win32Vulkan_Data GBackend;
+    ImGuiApp_ImplWin32Vulkan_Data GBackend;
 
     void CheckVkResult(VkResult err)
     {
@@ -121,7 +121,7 @@ namespace
             std::abort();
     }
 
-    bool IsInitInfoValid(const ImGuiApp_Win32Vulkan_InitInfo* init_info)
+    bool IsInitInfoValid(const ImGuiApp_ImplWin32Vulkan_InitInfo* init_info)
     {
         return init_info != nullptr && init_info->Hwnd != nullptr;
     }
@@ -136,7 +136,7 @@ namespace
         return (uint32_t)-1;
     }
 
-    void DestroyCaptureBuffers(ImGuiApp_Win32Vulkan_Data* bd)
+    void DestroyCaptureBuffers(ImGuiApp_ImplWin32Vulkan_Data* bd)
     {
         if (bd == nullptr || bd->Device == VK_NULL_HANDLE)
             return;
@@ -182,7 +182,7 @@ namespace
     // Persistently mapped host-visible+coherent staging buffer of at least `size` bytes.
     // current_submit_fence: this frame's (already waited + reset, unsubmitted) fence -- waiting
     // on it here would deadlock; equality means the old copy already retired at frame start.
-    bool EnsureCaptureBuffer(ImGuiApp_Win32Vulkan_Data* bd, int index, VkDeviceSize size, VkFence current_submit_fence)
+    bool EnsureCaptureBuffer(ImGuiApp_ImplWin32Vulkan_Data* bd, int index, VkDeviceSize size, VkFence current_submit_fence)
     {
         if (bd->CaptureBuffer[index] != VK_NULL_HANDLE && bd->CaptureCapacity[index] >= size)
             return true;
@@ -258,7 +258,7 @@ namespace
 
     // Records image -> staging copy into the frame's command buffer (before vkEndCommandBuffer).
     // `layout` is the image's layout at this point in the command buffer; it is restored after.
-    void RecordCaptureCopy(ImGuiApp_Win32Vulkan_Data* bd, VkCommandBuffer cb, VkImage image, int width, int height, VkFormat format, VkImageLayout layout, VkFence submit_fence)
+    void RecordCaptureCopy(ImGuiApp_ImplWin32Vulkan_Data* bd, VkCommandBuffer cb, VkImage image, int width, int height, VkFormat format, VkImageLayout layout, VkFence submit_fence)
     {
         if (!bd->CaptureArmed || width <= 0 || height <= 0)
             return;
@@ -318,7 +318,7 @@ namespace
         bd->CaptureWriteIndex = w ^ 1;
     }
 
-    void DestroyOffscreenTarget(ImGuiApp_Win32Vulkan_Data* bd)
+    void DestroyOffscreenTarget(ImGuiApp_ImplWin32Vulkan_Data* bd)
     {
         if (bd == nullptr || bd->Device == VK_NULL_HANDLE)
             return;
@@ -364,7 +364,7 @@ namespace
 
     // Fixed-size RGBA8 render target. finalLayout is TRANSFER_SRC_OPTIMAL: the capture copy
     // then needs no layout round-trip, and nothing ever presents this image.
-    bool CreateOffscreenTarget(ImGuiApp_Win32Vulkan_Data* bd, int width, int height)
+    bool CreateOffscreenTarget(ImGuiApp_ImplWin32Vulkan_Data* bd, int width, int height)
     {
         const VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
         VkResult err;
@@ -505,7 +505,7 @@ namespace
 
     // Lockstep offscreen frame: wait fence -> record -> submit. No acquire, no semaphores,
     // no present; the render pass leaves the image in TRANSFER_SRC for capture.
-    void FrameRenderOffscreen(ImGuiApp_Win32Vulkan_Data* bd, ImDrawData* draw_data, const VkClearValue* clear_value)
+    void FrameRenderOffscreen(ImGuiApp_ImplWin32Vulkan_Data* bd, ImDrawData* draw_data, const VkClearValue* clear_value)
     {
         VkResult err = vkWaitForFences(bd->Device, 1, &bd->OffscreenFence, VK_TRUE, UINT64_MAX);
         CheckVkResult(err);
@@ -606,7 +606,7 @@ namespace
         *height = (int)io.DisplaySize.y;
     }
 
-    void CloseVBlankWaitAdapter(ImGuiApp_Win32Vulkan_Data* bd)
+    void CloseVBlankWaitAdapter(ImGuiApp_ImplWin32Vulkan_Data* bd)
     {
         if (bd == nullptr || bd->VBlankAdapter == 0)
             return;
@@ -625,7 +625,7 @@ namespace
         bd->VBlankWaitAvailable = false;
     }
 
-    bool OpenVBlankWaitAdapter(ImGuiApp_Win32Vulkan_Data* bd)
+    bool OpenVBlankWaitAdapter(ImGuiApp_ImplWin32Vulkan_Data* bd)
     {
         if (bd == nullptr || bd->Hwnd == nullptr)
             return false;
@@ -654,7 +654,7 @@ namespace
         return true;
     }
 
-    void WaitForVBlankBeforePresent(ImGuiApp_Win32Vulkan_Data* bd, ImGui_ImplVulkanH_Window* wd)
+    void WaitForVBlankBeforePresent(ImGuiApp_ImplWin32Vulkan_Data* bd, ImGui_ImplVulkanH_Window* wd)
     {
         if (bd == nullptr || wd == nullptr || bd->VBlankWaitDisabled || wd->PresentMode != VK_PRESENT_MODE_IMMEDIATE_KHR)
             return;
@@ -716,7 +716,7 @@ namespace
         return VK_FALSE;
     }
 
-    bool SetupVulkan(ImGuiApp_Win32Vulkan_Data* bd, ImVector<const char*> instance_extensions, bool enable_validation)
+    bool SetupVulkan(ImGuiApp_ImplWin32Vulkan_Data* bd, ImVector<const char*> instance_extensions, bool enable_validation)
     {
         IM_ASSERT(bd != nullptr);
         if (bd == nullptr)
@@ -874,7 +874,7 @@ namespace
         return true;
     }
 
-    bool SetupVulkanWindow(ImGuiApp_Win32Vulkan_Data* bd, ImGui_ImplVulkanH_Window* wd, VkSurfaceKHR surface, int width, int height)
+    bool SetupVulkanWindow(ImGuiApp_ImplWin32Vulkan_Data* bd, ImGui_ImplVulkanH_Window* wd, VkSurfaceKHR surface, int width, int height)
     {
         IM_ASSERT(bd != nullptr);
         IM_ASSERT(wd != nullptr);
@@ -942,7 +942,7 @@ namespace
         return true;
     }
 
-    void CleanupVulkanWindow(ImGuiApp_Win32Vulkan_Data* bd, ImGui_ImplVulkanH_Window* wd)
+    void CleanupVulkanWindow(ImGuiApp_ImplWin32Vulkan_Data* bd, ImGui_ImplVulkanH_Window* wd)
     {
         if (bd == nullptr || wd == nullptr || bd->Instance == VK_NULL_HANDLE || bd->Device == VK_NULL_HANDLE)
             return;
@@ -954,7 +954,7 @@ namespace
         *wd = ImGui_ImplVulkanH_Window();
     }
 
-    void CleanupVulkan(ImGuiApp_Win32Vulkan_Data* bd)
+    void CleanupVulkan(ImGuiApp_ImplWin32Vulkan_Data* bd)
     {
         if (bd == nullptr)
             return;
@@ -992,7 +992,7 @@ namespace
         bd->VulkanInitialized = false;
     }
 
-    void ResizeMainWindowIfNeeded(ImGuiApp_Win32Vulkan_Data* bd)
+    void ResizeMainWindowIfNeeded(ImGuiApp_ImplWin32Vulkan_Data* bd)
     {
         if (bd == nullptr || bd->Device == VK_NULL_HANDLE || bd->OffscreenActive || bd->MainWindow.Surface == VK_NULL_HANDLE)
             return;
@@ -1023,7 +1023,7 @@ namespace
         bd->SwapChainRebuild = false;
     }
 
-    void FrameRender(ImGuiApp_Win32Vulkan_Data* bd, ImGui_ImplVulkanH_Window* wd, ImDrawData* draw_data)
+    void FrameRender(ImGuiApp_ImplWin32Vulkan_Data* bd, ImGui_ImplVulkanH_Window* wd, ImDrawData* draw_data)
     {
         if (bd == nullptr || wd == nullptr || wd->Swapchain == VK_NULL_HANDLE)
             return;
@@ -1089,7 +1089,7 @@ namespace
         CheckVkResult(err);
     }
 
-    void FramePresent(ImGuiApp_Win32Vulkan_Data* bd, ImGui_ImplVulkanH_Window* wd)
+    void FramePresent(ImGuiApp_ImplWin32Vulkan_Data* bd, ImGui_ImplVulkanH_Window* wd)
     {
         if (bd == nullptr || wd == nullptr || bd->SwapChainRebuild || wd->Swapchain == VK_NULL_HANDLE)
             return;
@@ -1129,7 +1129,7 @@ namespace
 
     void ShutdownBackend(void* user_data)
     {
-        ImGuiApp_Win32Vulkan_Data* bd = (ImGuiApp_Win32Vulkan_Data*)user_data;
+        ImGuiApp_ImplWin32Vulkan_Data* bd = (ImGuiApp_ImplWin32Vulkan_Data*)user_data;
         IM_ASSERT(bd != nullptr);
         if (bd == nullptr)
             return;
@@ -1148,12 +1148,12 @@ namespace
         CleanupVulkanWindow(bd, &bd->MainWindow);
         CleanupVulkan(bd);
 
-        *bd = ImGuiApp_Win32Vulkan_Data();
+        *bd = ImGuiApp_ImplWin32Vulkan_Data();
     }
 
     void NewFrame(void* user_data)
     {
-        ImGuiApp_Win32Vulkan_Data* bd = (ImGuiApp_Win32Vulkan_Data*)user_data;
+        ImGuiApp_ImplWin32Vulkan_Data* bd = (ImGuiApp_ImplWin32Vulkan_Data*)user_data;
         IM_ASSERT(bd != nullptr);
         if (bd == nullptr)
             return;
@@ -1165,7 +1165,7 @@ namespace
 
     void RenderDrawData(ImDrawData* draw_data, const ImGuiAppFrameConfig* config, void* user_data)
     {
-        ImGuiApp_Win32Vulkan_Data* bd = (ImGuiApp_Win32Vulkan_Data*)user_data;
+        ImGuiApp_ImplWin32Vulkan_Data* bd = (ImGuiApp_ImplWin32Vulkan_Data*)user_data;
         IM_ASSERT(bd != nullptr);
         if (bd == nullptr || draw_data == nullptr || config == nullptr)
             return;
@@ -1203,7 +1203,7 @@ namespace
     // and this, reading back the frame just rendered before it goes on screen.
     void PresentFrame(const ImGuiAppFrameConfig* config, void* user_data)
     {
-        ImGuiApp_Win32Vulkan_Data* bd = (ImGuiApp_Win32Vulkan_Data*)user_data;
+        ImGuiApp_ImplWin32Vulkan_Data* bd = (ImGuiApp_ImplWin32Vulkan_Data*)user_data;
         if (bd == nullptr || config == nullptr)
             return;
         if (bd->LastFrameRendered && (config->Flags & ImGuiAppFrameFlags_NoPresent) == 0)
@@ -1236,12 +1236,12 @@ static void Pace_Viewport_SwapBuffers(ImGuiViewport* viewport, void* render_arg)
         g_underlying_viewport_swap_buffers(viewport, render_arg);
 }
 
-static bool ImGuiApp_Win32Vulkan_Init(const ImGuiApp_Win32Vulkan_InitInfo* init_info)
+static bool ImGuiApp_ImplWin32Vulkan_Init(const ImGuiApp_ImplWin32Vulkan_InitInfo* init_info)
 {
     if (ImGuiX::GetCurrentContext() == nullptr)
         ImGuiX::CreateContext();
 
-    IM_ASSERT(IsInitInfoValid(init_info) && "ImGuiApp_Win32Vulkan_Init: invalid init_info.");
+    IM_ASSERT(IsInitInfoValid(init_info) && "ImGuiApp_ImplWin32Vulkan_Init: invalid init_info.");
     if (!IsInitInfoValid(init_info))
         return false;
 
@@ -1368,7 +1368,7 @@ static bool ImGuiApp_Win32Vulkan_Init(const ImGuiApp_Win32Vulkan_InitInfo* init_
     return true;
 }
 
-bool ImGuiApp_Win32Vulkan_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
+bool ImGuiApp_ImplWin32Vulkan_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
 {
     ImGuiAppPlatformState* state = IM_NEW(ImGuiAppPlatformState)();
     app->PlatformData = state;
@@ -1406,7 +1406,7 @@ bool ImGuiApp_Win32Vulkan_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
 
     ImGuiX::CreateContext();
 
-    ImGuiApp_Win32Vulkan_InitInfo init_info;
+    ImGuiApp_ImplWin32Vulkan_InitInfo init_info;
     init_info.Hwnd             = state->Hwnd;
     init_info.MinImageCount    = 3;
 #if defined(_DEBUG)
@@ -1417,7 +1417,7 @@ bool ImGuiApp_Win32Vulkan_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
     init_info.Headless         = config.Headless;
     init_info.OffscreenWidth   = window_width;
     init_info.OffscreenHeight  = window_height;
-    if (!ImGuiApp_Win32Vulkan_Init(&init_info))
+    if (!ImGuiApp_ImplWin32Vulkan_Init(&init_info))
     {
         ImGuiX::DestroyContext();
         return false;
@@ -1431,7 +1431,7 @@ bool ImGuiApp_Win32Vulkan_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
     return true;
 }
 
-void ImGuiApp_Win32Vulkan_ShutdownPlatform(ImGuiApp* app)
+void ImGuiApp_ImplWin32Vulkan_ShutdownPlatform(ImGuiApp* app)
 {
     ImGuiAppPlatformState* state = static_cast<ImGuiAppPlatformState*>(app->PlatformData);
     if (state == nullptr)
@@ -1459,7 +1459,7 @@ void ImGuiApp_Win32Vulkan_ShutdownPlatform(ImGuiApp* app)
 
 // Converts staging buffer `index` into CaptureRgba and fills out_frame. False on an
 // unsupported (non-32-bit) format.
-static bool CaptureConvertAndFill(ImGuiApp_Win32Vulkan_Data* bd, int index, ImGuiAppAVFrame* out_frame)
+static bool CaptureConvertAndFill(ImGuiApp_ImplWin32Vulkan_Data* bd, int index, ImGuiAppAVFrame* out_frame)
 {
     const int      width = bd->CaptureCopyWidth[index];
     const int      height = bd->CaptureCopyHeight[index];
@@ -1498,7 +1498,7 @@ static bool CaptureConvertAndFill(ImGuiApp_Win32Vulkan_Data* bd, int index, ImGu
 // One-shot synchronous copy of the CURRENT image (valid only in the encode phase: rendered,
 // not yet presented). Fills staging slot CaptureWriteIndex WITHOUT flipping it -- the next
 // rendered frame overwrites the slot, whose content this call consumed.
-static bool CaptureSyncNow(ImGuiApp_Win32Vulkan_Data* bd, VkImage image, int width, int height, VkFormat format, VkImageLayout layout)
+static bool CaptureSyncNow(ImGuiApp_ImplWin32Vulkan_Data* bd, VkImage image, int width, int height, VkFormat format, VkImageLayout layout)
 {
     if (image == VK_NULL_HANDLE || width <= 0 || height <= 0)
         return false;
@@ -1595,10 +1595,10 @@ static bool CaptureSyncNow(ImGuiApp_Win32Vulkan_Data* bd, VkImage image, int wid
 //   the freshest unreturned copy IF its fence already signaled (never blocks mid-take), else
 //   false. Callers drain the final frame by re-calling after the GPU settles.
 // - Never returns the same FrameIndex twice (CaptureLastReturned gate).
-bool ImGuiApp_Win32Vulkan_CaptureFrame(ImGuiApp* app, ImGuiAppAVFrame* out_frame)
+bool ImGuiApp_ImplWin32Vulkan_CaptureFrame(ImGuiApp* app, ImGuiAppAVFrame* out_frame)
 {
     IM_UNUSED(app);
-    ImGuiApp_Win32Vulkan_Data* bd = &GBackend;
+    ImGuiApp_ImplWin32Vulkan_Data* bd = &GBackend;
     if (out_frame == nullptr || !bd->VulkanInitialized || !bd->CaptureSupported)
         return false;
 
@@ -1655,10 +1655,10 @@ bool ImGuiApp_Win32Vulkan_CaptureFrame(ImGuiApp* app, ImGuiAppAVFrame* out_frame
 
 static const ImGuiAppPlatformBackend GPlatformBackend =
 {
-    ImGuiApp_Win32Vulkan_InitPlatform,
-    ImGuiApp_Win32Vulkan_ShutdownPlatform,
+    ImGuiApp_ImplWin32Vulkan_InitPlatform,
+    ImGuiApp_ImplWin32Vulkan_ShutdownPlatform,
     ImGuiApp_ImplWin32_RunLoop,
-    ImGuiApp_Win32Vulkan_CaptureFrame,
+    ImGuiApp_ImplWin32Vulkan_CaptureFrame,
 };
 
 const ImGuiAppPlatformBackend* ImGuiApp_GetPlatformBackend() { return &GPlatformBackend; }

@@ -15,14 +15,14 @@
 
 namespace
 {
-    struct ImGuiApp_Sdl2OpenGL3_InitInfo
+    struct ImGuiApp_ImplSDL2OpenGL3_InitInfo
     {
         void*       Window;
         void*       GLContext;
         const char* GlslVersion;
     };
 
-    struct ImGuiApp_Sdl2OpenGL3_Data
+    struct ImGuiApp_ImplSDL2OpenGL3_Data
     {
         SDL_Window*   Window;
         SDL_GLContext GLContext;
@@ -30,9 +30,9 @@ namespace
         bool          RendererBackendInitialized;
     };
 
-    ImGuiApp_Sdl2OpenGL3_Data GBackend;
+    ImGuiApp_ImplSDL2OpenGL3_Data GBackend;
 
-    bool IsInitInfoValid(const ImGuiApp_Sdl2OpenGL3_InitInfo* init_info)
+    bool IsInitInfoValid(const ImGuiApp_ImplSDL2OpenGL3_InitInfo* init_info)
     {
         return init_info != nullptr &&
                init_info->Window != nullptr &&
@@ -41,7 +41,7 @@ namespace
 
     void ShutdownBackend(void* user_data)
     {
-        ImGuiApp_Sdl2OpenGL3_Data* bd = (ImGuiApp_Sdl2OpenGL3_Data*)user_data;
+        ImGuiApp_ImplSDL2OpenGL3_Data* bd = (ImGuiApp_ImplSDL2OpenGL3_Data*)user_data;
         IM_ASSERT(bd != nullptr);
         if (bd == nullptr)
             return;
@@ -51,7 +51,7 @@ namespace
         if (bd->PlatformBackendInitialized)
             ImGui_ImplSDL2_Shutdown();
 
-        *bd = ImGuiApp_Sdl2OpenGL3_Data();
+        *bd = ImGuiApp_ImplSDL2OpenGL3_Data();
     }
 
     void NewFrame(void* user_data)
@@ -63,7 +63,7 @@ namespace
 
     void RenderDrawData(ImDrawData* draw_data, const ImGuiAppFrameConfig* config, void* user_data)
     {
-        ImGuiApp_Sdl2OpenGL3_Data* bd = (ImGuiApp_Sdl2OpenGL3_Data*)user_data;
+        ImGuiApp_ImplSDL2OpenGL3_Data* bd = (ImGuiApp_ImplSDL2OpenGL3_Data*)user_data;
         IM_ASSERT(bd != nullptr);
         if (bd == nullptr)
             return;
@@ -88,7 +88,7 @@ namespace
     // and this, reading back the frame just rendered before it goes on screen.
     void PresentFrame(const ImGuiAppFrameConfig* config, void* user_data)
     {
-        ImGuiApp_Sdl2OpenGL3_Data* bd = (ImGuiApp_Sdl2OpenGL3_Data*)user_data;
+        ImGuiApp_ImplSDL2OpenGL3_Data* bd = (ImGuiApp_ImplSDL2OpenGL3_Data*)user_data;
         if (bd == nullptr || config == nullptr)
             return;
         if ((config->Flags & ImGuiAppFrameFlags_NoPresent) == 0)
@@ -96,12 +96,12 @@ namespace
     }
 }
 
-static bool ImGuiApp_Sdl2OpenGL3_Init(const ImGuiApp_Sdl2OpenGL3_InitInfo* init_info)
+static bool ImGuiApp_ImplSDL2OpenGL3_Init(const ImGuiApp_ImplSDL2OpenGL3_InitInfo* init_info)
 {
     if (ImGuiX::GetCurrentContext() == nullptr)
         ImGuiX::CreateContext();
 
-    IM_ASSERT(IsInitInfoValid(init_info) && "ImGuiApp_Sdl2OpenGL3_Init: invalid init_info.");
+    IM_ASSERT(IsInitInfoValid(init_info) && "ImGuiApp_ImplSDL2OpenGL3_Init: invalid init_info.");
     if (!IsInitInfoValid(init_info))
         return false;
 
@@ -112,7 +112,7 @@ static bool ImGuiApp_Sdl2OpenGL3_Init(const ImGuiApp_Sdl2OpenGL3_InitInfo* init_
 
     if (!ImGui_ImplSDL2_InitForOpenGL(GBackend.Window, GBackend.GLContext))
     {
-        GBackend = ImGuiApp_Sdl2OpenGL3_Data();
+        GBackend = ImGuiApp_ImplSDL2OpenGL3_Data();
         return false;
     }
     GBackend.PlatformBackendInitialized = true;
@@ -141,7 +141,7 @@ static bool ImGuiApp_Sdl2OpenGL3_Init(const ImGuiApp_Sdl2OpenGL3_InitInfo* init_
     return true;
 }
 
-bool ImGuiApp_Sdl2OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
+bool ImGuiApp_ImplSDL2OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
 {
     ImGuiAppPlatformState* state = IM_NEW(ImGuiAppPlatformState)();
     app->PlatformData = state;
@@ -197,11 +197,11 @@ bool ImGuiApp_Sdl2OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
 
     ImGuiX::CreateContext();
 
-    ImGuiApp_Sdl2OpenGL3_InitInfo init_info;
+    ImGuiApp_ImplSDL2OpenGL3_InitInfo init_info;
     init_info.Window      = state->Window;
     init_info.GLContext   = state->GLContext;
     init_info.GlslVersion = glsl_version;
-    if (!ImGuiApp_Sdl2OpenGL3_Init(&init_info))
+    if (!ImGuiApp_ImplSDL2OpenGL3_Init(&init_info))
     {
         ImGuiX::DestroyContext();
         return false;
@@ -214,7 +214,7 @@ bool ImGuiApp_Sdl2OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
     return true;
 }
 
-void ImGuiApp_Sdl2OpenGL3_ShutdownPlatform(ImGuiApp* app)
+void ImGuiApp_ImplSDL2OpenGL3_ShutdownPlatform(ImGuiApp* app)
 {
     ImGuiAppPlatformState* state = static_cast<ImGuiAppPlatformState*>(app->PlatformData);
     if (state == nullptr)
@@ -238,8 +238,8 @@ void ImGuiApp_Sdl2OpenGL3_ShutdownPlatform(ImGuiApp* app)
 
 static const ImGuiAppPlatformBackend GPlatformBackend =
 {
-    ImGuiApp_Sdl2OpenGL3_InitPlatform,
-    ImGuiApp_Sdl2OpenGL3_ShutdownPlatform,
+    ImGuiApp_ImplSDL2OpenGL3_InitPlatform,
+    ImGuiApp_ImplSDL2OpenGL3_ShutdownPlatform,
     ImGuiApp_ImplSDL2_RunLoop,
 };
 
