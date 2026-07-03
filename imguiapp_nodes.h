@@ -464,8 +464,10 @@ struct ImGuiAppGraph
   int EditingNodeId;             // node whose title is being renamed inline, or -1
   char LastLinkErr[IM_LABEL_SIZE];  // last refused-link reason; transient, NOT in Save/Load
   int  LastLinkErrSeq;              // bumped on every rejection
+  ImGuiApp* LiveApp;             // running app this graph mirrors (set by BuildAppLiveGraph, read-only to
+                                 // codegen); null = no live source; transient, NOT in Save/Load
 
-  ImGuiAppGraph() { NextId = 1; EditingNodeId = -1; LastLinkErr[0] = 0; LastLinkErrSeq = 0; }
+  ImGuiAppGraph() { NextId = 1; EditingNodeId = -1; LastLinkErr[0] = 0; LastLinkErrSeq = 0; LiveApp = nullptr; }
 };
 
 namespace ImGui
@@ -538,8 +540,9 @@ namespace ImGui
   IMGUI_API void                ShowAppGraphTree(const ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, bool show_live = true);
 
   // Topologically order the Control nodes by data dependency (producers before consumers). Returns
-  // false and writes err on a cycle. out_control_ids receives node ids in push order.
-  IMGUI_API bool                AppGraphTopoOrder(const ImGuiAppGraph* g, ImVector<int>* out_control_ids, char* err, int err_size);
+  // false and writes err on a cycle. out_control_ids receives node ids in push order. include_live
+  // false = authored domain only (validation/health); true = the full mirrored composition (codegen).
+  IMGUI_API bool                AppGraphTopoOrder(const ImGuiAppGraph* g, ImVector<int>* out_control_ids, char* err, int err_size, bool include_live = false);
 
   // One problem found by AppGraphValidate. Severity: 1 = warning, 2 = error. NodeId is the node to
   // reveal (-1 for whole-graph issues).

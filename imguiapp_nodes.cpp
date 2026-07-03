@@ -7204,17 +7204,18 @@ namespace ImGui
     return nullptr;
   }
 
-  bool AppGraphTopoOrder(const ImGuiAppGraph* g, ImVector<int>* out_control_ids, char* err, int err_size)
+  bool AppGraphTopoOrder(const ImGuiAppGraph* g, ImVector<int>* out_control_ids, char* err, int err_size, bool include_live)
   {
     IM_ASSERT(g != nullptr && out_control_ids != nullptr);
     out_control_ids->clear();
     if (err && err_size > 0) err[0] = 0;
 
-    // Collect AUTHORED control node ids (stable order = node order, for deterministic output). Live-mirror
-    // controls are excluded: they are never emitted, so the topo/health domain matches the codegen domain.
+    // Collect control node ids (stable order = node order, for deterministic output). Validation/health
+    // pass include_live false (authored domain); codegen passes true (the full mirrored composition --
+    // live nodes append after authored ones, so authored controls keep their relative order).
     ImVector<int> ctrl;
     for (int i = 0; i < g->Nodes.Size; i++)
-      if (g->Nodes.Data[i].Kind == ImGuiAppNodeKind_Control && !g->Nodes.Data[i].IsLive)
+      if (g->Nodes.Data[i].Kind == ImGuiAppNodeKind_Control && (include_live || !g->Nodes.Data[i].IsLive))
         ctrl.push_back(g->Nodes.Data[i].Id);
 
     // In-degree = number of incoming data edges (producer -> this consumer).
@@ -7234,7 +7235,7 @@ namespace ImGui
       // Only control -> control edges order controls. Struct / Field / persist-temp-tie producers are emitted
       // before controls (separately), so they must NOT add in-degree (else the control never reaches zero).
       const ImGuiAppNode* prod = AppGraphFindNodeConst(g, AppGraphPortOwnerId(g, g->Links.Data[li].StartAttr));
-      if (prod == nullptr || prod->Kind != ImGuiAppNodeKind_Control || prod->IsLive) continue;
+      if (prod == nullptr || prod->Kind != ImGuiAppNodeKind_Control || (!include_live && prod->IsLive)) continue;
       const int consumer = AppGraphPortOwnerId(g, g->Links.Data[li].EndAttr);
       const int ci = ctrl_index(consumer);
       if (ci >= 0) indeg.Data[ci]++;
@@ -8070,14 +8071,14 @@ namespace ImGui
     return -1;
   }
 
-  // Does any authored control node name this host (Window/Sidebar) as its containment parent? Used by codegen to
-  // decide whether to capture a named local for the host (so it isn't emitted unused).
+  // Does any control node (authored or live) name this host (Window/Sidebar) as its containment parent? Used by
+  // codegen to decide whether to capture a named local for the host (so it isn't emitted unused).
   static bool AppGraphHostsControl(const ImGuiAppGraph* g, int host_id)
   {
     for (int i = 0; i < g->Nodes.Size; i++)
     {
       const ImGuiAppNode* n = &g->Nodes.Data[i];
-      if (n->IsLive || n->Kind != ImGuiAppNodeKind_Control) continue;
+      if (n->Kind != ImGuiAppNodeKind_Control) continue;
       if (AppGraphParentOf(g, n->Id) == host_id) return true;
     }
     return false;
@@ -8239,6 +8240,144 @@ namespace ImGui
     }
   }
 
+  //-----------------------------------------------------------------------------
+  // Live-node emission: a live node's code is REFLECTION of the running composition, never a draft.
+  // Types come from the runtime objects (reflected data shapes, mirrored placement); member functions are
+  // declaration-only -- their definitions are the ones compiled into the running binary.
+  //-----------------------------------------------------------------------------
+
+  static void AppEmitLiveFieldDecl(ImGuiTextBuffer* out, const ImGuiAppLiveFieldDesc* f)
+  {
+    if (f->Kind == ImGuiAppLiveFieldKind_CharArray)
+      out->appendf("  char %s[%d];\n", f->Name, f->Size);
+    else if (f->Kind == ImGuiAppLiveFieldKind_Opaque)
+      out->appendf("  unsigned char %s[%d];   // %s\n", f->Name, f->Size, f->TypeName);
+    else
+      out->appendf("  %s %s;\n", f->TypeName, f->Name);
+  }
+
+  // The runtime control's class name is not recorded, so derive it from the persist data type
+  // ("GraphDocData" -> "GraphDocControl"); a name without the Data suffix gets Control appended.
+  static void AppLiveControlClassName(const ImGuiAppNode* n, char* out, size_t out_size)
+  {
+    char dtype[IM_LABEL_SIZE];
+    AppNodeDataTypeName(n, dtype, IM_ARRAYSIZE(dtype));
+    char base[IM_LABEL_SIZE];
+    AppSanitizeIdentifier(base, IM_ARRAYSIZE(base), dtype);
+    const size_t len = strlen(base);
+    if (len > 4 && strcmp(base + len - 4, "Data") == 0)
+      base[len - 4] = 0;
+    ImFormatString(out, (int)out_size, "%sControl", base);
+  }
+
+  static void AppEmitLiveLayerCode(const ImGuiAppNode* n, ImGuiTextBuffer* out)
+  {
+    char base[IM_LABEL_SIZE];
+    AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
+    out->appendf("// live layer '%s' -- definitions live in the running binary\n", n->Draft.Name);
+    out->appendf("struct %s : ImGuiAppLayer\n{\n  virtual void OnRender(const ImGuiApp* app) const override;\n};\n\n", base);
+  }
+
+  static void AppEmitLiveHostCode(const ImGuiAppNode* n, ImGuiTextBuffer* out)
+  {
+    char base[IM_LABEL_SIZE];
+    AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
+    const char* kind = n->Kind == ImGuiAppNodeKind_Sidebar ? "Sidebar" : "Window";
+    out->appendf("// live %s '%s' -- definitions live in the running binary\n", n->Kind == ImGuiAppNodeKind_Sidebar ? "sidebar" : "window", n->Draft.Name);
+    out->appendf("struct %s : ImGuiApp%s<%s>\n{\n  virtual void OnRender(const ImGuiApp* app) const override;\n};\n\n", base, kind, base);
+  }
+
+  // Mirrored initial placement the running host carries (Flags ride the push site).
+  static void AppEmitLivePlacementLines(const ImGuiAppNode* n, const char* expr, ImGuiTextBuffer* out)
+  {
+    if (!n->HasInitialPlacement)
+      return;
+    out->appendf("  %s->HasInitialPlacement = true;\n", expr);
+    out->appendf("  %s->InitialPos = ImVec2(%.1ff, %.1ff);\n", expr, n->InitialPos.x, n->InitialPos.y);
+    out->appendf("  %s->InitialSize = ImVec2(%.1ff, %.1ff);\n", expr, n->InitialSize.x, n->InitialSize.y);
+  }
+
+  // Reflected data shapes + the control's interface shell with its dependency pack (from the live
+  // data edges GetControlDependencyIDs produced). Returns false when the runtime object is gone.
+  static bool AppEmitLiveControlCode(const ImGuiAppGraph* g, ImGuiApp* live_app, const ImGuiAppNode* n, ImGuiTextBuffer* out)
+  {
+    ImGuiAppItemBase* item = AppGraphFindLiveItem(live_app, n);
+    if (item == nullptr)
+    {
+      out->appendf("// live control '%s': runtime object unavailable\n\n", n->Draft.Name);
+      return false;
+    }
+    const ImGuiAppControlBase* ctrl = (const ImGuiAppControlBase*)item;
+
+    char pname[IM_LABEL_SIZE];
+    char tname[IM_LABEL_SIZE];
+    ctrl->GetControlDataTypeName(pname, IM_ARRAYSIZE(pname));
+    ctrl->GetControlTempDataTypeName(tname, IM_ARRAYSIZE(tname));
+    if (pname[0] == 0)
+    {
+      out->appendf("// live control '%s': no data type name\n\n", n->Draft.Name);
+      return false;
+    }
+    const char* temp_type = tname[0] ? tname : "TempData";
+
+    ImGuiAppLiveFieldDesc fields[64];
+    out->appendf("// reflected from the running control\nstruct %s\n{\n", pname);
+    int nf = ctrl->GetControlFields(fields, IM_ARRAYSIZE(fields), false);
+    if (nf <= 0)
+      out->appendf("  // opaque: not reflectable\n");
+    for (int i = 0; i < nf; i++)
+      AppEmitLiveFieldDecl(out, &fields[i]);
+    out->appendf("};\n\nstruct %s\n{\n", temp_type);
+    nf = ctrl->GetControlFields(fields, IM_ARRAYSIZE(fields), true);
+    if (nf <= 0)
+      out->appendf("  // opaque: not reflectable\n");
+    for (int i = 0; i < nf; i++)
+      AppEmitLiveFieldDecl(out, &fields[i]);
+    out->appendf("};\n\n");
+
+    // Dependency producers, from the live data edges (rebuilt each frame from GetControlDependencyIDs).
+    ImVector<int> deps;
+    AppGraphConsumerDeps(g, n->Id, &deps);
+
+    char cls[IM_LABEL_SIZE];
+    AppLiveControlClassName(n, cls, IM_ARRAYSIZE(cls));
+    out->appendf("// definitions live in the running binary\nstruct %s : ImGuiAppControl<%s, %s", cls, pname, temp_type);
+    for (int d = 0; d < deps.Size; d++)
+    {
+      const ImGuiAppNode* dn = AppGraphFindNodeConst(g, deps.Data[d]);
+      char dtype[IM_LABEL_SIZE];
+      AppNodeDataTypeName(dn, dtype, IM_ARRAYSIZE(dtype));
+      out->appendf(", %s", dtype);
+    }
+    out->appendf(">\n{\n");
+
+    auto emit_dep_params = [&](ImGuiTextBuffer* o)
+    {
+      for (int d = 0; d < deps.Size; d++)
+      {
+        const ImGuiAppNode* dn = AppGraphFindNodeConst(g, deps.Data[d]);
+        char dtype[IM_LABEL_SIZE];
+        AppNodeDataTypeName(dn, dtype, IM_ARRAYSIZE(dtype));
+        char dparam[IM_LABEL_SIZE];
+        AppToSnake(dparam, IM_ARRAYSIZE(dparam), dn->Draft.Name);
+        o->appendf(", const %s* %s", dtype, dparam);
+      }
+    };
+    out->appendf("  virtual void OnInitialize(ImGuiApp* app, %s* data", pname);
+    emit_dep_params(out);
+    out->appendf(") const override;\n");
+    out->appendf("  virtual void OnGetCommand(const ImGuiApp* app, ImGuiAppCommand* cmd, const %s* data, const %s* temp_data", pname, temp_type);
+    emit_dep_params(out);
+    out->appendf(") const override;\n");
+    out->appendf("  virtual void OnUpdate(float dt, %s* data, const %s* temp_data, const %s* last_temp_data", pname, temp_type, temp_type);
+    emit_dep_params(out);
+    out->appendf(") const override;\n");
+    out->appendf("  virtual void OnRender(const %s* data, %s* temp_data", pname, temp_type);
+    emit_dep_params(out);
+    out->appendf(") const override;\n};\n\n");
+    return true;
+  }
+
   void GenerateAppGraphCodeEx(const ImGuiAppGraph* g, ImGuiTextBuffer* out, ImVector<ImGuiAppCodeSpan>* out_spans)
   {
     IM_ASSERT(g != nullptr && out != nullptr);
@@ -8272,10 +8411,11 @@ namespace ImGui
       }
     };
 
-    // 1) Topo order of controls (producers before consumers).
+    // 1) Topo order of ALL controls, authored and live (producers before consumers): the generated
+    // program reproduces the whole running composition, not just the authored subset.
     ImVector<int> order;
     char err[160];
-    if (!AppGraphTopoOrder(g, &order, err, IM_ARRAYSIZE(err)))
+    if (!AppGraphTopoOrder(g, &order, err, IM_ARRAYSIZE(err), true))
     {
       out->appendf("// codegen aborted: %s\n", err[0] ? err : "dependency cycle");
       return;
@@ -8296,10 +8436,13 @@ namespace ImGui
     for (int i = 0; i < g->Nodes.Size; i++)
     {
       const ImGuiAppNode* n = &g->Nodes.Data[i];
-      if (n->Kind == ImGuiAppNodeKind_Layer && n->LayerType == ImGuiAppLayerType_Custom && !n->IsLive)
+      if (n->Kind == ImGuiAppNodeKind_Layer && n->LayerType == ImGuiAppLayerType_Custom)
       {
         const int begin = line_now();
-        AppEmitCustomLayerCode(n, out);
+        if (n->IsLive)
+          AppEmitLiveLayerCode(n, out);
+        else
+          AppEmitCustomLayerCode(n, out);
         span(n->Id, begin);
       }
     }
@@ -8315,15 +8458,29 @@ namespace ImGui
       }
     }
 
+    // Live host type shells (window/sidebar subclasses compiled into the running binary).
+    for (int i = 0; i < g->Nodes.Size; i++)
+    {
+      const ImGuiAppNode* n = &g->Nodes.Data[i];
+      if ((n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar) && n->IsLive)
+      {
+        const int begin = line_now();
+        AppEmitLiveHostCode(n, out);
+        span(n->Id, begin);
+      }
+    }
+
     for (int i = 0; i < order.Size; i++)
     {
       const ImGuiAppNode* n = AppGraphFindNodeConst(g, order.Data[i]);
-      if (n && !n->IsBuiltin)
-      {
-        const int begin = line_now();
+      if (n == nullptr)
+        continue;
+      const int begin = line_now();
+      if (n->IsLive)
+        AppEmitLiveControlCode(g, g->LiveApp, n, out);
+      else if (!n->IsBuiltin)
         AppEmitControlWithDeps(g, n, out);
-        span(n->Id, begin);
-      }
+      span(n->Id, begin);
     }
 
     // 3) Bring-up function: layers, then windows/sidebars, then controls in topo order. Each node's push
@@ -8333,7 +8490,7 @@ namespace ImGui
     for (int i = 0; i < g->Nodes.Size; i++)
     {
       const ImGuiAppNode* n = &g->Nodes.Data[i];
-      if (n->Kind != ImGuiAppNodeKind_Layer || n->IsLive)
+      if (n->Kind != ImGuiAppNodeKind_Layer)
         continue;
       const int begin = line_now();
       if (n->LayerType == ImGuiAppLayerType_Custom)
@@ -8349,11 +8506,15 @@ namespace ImGui
     for (int i = 0; i < g->Nodes.Size; i++)
     {
       const ImGuiAppNode* n = &g->Nodes.Data[i];
-      if (n->Kind == ImGuiAppNodeKind_Window && !n->IsLive)
+      if (n->Kind == ImGuiAppNodeKind_Window)
       {
         const int begin = line_now();
         char base[IM_LABEL_SIZE]; AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
         out->appendf("  ImGui::PushAppWindow<%s>(app);\n", base);
+        if (n->IsLive && n->Flags != 0)
+          out->appendf("  app->Windows.back()->Flags = (ImGuiWindowFlags)0x%X;\n", (unsigned)n->Flags);
+        if (n->IsLive)
+          AppEmitLivePlacementLines(n, "app->Windows.back()", out);
         AppEmitStyleModLines(n, "app->Windows.back()", "  ", out);
         if (AppGraphHostsControl(g, n->Id))
           out->appendf("  ImGuiAppWindowBase* win_%d = app->Windows.back();\n", n->Id);
@@ -8363,11 +8524,18 @@ namespace ImGui
     for (int i = 0; i < g->Nodes.Size; i++)
     {
       const ImGuiAppNode* n = &g->Nodes.Data[i];
-      if (n->Kind == ImGuiAppNodeKind_Sidebar && !n->IsLive)
+      if (n->Kind == ImGuiAppNodeKind_Sidebar)
       {
         const int begin = line_now();
         char base[IM_LABEL_SIZE]; AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
-        out->appendf("  ImGui::PushAppSidebar<%s>(app, vp, %s, %.1ff, ImGuiWindowFlags_None);\n", base, AppDirEnumName(n->DockDir), n->DockSize);
+        char flags[32];
+        if (n->IsLive && n->Flags != 0)
+          ImFormatString(flags, IM_ARRAYSIZE(flags), "(ImGuiWindowFlags)0x%X", (unsigned)n->Flags);
+        else
+          ImStrncpy(flags, "ImGuiWindowFlags_None", IM_ARRAYSIZE(flags));
+        out->appendf("  ImGui::PushAppSidebar<%s>(app, vp, %s, %.1ff, %s);\n", base, AppDirEnumName(n->DockDir), n->DockSize, flags);
+        if (n->IsLive)
+          AppEmitLivePlacementLines(n, "app->Sidebars.back()", out);
         AppEmitStyleModLines(n, "app->Sidebars.back()", "  ", out);
         if (AppGraphHostsControl(g, n->Id))
           out->appendf("  ImGuiAppSidebarBase* sb_%d = app->Sidebars.back();\n", n->Id);
@@ -8379,7 +8547,11 @@ namespace ImGui
       const ImGuiAppNode* n = AppGraphFindNodeConst(g, order.Data[i]);
       if (n == nullptr) continue;
       const int begin = line_now();
-      char base[IM_LABEL_SIZE]; AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
+      char base[IM_LABEL_SIZE];
+      if (n->IsLive)
+        AppLiveControlClassName(n, base, IM_ARRAYSIZE(base));
+      else
+        AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
       const int parent = AppGraphParentOf(g, n->Id);
       const ImGuiAppNode* pn = parent >= 0 ? AppGraphFindNodeConst(g, parent) : nullptr;
       if (pn && pn->Kind == ImGuiAppNodeKind_Sidebar)
@@ -8404,45 +8576,6 @@ namespace ImGui
     out->appendf("}\n");
   }
 
-  static void AppEmitLiveFieldDecl(ImGuiTextBuffer* out, const ImGuiAppLiveFieldDesc* f)
-  {
-    if (f->Kind == ImGuiAppLiveFieldKind_CharArray)
-      out->appendf("  char %s[%d];\n", f->Name, f->Size);
-    else if (f->Kind == ImGuiAppLiveFieldKind_Opaque)
-      out->appendf("  unsigned char %s[%d];   // %s\n", f->Name, f->Size, f->TypeName);
-    else
-      out->appendf("  %s %s;\n", f->TypeName, f->Name);
-  }
-
-  // Live control codegen is REFLECTION, not a draft: the real compiled struct shapes.
-  static bool AppEmitReflectedControlCode(ImGuiApp* live_app, const ImGuiAppNode* n, ImGuiTextBuffer* out)
-  {
-    ImGuiAppItemBase* item = AppGraphFindLiveItem(live_app, n);
-    if (item == nullptr)
-      return false;
-    const ImGuiAppControlBase* ctrl = (const ImGuiAppControlBase*)item;
-
-    char pname[IM_LABEL_SIZE];
-    char tname[IM_LABEL_SIZE];
-    ctrl->GetControlDataTypeName(pname, IM_ARRAYSIZE(pname));
-    ctrl->GetControlTempDataTypeName(tname, IM_ARRAYSIZE(tname));
-    if (pname[0] == 0)
-      return false;
-
-    ImGuiAppLiveFieldDesc fields[64];
-    out->appendf("// reflected from the running control\n");
-    out->appendf("struct %s\n{\n", pname);
-    int nf = ctrl->GetControlFields(fields, IM_ARRAYSIZE(fields), false);
-    for (int i = 0; i < nf; i++)
-      AppEmitLiveFieldDecl(out, &fields[i]);
-    out->appendf("};\n\nstruct %s\n{\n", tname[0] ? tname : "TempData");
-    nf = ctrl->GetControlFields(fields, IM_ARRAYSIZE(fields), true);
-    for (int i = 0; i < nf; i++)
-      AppEmitLiveFieldDecl(out, &fields[i]);
-    out->appendf("};\n\n// control implementation: compiled into the running binary (not a draft).\n");
-    return true;
-  }
-
   void GenerateAppNodeCode(const ImGuiAppGraph* g, const ImGuiAppNode* n, ImGuiTextBuffer* out, ImGuiApp* live_app)
   {
     IM_ASSERT(g != nullptr && n != nullptr && out != nullptr);
@@ -8450,7 +8583,7 @@ namespace ImGui
     switch (n->Kind)
     {
     case ImGuiAppNodeKind_Control:
-      if (n->IsLive && AppEmitReflectedControlCode(live_app, n, out))
+      if (n->IsLive && AppEmitLiveControlCode(g, live_app, n, out))
         break;                                      // live: the real compiled shape, never a TODO template
       AppEmitControlWithDeps(g, n, out);            // data structs + control struct with derived deps/bindings
       break;
@@ -8460,7 +8593,10 @@ namespace ImGui
       else if (n->LayerType == ImGuiAppLayerType_Custom)
       {
         char base[IM_LABEL_SIZE]; AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
-        AppEmitCustomLayerCode(n, out);             // the subclass skeleton this node names
+        if (n->IsLive)
+          AppEmitLiveLayerCode(n, out);             // the running subclass's shell
+        else
+          AppEmitCustomLayerCode(n, out);           // the subclass skeleton this node names
         out->appendf("// bring-up (at this position in the layer stack):\nImGui::PushAppLayer<%s>(app);\n", base);
       }
       else
@@ -8471,14 +8607,37 @@ namespace ImGui
     case ImGuiAppNodeKind_Window:
     {
       char base[IM_LABEL_SIZE]; AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
+      if (n->IsLive)
+        AppEmitLiveHostCode(n, out);
       out->appendf("// Window '%s' bring-up:\nImGui::PushAppWindow<%s>(app);\n", n->Draft.Name, base);
+      if (n->IsLive && n->Flags != 0)
+        out->appendf("app->Windows.back()->Flags = (ImGuiWindowFlags)0x%X;\n", (unsigned)n->Flags);
+      if (n->IsLive && n->HasInitialPlacement)
+      {
+        out->appendf("app->Windows.back()->HasInitialPlacement = true;\n");
+        out->appendf("app->Windows.back()->InitialPos = ImVec2(%.1ff, %.1ff);\n", n->InitialPos.x, n->InitialPos.y);
+        out->appendf("app->Windows.back()->InitialSize = ImVec2(%.1ff, %.1ff);\n", n->InitialSize.x, n->InitialSize.y);
+      }
       AppEmitStyleModLines(n, "app->Windows.back()", "", out);
       break;
     }
     case ImGuiAppNodeKind_Sidebar:
     {
       char base[IM_LABEL_SIZE]; AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
-      out->appendf("// Sidebar '%s' bring-up:\nImGui::PushAppSidebar<%s>(app, vp, %s, %.1ff, ImGuiWindowFlags_None);\n", n->Draft.Name, base, AppDirEnumName(n->DockDir), n->DockSize);
+      if (n->IsLive)
+        AppEmitLiveHostCode(n, out);
+      char flags[32];
+      if (n->IsLive && n->Flags != 0)
+        ImFormatString(flags, IM_ARRAYSIZE(flags), "(ImGuiWindowFlags)0x%X", (unsigned)n->Flags);
+      else
+        ImStrncpy(flags, "ImGuiWindowFlags_None", IM_ARRAYSIZE(flags));
+      out->appendf("// Sidebar '%s' bring-up:\nImGui::PushAppSidebar<%s>(app, vp, %s, %.1ff, %s);\n", n->Draft.Name, base, AppDirEnumName(n->DockDir), n->DockSize, flags);
+      if (n->IsLive && n->HasInitialPlacement)
+      {
+        out->appendf("app->Sidebars.back()->HasInitialPlacement = true;\n");
+        out->appendf("app->Sidebars.back()->InitialPos = ImVec2(%.1ff, %.1ff);\n", n->InitialPos.x, n->InitialPos.y);
+        out->appendf("app->Sidebars.back()->InitialSize = ImVec2(%.1ff, %.1ff);\n", n->InitialSize.x, n->InitialSize.y);
+      }
       AppEmitStyleModLines(n, "app->Sidebars.back()", "", out);
       break;
     }
@@ -9601,6 +9760,8 @@ namespace ImGui
   void BuildAppLiveGraph(const ImGuiApp* app, ImGuiAppGraph* g)
   {
     IM_ASSERT(g != nullptr);
+    // Codegen reads the mirrored composition through this pointer (read-only by contract).
+    g->LiveApp = const_cast<ImGuiApp*>(app);
     if (app == nullptr)
       return;
 
