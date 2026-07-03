@@ -11,17 +11,17 @@ struct ImGuiTestEngine;
 
 struct ImGuiAppTestHarnessConfig
 {
-  const char*          Name;                 // artifact base name
-  const char*          ArtifactDir;          // receives <Name>.mp4/.wal/.frametimes.csv
-  ImGuiAppHeadlessMode Headless;             // Offscreen = GPU pixels without a window (video on CI)
-  bool                 RecordVideo;          // requires Offscreen or a windowed app
-  bool                 KeepArtifactsOnPass;  // false: artifacts survive only failures
-  ImGuiAppPacerMode    PacerMode;            // Fixed = Reproduce posture; Target/Off = Witness (honest-clock) posture
-  float                Fps;                  // Fixed pacer rate / Constant-timing rate
-  ImGuiAppAVTimingMode Timing;               // Auto: Fixed pacer -> Constant video, else Realtime
-  ImGuiAppAVEncoder*   Encoder;              // null = harness default: libav when the SDK is linked, else QOI sequence
+  const char*          Name;                // artifact base name
+  const char*          ArtifactDir;         // receives <Name>.mp4/.wal/.frametimes.csv
+  ImGuiAppHeadlessMode Headless;            // Offscreen = GPU pixels without a window (video on CI)
+  bool                 RecordVideo;         // requires Offscreen or a windowed app
+  bool                 KeepArtifactsOnPass; // false: artifacts survive only failures
+  ImGuiAppPacerMode    PacerMode;           // Fixed = Reproduce posture; Target/Off = Witness (honest-clock) posture
+  float                Fps;                 // Fixed pacer rate / Constant-timing rate
+  ImGuiAppAVTimingMode Timing;              // Auto: Fixed pacer -> Constant video, else Realtime
+  ImGuiAppAVEncoder*   Encoder;             // null = harness default: libav when the SDK is linked, else QOI sequence
   ImGuiAppWALLevel     WALLevel;
-  const char*          TestFilter;           // test-engine filter; null = all
+  const char*          TestFilter;          // test-engine filter; null = all
   void (*RegisterTests)(ImGuiTestEngine* engine);   // required
   // After the take closes, extract the embedded meta stream from the recording and run
   // the full integrity ladder (AppAVMetaVerify). A verification failure fails the run
@@ -33,20 +33,20 @@ struct ImGuiAppTestHarnessConfig
 
   ImGuiAppTestHarnessConfig()
   {
-    Name = nullptr;
-    ArtifactDir = nullptr;
-    Headless = ImGuiAppHeadlessMode_Offscreen;
-    RecordVideo = true;
+    Name                = nullptr;
+    ArtifactDir         = nullptr;
+    Headless            = ImGuiAppHeadlessMode_Offscreen;
+    RecordVideo         = true;
     KeepArtifactsOnPass = false;
-    PacerMode = ImGuiAppPacerMode_Fixed;
-    Fps = 60.0f;
-    Timing = ImGuiAppAVTimingMode_Auto;
-    Encoder = nullptr;
-    WALLevel = ImGuiAppWALLevel_Frame;
-    TestFilter = nullptr;
-    RegisterTests = nullptr;
-    VerifyRecording = true;
-    EffectiveHeadless = nullptr;
+    PacerMode           = ImGuiAppPacerMode_Fixed;
+    Fps                 = 60.0f;
+    Timing              = ImGuiAppAVTimingMode_Auto;
+    Encoder             = nullptr;
+    WALLevel            = ImGuiAppWALLevel_Frame;
+    TestFilter          = nullptr;
+    RegisterTests       = nullptr;
+    VerifyRecording     = true;
+    EffectiveHeadless   = nullptr;
   }
 };
 

@@ -29,39 +29,39 @@ struct ImGuiAppMfEncoderData
   char                 OutputPath[512];
   float                Fps;
   ImGuiAppAVTimingMode Timing;
-  int                  Width;          // 0 until fixed (config, else first frame)
+  int                  Width;        // 0 until fixed (config, else first frame)
   int                  Height;
   UINT32               BitrateBps;
   bool                 OpenCalled;
-  bool                 CoInited;       // this instance holds one CoInitializeEx(MTA) ref
-  bool                 MfStarted;      // this instance holds one MFStartup ref
-  bool                 Writing;        // BeginWriting succeeded; Finalize pending
-  bool                 Dead;           // unrecoverable HRESULT: later WriteFrames no-op false
+  bool                 CoInited;     // this instance holds one CoInitializeEx(MTA) ref
+  bool                 MfStarted;    // this instance holds one MFStartup ref
+  bool                 Writing;      // BeginWriting succeeded; Finalize pending
+  bool                 Dead;         // unrecoverable HRESULT: later WriteFrames no-op false
   IMFSinkWriter*       Writer;
   DWORD                Stream;
   ImU64                FramesWritten;
   bool                 HaveFirstTime;
-  double               FirstTimeSec;   // Realtime PTS rebase
+  double               FirstTimeSec; // Realtime PTS rebase
   LONGLONG             PrevSampleTicks;
 
   ImGuiAppMfEncoderData()
   {
-    OutputPath[0] = 0;
-    Fps = 60.0f;
-    Timing = ImGuiAppAVTimingMode_Constant;
-    Width = 0;
-    Height = 0;
-    BitrateBps = 0;
-    OpenCalled = false;
-    CoInited = false;
-    MfStarted = false;
-    Writing = false;
-    Dead = false;
-    Writer = nullptr;
-    Stream = 0;
-    FramesWritten = 0;
-    HaveFirstTime = false;
-    FirstTimeSec = 0.0;
+    OutputPath[0]   = 0;
+    Fps             = 60.0f;
+    Timing          = ImGuiAppAVTimingMode_Constant;
+    Width           = 0;
+    Height          = 0;
+    BitrateBps      = 0;
+    OpenCalled      = false;
+    CoInited        = false;
+    MfStarted       = false;
+    Writing         = false;
+    Dead            = false;
+    Writer          = nullptr;
+    Stream          = 0;
+    FramesWritten   = 0;
+    HaveFirstTime   = false;
+    FirstTimeSec    = 0.0;
     PrevSampleTicks = 0;
   }
 };

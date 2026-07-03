@@ -64,10 +64,10 @@ namespace
 
   struct RandomTimeData
   {
-    char label[128];
-    char type[128];
+    char  label[128];
+    char  type[128];
     float max_timer_secs;
-    ImU64 rng;                 // seeded once in OnInitialize, stepped only by OnUpdate: snapshots capture it,
+    ImU64 rng; // seeded once in OnInitialize, stepped only by OnUpdate: snapshots capture it,
                                // record/replay reproduces every roll (see ImAppRandom)
   };
 
@@ -127,15 +127,15 @@ namespace
 
   struct BreathingControlData
   {
-    char label[128];
-    char type[128];
-    char text[128];
-    char timer_text[128];
-    const ImGuiApp* app;       // reads the optional Random Time source control
-    float timer_secs;
-    float t_value;
-    float t_direction;
-    ImVec4 col;
+    char            label[128];
+    char            type[128];
+    char            text[128];
+    char            timer_text[128];
+    const ImGuiApp* app; // reads the optional Random Time source control
+    float           timer_secs;
+    float           t_value;
+    float           t_direction;
+    ImVec4          col;
   };
 
   struct BreathingControlTempData
@@ -333,30 +333,30 @@ namespace
 
   struct GraphDocData
   {
-    ImGuiAppGraph   Graph;
-    int             Selection;        // node selection shared by tree + canvas
-    bool            ShowLive;         // show vs hide (never delete) live-mirror nodes
-    float           TreeW;            // outliner width (0 -> default on first use)
-    float           CodeH;            // bottom panel height (code/preview/problems/project; 0 == collapsed)
-    float           InspW;            // right-side Inspector column width (0 -> default on first use)
-    char            WriteMsg[64];     // transient "wrote header" confirmation
-    ImGuiID         WrittenSig;       // AppGraphSignature at the last header write (0 = never) -> Generate state
+    ImGuiAppGraph Graph;
+    int           Selection;    // node selection shared by tree + canvas
+    bool          ShowLive;     // show vs hide (never delete) live-mirror nodes
+    float         TreeW;        // outliner width (0 -> default on first use)
+    float         CodeH;        // bottom panel height (code/preview/problems/project; 0 == collapsed)
+    float         InspW;        // right-side Inspector column width (0 -> default on first use)
+    char          WriteMsg[64]; // transient "wrote header" confirmation
+    ImGuiID       WrittenSig;   // AppGraphSignature at the last header write (0 = never) -> Generate state
 
     // Frame-published facts: derived once per frame in GraphDocControl::OnUpdate, read everywhere;
     // never re-derive in a render path (docs/phase-coherence.md).
-    ImGuiID         FrameSig;         // this frame's AppGraphSignature
-    int             NumErrors;        // cached-validation counts
-    int             NumWarnings;
-    char            GraphPath[256];
-    char            HeaderPath[256];
+    ImGuiID FrameSig;  // this frame's AppGraphSignature
+    int     NumErrors; // cached-validation counts
+    int     NumWarnings;
+    char    GraphPath[256];
+    char    HeaderPath[256];
     struct DocLogLine { int Severity; char Text[184]; };
-    ImVector<DocLogLine> Log;         // newest last; capped in DocLog()
-    int             RevealPanel;      // one-shot ComposerPanel_*: reveal + select that bottom tab (0 = none)
-    int             LinkErrSeqSeen;   // last Graph.LastLinkErrSeq folded into the log
-    ImGuiID         LayoutSavedHash;  // hash of the last-persisted layout fields (change detection)
-    float           LayoutSaveT;      // debounce: seconds until the next layout-save check
-    ImGuiApp*       Mirror;           // THE running app: the one hosting this control (set in OnInitialize)
-    int             NumUnbuilt;       // frame fact: authored nodes with no live counterpart in the running
+    ImVector<DocLogLine> Log;             // newest last; capped in DocLog()
+    int                  RevealPanel;     // one-shot ComposerPanel_*: reveal + select that bottom tab (0 = none)
+    int                  LinkErrSeqSeen;  // last Graph.LastLinkErrSeq folded into the log
+    ImGuiID              LayoutSavedHash; // hash of the last-persisted layout fields (change detection)
+    float                LayoutSaveT;     // debounce: seconds until the next layout-save check
+    ImGuiApp*            Mirror;          // THE running app: the one hosting this control (set in OnInitialize)
+    int                  NumUnbuilt;      // frame fact: authored nodes with no live counterpart in the running
                                       // binary -- nonzero == stale until Generate + recompile + relaunch
   };
   struct GraphDocTempData {};
@@ -377,7 +377,7 @@ namespace
   struct ComposerLayoutFields
   {
     float TreeW, InspW, CodeH;
-    bool  ShowLive;
+    bool                          ShowLive;
     ImGui::ImGuiAppGraphViewState View;
   };
   static ComposerLayoutFields ComposerLayoutCapture(const GraphDocData* doc)
@@ -574,10 +574,10 @@ namespace
     bool Load;
     bool WriteHeader;
     bool ToggleCode;
-    bool ToggleLive;    // Live-eye toggle clicked this frame (OnUpdate derives the new state)
-    bool Undo;          // undo / redo edit-intents (applied in OnUpdate)
+    bool ToggleLive;     // Live-eye toggle clicked this frame (OnUpdate derives the new state)
+    bool Undo;           // undo / redo edit-intents (applied in OnUpdate)
     bool Redo;
-    bool Diff;          // diff current graph's codegen vs the saved-on-disk graph -> clipboard
+    bool Diff;           // diff current graph's codegen vs the saved-on-disk graph -> clipboard
     bool HistoryGotoSet; // history dropdown picked a step
     int  HistoryGotoIdx;
     bool CopyCode;       // Generate menu: copy the generated C++ to the clipboard
@@ -876,12 +876,12 @@ namespace
   struct StatusStripData
   {
     GraphDocData* Doc;
-    char CountMsg[96];                  // "design N  live N  promoted N"
-    bool HasMirror;                     // doc->Mirror != nullptr
-    bool MirrorInit;                    // mirror app initialized
-    char MirrorCounts[64];              // "L# W# S# C#"
-    char Breadcrumb[IM_LABEL_SIZE * 2]; // selection breadcrumb
-    char Msg[64];                       // transient write/diff confirmation (doc->WriteMsg snapshot)
+    char          CountMsg[96];                  // "design N  live N  promoted N"
+    bool          HasMirror;                     // doc->Mirror != nullptr
+    bool          MirrorInit;                    // mirror app initialized
+    char          MirrorCounts[64];              // "L# W# S# C#"
+    char          Breadcrumb[IM_LABEL_SIZE * 2]; // selection breadcrumb
+    char          Msg[64];                       // transient write/diff confirmation (doc->WriteMsg snapshot)
   };
   struct StatusStripTempData {};   // read-only display, captures no input
   struct StatusStripControl : ImGuiAppControl<StatusStripData, StatusStripTempData, GraphDocData>
@@ -1075,56 +1075,56 @@ namespace
 
   struct EditorBodyData
   {
-    GraphDocData*   Doc;                     // shared doc, cached non-const in OnInitialize
-    bool            TreeDragging;            // tree splitter drag FSM (advanced only in OnUpdate)
-    float           TreeDragDX;              // grab offset within the grip, captured at drag start
-    bool            InspDragging;            // inspector splitter drag FSM (advanced only in OnUpdate)
-    ImGuiTextBuffer CodeText;                // whole app's generated C++ (kept current while the panel is open)
-    ImVector<ImGui::ImGuiAppCodeSpan> CodeSpans;   // source map: node id -> line ranges in CodeText
-    ImVector<int>   CodeLines;               // byte offset of each line start in CodeText (render index)
-    ImGuiTextBuffer CodeNodeText;            // the selected node's code (the focused "Node" tab)
-    ImVector<int>   NodeLines;               // line starts in CodeNodeText
-    ImGuiID         CodeSig;                 // graph signature the buffers were generated from (regen gate)
-    int             CodeSel;                 // selection they were generated for (regen gate)
-    bool            HasCode;                 // CodeText is non-empty
-    bool            HasNodeCode;             // a node is selected and its code was generated
-    char            CodeName[IM_LABEL_SIZE]; // selected node's draft name (the Node tab label)
+    GraphDocData*                     Doc;                     // shared doc, cached non-const in OnInitialize
+    bool                              TreeDragging;            // tree splitter drag FSM (advanced only in OnUpdate)
+    float                             TreeDragDX;              // grab offset within the grip, captured at drag start
+    bool                              InspDragging;            // inspector splitter drag FSM (advanced only in OnUpdate)
+    ImGuiTextBuffer                   CodeText;                // whole app's generated C++ (kept current while the panel is open)
+    ImVector<ImGui::ImGuiAppCodeSpan> CodeSpans;               // source map: node id -> line ranges in CodeText
+    ImVector<int>                     CodeLines;               // byte offset of each line start in CodeText (render index)
+    ImGuiTextBuffer                   CodeNodeText;            // the selected node's code (the focused "Node" tab)
+    ImVector<int>                     NodeLines;               // line starts in CodeNodeText
+    ImGuiID                           CodeSig;                 // graph signature the buffers were generated from (regen gate)
+    int                               CodeSel;                 // selection they were generated for (regen gate)
+    bool                              HasCode;                 // CodeText is non-empty
+    bool                              HasNodeCode;             // a node is selected and its code was generated
+    char                              CodeName[IM_LABEL_SIZE]; // selected node's draft name (the Node tab label)
 
     // Diff mode, regenerated behind the same signature gate as the code buffers.
-    bool            DiffMode;                // Code tab shows diff-vs-saved instead of the whole program
-    ImGuiTextBuffer DiffText;
-    ImVector<int>   DiffLines;
-    bool            HasDiff;                 // a saved graph existed to diff against
-    ImVector<ImGui::ImGuiAppGraphIssue> Issues;  // validation problems, recomputed while the panel is open
+    bool                                DiffMode; // Code tab shows diff-vs-saved instead of the whole program
+    ImGuiTextBuffer                     DiffText;
+    ImVector<int>                       DiffLines;
+    bool                                HasDiff;  // a saved graph existed to diff against
+    ImVector<ImGui::ImGuiAppGraphIssue> Issues;   // validation problems, recomputed while the panel is open
 
     // Project tab: the document's files on disk, rescanned on a slow cadence in OnUpdate.
     struct ProjFile { char Name[160]; unsigned long long Size; bool IsGraph; bool IsHeader; };
     ImVector<ProjFile> ProjFiles;
-    float              ProjRescan;    // seconds until the next directory scan
+    float              ProjRescan; // seconds until the next directory scan
   };
   // Raw input recorded by OnRender (the only place ImGui item geometry exists), consumed by OnUpdate.
   struct EditorBodyTempData
   {
-    bool  TreeGripActivated;   // drag started on the tree grip this frame
-    bool  MouseLeftDown;       // left button held
-    float MouseX;              // mouse x (screen)
-    float TreeGripMinX;        // tree grip left edge
-    float TreeOriginX;         // body row left edge
-    bool  CodeGripActive;      // code grip held this frame
-    float CodeResolved;        // this frame's clamped code height (drag base)
-    float CodeMax;             // this frame's max code height
-    float MouseDY;             // mouse y delta while dragging the code grip
-    bool  CodeSnapClosed;      // resolved code height collapsed below threshold while idle
-    bool  SelectionChanged;    // tree/canvas changed the selection this frame
-    int   Selection;           // the new selection
-    bool  InspGripActivated;   // inspector splitter drag started this frame
-    float BodyMaxX;            // body row right edge (screen) -- the inspector width derives from it
-    bool  ProjLoadGraph;       // Project tab: load the graph file
-    bool  OpenOutput;          // viewport status strip clicked -> reveal + select the Output tab
-    bool  AckReveal;           // the bottom tab bar consumed the one-shot RevealPanel intent this frame
-    bool  ClearLog;            // Output tab: clear the document log
-    bool  ToggleDiffMode;      // Code tab header: flip whole-program <-> diff-vs-saved
-    int   StampPrefab;         // prefab index to instantiate (-1 = none)
+    bool  TreeGripActivated; // drag started on the tree grip this frame
+    bool  MouseLeftDown;     // left button held
+    float MouseX;            // mouse x (screen)
+    float TreeGripMinX;      // tree grip left edge
+    float TreeOriginX;       // body row left edge
+    bool  CodeGripActive;    // code grip held this frame
+    float CodeResolved;      // this frame's clamped code height (drag base)
+    float CodeMax;           // this frame's max code height
+    float MouseDY;           // mouse y delta while dragging the code grip
+    bool  CodeSnapClosed;    // resolved code height collapsed below threshold while idle
+    bool  SelectionChanged;  // tree/canvas changed the selection this frame
+    int   Selection;         // the new selection
+    bool  InspGripActivated; // inspector splitter drag started this frame
+    float BodyMaxX;          // body row right edge (screen) -- the inspector width derives from it
+    bool  ProjLoadGraph;     // Project tab: load the graph file
+    bool  OpenOutput;        // viewport status strip clicked -> reveal + select the Output tab
+    bool  AckReveal;         // the bottom tab bar consumed the one-shot RevealPanel intent this frame
+    bool  ClearLog;          // Output tab: clear the document log
+    bool  ToggleDiffMode;    // Code tab header: flip whole-program <-> diff-vs-saved
+    int   StampPrefab;       // prefab index to instantiate (-1 = none)
   };
 
   // Empty selection shows the document, in the same section grammar as the node inspector.
@@ -1820,7 +1820,7 @@ namespace
   };
   struct DemoMenuTempData
   {
-    bool Rendered;   // false until OnRender ran once (the first OnUpdate must not consume zeroed toggles)
+    bool Rendered; // false until OnRender ran once (the first OnUpdate must not consume zeroed toggles)
     bool ShowBaseWindow;
     bool ShowStatusBar;
     bool ShowRandomTime;

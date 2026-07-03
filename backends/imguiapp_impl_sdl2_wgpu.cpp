@@ -28,17 +28,17 @@ namespace
 
     struct ImGuiApp_ImplSDL2WGPU_Data
     {
-        SDL_Window* Window;
-        const char* CanvasSelector;
-        WGPUInstance Instance;
-        WGPUDevice Device;
-        WGPUSurface Surface;
-        WGPUQueue Queue;
+        SDL_Window*              Window;
+        const char*              CanvasSelector;
+        WGPUInstance             Instance;
+        WGPUDevice               Device;
+        WGPUSurface              Surface;
+        WGPUQueue                Queue;
         WGPUSurfaceConfiguration SurfaceConfiguration;
-        int SurfaceWidth;
-        int SurfaceHeight;
-        bool PlatformBackendInitialized;
-        bool RendererBackendInitialized;
+        int                      SurfaceWidth;
+        int                      SurfaceHeight;
+        bool                     PlatformBackendInitialized;
+        bool                     RendererBackendInitialized;
     };
 
     ImGuiApp_ImplSDL2WGPU_Data GBackend;

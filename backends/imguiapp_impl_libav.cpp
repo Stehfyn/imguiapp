@@ -33,11 +33,11 @@ struct ImGuiAppLibavEncoderData
   bool                 OpenCalled;
   bool                 PipelineOpen;
   bool                 TrailerWritten;
-  bool                 Dead;            // open/encode failure: every later WriteFrame no-ops false
+  bool                 Dead;         // open/encode failure: every later WriteFrame no-ops false
   bool                 HaveFirstTime;
-  double               FirstTimeSec;    // Realtime PTS rebase epoch (first frame -> pts 0)
-  ImU64                FrameCounter;    // Constant-mode pts index
-  ImS64                LastPtsUs;       // duplicate-PTS guard (muxers reject non-monotonic)
+  double               FirstTimeSec; // Realtime PTS rebase epoch (first frame -> pts 0)
+  ImU64                FrameCounter; // Constant-mode pts index
+  ImS64                LastPtsUs;    // duplicate-PTS guard (muxers reject non-monotonic)
   AVFormatContext*     Format;
   AVCodecContext*      Codec;
   AVStream*            Stream;
@@ -47,26 +47,26 @@ struct ImGuiAppLibavEncoderData
 
   ImGuiAppLibavEncoderData()
   {
-    OutputPath[0] = 0;
-    Fps = 60.0f;
-    Timing = ImGuiAppAVTimingMode_Constant;
-    Width = 0;
-    Height = 0;
-    BitrateKbps = 0;
-    OpenCalled = false;
-    PipelineOpen = false;
+    OutputPath[0]  = 0;
+    Fps            = 60.0f;
+    Timing         = ImGuiAppAVTimingMode_Constant;
+    Width          = 0;
+    Height         = 0;
+    BitrateKbps    = 0;
+    OpenCalled     = false;
+    PipelineOpen   = false;
     TrailerWritten = false;
-    Dead = false;
-    HaveFirstTime = false;
-    FirstTimeSec = 0.0;
-    FrameCounter = 0;
-    LastPtsUs = -1;
-    Format = nullptr;
-    Codec = nullptr;
-    Stream = nullptr;
-    Frame = nullptr;
-    Packet = nullptr;
-    Sws = nullptr;
+    Dead           = false;
+    HaveFirstTime  = false;
+    FirstTimeSec   = 0.0;
+    FrameCounter   = 0;
+    LastPtsUs      = -1;
+    Format         = nullptr;
+    Codec          = nullptr;
+    Stream         = nullptr;
+    Frame          = nullptr;
+    Packet         = nullptr;
+    Sws            = nullptr;
   }
 };
 

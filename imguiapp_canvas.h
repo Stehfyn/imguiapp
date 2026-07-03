@@ -18,16 +18,16 @@ struct ImGuiCanvasStyle
   ImU32 NodeBgSelected;
   ImU32 NodeOutline;
   ImU32 NodeOutlineSelected;
-  ImU32 TitleBar;          // per-node override via CanvasNextNodeTitleColor
+  ImU32 TitleBar;       // per-node override via CanvasNextNodeTitleColor
   ImU32 TitleBarHovered;
   ImU32 TitleBarSelected;
   ImU32 TitleText;
-  ImU32 TitleEditBg;       // InputText field bg while renaming a node title
+  ImU32 TitleEditBg;    // InputText field bg while renaming a node title
   ImU32 Wire;
   ImU32 WireHovered;
   ImU32 WireSelected;
-  ImU32 PinData;           // circle pins (data edges)
-  ImU32 PinContainment;    // square pins (containment edges)
+  ImU32 PinData;        // circle pins (data edges)
+  ImU32 PinContainment; // square pins (containment edges)
   ImU32 PinHovered;
   ImU32 MiniMapBg;
   ImU32 MiniMapBgHovered;
@@ -37,29 +37,29 @@ struct ImGuiCanvasStyle
   ImU32 MiniMapNodeBgSelected;
   ImU32 MiniMapNodeOutline;
   ImU32 MiniMapLink;
-  ImU32 MiniMapCanvas;         // the current-view rect inside the map
+  ImU32 MiniMapCanvas;  // the current-view rect inside the map
   ImU32 MiniMapCanvasOutline;
 
   // Metrics in MODEL units (the engine zooms them; hosts never pre-scale).
-  float GridSpacing;
-  float NodeRounding;
+  float  GridSpacing;
+  float  NodeRounding;
   ImVec2 NodePadding;
-  float NodeBorder;
-  float WireThickness;
-  float PinRadius;
-  float PinHoverRadius;
+  float  NodeBorder;
+  float  WireThickness;
+  float  PinRadius;
+  float  PinHoverRadius;
 
-  bool  GridLines;
-  bool  GridSnap;          // snap node origins to GridSpacing while dragging
+  bool GridLines;
+  bool GridSnap; // snap node origins to GridSpacing while dragging
 };
 
 struct ImGuiCanvasIO
 {
   // Bindings policy.
-  bool LmbPansEmptyCanvas;     // LMB-drag on empty canvas pans (no box select)
-  bool RmbPans;                // RMB-drag pans; a short RMB click reports CanvasMenuRequest*
-  bool WheelZooms;             // cursor-centered; Ctrl+wheel zooms even over nodes/items
-  float ZoomMin, ZoomMax;      // clamp (defaults 0.3 / 2.5)
+  bool  LmbPansEmptyCanvas; // LMB-drag on empty canvas pans (no box select)
+  bool  RmbPans;            // RMB-drag pans; a short RMB click reports CanvasMenuRequest*
+  bool  WheelZooms;         // cursor-centered; Ctrl+wheel zooms even over nodes/items
+  float ZoomMin, ZoomMax;   // clamp (defaults 0.3 / 2.5)
 };
 
 struct ImGuiCanvasState;   // opaque; created/destroyed by the engine; passed explicitly, no context stack

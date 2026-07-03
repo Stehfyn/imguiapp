@@ -27,13 +27,13 @@ namespace
         unsigned int         MinImageCount;
         bool                 EnableValidation;
         ImGuiAppHeadlessMode Headless;
-        int                  OffscreenWidth;    // Offscreen mode render target size
+        int                  OffscreenWidth; // Offscreen mode render target size
         int                  OffscreenHeight;
     };
 
     struct ImGuiApp_ImplWin32Vulkan_Data
     {
-        ImGuiApp*                      App;    // owner; source of FrameID at capture-copy time
+        ImGuiApp*                      App;               // owner; source of FrameID at capture-copy time
         HWND                           Hwnd;
         VkAllocationCallbacks*         Allocator;
         VkInstance                     Instance;
@@ -52,7 +52,7 @@ namespace
         bool                           VBlankWaitAvailable;
         bool                           VBlankWaitDisabled;
         bool                           SwapChainRebuild;
-        bool                           LastFrameRendered;   // set by RenderDrawData, consumed by PresentFrame
+        bool                           LastFrameRendered; // set by RenderDrawData, consumed by PresentFrame
         bool                           PlatformBackendInitialized;
         bool                           RendererBackendInitialized;
         bool                           VulkanInitialized;
@@ -60,38 +60,38 @@ namespace
         // Headless offscreen target (ImGuiAppHeadlessMode_Offscreen): renders into OffscreenImage
         // instead of a swapchain; render pass finalLayout is TRANSFER_SRC_OPTIMAL so capture copies
         // need no layout round-trip. Single command buffer + fence: headless frames run lockstep.
-        bool                           OffscreenActive;
-        int                            OffscreenWidth;
-        int                            OffscreenHeight;
-        VkImage                        OffscreenImage;
-        VkDeviceMemory                 OffscreenMemory;
-        VkImageView                    OffscreenView;
-        VkRenderPass                   OffscreenRenderPass;
-        VkFramebuffer                  OffscreenFramebuffer;
-        VkCommandPool                  OffscreenCommandPool;
-        VkCommandBuffer                OffscreenCommandBuffer;
-        VkFence                        OffscreenFence;
+        bool            OffscreenActive;
+        int             OffscreenWidth;
+        int             OffscreenHeight;
+        VkImage         OffscreenImage;
+        VkDeviceMemory  OffscreenMemory;
+        VkImageView     OffscreenView;
+        VkRenderPass    OffscreenRenderPass;
+        VkFramebuffer   OffscreenFramebuffer;
+        VkCommandPool   OffscreenCommandPool;
+        VkCommandBuffer OffscreenCommandBuffer;
+        VkFence         OffscreenFence;
 
         // Frame capture (AV readback, docs/av-design.md): armed by the first CaptureFrame call;
         // FrameRender then records a copy into one of two host-visible staging buffers and
         // CaptureFrame returns the other (previous frame's) buffer -- no pipeline stall.
-        bool                           CaptureSupported;      // swapchain surface allows TRANSFER_SRC (always true offscreen)
-        bool                           CaptureArmed;
-        int                            CaptureWriteIndex;     // staging buffer the next recorded copy targets
-        VkBuffer                       CaptureBuffer[2];
-        VkDeviceMemory                 CaptureMemory[2];
-        void*                          CaptureMapped[2];
-        VkDeviceSize                   CaptureCapacity[2];
-        int                            CaptureCopyWidth[2];   // geometry/format of the copy each buffer holds; 0 = none yet
-        int                            CaptureCopyHeight[2];
-        VkFormat                       CaptureCopyFormat[2];
-        ImGuiAppFrameID                CaptureCopyId[2];      // FrameID at copy-record time: the pixels' TRUE identity under double-buffer latency
-        VkFence                        CapturePendingFence[2];// fence of the submit containing the copy; null = data at rest
-        ImU64                          CaptureLastReturned;   // highest FrameID.FrameIndex handed to a caller; gates staleness/duplicates
-        VkCommandPool                  CaptureSyncPool;       // transient one-shot copy for the take's FIRST frame (pipeline not primed yet)
-        VkCommandBuffer                CaptureSyncCmd;
-        VkFence                        CaptureSyncFence;
-        ImVector<char>                 CaptureRgba;           // RGBA8 conversion buffer handed to CaptureFrame callers
+        bool            CaptureSupported;       // swapchain surface allows TRANSFER_SRC (always true offscreen)
+        bool            CaptureArmed;
+        int             CaptureWriteIndex;      // staging buffer the next recorded copy targets
+        VkBuffer        CaptureBuffer[2];
+        VkDeviceMemory  CaptureMemory[2];
+        void*           CaptureMapped[2];
+        VkDeviceSize    CaptureCapacity[2];
+        int             CaptureCopyWidth[2];    // geometry/format of the copy each buffer holds; 0 = none yet
+        int             CaptureCopyHeight[2];
+        VkFormat        CaptureCopyFormat[2];
+        ImGuiAppFrameID CaptureCopyId[2];       // FrameID at copy-record time: the pixels' TRUE identity under double-buffer latency
+        VkFence         CapturePendingFence[2]; // fence of the submit containing the copy; null = data at rest
+        ImU64           CaptureLastReturned;    // highest FrameID.FrameIndex handed to a caller; gates staleness/duplicates
+        VkCommandPool   CaptureSyncPool;        // transient one-shot copy for the take's FIRST frame (pipeline not primed yet)
+        VkCommandBuffer CaptureSyncCmd;
+        VkFence         CaptureSyncFence;
+        ImVector<char>  CaptureRgba;            // RGBA8 conversion buffer handed to CaptureFrame callers
     };
 
     struct D3DKMTApi

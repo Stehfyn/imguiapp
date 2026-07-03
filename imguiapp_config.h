@@ -63,17 +63,17 @@ struct ImGuiAppConfig
 
     ImGuiAppConfig()
     {
-        Platform.Name = nullptr;
+        Platform.Name               = nullptr;
         Platform.NativeWindowHandle = nullptr;
-        ConfigFlags = 0;
-        Style = ImGuiAppStyle_Dark;
-        ClearColor = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);
-        FontScale = 1.0f;
-        DpiScale = 1.0f;
-        Headless = ImGuiAppHeadlessMode_None;
-        PersistSettings = true;
-        WindowTitle = nullptr;
-        WindowWidth = 0;
-        WindowHeight = 0;
+        ConfigFlags                 = 0;
+        Style                       = ImGuiAppStyle_Dark;
+        ClearColor                  = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);
+        FontScale                   = 1.0f;
+        DpiScale                    = 1.0f;
+        Headless                    = ImGuiAppHeadlessMode_None;
+        PersistSettings             = true;
+        WindowTitle                 = nullptr;
+        WindowWidth                 = 0;
+        WindowHeight                = 0;
     }
 };

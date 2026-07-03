@@ -7403,7 +7403,7 @@ namespace ImGui
     const char*          Cur;
     bool                 Failed;
     char                 Err[192];
-    char                 StructType[IM_LABEL_SIZE];   // set when the last primary was a whole struct-field ref
+    char                 StructType[IM_LABEL_SIZE]; // set when the last primary was a whole struct-field ref
   };
 
   static int AppExprFail(AppExprCtx* c, const char* fmt, ...)
@@ -9377,11 +9377,11 @@ namespace ImGui
   {
     struct AppUndoHistory
     {
-      ImVector<char*>      Snaps;     // owned snapshot strings, oldest..newest
-      ImVector<char*>      Labels;    // owned operation names, parallel to Snaps (derived by diffing)
-      int                  Cursor;    // index of the snapshot matching the live graph (-1 = empty)
-      const ImGuiAppGraph* Owner;     // identity guard
-      ImGuiID              LiveHash;  // hash of Snaps[Cursor], for cheap change detection
+      ImVector<char*>      Snaps;    // owned snapshot strings, oldest..newest
+      ImVector<char*>      Labels;   // owned operation names, parallel to Snaps (derived by diffing)
+      int                  Cursor;   // index of the snapshot matching the live graph (-1 = empty)
+      const ImGuiAppGraph* Owner;    // identity guard
+      ImGuiID              LiveHash; // hash of Snaps[Cursor], for cheap change detection
 
       AppUndoHistory() { Cursor = -1; Owner = nullptr; LiveHash = 0; }
     };
@@ -9840,7 +9840,7 @@ namespace ImGui
     struct AppPrefab
     {
       char  Name[64];
-      char* Data;   // serialized subtree, owned
+      char* Data; // serialized subtree, owned
     };
     ImVector<AppPrefab> g_app_prefabs;
   }
@@ -9888,21 +9888,21 @@ namespace ImGui
   // One desired live entry, snapshotted from the running app BEFORE any graph mutation.
   struct AppLiveWant
   {
-    ImGuiID          Key;        // stable upsert key (so the node keeps its canvas position across frames)
-    ImGuiAppNodeKind Kind;
-    char             Name[IM_LABEL_SIZE];
-    ImGuiAppLayerType LayerType;
-    ImGuiID          DataId;     // control PersistData id (0 for non-controls)
-    ImGuiID          Deps[16];
-    int              DepCount;
-    ImGuiID          ParentKey;  // host window/sidebar Key for a hosted control (0 == app-level / no parent)
-    ImGuiWindowFlags Flags;      // Window/Sidebar: live window flags
-    bool             HasPlacement;
-    ImVec2           InitialPos;
-    ImVec2           InitialSize;
-    ImGuiDir         DockDir;    // Sidebar only
-    float            DockSize;   // Sidebar only
-    const ImGuiAppItemBase* Item; // live object (windows/sidebars/controls; null for layers) -- read within
+    ImGuiID                 Key;       // stable upsert key (so the node keeps its canvas position across frames)
+    ImGuiAppNodeKind        Kind;
+    char                    Name[IM_LABEL_SIZE];
+    ImGuiAppLayerType       LayerType;
+    ImGuiID                 DataId;    // control PersistData id (0 for non-controls)
+    ImGuiID                 Deps[16];
+    int                     DepCount;
+    ImGuiID                 ParentKey; // host window/sidebar Key for a hosted control (0 == app-level / no parent)
+    ImGuiWindowFlags        Flags;     // Window/Sidebar: live window flags
+    bool                    HasPlacement;
+    ImVec2                  InitialPos;
+    ImVec2                  InitialSize;
+    ImGuiDir                DockDir;   // Sidebar only
+    float                   DockSize;  // Sidebar only
+    const ImGuiAppItemBase* Item;      // live object (windows/sidebars/controls; null for layers) -- read within
                                   // BuildAppLiveGraph only, to mirror StyleMods (kept OFF this struct: a nested
                                   // ImVector member inside ImVector<AppLiveWant> would break ImVector's memcpy grow)
   };
@@ -10223,12 +10223,12 @@ namespace ImGui
     bool  KindVisible[ImGuiAppNodeKind_COUNT];
     int*  RenameNode;
     bool* RenameFocus;
-    int   Act;        // 0 none / 1 delete / 2 duplicate / 3 explode / 4 collapse / 5 reparent
+    int   Act;       // 0 none / 1 delete / 2 duplicate / 3 explode / 4 collapse / 5 reparent
     int   ActNode;
     int   ActList;
-    int   ActTarget;  // reparent destination
-    int   SetOpen;    // -1 none, 0 collapse-all, 1 expand-all (applied via SetNextItemOpen for one frame)
-    bool  ShowLive;   // false: live-mirror rows are not listed (same toggle as the canvas)
+    int   ActTarget; // reparent destination
+    int   SetOpen;   // -1 none, 0 collapse-all, 1 expand-all (applied via SetNextItemOpen for one frame)
+    bool  ShowLive;  // false: live-mirror rows are not listed (same toggle as the canvas)
   };
 
   // Right-aligned metadata for a tree row: a count of what the node holds (fields, hosted controls, commands).

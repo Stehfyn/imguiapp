@@ -72,8 +72,8 @@ static ImU64 AvClockCounter()
 // Stream header. Field-exact contract with the parsers below; version bumps on any change.
 struct ImGuiAppAVMetaHeader
 {
-  char  Magic[8];      // "IMAVMETA"
-  ImU32 Version;       // 1
+  char  Magic[8]; // "IMAVMETA"
+  ImU32 Version;  // 1
   float Fps;
   ImU64 StartTsc;
   ImU64 QpcHz;
@@ -114,7 +114,7 @@ struct ImGuiAppAVJob
   int             Width;
   int             Height;
   ImGuiAppFrameID FrameID;
-  ImVector<char>  Pixels;      // tightly packed RGBA (pitch collapsed at copy)
+  ImVector<char>  Pixels; // tightly packed RGBA (pitch collapsed at copy)
 };
 
 // One ring entry: QOI-compressed pixels + the frame's already-framed meta records.
@@ -123,8 +123,8 @@ struct ImGuiAppAVRingEntry
   int             Width;
   int             Height;
   ImGuiAppFrameID FrameID;
-  ImU32           StateHash;     // this frame's AppStateHash; the dump recomputes the chain over survivors
-  int             ChainOffset;   // byte offset of the IoFrame chain field within MetaRecords; -1 = none
+  ImU32           StateHash;   // this frame's AppStateHash; the dump recomputes the chain over survivors
+  int             ChainOffset; // byte offset of the IoFrame chain field within MetaRecords; -1 = none
   ImVector<char>  Qoi;
   ImVector<char>  MetaRecords;
 
@@ -133,58 +133,58 @@ struct ImGuiAppAVRingEntry
 
 struct ImGuiAppRecorder
 {
-  ImGuiApp*                 App;
-  ImGuiAppAVEncoder*        Encoder;
-  ImGuiAppAVEncodeConfig    Config;        // Timing resolved (never Auto) before the provider sees it
-  char                      OutputPath[512];
-  bool                      Active;
-  bool                      EncoderOpen;
-  int                       FixedWidth;    // 0 until the first captured frame locks the size
-  int                       FixedHeight;
-  ImU64                     AcceptedFrames;    // frames emitted this take (video frame ordinal), placeholders included
-  ImU64                     LastEmittedIndex;  // FrameID.FrameIndex of the last emitted frame; 0 = none. Gap fill + duplicate guard
-  bool                      NoSizeWarned;      // pre-first-capture miss with no size to synthesize at: WAL once
-  ImVector<char>            PlaceholderPixels; // pause-glyph frame at the locked size, built lazily
+  ImGuiApp*              App;
+  ImGuiAppAVEncoder*     Encoder;
+  ImGuiAppAVEncodeConfig Config;            // Timing resolved (never Auto) before the provider sees it
+  char                   OutputPath[512];
+  bool                   Active;
+  bool                   EncoderOpen;
+  int                    FixedWidth;        // 0 until the first captured frame locks the size
+  int                    FixedHeight;
+  ImU64                  AcceptedFrames;    // frames emitted this take (video frame ordinal), placeholders included
+  ImU64                  LastEmittedIndex;  // FrameID.FrameIndex of the last emitted frame; 0 = none. Gap fill + duplicate guard
+  bool                   NoSizeWarned;      // pre-first-capture miss with no size to synthesize at: WAL once
+  ImVector<char>         PlaceholderPixels; // pause-glyph frame at the locked size, built lazily
 
   // Meta record stream (normal mode): the video is the only metadata store. Pending
   // bytes drain into each frame's pixel strip as chunks; the ring builds its stream
   // at dump time from per-entry records instead.
-  ImGuiAppAVMetaHeader      MetaHeader;
-  ImVector<char>            MetaPending;       // header + framed records awaiting a strip
-  int                       MetaPendingCursor; // first unstamped byte
-  ImVector<char>            IdentityRecord;    // framed Identity, built at Begin (ring dumps re-emit it)
-  ImU32                     SchemaHash;        // Identity's schema hash: the io hash chain's seed
-  ImU32                     IoChain;           // running chain: chain_k = ImHashData(&state_hash_k, 4, chain_{k-1})
-  ImU32                     StreamDigest;      // incremental ImHashData over every logical-stream byte queued
-  ImU64                     StreamBytes;       // logical-stream byte count (header + records)
-  bool                      EmitDigestNext;    // set by AppRecordEnd: the next emitted frame carries the Digest
+  ImGuiAppAVMetaHeader MetaHeader;
+  ImVector<char>       MetaPending;       // header + framed records awaiting a strip
+  int                  MetaPendingCursor; // first unstamped byte
+  ImVector<char>       IdentityRecord;    // framed Identity, built at Begin (ring dumps re-emit it)
+  ImU32                SchemaHash;        // Identity's schema hash: the io hash chain's seed
+  ImU32                IoChain;           // running chain: chain_k = ImHashData(&state_hash_k, 4, chain_{k-1})
+  ImU32                StreamDigest;      // incremental ImHashData over every logical-stream byte queued
+  ImU64                StreamBytes;       // logical-stream byte count (header + records)
+  bool                 EmitDigestNext;    // set by AppRecordEnd: the next emitted frame carries the Digest
 
   // Per-frame pending data (set during the frame, consumed by the pump)
-  ImVector<char>            PendingBlob;
-  bool                      PendingBlobSet;
-  ImVector<char>            PendingSnapshotRecord;   // framed StateSnapshot record, if requested this frame
+  ImVector<char> PendingBlob;
+  bool           PendingBlobSet;
+  ImVector<char> PendingSnapshotRecord; // framed StateSnapshot record, if requested this frame
 
   // Attached input log (caller-owned): new frames since LastInputCount serialize each pump
-  const ImGuiAppInputLog*   InputLog;
-  int                       LastInputCount;
-  ImGuiID                   InputHdrComposition;     // composition the last written InputHdr described
-  ImVector<char>            InputHdrRecord;          // latest framed InputHdr (ring rewrites it at dump)
+  const ImGuiAppInputLog* InputLog;
+  int                     LastInputCount;
+  ImGuiID                 InputHdrComposition; // composition the last written InputHdr described
+  ImVector<char>          InputHdrRecord;      // latest framed InputHdr (ring rewrites it at dump)
 
   // Raw-io capture shadow (IoFrame records): key downs as of the previous pump; the
   // first pump emits currently-down keys as transitions.
-  bool                      IoShadowValid;
-  bool                      IoKeyDown[ImGuiKey_NamedKey_COUNT];
+  bool IoShadowValid;
+  bool IoKeyDown[ImGuiKey_NamedKey_COUNT];
 
   // Strip stamping scratch + one-shot WAL flags
-  ImVector<char>            EmbedStream;             // framed chunk stamped into the strip
-  bool                      EmbedTooShortWarned;     // frame shorter than EmbedRows: WAL once
+  ImVector<char> EmbedStream;         // framed chunk stamped into the strip
+  bool           EmbedTooShortWarned; // frame shorter than EmbedRows: WAL once
 
   // Encoder thread + bounded queue (normal mode only)
   std::thread               Thread;
   std::mutex                Mutex;
   std::condition_variable   CvPush;
   std::condition_variable   CvPop;
-  ImVector<ImGuiAppAVJob*>  Queue;         // FIFO; front = index 0
+  ImVector<ImGuiAppAVJob*>  Queue; // FIFO; front = index 0
   int                       QueueDepth;
   ImGuiAppRecordQueuePolicy QueuePolicy;
   bool                      ThreadStop;
@@ -192,48 +192,48 @@ struct ImGuiAppRecorder
   ImU64                     DroppedFrames;
 
   // Ring mode
-  bool                      IsRing;
-  ImGuiAppRingConfig        Ring;
-  ImVector<ImGuiAppAVRingEntry*> RingEntries;   // FIFO; front = oldest
-  size_t                    RingBytes;
-  double                    RingLastAcceptSec;
-  int                       DumpCount;
+  bool                           IsRing;
+  ImGuiAppRingConfig             Ring;
+  ImVector<ImGuiAppAVRingEntry*> RingEntries; // FIFO; front = oldest
+  size_t                         RingBytes;
+  double                         RingLastAcceptSec;
+  int                            DumpCount;
 
   ImGuiAppRecorder()
   {
-    App = nullptr;
-    Encoder = nullptr;
-    OutputPath[0] = 0;
-    Active = false;
-    EncoderOpen = false;
-    FixedWidth = 0;
-    FixedHeight = 0;
-    AcceptedFrames = 0;
+    App              = nullptr;
+    Encoder          = nullptr;
+    OutputPath[0]    = 0;
+    Active           = false;
+    EncoderOpen      = false;
+    FixedWidth       = 0;
+    FixedHeight      = 0;
+    AcceptedFrames   = 0;
     LastEmittedIndex = 0;
-    NoSizeWarned = false;
+    NoSizeWarned     = false;
     memset(&MetaHeader, 0, sizeof(MetaHeader));
-    MetaPendingCursor = 0;
-    PendingBlobSet = false;
-    InputLog = nullptr;
-    LastInputCount = 0;
+    MetaPendingCursor   = 0;
+    PendingBlobSet      = false;
+    InputLog            = nullptr;
+    LastInputCount      = 0;
     InputHdrComposition = 0;
-    SchemaHash = 0;
-    IoChain = 0;
-    StreamDigest = 0;
-    StreamBytes = 0;
-    EmitDigestNext = false;
-    IoShadowValid = false;
+    SchemaHash          = 0;
+    IoChain             = 0;
+    StreamDigest        = 0;
+    StreamBytes         = 0;
+    EmitDigestNext      = false;
+    IoShadowValid       = false;
     memset(IoKeyDown, 0, sizeof(IoKeyDown));
     EmbedTooShortWarned = false;
-    QueueDepth = 3;
-    QueuePolicy = ImGuiAppRecordQueuePolicy_Block;
-    ThreadStop = false;
-    EncodeFailed = false;
-    DroppedFrames = 0;
-    IsRing = false;
-    RingBytes = 0;
-    RingLastAcceptSec = -1e300;
-    DumpCount = 0;
+    QueueDepth          = 3;
+    QueuePolicy         = ImGuiAppRecordQueuePolicy_Block;
+    ThreadStop          = false;
+    EncodeFailed        = false;
+    DroppedFrames       = 0;
+    IsRing              = false;
+    RingBytes           = 0;
+    RingLastAcceptSec   = -1e300;
+    DumpCount           = 0;
   }
 };
 
@@ -1289,7 +1289,7 @@ struct ImGuiAppAVMetaReader
 {
   ImVector<char>       Bytes;
   ImGuiAppAVMetaHeader Header;
-  int                  Cursor;   // first record byte
+  int                  Cursor; // first record byte
 };
 
 static bool AvMetaInit(const void* meta, int meta_size, ImGuiAppAVMetaReader* r)

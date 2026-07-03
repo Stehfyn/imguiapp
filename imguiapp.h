@@ -92,9 +92,9 @@ enum ImGuiAppCommandPrivate
 // video frames, sidecar records, WAL lines, and test logs (docs/av-design.md).
 struct ImGuiAppFrameID
 {
-  ImU64  FrameIndex;   // monotonic from run start (not ImGui's frame count: survives context recreation)
-  ImU64  Tsc;          // __rdtsc / platform equivalent at frame begin
-  double TimeSec;      // QPC seconds since run start
+  ImU64  FrameIndex; // monotonic from run start (not ImGui's frame count: survives context recreation)
+  ImU64  Tsc;        // __rdtsc / platform equivalent at frame begin
+  double TimeSec;    // QPC seconds since run start
 
   ImGuiAppFrameID() { FrameIndex = 0; Tsc = 0; TimeSec = 0.0; }
 };
@@ -113,12 +113,12 @@ enum ImGuiAppPacerMode_
 struct ImGuiAppPacer
 {
   ImGuiAppPacerMode Mode;
-  float  TargetHz;         // <= 0 with Mode_Target = pace to primary monitor refresh
-  float  SleepSlackMs;     // spin the last N ms (OS sleep granularity guard)
-  // read-only telemetry
-  double LastFrameMs;
-  double LastWaitMs;
-  ImU64  MissedDeadlines;  // frames that arrived after their deadline
+  float             TargetHz;        // <= 0 with Mode_Target = pace to primary monitor refresh
+  float             SleepSlackMs;    // spin the last N ms (OS sleep granularity guard)
+                                     // read-only telemetry
+  double            LastFrameMs;
+  double            LastWaitMs;
+  ImU64             MissedDeadlines; // frames that arrived after their deadline
 
   ImGuiAppPacer() { Mode = ImGuiAppPacerMode_Off; TargetHz = 0.0f; SleepSlackMs = 2.0f; LastFrameMs = 0.0; LastWaitMs = 0.0; MissedDeadlines = 0; }
 };
@@ -135,10 +135,10 @@ enum ImGuiAppWALLevel_
 
 struct ImGuiAppWAL
 {
-  void*                  File;      // FILE*; typed void* to keep <cstdio> out of this header
-  int                    Seq;       // monotonic record number
+  void*                  File;    // FILE*; typed void* to keep <cstdio> out of this header
+  int                    Seq;     // monotonic record number
   ImGuiAppWALLevel       Level;
-  const ImGuiAppFrameID* FrameID;   // optional (point at ImGuiApp::FrameID): prefixes records "[tick:N tsc:T]"
+  const ImGuiAppFrameID* FrameID; // optional (point at ImGuiApp::FrameID): prefixes records "[tick:N tsc:T]"
   char                   Path[256];
 
   ImGuiAppWAL() { File = nullptr; Seq = 0; Level = ImGuiAppWALLevel_Off; FrameID = nullptr; Path[0] = 0; }
@@ -317,8 +317,8 @@ IMGUI_API void ImGuiAppAssertFail(const char* expr, const char* file, int line);
 // its members. Float-valued vars brace-init as { var, ImVec2(v, 0.0f) }.
 struct ImGuiAppStyleModDesc
 {
-  ImGuiStyleVar Var = 0;
-  ImVec2        Value = ImVec2(0.0f, 0.0f);
+  ImGuiStyleVar Var    = 0;
+  ImVec2        Value  = ImVec2(0.0f, 0.0f);
   bool          Active = true;
 };
 
@@ -326,8 +326,8 @@ struct ImGuiAppStyleModDesc
 // Aggregate for the same reason as ImGuiAppStyleModDesc.
 struct ImGuiAppColorModDesc
 {
-  ImGuiCol Col = 0;
-  ImU32    Value = 0;
+  ImGuiCol Col    = 0;
+  ImU32    Value  = 0;
   bool     Active = true;
 };
 
@@ -455,22 +455,22 @@ struct ImGuiAppItemBase : ImGuiInterface
 
 struct ImGuiAppWindowBase : ImGuiAppItemBase
 {
-	bool Open = true;
-  ImGuiWindow* Window = nullptr;
-  ImGuiViewport* Viewport = nullptr;
-  ImGuiWindowFlags Flags = ImGuiWindowFlags_None;
-  ImVector<ImGuiAppControlBase*> Controls;
+	bool                           Open     = true;
+	ImGuiWindow*                   Window   = nullptr;
+	ImGuiViewport*                 Viewport = nullptr;
+	ImGuiWindowFlags               Flags    = ImGuiWindowFlags_None;
+	ImVector<ImGuiAppControlBase*> Controls;
 
   // Optional first-use placement (applied with ImGuiCond_FirstUseEver, so saved .ini wins).
   bool   HasInitialPlacement = false;
-  ImVec2 InitialPos = ImVec2(0.0f, 0.0f);
-  ImVec2 InitialSize = ImVec2(0.0f, 0.0f);
+  ImVec2 InitialPos          = ImVec2(0.0f, 0.0f);
+  ImVec2 InitialSize         = ImVec2(0.0f, 0.0f);
 };
 
 struct ImGuiAppSidebarBase : ImGuiAppWindowBase
 {
   ImGuiDir DockDir = ImGuiDir_None;
-  float    Size = 0.0f;
+  float    Size    = 0.0f;
 };
 
 // One reflected member of a control's Persist/Temp aggregate (live-mirror introspection).
@@ -491,13 +491,13 @@ enum ImGuiAppLiveFieldKind_
 
 struct ImGuiAppLiveFieldDesc
 {
-  const char*             Name;
-  const char*             TypeName;
-  const char*             ElemTypeName;   // ImVector element type (schema fields); null otherwise
-  int                     Offset;         // within the Persist (or Temp) struct
-  int                     Size;
-  ImGuiAppLiveFieldKind   Kind;
-  bool                    Exact;          // TypeName is the member's declared C++ spelling (emit verbatim)
+  const char*           Name;
+  const char*           TypeName;
+  const char*           ElemTypeName; // ImVector element type (schema fields); null otherwise
+  int                   Offset;       // within the Persist (or Temp) struct
+  int                   Size;
+  ImGuiAppLiveFieldKind Kind;
+  bool                  Exact;        // TypeName is the member's declared C++ spelling (emit verbatim)
 };
 
 struct ImGuiAppControlBase : ImGuiAppItemBase
@@ -534,10 +534,10 @@ inline constexpr bool ImGuiAppDataReflectable = std::is_aggregate_v<T>
 
 struct ImGuiAppTypeSchema
 {
-  const char*                   TypeName;   // display name (scope-stripped, matches ImGuiType<T>::Name)
-  const ImGuiAppLiveFieldDesc*  Fields;     // declaration order
-  int                           Count;
-  int                           Size;       // sizeof(T)
+  const char*                  TypeName; // display name (scope-stripped, matches ImGuiType<T>::Name)
+  const ImGuiAppLiveFieldDesc* Fields;   // declaration order
+  int                          Count;
+  int                          Size;     // sizeof(T)
 };
 
 IMGUI_API void                        ImGuiAppRegisterTypeSchema(const ImGuiAppTypeSchema* schema);
@@ -773,11 +773,11 @@ struct ImGuiAppBase : ImGuiInterface
 
 struct ImGuiAppStorageEntry
 {
-  ImGuiID ID = 0;
-  void* Ptr = nullptr;
-  int Size = 0;                       // byte size when the data is snapshottable (trivially copyable); 0 = opaque
-  int TempOffset = 0;                 // byte range of the TempData member inside the instance data -- the
-  int TempSize = 0;                   // control's per-frame INPUT; [0, TempOffset) is Persist + LastTemp (state)
+  ImGuiID ID         = 0;
+  void*   Ptr        = nullptr;
+  int     Size       = 0; // byte size when the data is snapshottable (trivially copyable); 0 = opaque
+  int     TempOffset = 0; // byte range of the TempData member inside the instance data -- the
+  int     TempSize   = 0; // control's per-frame INPUT; [0, TempOffset) is Persist + LastTemp (state)
   void (*Destroy)(void*) = nullptr;
 };
 
@@ -786,10 +786,10 @@ struct ImGuiAppStorageEntry
 struct ImGuiAppStateHistory
 {
   ImGuiID           CompositionID = 0;   // layout is valid for exactly this composition
-  int               FrameSize = 0;       // bytes per snapshot (sum of slot sizes)
-  int               MaxFrames = 600;     // ring capacity (default 600 ~ 10s at 60fps)
-  int               Count = 0;           // valid snapshots
-  int               Head = 0;            // ring write index
+  int               FrameSize     = 0;   // bytes per snapshot (sum of slot sizes)
+  int               MaxFrames     = 600; // ring capacity (default 600 ~ 10s at 60fps)
+  int               Count         = 0;   // valid snapshots
+  int               Head          = 0;   // ring write index
   ImVector<ImGuiID> SlotIds;             // storage entry per slot, in StorageEntries order
   ImVector<int>     SlotSizes;
   ImVector<char>    Frames;              // MaxFrames * FrameSize bytes
@@ -799,14 +799,14 @@ struct ImGuiAppStateHistory
 // (Persist+LastTemp prefix of every instance) so replay can pinpoint the first divergent frame.
 struct ImGuiAppInputLog
 {
-  ImGuiID           CompositionID;   // layout is valid for exactly this composition
-  int               FrameSize;       // bytes per frame: sum of temp sizes + sizeof(float) dt
-  int               Count;           // recorded frames
-  ImVector<ImGuiID> SlotIds;         // storage entry per slot, in StorageEntries order
-  ImVector<int>     SlotOffsets;     // TempData offset within each instance
-  ImVector<int>     SlotSizes;       // TempData size
-  ImVector<char>    Frames;          // Count * FrameSize bytes, appended (caller clears between takes)
-  ImVector<ImGuiID> StateHashes;     // per-frame post-update state hash (replay divergence reference)
+  ImGuiID           CompositionID; // layout is valid for exactly this composition
+  int               FrameSize;     // bytes per frame: sum of temp sizes + sizeof(float) dt
+  int               Count;         // recorded frames
+  ImVector<ImGuiID> SlotIds;       // storage entry per slot, in StorageEntries order
+  ImVector<int>     SlotOffsets;   // TempData offset within each instance
+  ImVector<int>     SlotSizes;     // TempData size
+  ImVector<char>    Frames;        // Count * FrameSize bytes, appended (caller clears between takes)
+  ImVector<ImGuiID> StateHashes;   // per-frame post-update state hash (replay divergence reference)
 
   ImGuiAppInputLog() { CompositionID = 0; FrameSize = 0; Count = 0; }
 };
@@ -822,10 +822,10 @@ struct ImGuiApp : ImGuiAppBase
   ImGuiAppPlatform               Platform;
   ImVec4                         ClearColor;
   void*                          PlatformData;
-  ImGuiAppWAL*                   WAL;           // optional write-ahead logger (caller-owned); null = silent
-  ImGuiAppRecorder*              Recorder;      // active recording (AppRecordBegin registers, AppRecordEnd clears); null = none
-  ImGuiAppFrameID                FrameID;       // updated at the top of OnDrawFrame; correlation key for WAL/video/sidecar
-  ImGuiAppPacer                  Pacer;         // advisory; consulted by the backend run loop via AppPacerWait
+  ImGuiAppWAL*                   WAL;      // optional write-ahead logger (caller-owned); null = silent
+  ImGuiAppRecorder*              Recorder; // active recording (AppRecordBegin registers, AppRecordEnd clears); null = none
+  ImGuiAppFrameID                FrameID;  // updated at the top of OnDrawFrame; correlation key for WAL/video/sidecar
+  ImGuiAppPacer                  Pacer;    // advisory; consulted by the backend run loop via AppPacerWait
   bool                           Initialized;
 
   ImGuiApp() : PlatformData(nullptr), WAL(nullptr), Recorder(nullptr), Initialized(false) {}

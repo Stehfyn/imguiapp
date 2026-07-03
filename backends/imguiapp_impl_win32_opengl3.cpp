@@ -34,9 +34,9 @@ namespace
         bool  RendererBackendInitialized;
 
         // Frame capture (AV readback).
-        ImU64          CaptureLastReturned;   // highest FrameID.FrameIndex handed out; a repeat call with no new frame returns false
-        ImVector<char> CaptureRead;   // glReadPixels scratch, GL's bottom-up row order
-        ImVector<char> CaptureRgba;   // top-down RGBA handed to callers; valid until the next capture
+        ImU64          CaptureLastReturned; // highest FrameID.FrameIndex handed out; a repeat call with no new frame returns false
+        ImVector<char> CaptureRead;         // glReadPixels scratch, GL's bottom-up row order
+        ImVector<char> CaptureRgba;         // top-down RGBA handed to callers; valid until the next capture
     };
 
     ImGuiApp_ImplWin32OpenGL3_Data GBackend;

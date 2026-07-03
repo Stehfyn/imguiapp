@@ -171,8 +171,8 @@ int ImGuiApp::Run(int argc, char** argv)
 struct ImGuiAppPacerState
 {
   const ImGuiApp* App;
-  double          NextDeadline;   // on the monotonic app clock; < 0 = chain not started
-  double          LastEnter;      // previous AppPacerWait entry (feeds LastFrameMs)
+  double          NextDeadline; // on the monotonic app clock; < 0 = chain not started
+  double          LastEnter;    // previous AppPacerWait entry (feeds LastFrameMs)
 };
 static ImGuiAppPacerState s_app_pacer = { nullptr, -1.0, -1.0 };
 
@@ -227,7 +227,7 @@ struct ImGuiAppViewportPace
 {
   ImGuiID ViewportId;
   double  NextDeadline;
-  ImU64   LastSeenFrame;   // FrameID.FrameIndex; feeds lazy pruning of vanished viewports
+  ImU64   LastSeenFrame; // FrameID.FrameIndex; feeds lazy pruning of vanished viewports
 };
 static ImVector<ImGuiAppViewportPace> s_app_vp_pace;
 

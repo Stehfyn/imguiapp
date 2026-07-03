@@ -23,24 +23,24 @@
 struct ImGuiCanvasNodeRec
 {
   int    Id;
-  ImVec2 Pos;              // model units
-  ImVec2 Size;             // model units, measured same-frame at submission
-  ImU32  TitleColor;       // 0 = style default
+  ImVec2 Pos;        // model units
+  ImVec2 Size;       // model units, measured same-frame at submission
+  ImU32  TitleColor; // 0 = style default
   char   Title[64];
   bool   Draggable;
-  int    LastFrame;        // ImGui frame count of the last submission (cull/hit bookkeeping)
+  int    LastFrame;  // ImGui frame count of the last submission (cull/hit bookkeeping)
 };
 
 struct ImGuiCanvasPinRec
 {
   int    Id;
   int    NodeId;
-  int    Kind;             // ImGuiCanvasPin_In / _Out
-  int    Shape;            // circle (data) / square (containment)
-  ImU32  Color;            // 0 = style (by shape); set via CanvasNextPinColor
-  ImVec2 Anchor;           // MODEL units: pin center at the node edge, row-centered
+  int    Kind;       // ImGuiCanvasPin_In / _Out
+  int    Shape;      // circle (data) / square (containment)
+  ImU32  Color;      // 0 = style (by shape); set via CanvasNextPinColor
+  ImVec2 Anchor;     // MODEL units: pin center at the node edge, row-centered
   int    LastFrame;
-  int    WiredCount;       // wires touching this pin THIS frame (filled pin glyph)
+  int    WiredCount; // wires touching this pin THIS frame (filled pin glyph)
 };
 
 struct ImGuiCanvasWireRec  // per-frame submission, rebuilt every frame
@@ -48,7 +48,7 @@ struct ImGuiCanvasWireRec  // per-frame submission, rebuilt every frame
   int   Id;
   int   PinA;
   int   PinB;
-  ImU32 Color;             // 0 = style
+  ImU32 Color; // 0 = style
 };
 
 enum ImGuiCanvasInteraction_
@@ -68,7 +68,7 @@ struct ImGuiCanvasState
   // Camera
   ImVec2 Pan;
   float  Zoom;
-  float  FontRatio;    // host font scale (DPI * user scale) captured at CanvasBegin; geometry scale = Zoom * FontRatio
+  float  FontRatio; // host font scale (DPI * user scale) captured at CanvasBegin; geometry scale = Zoom * FontRatio
 
   // Nodes
   ImVector<ImGuiCanvasNodeRec> Nodes;
@@ -77,56 +77,56 @@ struct ImGuiCanvasState
   ImVector<int>                SubmitOrderNow; // rebuilt during the current frame
 
   // Pins + wires
-  ImVector<ImGuiCanvasPinRec> Pins;
-  ImGuiStorage                PinIdx;          // id -> index + 1
-  ImVector<ImGuiCanvasWireRec> Wires;          // rebuilt per frame between CanvasBegin/End
-  ImVector<ImGuiCanvasWireRec> WiresPrev;      // last frame's wires: press decisions run at CanvasBegin
-  ImVector<int>               CurNodePins;     // pin indices submitted inside the current node (anchor.x resolves at EndNode)
+  ImVector<ImGuiCanvasPinRec>  Pins;
+  ImGuiStorage                 PinIdx;      // id -> index + 1
+  ImVector<ImGuiCanvasWireRec> Wires;       // rebuilt per frame between CanvasBegin/End
+  ImVector<ImGuiCanvasWireRec> WiresPrev;   // last frame's wires: press decisions run at CanvasBegin
+  ImVector<int>                CurNodePins; // pin indices submitted inside the current node (anchor.x resolves at EndNode)
 
   // Selection + hover
   ImVector<int> Selection;
-  int           HoveredNode;                   // resolved against current camera + model geometry
-  int           HoveredPin;                    // resolved in CanvasEnd (needs this frame's wires/pins); -1 = none
+  int           HoveredNode;  // resolved against current camera + model geometry
+  int           HoveredPin;   // resolved in CanvasEnd (needs this frame's wires/pins); -1 = none
   int           HoveredWire;
-  int           SelectedWire;                  // single wire selection (click); -1 = none
+  int           SelectedWire; // single wire selection (click); -1 = none
 
   // Per-frame canvas geometry
-  ImVec2      Origin;         // canvas child top-left (screen)
-  ImVec2      CanvasSize;
-  ImDrawList* DrawList;
-  ImDrawListSplitter Splitter;                 // ch0 = grid + wires, ch1 = node plates, ch2 = node content
-  bool        InsideCanvas;
+  ImVec2             Origin;   // canvas child top-left (screen)
+  ImVec2             CanvasSize;
+  ImDrawList*        DrawList;
+  ImDrawListSplitter Splitter; // ch0 = grid + wires, ch1 = node plates, ch2 = node content
+  bool               InsideCanvas;
 
   // Node submission scratch
-  int    CurNode;             // index into Nodes during Begin/EndNode, -1 otherwise
-  ImVec2 CurNodeScreen;       // this frame's screen pos of the node origin
+  int    CurNode;       // index into Nodes during Begin/EndNode, -1 otherwise
+  ImVec2 CurNodeScreen; // this frame's screen pos of the node origin
   char   NextTitle[64];
   ImU32  NextTitleColor;
 
   // Interaction FSM
-  int    Interaction;
-  ImVec2 GestureStartMouse;
-  ImVec2 GestureStartPan;
-  ImVector<ImVec2> DragStartPos;               // model pos of each selected node at drag start
+  int              Interaction;
+  ImVec2           GestureStartMouse;
+  ImVec2           GestureStartPan;
+  ImVector<ImVec2> DragStartPos;    // model pos of each selected node at drag start
   ImVector<int>    DragNodes;
-  int    DragWireFromPin;                      // DragWire: the fixed end
+  int              DragWireFromPin; // DragWire: the fixed end
 
   // Rename hook: per-frame pointers captured by CanvasNextNodeTitleEditable (host-owned storage).
-  char*  EditBuf;
-  int    EditBufSize;
-  bool*  EditFlag;
-  int    EditNodeIdx;
-  bool   EditFocusPending;
-  int    LastEditingNodeId;    // focus-once tracking across frames
+  char* EditBuf;
+  int   EditBufSize;
+  bool* EditFlag;
+  int   EditNodeIdx;
+  bool  EditFocusPending;
+  int   LastEditingNodeId; // focus-once tracking across frames
 
   // Minimap
   bool   MiniMapReq;
   float  MiniMapFraction;
-  ImVec2 MiniRectMin;          // background rect incl. padding ring (screen); the FSM keeps out of it
+  ImVec2 MiniRectMin;    // background rect incl. padding ring (screen); the FSM keeps out of it
   ImVec2 MiniRectMax;
-  ImVec2 MiniContentMin;       // content rect origin (screen); the mapping's anchor
-  ImVec2 MiniModelMin;         // content bounds min (model); the mapping's other anchor
-  float  MiniScale;            // model units -> minimap pixels
+  ImVec2 MiniContentMin; // content rect origin (screen); the mapping's anchor
+  ImVec2 MiniModelMin;   // content bounds min (model); the mapping's other anchor
+  float  MiniScale;      // model units -> minimap pixels
 
   // Latched events (valid from CanvasEnd until the next CanvasBegin)
   bool   NodeDblClickReq;

@@ -30,10 +30,10 @@ struct ImGuiAppAVFrame
 {
   int             Width;
   int             Height;
-  int             PitchBytes;     // row stride; encoders must honor it
-  const void*     Pixels;         // RGBA8
+  int             PitchBytes; // row stride; encoders must honor it
+  const void*     Pixels;     // RGBA8
   ImGuiAppFrameID FrameID;
-  const void*     UserData;       // optional per-frame blob (meta stream record, never visible pixels)
+  const void*     UserData;   // optional per-frame blob (meta stream record, never visible pixels)
   int             UserDataSize;
 
   ImGuiAppAVFrame() { Width = 0; Height = 0; PitchBytes = 0; Pixels = nullptr; UserData = nullptr; UserDataSize = 0; }
@@ -41,22 +41,22 @@ struct ImGuiAppAVFrame
 
 struct ImGuiAppAVEncodeConfig
 {
-  const char*          OutputPath;    // container path, or directory for sequence providers
-  float                Fps;           // Constant mode: the frame rate. Realtime mode: nominal rate hint only
+  const char*          OutputPath;  // container path, or directory for sequence providers
+  float                Fps;         // Constant mode: the frame rate. Realtime mode: nominal rate hint only
   ImGuiAppAVTimingMode Timing;
-  int                  Width;         // 0 = first frame's size (fixed thereafter; resize aborts recording)
+  int                  Width;       // 0 = first frame's size (fixed thereafter; resize aborts recording)
   int                  Height;
-  int                  BitrateKbps;   // hint; lossless providers ignore
-  // Metadata lives IN the video: while recording, the meta record stream (40-byte
-  // header first, then framed records in emission order) is chunked across the frames'
-  // BOTTOM EmbedRows pixel rows as 4x4-pixel luma blocks (black 16 / white 235, read
-  // threshold 128 -- survives lossy encode). Per frame: u32 magic 'IMIL' |
-  // u32 chunk_size | chunk (the stream's next bytes, up to capacity) | u32 ImHashData
-  // checksum (CRC32c). Records self-describe, so reassembly is chunk concatenation in
-  // frame order; a large record (state snapshot) legitimately spans frames. The only
-  // loss mode is a corrupt frame, which truncates the stream at that point on read.
-  // Capacity per frame = floor(W/4) * floor(EmbedRows/4) / 8 - 12 bytes.
-  int                  EmbedRows;     // reserved bottom rows; multiple of 4
+  int                  BitrateKbps; // hint; lossless providers ignore
+                                    // Metadata lives IN the video: while recording, the meta record stream (40-byte
+                                    // header first, then framed records in emission order) is chunked across the frames'
+                                    // BOTTOM EmbedRows pixel rows as 4x4-pixel luma blocks (black 16 / white 235, read
+                                    // threshold 128 -- survives lossy encode). Per frame: u32 magic 'IMIL' |
+                                    // u32 chunk_size | chunk (the stream's next bytes, up to capacity) | u32 ImHashData
+                                    // checksum (CRC32c). Records self-describe, so reassembly is chunk concatenation in
+                                    // frame order; a large record (state snapshot) legitimately spans frames. The only
+                                    // loss mode is a corrupt frame, which truncates the stream at that point on read.
+                                    // Capacity per frame = floor(W/4) * floor(EmbedRows/4) / 8 - 12 bytes.
+  int                  EmbedRows;   // reserved bottom rows; multiple of 4
 
   ImGuiAppAVEncodeConfig() { OutputPath = nullptr; Fps = 60.0f; Timing = ImGuiAppAVTimingMode_Auto; Width = 0; Height = 0; BitrateKbps = 0; EmbedRows = 32; }
 };
@@ -66,7 +66,7 @@ struct ImGuiAppAVEncodeConfig
 struct ImGuiAppAVEncoder
 {
   const char* Name;
-  bool        SupportsRealtimePts;   // provider can carry per-frame wall-clock PTS (true VFR)
+  bool        SupportsRealtimePts; // provider can carry per-frame wall-clock PTS (true VFR)
   bool (*Open)(ImGuiAppAVEncoder* self, const ImGuiAppAVEncodeConfig* config);
   bool (*WriteFrame)(ImGuiAppAVEncoder* self, const ImGuiAppAVFrame* frame);   // PTS from frame->FrameID.TimeSec under Realtime
   void (*Close)(ImGuiAppAVEncoder* self);
@@ -136,9 +136,9 @@ enum ImGuiAppRecordQueuePolicy_
 // plus their meta records); the stream is chunked across the frames at dump time.
 struct ImGuiAppRingConfig
 {
-  float Seconds;       // ring span
-  int   MaxMemoryMB;   // hard cap; oldest frames evicted when either bound binds
-  float Fps;           // <= 0 (default) = keep EVERY frame; > 0 = explicit subsample opt-out of the encode-every-frame contract
+  float Seconds;     // ring span
+  int   MaxMemoryMB; // hard cap; oldest frames evicted when either bound binds
+  float Fps;         // <= 0 (default) = keep EVERY frame; > 0 = explicit subsample opt-out of the encode-every-frame contract
 
   ImGuiAppRingConfig() { Seconds = 10.0f; MaxMemoryMB = 256; Fps = 0.0f; }
 };
@@ -158,8 +158,8 @@ struct ImGuiAppAVStreamStats
   ImU64 LastTick;
   int   TickGaps;
   bool  ChainOk;
-  int   ChainDivergesAt;   // io-frame ordinal of the first divergence; -1 = none
-  int   DigestState;       // 0 ok, 1 missing (truncated take), 2 mismatch (corruption)
+  int   ChainDivergesAt; // io-frame ordinal of the first divergence; -1 = none
+  int   DigestState;     // 0 ok, 1 missing (truncated take), 2 mismatch (corruption)
   int   CorruptFrames;
 
   ImGuiAppAVStreamStats() { Frames = 0; IoFrames = 0; InputHdrs = 0; InputFrames = 0; Snapshots = 0; Identities = 0; FirstTick = 0; LastTick = 0; TickGaps = 0; ChainOk = false; ChainDivergesAt = -1; DigestState = 1; CorruptFrames = 0; }

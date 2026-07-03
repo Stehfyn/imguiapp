@@ -194,10 +194,10 @@ enum ImGuiAppFieldType_
 // reflection walk (imguiapp.h) materializes their manifests for live mirrors and codegen.
 struct ImGuiAppFieldDesc
 {
-  char              Name[IM_LABEL_SIZE] = "";
-  ImGuiAppFieldType Type = ImGuiAppFieldType_Float;
-  int               ArraySize = 128;             // buffer length for ImGuiAppFieldType_String; ignored otherwise
-  char              StructType[IM_LABEL_SIZE] = "";   // referenced struct type name for ImGuiAppFieldType_Struct
+  char              Name[IM_LABEL_SIZE]       = "";
+  ImGuiAppFieldType Type                      = ImGuiAppFieldType_Float;
+  int               ArraySize                 = 128; // buffer length for ImGuiAppFieldType_String; ignored otherwise
+  char              StructType[IM_LABEL_SIZE] = "";  // referenced struct type name for ImGuiAppFieldType_Struct
 };
 
 // One drafted control: a name plus its persisted and per-frame field sets.
@@ -293,9 +293,9 @@ enum ImGuiAppEdgeKind_
 // member initializer keeps { id, start, end } brace-init and the legacy save/load format working.
 struct ImGuiAppNodeLink
 {
-  int Id;
-  int StartAttr;
-  int EndAttr;
+  int              Id;
+  int              StartAttr;
+  int              EndAttr;
   ImGuiAppEdgeKind Kind = ImGuiAppEdgeKind_Data;
 };
 
@@ -337,10 +337,10 @@ namespace ImGui
 // One pin on a node, stored (never index-derived) so its id is stable across reorder/delete.
 struct ImGuiAppNodePort
 {
-  int              Id = 0;                     // from ImGuiAppGraph::NextId; == canvas pin id
-  ImGuiAppPortKind Kind = ImGuiAppPortKind_DataOut;
+  int              Id                  = 0; // from ImGuiAppGraph::NextId; == canvas pin id
+  ImGuiAppPortKind Kind                = ImGuiAppPortKind_DataOut;
   char             Name[IM_LABEL_SIZE] = "";
-  ImGuiID          DataTypeId = 0;             // ImGuiType<PersistData>::ID for DataOut/DataIn (the data-flow key); 0 otherwise
+  ImGuiID          DataTypeId          = 0; // ImGuiType<PersistData>::ID for DataOut/DataIn (the data-flow key); 0 otherwise
 };
 
 struct ImGuiAppCommandDesc
@@ -375,55 +375,55 @@ enum ImGuiAppEventAction_
 // block in OnUpdate (plus, for EmitCommand, the latch + OnGetCommand emission).
 struct ImGuiAppEventDesc
 {
-  char                TempField[IM_LABEL_SIZE] = "";   // watched TempData field
-  ImGuiAppEventEdge   Edge = ImGuiAppEventEdge_Changed;
-  ImGuiAppEventAction Action = ImGuiAppEventAction_SetField;
-  char                DstField[IM_LABEL_SIZE] = "";    // SetField: PersistData destination
-  char                Expr[IM_LABEL_SIZE] = "";        // SetField: source expression (emitted verbatim); empty -> temp_data-><TempField>
-  char                Command[IM_LABEL_SIZE] = "";     // EmitCommand: one of the control's selected commands
+  char                TempField[IM_LABEL_SIZE] = ""; // watched TempData field
+  ImGuiAppEventEdge   Edge                     = ImGuiAppEventEdge_Changed;
+  ImGuiAppEventAction Action                   = ImGuiAppEventAction_SetField;
+  char                DstField[IM_LABEL_SIZE]  = ""; // SetField: PersistData destination
+  char                Expr[IM_LABEL_SIZE]      = ""; // SetField: source expression (emitted verbatim); empty -> temp_data-><TempField>
+  char                Command[IM_LABEL_SIZE]   = ""; // EmitCommand: one of the control's selected commands
 };
 
 // One node in the authored graph. Embeds ImGuiAppNodeDraft so the rename/field-edit/codegen helpers
 // apply verbatim and a legacy "[Draft]" maps 1:1 to a Control node. Most fields are kind-specific.
 struct ImGuiAppNode
 {
-  int               Id = 0;         // from NextId; == canvas node id
-  ImGuiAppNodeKind  Kind = ImGuiAppNodeKind_Control;
-  ImGuiAppNodeDraft Draft;          // Draft.Name is the node label; PersistFields/TempFields used by Control
-  bool              IsBuiltin = false;   // true: backed by a compiled C++ type (palette), not drafted
-  char              TypeName[IM_LABEL_SIZE] = "";      // C++ type to Push<> (builtin window/sidebar/layer/control)
-  char              DataTypeName[IM_LABEL_SIZE] = "";  // builtin control PersistData type name; empty => "<Name>Data"
-  ImGuiAppLayerType LayerType = ImGuiAppLayerType_Task;   // Layer nodes only
-  bool              HasInitialPlacement = false;          // Window/Sidebar first-use placement
-  ImVec2            InitialPos = ImVec2(0.0f, 0.0f);
-  ImVec2            InitialSize = ImVec2(0.0f, 0.0f);
-  ImGuiDir          DockDir = ImGuiDir_Down;   // Sidebar dock direction
-  float             DockSize = 0.0f;           // Sidebar size
-  ImGuiWindowFlags  Flags = ImGuiWindowFlags_None;   // Window/Sidebar flags
-  ImVec2            GridPos = ImVec2(0.0f, 0.0f);    // persisted canvas position
-  bool              HasGridPos = false;
-  bool              _NeedsPlace = false;   // apply GridPos to the canvas before the next submission
-  int               BodyAttrId = 0;        // dedicated non-port static-attribute id for the node body
-  bool              IsLive = false;        // mirrored from a running app object (read-only)
-  bool              IsPromoted = false;    // design control whose emitted data type matches a live node (transient)
-  ImGuiID           LiveKey = 0;           // stable upsert key for a live node (so its position survives re-mirroring)
-  ImVector<ImGuiAppCommandDesc> Commands;  // CommandLayer: definitions. Control: selected commands emitted by OnGetCommand.
-  ImVector<ImGuiAppEventDesc>   Events;    // Control: authored temp-vs-last-temp events (see ImGuiAppEventDesc)
-  ImVector<ImGuiAppStyleModDesc> StyleMods; // Window/Sidebar/Control: authored style-var overrides (emitted into SetupApp)
-  ImVector<ImGuiAppColorModDesc> ColorMods; // Window/Sidebar/Control: authored style-color overrides (same lifecycle)
-  ImVector<ImGuiAppNodePort> Ports;
-  int               FieldList = 0;         // Field node: which list it belongs to on its owner (0 = Persist, 1 = Temp)
-  int               PersistStructId = -1;  // Control: Struct node its PersistData was exploded into (-1 = inline)
-  int               TempStructId = -1;     // Control: Struct node its TempData was exploded into (-1 = inline)
-  bool              GroupCollapsed = false;   // descendants hidden behind a proxy chip (transient, not serialized)
-  bool              Hidden = false;           // not submitted to the canvas (transient, not serialized)
+  int                            Id                          = 0;                      // from NextId; == canvas node id
+  ImGuiAppNodeKind               Kind                        = ImGuiAppNodeKind_Control;
+  ImGuiAppNodeDraft              Draft;                                                // Draft.Name is the node label; PersistFields/TempFields used by Control
+  bool                           IsBuiltin                   = false;                  // true: backed by a compiled C++ type (palette), not drafted
+  char                           TypeName[IM_LABEL_SIZE]     = "";                     // C++ type to Push<> (builtin window/sidebar/layer/control)
+  char                           DataTypeName[IM_LABEL_SIZE] = "";                     // builtin control PersistData type name; empty => "<Name>Data"
+  ImGuiAppLayerType              LayerType                   = ImGuiAppLayerType_Task; // Layer nodes only
+  bool                           HasInitialPlacement         = false;                  // Window/Sidebar first-use placement
+  ImVec2                         InitialPos                  = ImVec2(0.0f, 0.0f);
+  ImVec2                         InitialSize                 = ImVec2(0.0f, 0.0f);
+  ImGuiDir                       DockDir                     = ImGuiDir_Down;          // Sidebar dock direction
+  float                          DockSize                    = 0.0f;                   // Sidebar size
+  ImGuiWindowFlags               Flags                       = ImGuiWindowFlags_None;  // Window/Sidebar flags
+  ImVec2                         GridPos                     = ImVec2(0.0f, 0.0f);     // persisted canvas position
+  bool                           HasGridPos                  = false;
+  bool                           _NeedsPlace                 = false;                  // apply GridPos to the canvas before the next submission
+  int                            BodyAttrId                  = 0;                      // dedicated non-port static-attribute id for the node body
+  bool                           IsLive                      = false;                  // mirrored from a running app object (read-only)
+  bool                           IsPromoted                  = false;                  // design control whose emitted data type matches a live node (transient)
+  ImGuiID                        LiveKey                     = 0;                      // stable upsert key for a live node (so its position survives re-mirroring)
+  ImVector<ImGuiAppCommandDesc>  Commands;                                             // CommandLayer: definitions. Control: selected commands emitted by OnGetCommand.
+  ImVector<ImGuiAppEventDesc>    Events;                                               // Control: authored temp-vs-last-temp events (see ImGuiAppEventDesc)
+  ImVector<ImGuiAppStyleModDesc> StyleMods;                                            // Window/Sidebar/Control: authored style-var overrides (emitted into SetupApp)
+  ImVector<ImGuiAppColorModDesc> ColorMods;                                            // Window/Sidebar/Control: authored style-color overrides (same lifecycle)
+  ImVector<ImGuiAppNodePort>     Ports;
+  int                            FieldList                   = 0;                      // Field node: which list it belongs to on its owner (0 = Persist, 1 = Temp)
+  int                            PersistStructId             = -1;                     // Control: Struct node its PersistData was exploded into (-1 = inline)
+  int                            TempStructId                = -1;                     // Control: Struct node its TempData was exploded into (-1 = inline)
+  bool                           GroupCollapsed              = false;                  // descendants hidden behind a proxy chip (transient, not serialized)
+  bool                           Hidden                      = false;                  // not submitted to the canvas (transient, not serialized)
 };
 
 // Per-data-edge field assignment: emits one "data->Dst = dep->Src;" line in OnUpdate. Keyed by LinkId,
 // kept off the link (an ImVector member would break ImGuiAppNodeLink's aggregate brace-init).
 struct ImGuiAppFieldBinding
 {
-  int  LinkId = 0;
+  int  LinkId                  = 0;
   char DstField[IM_LABEL_SIZE] = "";
   char SrcField[IM_LABEL_SIZE] = "";
 };
@@ -434,8 +434,8 @@ struct ImGuiAppFieldBinding
 struct ImGuiAppScopeCamera
 {
   int    ScopeId = -1;
-  ImVec2 Pan = ImVec2(0.0f, 0.0f);
-  float  Zoom = 1.0f;
+  ImVec2 Pan     = ImVec2(0.0f, 0.0f);
+  float  Zoom    = 1.0f;
 };
 
 // The whole authored graph. One monotonic id allocator shared by every node/port/body-attr/link:
@@ -445,18 +445,18 @@ struct ImGuiAppGraph
   ImVector<ImGuiAppNode>         Nodes;
   ImVector<ImGuiAppNodeLink>     Links;
   ImVector<ImGuiAppFieldBinding> Bindings;
-  ImVector<int>                  Selection;   // multi-selection (node ids); the single selected_node_id is primary
-  ImVector<int>                  ViewScope;   // drill-down scope stack (node ids, outer->inner); empty = whole app; transient, not serialized
-  ImVector<ImGuiAppScopeCamera>  ScopeCams;   // per-branch camera memory (transient, not serialized)
-  int NextId = 1;
-  int EditingNodeId = -1;        // node whose title is being renamed inline, or -1
-  char LastLinkErr[IM_LABEL_SIZE] = "";  // last refused-link reason; transient, NOT in Save/Load
-  int  LastLinkErrSeq = 0;               // bumped on every rejection
-  ImGuiApp* LiveApp = nullptr;   // running app this graph mirrors (set by BuildAppLiveGraph, read-only to
-                                 // codegen); null = no live source; transient, NOT in Save/Load
-  int _ScopeSig = -1;            // editor scope-change detector (transient; -1 = first frame)
-  int _ScopeCamId = -1;          // scope id the camera currently shows (-1 = root; transient)
-  int _PendingFit = 0;           // deferred fit-all countdown after a scope change (transient)
+  ImVector<int>                  Selection;                            // multi-selection (node ids); the single selected_node_id is primary
+  ImVector<int>                  ViewScope;                            // drill-down scope stack (node ids, outer->inner); empty = whole app; transient, not serialized
+  ImVector<ImGuiAppScopeCamera>  ScopeCams;                            // per-branch camera memory (transient, not serialized)
+  int                            NextId                     = 1;
+  int                            EditingNodeId              = -1;      // node whose title is being renamed inline, or -1
+  char                           LastLinkErr[IM_LABEL_SIZE] = "";      // last refused-link reason; transient, NOT in Save/Load
+  int                            LastLinkErrSeq             = 0;       // bumped on every rejection
+  ImGuiApp*                      LiveApp                    = nullptr; // running app this graph mirrors (set by BuildAppLiveGraph, read-only to
+                                                                       // codegen); null = no live source; transient, NOT in Save/Load
+  int                            _ScopeSig                  = -1;      // editor scope-change detector (transient; -1 = first frame)
+  int                            _ScopeCamId                = -1;      // scope id the camera currently shows (-1 = root; transient)
+  int                            _PendingFit                = 0;       // deferred fit-all countdown after a scope change (transient)
 };
 
 namespace ImGui
@@ -575,9 +575,9 @@ namespace ImGui
   // AppGraphConsumeHostCommand (one-frame latency, the editor never calls the host).
   struct ImGuiAppGraphHostCmd
   {
-    const char* Label;      // e.g. "File: Save graph"
-    const char* Shortcut;   // displayed dim + right-aligned; "" = none
-    int         Id;         // host-defined, returned by AppGraphConsumeHostCommand
+    const char* Label;    // e.g. "File: Save graph"
+    const char* Shortcut; // displayed dim + right-aligned; "" = none
+    int         Id;       // host-defined, returned by AppGraphConsumeHostCommand
   };
   IMGUI_API void                AppGraphSetHostCommands(const ImGuiAppGraphHostCmd* cmds, int count);
   IMGUI_API int                 AppGraphConsumeHostCommand();   // picked host cmd id since last call, or -1
@@ -604,11 +604,11 @@ namespace ImGui
     ImU32 KindDefault;
     // Layer-type accents
     ImU32 LayerTask;
-    ImU32 LayerCommand;        // also marks hidden nodes
+    ImU32 LayerCommand;  // also marks hidden nodes
     ImU32 LayerStatus;
     ImU32 LayerWindow;
-    ImU32 AccentNeutral;       // fallback accent for typeless rows/ports
-    // Pins
+    ImU32 AccentNeutral; // fallback accent for typeless rows/ports
+                         // Pins
     ImU32 PinData;
     ImU32 PinChild;
     ImU32 PinTie;
@@ -632,13 +632,13 @@ namespace ImGui
     ImU32 FieldBgEdit;
     ImU32 FieldBorder;
     ImU32 FieldText;
-    ImU32 TextMuted;           // idle glyphs (disclosure chevrons)
-    ImU32 TextOnAccent;        // near-black text/numerals over accent fills
-    ImU32 DarkOutline;         // near-black rings over accent fills
-    // Group boxes + numbered rail
+    ImU32 TextMuted;    // idle glyphs (disclosure chevrons)
+    ImU32 TextOnAccent; // near-black text/numerals over accent fills
+    ImU32 DarkOutline;  // near-black rings over accent fills
+                        // Group boxes + numbered rail
     ImU32 GroupFill;
     ImU32 GroupOutline;
-    ImU32 GroupTitleBg;        // opaque: grid must not bleed through text
+    ImU32 GroupTitleBg; // opaque: grid must not bleed through text
     ImU32 RailLine;
   };
   IMGUI_API ImGuiAppComposerStyle* AppComposerGetStyle();
@@ -652,8 +652,8 @@ namespace ImGui
   // editable half. Seeded from AppComposerGetStyle.
   struct ImGuiAppChromeTheme
   {
-    ImGuiAppColorModDesc Combo[8];   // dropdown fields (enum combos, struct picker): field + popup + rows
-    ImGuiAppColorModDesc Edit[4];    // in-place editors (InputText/InputInt): transparent frame over the drawn bg
+    ImGuiAppColorModDesc Combo[8]; // dropdown fields (enum combos, struct picker): field + popup + rows
+    ImGuiAppColorModDesc Edit[4];  // in-place editors (InputText/InputInt): transparent frame over the drawn bg
   };
   IMGUI_API ImGuiAppChromeTheme*    AppGraphChromeTheme();
 
@@ -666,7 +666,7 @@ namespace ImGui
     bool  OvBands;
     bool  OvFrames;
     bool  OvMinimap;
-    float Zoom;      // canvas zoom, wheel-driven, [0.3, 2.5]; authored positions stay zoom-independent
+    float Zoom; // canvas zoom, wheel-driven, [0.3, 2.5]; authored positions stay zoom-independent
   };
   IMGUI_API ImGuiAppGraphViewState* AppGraphViewState();
 

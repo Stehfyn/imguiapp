@@ -23,17 +23,17 @@ struct ImGuiAppQoiSeqEncoderData
   char           Dir[512];
   ImFileHandle   Index;
   int            FrameCounter;
-  int            Width;          // 0 until fixed (config, else first frame)
+  int            Width;   // 0 until fixed (config, else first frame)
   int            Height;
-  ImVector<char> Encoded;        // reused per frame
+  ImVector<char> Encoded; // reused per frame
 
   ImGuiAppQoiSeqEncoderData()
   {
-    Dir[0] = 0;
-    Index = nullptr;
+    Dir[0]       = 0;
+    Index        = nullptr;
     FrameCounter = 0;
-    Width = 0;
-    Height = 0;
+    Width        = 0;
+    Height       = 0;
   }
 };
 
