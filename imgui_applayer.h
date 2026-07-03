@@ -131,7 +131,8 @@ struct ImGuiAppWAL
   ImGuiAppWAL() { File = nullptr; Seq = 0; Level = ImGuiAppWALLevel_Off; FrameID = nullptr; Path[0] = 0; }
 };
 
-struct ImGuiAppAVFrame;   // imapp_av.h: one captured frame (pixels + FrameID + per-frame blob)
+struct ImGuiAppAVFrame;   // imguiapp_av.h: one captured frame (pixels + FrameID + per-frame blob)
+struct ImGuiAppRecorder;  // imguiapp_av.h: active recording; OnEncodeFrame pumps it
 
 // Platform backend interface. The core app layer depends only on this vtable. Exactly one backend
 // translation unit is linked per build; it defines ImGuiApp_GetPlatformBackend().
@@ -561,11 +562,12 @@ struct ImGuiApp : ImGuiAppBase
   ImVec4                         ClearColor;
   void*                          PlatformData;
   ImGuiAppWAL*                   WAL;           // optional write-ahead logger (caller-owned); null = silent
+  ImGuiAppRecorder*              Recorder;      // active recording (AppRecordBegin registers, AppRecordEnd clears); null = none
   ImGuiAppFrameID                FrameID;       // updated at the top of OnDrawFrame; correlation key for WAL/video/sidecar
   ImGuiAppPacer                  Pacer;         // advisory; consulted by the backend run loop via AppPacerWait
   bool                           Initialized;
 
-  ImGuiApp() : PlatformData(nullptr), WAL(nullptr), Initialized(false) {}
+  ImGuiApp() : PlatformData(nullptr), WAL(nullptr), Recorder(nullptr), Initialized(false) {}
   virtual ~ImGuiApp();
   int                         Run(int argc, char** argv);
   bool                        Initialize(const ImGuiAppConfig* config);
@@ -573,7 +575,14 @@ struct ImGuiApp : ImGuiAppBase
   virtual void                Shutdown();
   static void                 DrawFrame(ImGuiApp* app);
   virtual bool                OnInitialize(int argc, char** argv) { return true; }
+  // One frame = the four phases in order: draw (frame id, NewFrame, app layers/widgets),
+  // render (draw data -> GPU, platform windows), encode (recorder pump reads the frame
+  // just rendered), present. Backend run loops call Frame(); override a phase to extend it.
+  void                        Frame();
   virtual void                OnDrawFrame();
+  virtual void                OnRenderFrame();
+  virtual void                OnEncodeFrame();
+  virtual void                OnPresentFrame();
   virtual void                OnExecuteCommand(ImGuiAppCommand cmd) override;
   virtual bool                OnInitializePlatform(ImGuiAppConfig& config);
   virtual void                OnShutdownPlatform();

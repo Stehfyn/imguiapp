@@ -231,6 +231,12 @@ IMGUI_API bool AppAVMetaReadStateSnapshot(const char* avmeta_path, ImVector<char
 ```cpp
 struct ImGuiAppRecorder;   // opaque
 
+// The frame is four ordered phases -- ImGuiApp::Frame() = OnDrawFrame (frame id,
+// NewFrame, app layers) -> OnRenderFrame (draw data -> GPU, platform windows) ->
+// OnEncodeFrame (recorder pump reads the frame just rendered) -> OnPresentFrame.
+// AppRecordBegin registers itself on app->Recorder, so OnEncodeFrame pumps it
+// automatically; overriding a phase extends the pipeline at that point.
+
 IMGUI_API ImGuiAppRecorder* AppRecordBegin(ImGuiApp* app, ImGuiAppAVEncoder* encoder /* required; providers in backends/ */, const ImGuiAppAVEncodeConfig* config);
 IMGUI_API void              AppRecordSetFrameData(ImGuiAppRecorder* rec, const void* data, int size);   // this frame's blob; copied immediately
 IMGUI_API bool              AppRecordIsActive(const ImGuiAppRecorder* rec);

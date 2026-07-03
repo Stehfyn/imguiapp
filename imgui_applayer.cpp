@@ -12,6 +12,7 @@
 
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "imgui_applayer.h"
+#include "imguiapp_av.h"   // AppRecordPump (OnEncodeFrame)
 #include "imgui_internal.h"
 #include "imguix.h"
 
@@ -290,6 +291,14 @@ static ImU64 AppClockTsc()
 // any app in the process, so multiple apps share one timeline.
 static double s_app_run_epoch = -1.0;
 
+void ImGuiApp::Frame()
+{
+    OnDrawFrame();
+    OnRenderFrame();
+    OnEncodeFrame();
+    OnPresentFrame();
+}
+
 void ImGuiApp::OnDrawFrame()
 {
     // Frame identity first: everything this frame emits (WAL lines, captured video
@@ -300,11 +309,30 @@ void ImGuiApp::OnDrawFrame()
     FrameID.Tsc = AppClockTsc();
     FrameID.TimeSec = AppClockNowSec() - s_app_run_epoch;
 
-    ImGuiAppFrameConfig frame_config;
-    frame_config.ClearColor = ClearColor;
     ImGuiX::BeginFrame();
     DrawFrame(this);
+}
+
+void ImGuiApp::OnRenderFrame()
+{
+    ImGuiAppFrameConfig frame_config;
+    frame_config.ClearColor = ClearColor;
     ImGuiX::EndFrame(&frame_config);
+}
+
+void ImGuiApp::OnEncodeFrame()
+{
+    // Runs between render and present: CaptureFrame reads the frame just rendered
+    // (double-buffered staging returns frame N-1; the FrameID travels with the pixels).
+    if (Recorder != nullptr)
+        ImGui::AppRecordPump(Recorder);
+}
+
+void ImGuiApp::OnPresentFrame()
+{
+    ImGuiAppFrameConfig frame_config;
+    frame_config.ClearColor = ClearColor;
+    ImGuiX::PresentFrame(&frame_config);
 }
 
 void ImGuiApp::OnExecuteCommand(ImGuiAppCommand cmd)

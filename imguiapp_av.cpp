@@ -584,6 +584,8 @@ IMGUI_API ImGuiAppRecorder* AppRecordBegin(ImGuiApp* app, ImGuiAppAVEncoder* enc
 
   rec->Active = true;
   rec->Thread = std::thread(AvEncoderThread, rec);
+  if (app->Recorder == nullptr)
+    app->Recorder = rec;   // OnEncodeFrame pumps it; explicit AppRecordPump remains valid
   AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "av: recording '%s' via %s (%s)", rec->OutputPath, encoder->Name,
               rec->Config.Timing == ImGuiAppAVTimingMode_Constant ? "constant" : "realtime");
   return rec;
@@ -675,6 +677,8 @@ IMGUI_API void AppRecordEnd(ImGuiAppRecorder* rec)
   for (int i = 0; i < rec->Queue.Size; i++)
     IM_DELETE(rec->Queue.Data[i]);
   rec->Queue.clear();
+  if (rec->App != nullptr && rec->App->Recorder == rec)
+    rec->App->Recorder = nullptr;   // OnEncodeFrame must never pump a freed recorder
   IM_DELETE(rec);
 }
 
@@ -691,6 +695,8 @@ IMGUI_API ImGuiAppRecorder* AppRecordBeginRing(ImGuiApp* app, ImGuiAppAVEncoder*
   rec->IsRing = true;
   rec->Ring = *ring;
   rec->Active = true;
+  if (app->Recorder == nullptr)
+    app->Recorder = rec;   // OnEncodeFrame pumps it; explicit AppRecordPump remains valid
   AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "av: flight recorder armed (%.1fs / %dMB @ %.0f fps)",
               rec->Ring.Seconds, rec->Ring.MaxMemoryMB, rec->Ring.Fps);
   return rec;

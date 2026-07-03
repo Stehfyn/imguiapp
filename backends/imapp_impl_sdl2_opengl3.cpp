@@ -82,7 +82,15 @@ namespace
         }
 
         ImGui_ImplOpenGL3_RenderDrawData(draw_data);
+    }
 
+    // Present phase (ImGuiX::PresentFrame): the encode phase runs between RenderDrawData
+    // and this, reading back the frame just rendered before it goes on screen.
+    void PresentFrame(const ImGuiAppFrameConfig* config, void* user_data)
+    {
+        ImGuiApp_Sdl2OpenGL3_Data* bd = (ImGuiApp_Sdl2OpenGL3_Data*)user_data;
+        if (bd == nullptr || config == nullptr)
+            return;
         if ((config->Flags & ImGuiAppFrameFlags_NoPresent) == 0)
             SDL_GL_SwapWindow(bd->Window);
     }
@@ -122,6 +130,7 @@ static bool ImGuiApp_Sdl2OpenGL3_Init(const ImGuiApp_Sdl2OpenGL3_InitInfo* init_
     imguix_init_info.Backend.Shutdown = ShutdownBackend;
     imguix_init_info.Backend.NewFrame = NewFrame;
     imguix_init_info.Backend.RenderDrawData = RenderDrawData;
+    imguix_init_info.Backend.PresentFrame = PresentFrame;
 
     if (!ImGuiX::Initialize(&imguix_init_info))
     {

@@ -63,7 +63,7 @@ int ImGuiApp_ImplSDL2_RunLoop(ImGuiApp* app)
         }
 
         ResizeCanvasToCssSize(s->Window);
-        app->OnDrawFrame();
+        app->Frame();
     }, app, 0, true);
 
     return 0;

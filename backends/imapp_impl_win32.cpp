@@ -21,7 +21,7 @@ LRESULT WINAPI ImGuiApp_ImplWin32_WndProc(HWND hWnd, UINT msg, WPARAM wParam, LP
     {
     case WM_TIMER:
         if (ImGuiApp* app = (ImGuiApp*)::GetWindowLongPtr(hWnd, GWLP_USERDATA))
-            app->OnDrawFrame();
+            app->Frame();
         return 0;
     case WM_ENTERMENULOOP:
     case WM_ENTERSIZEMOVE:
@@ -66,7 +66,7 @@ int ImGuiApp_ImplWin32_RunLoop(ImGuiApp* app)
             continue;
         }
         ImGui::AppPacerWait(app);   // unconditional; Off returns immediately. Modal WM_TIMER repaints stay unpaced.
-        app->OnDrawFrame();
+        app->Frame();
     }
 
     app->Shutdown();

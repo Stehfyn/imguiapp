@@ -51,6 +51,7 @@ namespace
         bool                           VBlankWaitAvailable;
         bool                           VBlankWaitDisabled;
         bool                           SwapChainRebuild;
+        bool                           LastFrameRendered;   // set by RenderDrawData, consumed by PresentFrame
         bool                           PlatformBackendInitialized;
         bool                           RendererBackendInitialized;
         bool                           VulkanInitialized;
@@ -1156,7 +1157,8 @@ namespace
         {
             if (!minimized)
                 FrameRenderOffscreen(bd, draw_data, &bd->MainWindow.ClearValue);
-            return;   // no platform windows, no present
+            bd->LastFrameRendered = false;   // no swapchain: PresentFrame must no-op
+            return;
         }
 
         if (!minimized)
@@ -1169,8 +1171,19 @@ namespace
             ImGui::RenderPlatformWindowsDefault();
         }
 
-        if (!minimized && (config->Flags & ImGuiAppFrameFlags_NoPresent) == 0)
+        bd->LastFrameRendered = !minimized;
+    }
+
+    // Present phase (ImGuiX::PresentFrame): the encode phase runs between RenderDrawData
+    // and this, reading back the frame just rendered before it goes on screen.
+    void PresentFrame(const ImGuiAppFrameConfig* config, void* user_data)
+    {
+        ImGuiApp_Win32Vulkan_Data* bd = (ImGuiApp_Win32Vulkan_Data*)user_data;
+        if (bd == nullptr || config == nullptr)
+            return;
+        if (bd->LastFrameRendered && (config->Flags & ImGuiAppFrameFlags_NoPresent) == 0)
             FramePresent(bd, &bd->MainWindow);
+        bd->LastFrameRendered = false;
     }
 }
 
@@ -1279,6 +1292,7 @@ static bool ImGuiApp_Win32Vulkan_Init(const ImGuiApp_Win32Vulkan_InitInfo* init_
     imguix_init_info.Backend.Shutdown = ShutdownBackend;
     imguix_init_info.Backend.NewFrame = NewFrame;
     imguix_init_info.Backend.RenderDrawData = RenderDrawData;
+    imguix_init_info.Backend.PresentFrame = PresentFrame;
 
     if (!ImGuiX::Initialize(&imguix_init_info))
     {

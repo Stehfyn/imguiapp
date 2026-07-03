@@ -181,7 +181,15 @@ namespace
             ImGui::RenderPlatformWindowsDefault();
             wglMakeCurrent((HDC)bd->MainDC, (HGLRC)bd->MainGLRC);
         }
+    }
 
+    // Present phase (ImGuiX::PresentFrame): the encode phase runs between RenderDrawData
+    // and this, reading back the frame just rendered before it goes on screen.
+    void PresentFrame(const ImGuiAppFrameConfig* config, void* user_data)
+    {
+        ImGuiApp_Win32OpenGL3_Data* bd = (ImGuiApp_Win32OpenGL3_Data*)user_data;
+        if (bd == nullptr || config == nullptr)
+            return;
         if ((config->Flags & ImGuiAppFrameFlags_NoPresent) == 0)
             ::SwapBuffers((HDC)bd->MainDC);
     }
@@ -222,6 +230,7 @@ static bool ImGuiApp_Win32OpenGL3_Init(const ImGuiApp_Win32OpenGL3_InitInfo* ini
     imguix_init_info.Backend.Shutdown = ShutdownBackend;
     imguix_init_info.Backend.NewFrame = NewFrame;
     imguix_init_info.Backend.RenderDrawData = RenderDrawData;
+    imguix_init_info.Backend.PresentFrame = PresentFrame;
 
     if (!ImGuiX::Initialize(&imguix_init_info))
     {
