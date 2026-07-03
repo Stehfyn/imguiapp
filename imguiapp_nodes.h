@@ -10,13 +10,12 @@ Index of this file:
 // [SECTION] Graph topology and persistence (ImGuiAppNodeLink, link capture, save/load)
 // [SECTION] Code generation (GenerateAppControlCode)
 
-Reflection-driven node tooling. Pulls in the C++20 reflection library and some STL,
-kept out of imguiapp.h. Public entry points stay imgui-shaped: pointer parameters,
-char[] buffers, ImGuiID, ImVector.
+Reflection-driven node tooling. Uses the applayer's reflection port (imguiapp_reflect.h,
+via imguiapp.h) and some STL kept out of imguiapp.h. Public entry points stay
+imgui-shaped: pointer parameters, char[] buffers, ImGuiID, ImVector.
 
-Reflection subset: the reflection library only reflects aggregates and miscounts raw
-array members such as char Label[128] (wrap arrays in a struct). Data driven through
-these helpers must be a plain-scalar aggregate; codegen emits exactly such aggregates.
+Reflection subset: aggregates only (no user ctors); the port's patched member count
+handles raw array members such as char Label[128] correctly (one member each).
 
 */
 
@@ -26,8 +25,7 @@ these helpers must be a plain-scalar aggregate; codegen emits exactly such aggre
 
 #include "imgui.h"
 #include "imgui_internal.h"               // ImFormatString
-#include "imguiapp.h"               // ImGuiApp, IM_LABEL_SIZE, ImGuiType<>
-#include "reflect/reflect"                // reflect::for_each, member_name, get, type_name
+#include "imguiapp.h"                     // ImGuiApp, IM_LABEL_SIZE, ImGuiType<>, ImAppReflect
 
 #include <format>                         // std::format (field stringify, confined to this header)
 #include <string>                         // std::string (transient, copied into char[] at the boundary)
@@ -70,7 +68,7 @@ namespace ImGui
     }
     else
     {
-      std::string_view tn = reflect::type_name(*value);
+      std::string_view tn = ImAppReflect::type_name(*value);
       ImGui::Text("%s: <%.*s>", label, (int)tn.size(), tn.data());
     }
   }
@@ -116,9 +114,9 @@ namespace ImGui
   {
     IM_ASSERT(obj != nullptr);
 
-    reflect::for_each([&](auto I)
+    ImAppReflect::for_each([&](auto I)
     {
-      visitor((int)I, reflect::member_name<I>(*obj), reflect::get<I>(*obj));
+      visitor((int)I, ImAppReflect::member_name<I>(*obj), ImAppReflect::get<I>(*obj));
     }, *obj);
   }
 }

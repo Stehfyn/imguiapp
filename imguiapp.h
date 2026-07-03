@@ -28,32 +28,17 @@ Index of this file:
 #include <string_view>
 #include <array>                          // compile-time declaration spellings (ImGuiAppVecSpelling)
 
-// Compile-time reflection (qlibs/reflect, vendored by ImStructTable): powers the live
-// mirror's field introspection. Absent -> GetControlFields degrades to zero fields.
-// NTEST: reflect self-verifies on include with static_asserts whose constexpr call
-// depth exceeds MSVC's default /constexpr:depth budget in heavy TUs -- the library's
-// own tests are not this codebase's to re-run per consumer.
-#if defined(__has_include)
-#if __has_include("reflect/reflect")
-#ifndef NTEST
-#define NTEST
-#define IMGUIAPP_DEFINED_NTEST
-#endif
-// windows.h's min/max macros (leaked by platform-backend TUs) break reflect's std::min.
+// Compile-time reflection (imguiapp_reflect.h, the applayer's port of qlibs/reflect):
+// powers the live mirror's field introspection.
+// windows.h's min/max macros (leaked by platform-backend TUs) break its std::min.
 #pragma push_macro("min")
 #pragma push_macro("max")
 #undef min
 #undef max
-#include "reflect/reflect"
+#include "imguiapp_reflect.h"
 #pragma pop_macro("max")
 #pragma pop_macro("min")
-#ifdef IMGUIAPP_DEFINED_NTEST
-#undef NTEST
-#undef IMGUIAPP_DEFINED_NTEST
-#endif
 #define IMGUIAPP_HAS_REFLECT 1
-#endif
-#endif
 
 #ifdef _MSC_VER
 #pragma warning (push)
@@ -541,7 +526,7 @@ inline constexpr bool ImGuiAppDataReflectable = std::is_aggregate_v<T>
 
 //-----------------------------------------------------------------------------
 // Type schema registry: per-type field manifests BUILT AUTOMATICALLY AT COMPILE TIME from
-// the vendored reflect walk and materialized into a runtime registry anyone can read (live
+// the reflection walk (imguiapp_reflect.h) and materialized into a runtime registry anyone can read (live
 // mirrors, codegen, inspectors). No hand-authored manifests: instantiating a control (or
 // reaching a type through another type's members) registers its manifest transitively.
 // Snapshot reflectability (trivially-copyable byte copies) is separate and stricter.
@@ -560,7 +545,7 @@ IMGUI_API const ImGuiAppTypeSchema*   ImGuiAppFindTypeSchema(const char* type_na
 
 #ifdef IMGUIAPP_HAS_REFLECT
 
-// Field-enumeration contract: reflect walks any aggregate (the vendored probe counts array
+// Field-enumeration contract: the reflection walk handles any aggregate (the patched probe counts array
 // members correctly), bounded by the 64-binding visit chain. The tag opts out explicitly.
 template <typename T>
 consteval bool ImGuiAppFieldsVisibleFn()
@@ -568,7 +553,7 @@ consteval bool ImGuiAppFieldsVisibleFn()
   if constexpr (!std::is_aggregate_v<T> || requires { typename T::ImGuiAppOpaque; })
     return false;
   else
-    return reflect::size<T>() <= 64u;
+    return ImAppReflect::size<T>() <= 64u;
 }
 template <typename T>
 inline constexpr bool ImGuiAppFieldsVisible = ImGuiAppFieldsVisibleFn<T>();
@@ -638,7 +623,7 @@ inline void ImGuiAppEnsureTypeRegistered()
 {
   if constexpr (ImGuiAppFieldsVisible<T>)
   {
-    constexpr int n = (int)reflect::size<T>();
+    constexpr int n = (int)ImAppReflect::size<T>();
     const char* type_name = ImGuiAppTypeDisplayName<T>();
     if (ImGuiAppFindTypeSchema(type_name) != nullptr)
       return;
@@ -661,22 +646,22 @@ inline int ImGuiAppReflectFields(ImGuiAppLiveFieldDesc* out, int cap)
 {
   if constexpr (ImGuiAppFieldsVisible<T>)
   {
-    constexpr int n = (int)reflect::size<T>();
+    constexpr int n = (int)ImAppReflect::size<T>();
     if (out == nullptr || cap <= 0)
       return n;
     int written = 0;
-    reflect::for_each<T>([&](auto I)
+    ImAppReflect::for_each<T>([&](auto I)
     {
       constexpr auto i = decltype(I)::value;
-      using M = std::remove_cvref_t<decltype(reflect::get<i>(std::declval<T&>()))>;
+      using M = std::remove_cvref_t<decltype(ImAppReflect::get<i>(std::declval<T&>()))>;
       using E = typename ImGuiAppVecElemOf<M>::Type;
       if (written >= cap)
         return;
       ImGuiAppLiveFieldDesc* d = &out[written++];
-      d->Name = reflect::member_name<i, T>().data();
+      d->Name = ImAppReflect::member_name<i, T>().data();
       d->ElemTypeName = nullptr;
       d->Exact = true;
-      d->Offset = (int)reflect::offset_of<i, T>();
+      d->Offset = (int)ImAppReflect::offset_of<i, T>();
       d->Size = (int)sizeof(M);
       if constexpr (std::is_same_v<M, bool>)                                        { d->Kind = ImGuiAppLiveFieldKind_Bool;      d->TypeName = "bool"; }
       else if constexpr (std::is_same_v<M, float>)                                  { d->Kind = ImGuiAppLiveFieldKind_F32;       d->TypeName = "float"; }
