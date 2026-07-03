@@ -351,6 +351,7 @@ namespace ImGui
   ImVec2 CanvasGetPan(const ImGuiCanvasState* c)              { return c->Pan; }
   void   CanvasSetPan(ImGuiCanvasState* c, ImVec2 pan)        { c->Pan = pan; }
   float  CanvasGetZoom(const ImGuiCanvasState* c)             { return c->Zoom; }
+  float  CanvasGetScale(const ImGuiCanvasState* c)            { return CanvasScale(c); }
 
   ImVec2 CanvasToScreen(const ImGuiCanvasState* c, ImVec2 model)
   {
@@ -655,7 +656,7 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
   case ImGuiCanvasInteraction_MenuPending:
   {
     // Click-vs-pan slop in screen px, font-derived so it tracks DPI/font scale.
-    const float slop = ImGui::GetFontSize() * 0.2f;
+    const float slop = ImGui::GetFontSize() * 0.1875f;
     if (c->IO.RmbPans && ImGui::IsMouseDown(ImGuiMouseButton_Right))
     {
       const ImVec2 travel = mouse - c->GestureStartMouse;
@@ -849,7 +850,9 @@ namespace ImGui
     const float  z = CanvasScale(c);
     const float  title_h = n->Title[0] ? GetFrameHeight() : 0.0f;   // still under the zoomed font
 
-    // Same-frame measurement in the same zoom the content rendered with; the model size is exact.
+    // Same-frame measurement at the same model->screen scale the content rendered with: the node
+    // font is pushed at GetFontSize() * Zoom and GetFontSize already carries FontRatio, so content
+    // screen size is model * (Zoom * FontRatio). Dividing by CanvasScale is exact, not c->Zoom.
     const ImVec2 content_px(ImMax(content_mx.x - content_mn.x, GetFontSize() * 2.0f), ImMax(content_mx.y - content_mn.y, 0.0f));
     n->Size.x = (content_px.x + c->Style.NodePadding.x * z * 2.0f) / z;
     n->Size.y = (content_px.y + c->Style.NodePadding.y * z * 2.0f + title_h) / z;

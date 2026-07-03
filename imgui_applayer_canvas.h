@@ -91,6 +91,9 @@ namespace ImGui
   IMGUI_API ImVec2 CanvasGetPan(const ImGuiCanvasState* c);
   IMGUI_API void   CanvasSetPan(ImGuiCanvasState* c, ImVec2 pan);
   IMGUI_API float  CanvasGetZoom(const ImGuiCanvasState* c);
+  // Model -> screen scale (Zoom x host font DPI/user factor). Use for ALL model<->pixel
+  // conversions; CanvasGetZoom is the logical camera only (font pushes, persisted view state).
+  IMGUI_API float  CanvasGetScale(const ImGuiCanvasState* c);
   IMGUI_API void   CanvasSetZoom(ImGuiCanvasState* c, float zoom, ImVec2 keep_screen_pos);   // keeps that screen point fixed
   IMGUI_API ImVec2 CanvasToScreen(const ImGuiCanvasState* c, ImVec2 model);
   IMGUI_API ImVec2 CanvasFromScreen(const ImGuiCanvasState* c, ImVec2 screen);

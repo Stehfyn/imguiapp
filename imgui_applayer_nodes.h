@@ -596,9 +596,67 @@ namespace ImGui
   // One-shot: frame the whole graph on the editor's next submission.
   IMGUI_API void                AppGraphRequestFitAll();
 
+  // Composer chrome palette, derived from the current ImGuiStyle theme (AppComposerStyleFromTheme):
+  // neutrals ride the WindowBg -> Text axis, semantic hues are pulled toward Text for light-theme
+  // legibility. Fields are final packed IM_COL32 values; overwrite after derivation to customize.
+  struct ImGuiAppComposerStyle
+  {
+    // Node kind accents
+    ImU32 KindLayer;
+    ImU32 KindWindow;
+    ImU32 KindSidebar;
+    ImU32 KindControl;
+    ImU32 KindStruct;
+    ImU32 KindField;
+    ImU32 KindDefault;
+    // Layer-type accents
+    ImU32 LayerTask;
+    ImU32 LayerCommand;        // also marks hidden nodes
+    ImU32 LayerStatus;
+    ImU32 LayerWindow;
+    ImU32 AccentNeutral;       // fallback accent for typeless rows/ports
+    // Pins
+    ImU32 PinData;
+    ImU32 PinChild;
+    ImU32 PinTie;
+    ImU32 PinDefault;
+    // Diagnostics
+    ImU32 SevError;
+    ImU32 SevWarn;
+    ImU32 ErrorText;
+    ImU32 Danger;
+    // Live mirror / promotion
+    ImU32 OriginLive;
+    ImU32 OriginPromoted;
+    ImU32 DotLive;
+    ImU32 DotPromoted;
+    ImU32 DotDrift;
+    // Overlay accents
+    ImU32 Gold;
+    // Field chrome (flat draw-list widgets)
+    ImU32 FieldBg;
+    ImU32 FieldBgHovered;
+    ImU32 FieldBgEdit;
+    ImU32 FieldBorder;
+    ImU32 FieldText;
+    ImU32 TextMuted;           // idle glyphs (disclosure chevrons)
+    ImU32 TextOnAccent;        // near-black text/numerals over accent fills
+    ImU32 DarkOutline;         // near-black rings over accent fills
+    // Group boxes + numbered rail
+    ImU32 GroupFill;
+    ImU32 GroupOutline;
+    ImU32 GroupTitleBg;        // opaque: grid must not bleed through text
+    ImU32 RailLine;
+  };
+  IMGUI_API ImGuiAppComposerStyle* AppComposerGetStyle();
+  // Recompute all composer colors from the current ImGuiStyle theme (requires a live context).
+  // Runs lazily on first AppComposerGetStyle; call again after switching themes. Re-deriving the
+  // global style also reseeds AppGraphChromeTheme, discarding live inspector edits.
+  IMGUI_API void AppComposerStyleFromTheme(ImGuiAppComposerStyle* style);
+
   // The composer chrome's push-stack palette, exposed read-write (stable pointer): the project
   // inspector's Theme section edits it live. Col slots are semantic and fixed; Value/Active are the
-  // editable half.
+  // editable half. Seeded from AppComposerGetStyle.
   struct ImGuiAppChromeTheme
   {
     ImGuiAppColorModDesc Combo[8];   // dropdown fields (enum combos, struct picker): field + popup + rows
