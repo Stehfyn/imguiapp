@@ -12,30 +12,30 @@ point is named **ImGuiAppTestHarness**; an ffmpeg backend ships by default.
 
 ---
 
-## 1. Frame identity: ImGuiAppFrameStamp
+## 1. Frame identity: ImGuiAppFrameID
 
-One stamp per frame, taken at the top of `OnDrawFrame`, is the correlation key across
+One id per frame, taken at the top of `OnDrawFrame`, is the correlation key across
 video, sidecar, WAL, and test-engine logs.
 
 ```cpp
-struct ImGuiAppFrameStamp
+struct ImGuiAppFrameID
 {
   ImU64  FrameIndex;   // monotonic from run start (not ImGui's frame count: survives context recreation)
   ImU64  Tsc;          // __rdtsc / cntvct_el0 at frame begin
   double TimeSec;      // QPC seconds since run start
 };
 // lives on the app:
-//   ImGuiAppFrameStamp FrameStamp;   (member of ImGuiApp, updated by OnDrawFrame)
+//   ImGuiAppFrameID FrameID;   (member of ImGuiApp, updated by OnDrawFrame)
 ```
 
-WAL correlation: `ImGuiAppWAL` gains an optional stamp source; when set, every record is
-prefixed `[f:%llu tsc:%llu]`. Null = today's behavior, so this is non-breaking.
+WAL correlation: `ImGuiAppWAL` gains an optional frame-id source; when set, every record
+is prefixed `[f:%llu tsc:%llu]`. Null = today's behavior, so this is non-breaking.
 
 ```cpp
 struct ImGuiAppWAL
 {
   // ... existing fields ...
-  const ImGuiAppFrameStamp* Stamp;   // optional; prefixes records with frame identity
+  const ImGuiAppFrameID* FrameID;   // optional; prefixes records with frame identity
 };
 ```
 
@@ -98,7 +98,7 @@ struct ImGuiAppAVFrame
   int    Height;
   int    PitchBytes;               // row stride; providers must honor it
   const void* Pixels;              // RGBA8; valid only during WriteFrame
-  ImGuiAppFrameStamp Stamp;
+  ImGuiAppFrameID FrameID;
   const void* UserData;            // optional per-frame blob (goes to sidecar, not the video)
   int    UserDataSize;
 };
@@ -193,7 +193,7 @@ struct ImGuiAppPlatformBackend
   int  (*RunLoop)(ImGuiApp* app);
   // Readback of the frame just rendered (called after render, before present).
   // Double-buffered staging: returns frame N-1's pixels while frame N copies -- the
-  // stamp travels inside ImGuiAppAVFrame, so latency never misaligns identity.
+  // frame id travels inside ImGuiAppAVFrame, so latency never misaligns identity.
   bool (*CaptureFrame)(ImGuiApp* app, ImGuiAppAVFrame* out_frame);
 };
 ```
@@ -224,7 +224,7 @@ loop skips present (existing `ImGuiAppFrameFlags_NoPresent`).
 ## 5. ImGuiAppTestHarness (use case 3)
 
 One entry point wires app + Test Engine + headless + recorder + WAL, all sharing the
-frame stamp. Replaces the hand-rolled loop in tests/imguix_tests_main.cpp (which today
+frame id. Replaces the hand-rolled loop in tests/imguix_tests_main.cpp (which today
 uses the test engine's own null app, not ImGuiApp -- migrating it is part of this work).
 
 ```cpp
@@ -246,9 +246,9 @@ struct ImGuiAppTestHarnessConfig
 IMGUI_API int AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessConfig* config);
 ```
 
-Per frame the harness: `AppPacerWait` (Fixed) -> stamp -> `ImGui::NewFrame` -> app frame ->
+Per frame the harness: `AppPacerWait` (Fixed) -> frame id -> `ImGui::NewFrame` -> app frame ->
 render -> `CaptureFrame` -> recorder (`WriteFrame` + sidecar) -> `PreSwap`/present/`PostSwap`.
-The WAL's stamp source is set, so every event-source line carries the same frame index
+The WAL's frame-id source is set, so every event-source line carries the same frame index
 that names the video frame: *scrub the video to frame N, grep the WAL for `f:N`*.
 
 Benchmarking falls out of the same artifacts: the sidecar's TSC deltas are exact
@@ -257,7 +257,7 @@ per-frame costs under a deterministic dt; the harness additionally emits
 
 ## 6. Phasing
 
-- **P1** — FrameStamp on ImGuiApp; WAL stamp prefix; ImGuiAppPacer + `AppPacerWait`
+- **P1** — FrameID on ImGuiApp; WAL frame-id prefix; ImGuiAppPacer + `AppPacerWait`
   in both win32 run loops (message-pump loop calls it unconditionally).
 - **P2** — Encoder seam; QOI-sequence + ffmpeg-pipe providers; recorder + sidecar;
   `CaptureFrame` for win32-vulkan; `Headless_Offscreen` for vulkan.
