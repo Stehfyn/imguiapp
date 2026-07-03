@@ -260,6 +260,40 @@ frame carrying its real frame id. The win32 run loop keeps frames running while
 minimized whenever a recorder is active, so the pause span is encoded rather than
 skipped.
 
+### Embedded input log (pixel strip)
+
+`ImGuiAppAVEncodeConfig::EmbedInputLog` stamps each frame's input-log records into the
+frame's bottom `EmbedRows` pixel rows, making the video self-contained for replay: the
+records are byte-identical to what the same pump writes to the sidecar (one buffer, two
+sinks). Requires `AppRecordAttachInputLog`; frames with no new records (placeholders
+included) stamp an empty marker.
+
+Format (frozen; the reader is `ImGuiAppAV_ReadEmbeddedInputLog` in
+backends/imguiapp_impl_libav.h):
+
+- Strip: the bottom `EmbedRows` rows (clamped at `AppRecordBegin` to a multiple of 4,
+  minimum 4; the adjusted value is the take's contract). Blocks are 4x4 pixels, luma
+  black 16 / white 235 (R = G = B, A = 255), read threshold 128 -- survives lossy encode.
+- Block addressing: block (bx, by), by = 0 the TOPMOST reserved row group; bit index
+  = by * blocks_per_row + bx, blocks_per_row = floor(W / 4). Pixels right of the block
+  grid (W % 4) are black filler.
+- Bitstream is a byte stream read MSB-first per byte (bit k of byte i is stream bit
+  i * 8 + k, k = 0 the most significant bit).
+- Stream layout: `u32 magic 'I','M','I','L'` | `u32 payload_size (LE)` | payload (this
+  frame's InputHdr-if-changed + InputFrame records, exact sidecar framing) |
+  `u32 checksum (LE) = ImHashData(payload, payload_size, 0)`. Note for external tools:
+  ImHashData is CRC32c (reflected polynomial 0x82F63B78, imgui >= 1.91.6), not zlib CRC32.
+- Capacity: floor(W/4) * (EmbedRows/4) bits per frame. Over-capacity frames stamp
+  magic + true payload_size + checksum with NO payload bytes (readers detect via
+  (12 + payload_size + 4) * 8 > capacity) and WAL-log once per take.
+- Unused trailing blocks are black (bit 0).
+
+The lossy-channel budget is why only the input log embeds: records are tens-to-hundreds
+of bytes per frame, giant 4x4 luma blocks survive crf-level quantization, and the
+checksum gates any residual corruption. State snapshots stay sidecar-only (size x
+entropy makes them adversarial to the video codec; determinism artifacts don't ride
+best-effort channels).
+
 ### Flight recorder (ring mode)
 
 The WAL's crash-forensics philosophy applied to pixels: an always-on in-memory ring of

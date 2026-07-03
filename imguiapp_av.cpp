@@ -157,6 +157,12 @@ struct ImGuiAppRecorder
   ImGuiID                   InputHdrComposition;     // composition the last written InputHdr described
   ImVector<char>            InputHdrRecord;          // latest framed InputHdr (ring rewrites it at dump)
 
+  // Embedded input log (Config.EmbedInputLog): scratch buffers for the pixel strip
+  ImVector<char>            EmbedStream;             // byte stream stamped into the strip
+  ImVector<char>            EmbedScratch;            // mutable frame copy for the ring path
+  bool                      EmbedOverflowWarned;
+  bool                      EmbedTooShortWarned;     // frame shorter than EmbedRows: WAL once
+
   // Encoder thread + bounded queue (normal mode only)
   std::thread               Thread;
   std::mutex                Mutex;
@@ -195,6 +201,8 @@ struct ImGuiAppRecorder
     InputLog = nullptr;
     LastInputCount = 0;
     InputHdrComposition = 0;
+    EmbedOverflowWarned = false;
+    EmbedTooShortWarned = false;
     QueueDepth = 3;
     QueuePolicy = ImGuiAppRecordQueuePolicy_Block;
     ThreadStop = false;
@@ -397,6 +405,94 @@ static void AvMetaWrite(ImGuiAppRecorder* rec, const ImVector<char>* framed)
 }
 
 //-----------------------------------------------------------------------------
+// [SECTION] Embedded input log (pixel strip)
+//-----------------------------------------------------------------------------
+
+// Strip format is the frozen contract in imguiapp_av.h / docs/av-design.md: bottom
+// EmbedRows rows, 4x4 luma blocks (black 16 / white 235), block (bx, by) with by = 0
+// the TOPMOST reserved row group, bit index = by * blocks_per_row + bx, MSB-first per
+// stream byte. Stream: u32 'IMIL' | u32 payload_size | payload | u32 ImHashData(payload).
+// Over capacity: magic + true payload_size + checksum with NO payload bytes -- readers
+// detect via required bits > capacity.
+static void AvStampInputStrip(ImGuiAppRecorder* rec, char* rgba, int w, int h, const ImVector<char>* payload)
+{
+  const int embed_rows = rec->Config.EmbedRows;
+  if (h <= embed_rows)
+  {
+    if (!rec->EmbedTooShortWarned)
+    {
+      rec->EmbedTooShortWarned = true;
+      ImGui::AppWALWrite(rec->App->WAL, ImGuiAppWALLevel_Lifecycle, "av: frame height %d <= EmbedRows %d, strip not stamped", h, embed_rows);
+    }
+    return;
+  }
+
+  const int blocks_x = w / 4;
+  const int block_rows = embed_rows / 4;
+  const long long capacity_bits = (long long)blocks_x * block_rows;
+
+  const ImU32 size = (ImU32)payload->Size;
+  const ImU32 checksum = ImHashData(size > 0 ? payload->Data : "", (size_t)size, 0);
+  const bool fits = ((long long)(12 + size) + 4) * 8 <= capacity_bits;
+  if (!fits && !rec->EmbedOverflowWarned)
+  {
+    rec->EmbedOverflowWarned = true;
+    ImGui::AppWALWrite(rec->App->WAL, ImGuiAppWALLevel_Lifecycle, "av: embedded input log over capacity (%u B > %lld bits), stamping marker only", size, capacity_bits);
+  }
+
+  ImVector<char>* s = &rec->EmbedStream;
+  s->clear();
+  AvPut(s, "IMIL", 4);
+  AvPut(s, &size, 4);
+  if (fits && size > 0)
+    AvPut(s, payload->Data, (int)size);
+  AvPut(s, &checksum, 4);
+
+  const int y0 = h - embed_rows;
+  const long long total_bits = (long long)s->Size * 8;
+  for (int by = 0; by < block_rows; by++)
+  {
+    for (int bx = 0; bx < blocks_x; bx++)
+    {
+      const long long bit = (long long)by * blocks_x + bx;
+      unsigned char luma = 16;
+      if (bit < total_bits)
+      {
+        const unsigned char byte = (unsigned char)s->Data[bit >> 3];
+        if (byte & (0x80 >> (bit & 7)))
+          luma = 235;
+      }
+      for (int py = 0; py < 4; py++)
+      {
+        unsigned char* px = (unsigned char*)rgba + ((size_t)(y0 + by * 4 + py) * w + (size_t)bx * 4) * 4;
+        for (int pxi = 0; pxi < 4; pxi++)
+        {
+          px[0] = luma;
+          px[1] = luma;
+          px[2] = luma;
+          px[3] = 255;
+          px += 4;
+        }
+      }
+    }
+  }
+  // Trailing pixels right of the block grid (w % 4): blacked for an unambiguous strip.
+  const int grid_w = blocks_x * 4;
+  for (int y = y0; y < h && grid_w < w; y++)
+  {
+    unsigned char* px = (unsigned char*)rgba + ((size_t)y * w + grid_w) * 4;
+    for (int x = grid_w; x < w; x++)
+    {
+      px[0] = 16;
+      px[1] = 16;
+      px[2] = 16;
+      px[3] = 255;
+      px += 4;
+    }
+  }
+}
+
+//-----------------------------------------------------------------------------
 // [SECTION] Per-frame pump
 //-----------------------------------------------------------------------------
 
@@ -410,7 +506,13 @@ static void AvEmitFrame(ImGuiAppRecorder* rec, const ImGuiAppAVFrame* frame, boo
   const void* user = with_blob ? (const void*)rec->PendingBlob.Data : nullptr;
   const ImU32 user_size = with_blob ? (ImU32)rec->PendingBlob.Size : 0;
   AvBuildFrameRecord(&meta, &frame->FrameID, user, user_size);
-  AvCollectInputRecords(rec, &meta);
+
+  // One buffer feeds both sinks: the sidecar and the pixel strip carry the SAME bytes.
+  ImVector<char> input_records;
+  AvCollectInputRecords(rec, &input_records);
+  if (input_records.Size > 0)
+    AvPut(&meta, input_records.Data, input_records.Size);
+
   if (consume_pendings && rec->PendingSnapshotRecord.Size > 0)
   {
     AvPut(&meta, rec->PendingSnapshotRecord.Data, rec->PendingSnapshotRecord.Size);
@@ -422,15 +524,37 @@ static void AvEmitFrame(ImGuiAppRecorder* rec, const ImGuiAppAVFrame* frame, boo
     rec->PendingBlob.clear();
   }
 
+  const bool embed = rec->Config.EmbedInputLog;
+
   if (rec->IsRing)
   {
     rec->RingLastAcceptSec = frame->FrameID.TimeSec;
+
+    // The captured pixels are the backend's (const): embedding needs a mutable copy.
+    const void* qoi_src = frame->Pixels;
+    int qoi_pitch = frame->PitchBytes;
+    if (embed)
+    {
+      rec->EmbedScratch.resize(frame->Width * frame->Height * 4);
+      const char* src = (const char*)frame->Pixels;
+      char* dst = rec->EmbedScratch.Data;
+      const int row = frame->Width * 4;
+      for (int y = 0; y < frame->Height; y++)
+      {
+        memcpy(dst, src, (size_t)row);
+        src += frame->PitchBytes;
+        dst += row;
+      }
+      AvStampInputStrip(rec, rec->EmbedScratch.Data, frame->Width, frame->Height, &input_records);
+      qoi_src = rec->EmbedScratch.Data;
+      qoi_pitch = row;
+    }
 
     ImGuiAppAVRingEntry* entry = IM_NEW(ImGuiAppAVRingEntry)();
     entry->Width = frame->Width;
     entry->Height = frame->Height;
     entry->FrameID = frame->FrameID;
-    if (!ImGuiAppAV_QoiEncode(frame->Pixels, frame->Width, frame->Height, frame->PitchBytes, &entry->Qoi))
+    if (!ImGuiAppAV_QoiEncode(qoi_src, frame->Width, frame->Height, qoi_pitch, &entry->Qoi))
     {
       IM_DELETE(entry);
       return;
@@ -473,6 +597,8 @@ static void AvEmitFrame(ImGuiAppRecorder* rec, const ImGuiAppAVFrame* frame, boo
       src += frame->PitchBytes;
       dst += row;
     }
+    if (embed)
+      AvStampInputStrip(rec, job->Pixels.Data, frame->Width, frame->Height, &input_records);
 
     const ImU64 drops_before = rec->DroppedFrames;
     if (!AvQueuePush(rec, job) && rec->DroppedFrames == drops_before + 1 && drops_before == 0)
@@ -677,6 +803,19 @@ static ImGuiAppRecorder* AvBeginCommon(ImGuiApp* app, ImGuiAppAVEncoder* encoder
   // motivated a DropNewest default is fixed). DropNewest stays an explicit opt-in via
   // AppRecordSetQueuePolicy for callers that prefer drops over any app stall.
   rec->QueuePolicy = ImGuiAppRecordQueuePolicy_Block;
+
+  // Strip geometry is 4x4 blocks: EmbedRows clamps to a multiple of 4, minimum one
+  // block row. The adjusted value is the take's contract (readers use the same rows).
+  if (rec->Config.EmbedInputLog)
+  {
+    const int requested = rec->Config.EmbedRows;
+    int rows = requested < 4 ? 4 : requested & ~3;
+    if (rows != requested)
+    {
+      rec->Config.EmbedRows = rows;
+      AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "av: EmbedRows %d adjusted to %d (multiple of 4)", requested, rows);
+    }
+  }
 
   rec->MetaHeader.Version = 1;
   memcpy(rec->MetaHeader.Magic, kAvMetaMagic, 8);

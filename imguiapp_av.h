@@ -48,8 +48,17 @@ struct ImGuiAppAVEncodeConfig
   int                  Height;
   int                  BitrateKbps;   // hint; lossless providers ignore
   bool                 WriteSidecar;  // "<OutputPath>.avmeta" written by the recorder
+  // Embedded input log: each frame's input-log records are stamped into the frame's
+  // BOTTOM EmbedRows pixel rows as 4x4-pixel luma blocks (black 16 / white 235,
+  // read threshold 128 -- survives lossy encode), row-major bitstream per frame:
+  // u32 magic 'IMIL' | u32 payload_size | payload (this frame's InputHdr-if-changed +
+  // InputFrame records, sidecar framing) | u32 ImHashData checksum. Capacity per frame
+  // = floor(W/4) * floor(EmbedRows/4) bits. Requires AppRecordAttachInputLog; a frame
+  // whose records exceed capacity stamps magic + size + checksum only and WAL-logs once.
+  bool                 EmbedInputLog;
+  int                  EmbedRows;     // reserved bottom rows; multiple of 4
 
-  ImGuiAppAVEncodeConfig() { OutputPath = nullptr; Fps = 60.0f; Timing = ImGuiAppAVTimingMode_Auto; Width = 0; Height = 0; BitrateKbps = 0; WriteSidecar = true; }
+  ImGuiAppAVEncodeConfig() { OutputPath = nullptr; Fps = 60.0f; Timing = ImGuiAppAVTimingMode_Auto; Width = 0; Height = 0; BitrateKbps = 0; WriteSidecar = true; EmbedInputLog = false; EmbedRows = 32; }
 };
 
 // Encoder provider vtable. Implementations allocate themselves (Create* in their own
