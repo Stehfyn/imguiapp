@@ -7070,25 +7070,13 @@ namespace ImGui
       return;
     }
 
-    // Live node: no mock -- the control is RUNNING; show its reflected members with
-    // current values instead of draft placeholders.
+    // Live node: no mock and no repeat -- the control is RUNNING, and its members with current
+    // values are already the Data (live) / Temp (live) sections of the node inspector.
     if (n->IsLive)
     {
-      ImGuiAppItemBase* item = AppGraphFindLiveItem(live_app, n);
-      const ImGuiAppControlBase* ctrl = item != nullptr ? (const ImGuiAppControlBase*)item : nullptr;
-      ImGui::TextDisabled("live: %s", n->DataTypeName[0] ? n->DataTypeName : n->Draft.Name);
-      ImGui::Separator();
-      if (ctrl == nullptr)
-      {
-        ImGui::TextDisabled("(running control not reachable -- no mirrored app)");
-        return;
-      }
-      const void* live_persist = nullptr;
-      const void* live_temp = nullptr;
-      ctrl->GetControlLiveData(&live_persist, &live_temp);
-      AppLiveFieldsTable("##mock_live_persist", ctrl, false, live_persist);
-      ImGui::SeparatorText("temp");
-      AppLiveFieldsTable("##mock_live_temp", ctrl, true, live_temp);
+      IM_UNUSED(live_app);
+      ImGui::TextDisabled("live: %s is running -- current values are in Data (live) / Temp (live)",
+                          n->DataTypeName[0] ? n->DataTypeName : n->Draft.Name);
       return;
     }
 

@@ -1761,8 +1761,12 @@ namespace
         else
         {
           ImGui::EditAppNodeInspectorEx(graph, selection, doc->Mirror);
-          if (ImGui::AppInspectorSection("##sec_preview", ICON_FA_PLAY, "Preview", nullptr, nullptr))
-            ImGui::AppGraphRenderMockPanel(graph, selection, doc->Mirror);
+          // Preview mocks a DESIGN control's UI from its drafted fields. A live node's reality is
+          // already on screen (and its values are the Data/Temp (live) sections above).
+          const ImGuiAppNode* seln = ImGui::AppGraphFindNode(graph, selection);
+          if (seln != nullptr && !seln->IsLive)
+            if (ImGui::AppInspectorSection("##sec_preview", ICON_FA_PLAY, "Preview", nullptr, nullptr))
+              ImGui::AppGraphRenderMockPanel(graph, selection, doc->Mirror);
           if (data->HasNodeCode)
           {
             ImGui::SeparatorText("Generated C++");
