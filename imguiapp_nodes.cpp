@@ -315,21 +315,21 @@ namespace ImGui
     {
       const ImGuiAppColorModDesc combo[] =
       {   // dropdown fields (AppBlEnum, struct picker): field + popup + rows
-        ImGuiAppColorModDesc(ImGuiCol_FrameBg,        s->FieldBg),
-        ImGuiAppColorModDesc(ImGuiCol_FrameBgHovered, s->FieldBgHovered),
-        ImGuiAppColorModDesc(ImGuiCol_FrameBgActive,  s->FieldBgHovered),
-        ImGuiAppColorModDesc(ImGuiCol_Text,           s->FieldText),
-        ImGuiAppColorModDesc(ImGuiCol_PopupBg,        s->FieldBgEdit),
-        ImGuiAppColorModDesc(ImGuiCol_Header,         s->FieldBgHovered),
-        ImGuiAppColorModDesc(ImGuiCol_HeaderHovered,  s->FieldBgHovered),
-        ImGuiAppColorModDesc(ImGuiCol_Border,         s->FieldBorder),
+        { ImGuiCol_FrameBg,        s->FieldBg },
+        { ImGuiCol_FrameBgHovered, s->FieldBgHovered },
+        { ImGuiCol_FrameBgActive,  s->FieldBgHovered },
+        { ImGuiCol_Text,           s->FieldText },
+        { ImGuiCol_PopupBg,        s->FieldBgEdit },
+        { ImGuiCol_Header,         s->FieldBgHovered },
+        { ImGuiCol_HeaderHovered,  s->FieldBgHovered },
+        { ImGuiCol_Border,         s->FieldBorder },
       };
       const ImGuiAppColorModDesc edit[] =
       {   // in-place editors (InputText/InputInt): transparent frame over the self-drawn bg
-        ImGuiAppColorModDesc(ImGuiCol_FrameBg,        0),
-        ImGuiAppColorModDesc(ImGuiCol_FrameBgHovered, 0),
-        ImGuiAppColorModDesc(ImGuiCol_FrameBgActive,  0),
-        ImGuiAppColorModDesc(ImGuiCol_Text,           s->FieldText),
+        { ImGuiCol_FrameBg,        0 },
+        { ImGuiCol_FrameBgHovered, 0 },
+        { ImGuiCol_FrameBgActive,  0 },
+        { ImGuiCol_Text,           s->FieldText },
       };
       memcpy(t.Combo, combo, sizeof(combo));
       memcpy(t.Edit, edit, sizeof(edit));
@@ -358,8 +358,8 @@ namespace ImGui
     const float r = ImGui::GetFrameHeight() * kBlRounding;
     const ImGuiAppStyleModDesc vars[] =
     {
-      ImGuiAppStyleModDesc(ImGuiStyleVar_FrameRounding, r),
-      ImGuiAppStyleModDesc(ImGuiStyleVar_PopupRounding, r, with_popup),
+      { ImGuiStyleVar_FrameRounding, ImVec2(r, 0.0f) },
+      { ImGuiStyleVar_PopupRounding, ImVec2(r, 0.0f), with_popup },
     };
     AppBlStyleScope s;
     s.Colors = ImGui::PushAppColorMods(cols, ncols);
@@ -1126,23 +1126,40 @@ namespace ImGui
     dst[n] = 0;
   }
 
-  static void AppEmitFieldDecl(ImGuiTextBuffer* out, const ImGuiAppFieldDesc* f)
+  // Type spelling of one drafted field (String is a char array; Struct falls back to a
+  // placeholder until the referenced type is named).
+  static const char* AppFieldDeclTypeName(const ImGuiAppFieldDesc* f)
+  {
+    if (f->Type == ImGuiAppFieldType_String)
+      return "char";
+    if (f->Type == ImGuiAppFieldType_Struct)
+      return f->StructType[0] ? f->StructType : "void* /* set struct type */";
+    return AppFieldTypeName(f->Type);
+  }
+
+  // Identifier column start = widest type spelling in the struct (+1 space), so member names
+  // column-align in the emitted definition.
+  static int AppFieldDeclTypeWidth(const ImGuiAppFieldDesc* fields, int count)
+  {
+    int w = 0;
+    for (int i = 0; i < count; i++)
+    {
+      const int len = (int)strlen(AppFieldDeclTypeName(&fields[i]));
+      if (len > w)
+        w = len;
+    }
+    return w;
+  }
+
+  static void AppEmitFieldDecl(ImGuiTextBuffer* out, const ImGuiAppFieldDesc* f, int type_w)
   {
     char name[IM_LABEL_SIZE];
     AppSanitizeIdentifier(name, IM_ARRAYSIZE(name), f->Name);
 
     if (f->Type == ImGuiAppFieldType_String)
-    {
-      out->appendf("  char %s[%d];\n", name, f->ArraySize > 0 ? f->ArraySize : 128);
-    }
-    else if (f->Type == ImGuiAppFieldType_Struct)
-    {
-      out->appendf("  %s %s;\n", f->StructType[0] ? f->StructType : "void* /* set struct type */", name);
-    }
+      out->appendf("  %-*s %s[%d];\n", type_w, "char", name, f->ArraySize > 0 ? f->ArraySize : 128);
     else
-    {
-      out->appendf("  %s %s;\n", AppFieldTypeName(f->Type), name);
-    }
+      out->appendf("  %-*s %s;\n", type_w, AppFieldDeclTypeName(f), name);
   }
 
   void GenerateAppControlCode(const ImGuiAppNodeDraft* draft, ImGuiTextBuffer* out)
@@ -1153,13 +1170,15 @@ namespace ImGui
     AppSanitizeIdentifier(base, IM_ARRAYSIZE(base), draft->Name);
 
     out->appendf("struct %sData\n{\n", base);
+    int type_w = AppFieldDeclTypeWidth(draft->PersistFields.Data, draft->PersistFields.Size);
     for (int i = 0; i < draft->PersistFields.Size; i++)
-      AppEmitFieldDecl(out, &draft->PersistFields.Data[i]);
+      AppEmitFieldDecl(out, &draft->PersistFields.Data[i], type_w);
     out->appendf("};\n\n");
 
     out->appendf("struct %sTempData\n{\n", base);
+    type_w = AppFieldDeclTypeWidth(draft->TempFields.Data, draft->TempFields.Size);
     for (int i = 0; i < draft->TempFields.Size; i++)
-      AppEmitFieldDecl(out, &draft->TempFields.Data[i]);
+      AppEmitFieldDecl(out, &draft->TempFields.Data[i], type_w);
     out->appendf("};\n\n");
 
     // Dependencies (extra ImGuiAppControl<> template args) derive from incoming graph links; a single
@@ -3472,7 +3491,7 @@ namespace ImGui
 
     if (AppBlAddPill("##addstyle", "Style"))
     {
-      ImGuiAppStyleModDesc sm(n->Kind == ImGuiAppNodeKind_Control ? ImGuiStyleVar_FrameRounding : ImGuiStyleVar_WindowRounding, 0.0f, true);
+      ImGuiAppStyleModDesc sm{ n->Kind == ImGuiAppNodeKind_Control ? ImGuiStyleVar_FrameRounding : ImGuiStyleVar_WindowRounding, ImVec2(0.0f, 0.0f), true };
       AppStyleModSeedValue(&sm);
       n->StyleMods.push_back(sm);
     }
@@ -3480,7 +3499,7 @@ namespace ImGui
     if (AppBlAddPill("##addcolor", "Color"))
     {
       const ImGuiCol col = n->Kind == ImGuiAppNodeKind_Control ? ImGuiCol_FrameBg : ImGuiCol_WindowBg;
-      n->ColorMods.push_back(ImGuiAppColorModDesc(col, ImGui::ColorConvertFloat4ToU32(ImGui::GetStyleColorVec4(col)), true));
+      n->ColorMods.push_back(ImGuiAppColorModDesc{ col, ImGui::ColorConvertFloat4ToU32(ImGui::GetStyleColorVec4(col)), true });
     }
   }
 
@@ -3565,6 +3584,12 @@ namespace ImGui
       return;
     }
     const char* p = (const char*)base + f->Offset;
+    if (f->ElemTypeName != nullptr)
+    {
+      // ImVector member: Size is the leading int of the (Size, Capacity, Data) layout.
+      ImFormatString(out, (size_t)out_size, "%d x %s", *(const int*)p, f->ElemTypeName);
+      return;
+    }
     switch (f->Kind)
     {
     case ImGuiAppLiveFieldKind_Bool:      ImFormatString(out, (size_t)out_size, "%s", *(const bool*)p ? "true" : "false"); break;
@@ -3589,19 +3614,19 @@ namespace ImGui
   // Values are read from the live instance every frame -- they change as the app runs.
   static void AppLiveFieldsTable(const char* str_id, const ImGuiAppControlBase* ctrl, bool temp_data, const void* base)
   {
-    if (!ctrl->IsControlDataReflectable(temp_data))
-    {
-      // Same boundary as snapshots: owning containers are opaque bytes, not fields.
-      ImGui::TextDisabled("(not trivially copyable -- opaque, like snapshots)");
-      return;
-    }
     ImGuiAppLiveFieldDesc fields[64];
     const int n = ctrl->GetControlFields(fields, IM_ARRAYSIZE(fields), temp_data);
     if (n <= 0)
     {
-      ImGui::TextDisabled("(no members)");
+      // Outside the field-enumeration contract (non-aggregate or tagged opaque).
+      if (!ctrl->IsControlDataReflectable(temp_data))
+        ImGui::TextDisabled("(opaque to reflection)");
+      else
+        ImGui::TextDisabled("(no members)");
       return;
     }
+    if (!ctrl->IsControlDataReflectable(temp_data))
+      ImGui::TextDisabled("(snapshot-opaque -- fields via build-time reflection)");
     if (ImGui::BeginTable(str_id, 3, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
     {
       char val[256];
@@ -4027,6 +4052,38 @@ namespace ImGui
     return g->ViewScope.Size > 0 ? g->ViewScope.back() : -1;
   }
 
+  // Per-branch camera memory lives ON the graph (ImGuiAppGraph::ScopeCams, transient like
+  // ViewScope): every editor over a graph shares its memory; two graphs never share state.
+  static void AppScopeCameraSave(ImGuiAppGraph* g, ImGuiCanvasState* cv, int scope_id)
+  {
+    ImGuiAppScopeCamera* cam = nullptr;
+    for (int i = 0; i < g->ScopeCams.Size && cam == nullptr; i++)
+      if (g->ScopeCams.Data[i].ScopeId == scope_id)
+        cam = &g->ScopeCams.Data[i];
+    if (cam == nullptr)
+    {
+      g->ScopeCams.push_back(ImGuiAppScopeCamera());
+      cam = &g->ScopeCams.back();
+      cam->ScopeId = scope_id;
+    }
+    cam->Pan = ImGui::CanvasGetPan(cv);
+    cam->Zoom = ImGui::CanvasGetZoom(cv);
+  }
+
+  static bool AppScopeCameraRestore(const ImGuiAppGraph* g, ImGuiCanvasState* cv, int scope_id)
+  {
+    for (int i = 0; i < g->ScopeCams.Size; i++)
+    {
+      const ImGuiAppScopeCamera* cam = &g->ScopeCams.Data[i];
+      if (cam->ScopeId != scope_id)
+        continue;
+      ImGui::CanvasSetZoom(cv, cam->Zoom, ImGui::GetCursorScreenPos());
+      ImGui::CanvasSetPan(cv, cam->Pan);   // after the zoom: SetZoom adjusts pan to hold its anchor
+      return true;
+    }
+    return false;
+  }
+
   static bool AppScopeCanEnter(const ImGuiAppNode* n)
   {
     return n != nullptr && (n->Kind == ImGuiAppNodeKind_Layer || n->Kind == ImGuiAppNodeKind_Window
@@ -4420,7 +4477,7 @@ namespace ImGui
     const int top = AppScopeCurrent(g);
     const ImGuiAppNode* tn = top >= 0 ? AppGraphFindNodeConst(g, top) : nullptr;
     if (tn == nullptr)
-      return "";
+      return "composition root -- the phase layers run left to right every frame";
     if (tn->Kind == ImGuiAppNodeKind_Layer)
     {
       switch (tn->LayerType)
@@ -4526,76 +4583,102 @@ namespace ImGui
   }
   static ImU32 AppPinTieColor() { return AppComposerGetStyle()->PinTie; }
 
-  // Editor path while drilled in: "App > WindowLayer > Mixer" chips at the canvas top-left. Clicking a
-  // segment jumps back to that depth (selecting the scope just exited); the tail chip is the current
-  // scope. A caption underneath states the scope's per-frame contract.
+  // Editor path chips at the canvas top-left: "App > WindowLayer > Mixer". Always shown -- at the
+  // root a single App tail chip anchors WHERE you are; drilled in, clicking a segment jumps back to
+  // that depth (selecting the scope just exited). A caption underneath states the scope's per-frame
+  // contract. A CHILD window overlaying the canvas, not draw-list chips in the canvas window (the
+  // canvas item is submitted first and owns the mouse, so in-window buttons never receive the
+  // click) and not a top-level window (any click on the host window raises the host above it).
   static void AppDrawScopeBreadcrumb(ImGuiAppGraph* g, int* selected_node_id, ImVec2 editor_min)
   {
-    if (g->ViewScope.Size == 0)
-      return;
-
     const float em = ImGui::GetFontSize();
     const float h = ImGui::GetFrameHeight();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    float x = editor_min.x + em * 0.8f;
-    const float y = editor_min.y + em * 0.6f;
     int jump = -1;   // depth to pop back to (0 = root)
 
-    ImGui::PushID("##scopepath");
-    for (int i = 0; i <= g->ViewScope.Size; i++)
+    // Callers treat the canvas as the editor's LAST ITEM (GetItemRect* after ShowAppGraphEditor);
+    // the overlay child must not become it.
+    ImGuiContext& ictx = *ImGui::GetCurrentContext();
+    const ImGuiLastItemData last_item = ictx.LastItemData;
+
+    ImGui::SetNextWindowPos(ImVec2(editor_min.x + em * 0.8f, editor_min.y + em * 0.6f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(em * 0.1f, em * 0.1f));
+    if (ImGui::BeginChild("##scope_breadcrumb", ImVec2(0.0f, 0.0f),
+                          ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysAutoResize,
+                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoSavedSettings))
     {
-      const bool is_tail = i == g->ViewScope.Size;
-      char label[IM_LABEL_SIZE + 8];
-      ImU32 accent = AppComposerGetStyle()->AccentNeutral;
-      if (i == 0)
-        ImStrncpy(label, ICON_FA_CIRCLE_NODES "  App", IM_ARRAYSIZE(label));
-      else
+      ImDrawList* dl = ImGui::GetWindowDrawList();
+      for (int i = 0; i <= g->ViewScope.Size; i++)
       {
-        const ImGuiAppNode* n = AppGraphFindNodeConst(g, g->ViewScope.Data[i - 1]);
-        if (n == nullptr)
-          break;
-        const char* nm = n->Kind == ImGuiAppNodeKind_Layer ? AppLayerNodeName(n->LayerType) : (n->Draft.Name[0] ? n->Draft.Name : "(unnamed)");
-        ImFormatString(label, IM_ARRAYSIZE(label), "%s  %s", AppNodeIcon(n), nm);
-        accent = n->Kind == ImGuiAppNodeKind_Layer ? AppLayerAccent(n->LayerType) : AppKindColor(n->Kind);
-      }
-      const ImVec2 ts = ImGui::CalcTextSize(label);
-      const ImVec2 mn(x, y);
-      const ImVec2 mx(x + ts.x + em * 0.9f, y + h);
+        const bool is_tail = i == g->ViewScope.Size;
+        char label[IM_LABEL_SIZE + 8];
+        ImU32 accent = AppComposerGetStyle()->AccentNeutral;
+        if (i == 0)
+          ImStrncpy(label, ICON_FA_CIRCLE_NODES "  App", IM_ARRAYSIZE(label));
+        else
+        {
+          const ImGuiAppNode* n = AppGraphFindNodeConst(g, g->ViewScope.Data[i - 1]);
+          if (n == nullptr)
+            break;
+          const char* nm = n->Kind == ImGuiAppNodeKind_Layer ? AppLayerNodeName(n->LayerType) : (n->Draft.Name[0] ? n->Draft.Name : "(unnamed)");
+          ImFormatString(label, IM_ARRAYSIZE(label), "%s  %s", AppNodeIcon(n), nm);
+          accent = n->Kind == ImGuiAppNodeKind_Layer ? AppLayerAccent(n->LayerType) : AppKindColor(n->Kind);
+        }
+        const ImVec2 ts = ImGui::CalcTextSize(label);
+        const ImVec2 seg(ts.x + em * 0.9f, h);
 
-      bool hov = false;
-      if (!is_tail)
-      {
-        ImGui::SetCursorScreenPos(mn);
+        if (i > 0)
+          ImGui::SameLine(0.0f, em * 0.25f);
         ImGui::PushID(i);
-        if (ImGui::InvisibleButton("##seg", mx - mn))
+        bool hov = false;
+        if (is_tail)
+        {
+          ImGui::Dummy(seg);
+        }
+        else if (ImGui::InvisibleButton("##seg", seg))
+        {
           jump = i;
-        hov = ImGui::IsItemHovered();
-        if (hov)
-          ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        }
+        if (!is_tail)
+        {
+          hov = ImGui::IsItemHovered();
+          if (hov)
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        }
         ImGui::PopID();
+
+        const ImVec2 mn = ImGui::GetItemRectMin();
+        const ImVec2 mx = ImGui::GetItemRectMax();
+        const ImU32 bg = is_tail ? AppScaleRGB(accent, 0.45f)
+                                 : ImGui::GetColorU32(hov ? ImGuiCol_ButtonHovered : ImGuiCol_Button, 0.9f);
+        dl->AddRectFilled(mn, mx, bg, em * 0.25f);
+        if (is_tail)
+          dl->AddRect(mn, mx, (accent & 0x00FFFFFF) | 0xC8000000, em * 0.25f);
+        dl->AddText(ImVec2(mn.x + em * 0.45f, mn.y + (h - ts.y) * 0.5f),
+                    is_tail ? AppThemeNeutral(0.94f) : ImGui::GetColorU32(ImGuiCol_Text, hov ? 1.0f : 0.75f), label);
+        if (!is_tail)
+        {
+          ImGui::SameLine(0.0f, em * 0.25f);
+          const ImVec2 ss = ImGui::CalcTextSize(ICON_FA_ANGLE_RIGHT);
+          const ImVec2 sp = ImGui::GetCursorScreenPos();
+          ImGui::Dummy(ImVec2(ss.x, h));
+          dl->AddText(ImVec2(sp.x, sp.y + (h - ss.y) * 0.5f), ImGui::GetColorU32(ImGuiCol_TextDisabled), ICON_FA_ANGLE_RIGHT);
+        }
       }
 
-      const ImU32 bg = is_tail ? AppScaleRGB(accent, 0.45f)
-                               : ImGui::GetColorU32(hov ? ImGuiCol_ButtonHovered : ImGuiCol_Button, 0.9f);
-      dl->AddRectFilled(mn, mx, bg, em * 0.25f);
-      if (is_tail)
-        dl->AddRect(mn, mx, (accent & 0x00FFFFFF) | 0xC8000000, em * 0.25f);
-      dl->AddText(ImVec2(mn.x + em * 0.45f, y + (h - ts.y) * 0.5f),
-                  is_tail ? AppThemeNeutral(0.94f) : ImGui::GetColorU32(ImGuiCol_Text, hov ? 1.0f : 0.75f), label);
-      x = mx.x + em * 0.25f;
-      if (!is_tail)
-      {
-        const ImVec2 ss = ImGui::CalcTextSize(ICON_FA_ANGLE_RIGHT);
-        dl->AddText(ImVec2(x, y + (h - ss.y) * 0.5f), ImGui::GetColorU32(ImGuiCol_TextDisabled), ICON_FA_ANGLE_RIGHT);
-        x += ss.x + em * 0.25f;
-      }
     }
-    ImGui::PopID();
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    const ImVec2 crumb_max = ImGui::GetItemRectMax();   // the child item's rect
 
-    // Scope contract caption: what executes here and in which per-frame sequence.
+    // Scope contract caption, passive text in the PARENT window (inside the child it would widen
+    // the strip of canvas the overlay steals from panning/clicks).
     const char* cap = AppScopeCaption(g);
     if (cap[0])
-      dl->AddText(ImVec2(editor_min.x + em * 0.9f, y + h + em * 0.3f), ImGui::GetColorU32(ImGuiCol_TextDisabled), cap);
+      ImGui::GetWindowDrawList()->AddText(ImVec2(editor_min.x + em * 0.9f, crumb_max.y + em * 0.3f),
+                                          ImGui::GetColorU32(ImGuiCol_TextDisabled), cap);
+
+    // The overlay must not become the editor's last item (see above).
+    ictx.LastItemData = last_item;
 
     if (jump >= 0)
     {
@@ -4721,22 +4804,25 @@ namespace ImGui
     // stored GridPos (it left the canvas while out of scope) and arm a deferred fit-all (dims valid post-submit).
     AppScopeValidate(g);
     const bool at_root = g->ViewScope.Size == 0;
-    static int s_scope_sig = -1;
-    static int s_pending_fit = 0;
     const int scope_sig = g->ViewScope.Size * 100000 + (AppScopeCurrent(g) + 1);
-    if (scope_sig != s_scope_sig)
+    if (scope_sig != g->_ScopeSig)
     {
-      if (s_scope_sig != -1)   // skip the very first frame (initial layout owns the camera)
+      if (g->_ScopeSig != -1)   // skip the very first frame (initial layout owns the camera)
       {
         for (int i = 0; i < g->Nodes.Size; i++)
           if (!(!show_live && g->Nodes.Data[i].IsLive) && !AppNodeHiddenByCollapse(g, g->Nodes.Data[i].Id))
             g->Nodes.Data[i]._NeedsPlace = true;
-        s_pending_fit = 1;
+        // Camera memory is PER BRANCH (keyed by the scope NODE, not the depth): leaving a scope
+        // saves the view the user left it with; re-entering one -- forward or back -- restores
+        // it. Only a never-visited scope falls back to the deferred fit.
+        AppScopeCameraSave(g, cv, g->_ScopeCamId);
+        g->_PendingFit = AppScopeCameraRestore(g, cv, AppScopeCurrent(g)) ? 0 : 1;
         // Selection does not survive scope transitions by design: *selected_node_id is the survivor and
         // re-applies onto the new scope (the sync block after CanvasEnd).
         ImGui::CanvasClearSelection(cv);
       }
-      s_scope_sig = scope_sig;
+      g->_ScopeSig = scope_sig;
+      g->_ScopeCamId = AppScopeCurrent(g);
     }
 
     // Drive the layer vertical drag BEFORE submission so the clamped position lands in THIS frame's
@@ -5520,7 +5606,7 @@ namespace ImGui
 
     // Deferred scope fit: frame the freshly revealed composition once its nodes have been submitted (scope
     // changes from Tab/breadcrumb/tree happen post-submission, so the fit lands on the following frame).
-    if (s_pending_fit > 0 && --s_pending_fit == 0)
+    if (g->_PendingFit > 0 && --g->_PendingFit == 0)
       fit_all();
 
     // Navigation: F frames the selection's bounding box (all selected nodes); Home fits all nodes.
@@ -6520,7 +6606,7 @@ namespace ImGui
     // A scope mutation THIS frame (Tab/Esc/double-click/breadcrumb/palette, all handled above): selection
     // does not survive scope transitions by design -- drop it before the sync below re-applies the survivor.
     // The top-of-frame latch covers changes made during the sync.
-    if (g->ViewScope.Size * 100000 + (AppScopeCurrent(g) + 1) != s_scope_sig)
+    if (g->ViewScope.Size * 100000 + (AppScopeCurrent(g) + 1) != g->_ScopeSig)
       ImGui::CanvasClearSelection(cv);
 
     // Cross-view selection sync. Order: dangle guard -> canvas read-back -> tree apply + reveal.
@@ -7761,13 +7847,16 @@ namespace ImGui
       ImVector<ImGuiAppFieldDesc> persist_fields;
       AppNodeEffectiveFields(g, n, 0, &persist_fields);
       out->appendf("struct %sData\n{\n", base);
+      int type_w = AppFieldDeclTypeWidth(persist_fields.Data, persist_fields.Size);
+      if (latch_events.Size > 0 && type_w < 4)
+        type_w = 4;   // the latch rows below are "bool"
       for (int i = 0; i < persist_fields.Size; i++)
-        AppEmitFieldDecl(out, &persist_fields.Data[i]);
+        AppEmitFieldDecl(out, &persist_fields.Data[i], type_w);
       for (int l = 0; l < latch_events.Size; l++)
       {
         char latch[IM_LABEL_SIZE + 16];
         latch_name(&n->Events.Data[latch_events.Data[l]], latch, IM_ARRAYSIZE(latch));
-        out->appendf("  bool %s;   // event latch: set by OnUpdate on the edge, emitted by OnGetCommand\n", latch);
+        out->appendf("  %-*s %s;   // event latch: set by OnUpdate on the edge, emitted by OnGetCommand\n", type_w, "bool", latch);
       }
       out->appendf("};\n\n");
     }
@@ -7787,8 +7876,9 @@ namespace ImGui
       ImVector<ImGuiAppFieldDesc> temp_fields;
       AppNodeEffectiveFields(g, n, 1, &temp_fields);
       out->appendf("struct %sTempData\n{\n", base);
+      const int type_w = AppFieldDeclTypeWidth(temp_fields.Data, temp_fields.Size);
       for (int i = 0; i < temp_fields.Size; i++)
-        AppEmitFieldDecl(out, &temp_fields.Data[i]);
+        AppEmitFieldDecl(out, &temp_fields.Data[i], type_w);
       out->appendf("};\n\n");
     }
 
@@ -8191,8 +8281,9 @@ namespace ImGui
     char base[IM_LABEL_SIZE]; AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
     ImVector<ImGuiAppFieldDesc> fields; AppNodeEffectiveFields(g, n, 0, &fields);   // exploded Field nodes or inline
     out->appendf("struct %s\n{\n", base);
+    const int type_w = AppFieldDeclTypeWidth(fields.Data, fields.Size);
     for (int i = 0; i < fields.Size; i++)
-      AppEmitFieldDecl(out, &fields.Data[i]);
+      AppEmitFieldDecl(out, &fields.Data[i], type_w);
     out->appendf("};\n\n");
   }
 
@@ -8222,17 +8313,13 @@ namespace ImGui
       char x[32], y[32];
       AppFloatLit(x, IM_ARRAYSIZE(x), sm->Value.x);
       AppFloatLit(y, IM_ARRAYSIZE(y), sm->Value.y);
-      if (info->Count == 2)
-        out->appendf("%s%s->StyleMods.push_back(ImGuiAppStyleModDesc(%s, ImVec2(%s, %s), %s));\n",
-                     indent, expr, AppStyleVarEnumName(sm->Var), x, y, sm->Active ? "true" : "false");
-      else
-        out->appendf("%s%s->StyleMods.push_back(ImGuiAppStyleModDesc(%s, %s, %s));\n",
-                     indent, expr, AppStyleVarEnumName(sm->Var), x, sm->Active ? "true" : "false");
+      out->appendf("%s%s->StyleMods.push_back(ImGuiAppStyleModDesc{ %s, ImVec2(%s, %s), %s });\n",
+                   indent, expr, AppStyleVarEnumName(sm->Var), x, info->Count == 2 ? y : "0.0f", sm->Active ? "true" : "false");
     }
     for (int i = 0; i < n->ColorMods.Size; i++)
     {
       const ImGuiAppColorModDesc* cm = &n->ColorMods.Data[i];
-      out->appendf("%s%s->ColorMods.push_back(ImGuiAppColorModDesc(ImGuiCol_%s, IM_COL32(%u, %u, %u, %u), %s));\n",
+      out->appendf("%s%s->ColorMods.push_back(ImGuiAppColorModDesc{ ImGuiCol_%s, IM_COL32(%u, %u, %u, %u), %s });\n",
                    indent, expr, ImGui::GetStyleColorName(cm->Col),
                    (cm->Value >> IM_COL32_R_SHIFT) & 0xFF, (cm->Value >> IM_COL32_G_SHIFT) & 0xFF,
                    (cm->Value >> IM_COL32_B_SHIFT) & 0xFF, (cm->Value >> IM_COL32_A_SHIFT) & 0xFF,
@@ -8246,14 +8333,74 @@ namespace ImGui
   // declaration-only -- their definitions are the ones compiled into the running binary.
   //-----------------------------------------------------------------------------
 
-  static void AppEmitLiveFieldDecl(ImGuiTextBuffer* out, const ImGuiAppLiveFieldDesc* f)
+  // Type spelling of one reflected field as its declaration emits it.
+  static const char* AppLiveFieldDeclTypeName(const ImGuiAppLiveFieldDesc* f)
   {
     if (f->Kind == ImGuiAppLiveFieldKind_CharArray)
-      out->appendf("  char %s[%d];\n", f->Name, f->Size);
-    else if (f->Kind == ImGuiAppLiveFieldKind_Opaque)
-      out->appendf("  unsigned char %s[%d];   // %s\n", f->Name, f->Size, f->TypeName);
+      return "char";
+    if (f->Kind == ImGuiAppLiveFieldKind_Opaque && !f->Exact)
+      return "unsigned char";
+    return f->TypeName;
+  }
+
+  // Identifier column start = widest type spelling in the struct (+1 space), so member names
+  // column-align in the emitted definition.
+  static int AppLiveFieldDeclTypeWidth(const ImGuiAppLiveFieldDesc* fields, int count)
+  {
+    int w = 0;
+    for (int i = 0; i < count; i++)
+    {
+      const int len = (int)strlen(AppLiveFieldDeclTypeName(&fields[i]));
+      if (len > w)
+        w = len;
+    }
+    return w;
+  }
+
+  static void AppEmitLiveFieldDecl(ImGuiTextBuffer* out, const ImGuiAppLiveFieldDesc* f, int type_w)
+  {
+    if (f->Kind == ImGuiAppLiveFieldKind_CharArray)
+      out->appendf("  %-*s %s[%d];\n", type_w, "char", f->Name, f->Size);
+    else if (f->Kind == ImGuiAppLiveFieldKind_Opaque && !f->Exact)
+      out->appendf("  %-*s %s[%d];   // %s\n", type_w, "unsigned char", f->Name, f->Size, f->TypeName);
     else
-      out->appendf("  %s %s;\n", f->TypeName, f->Name);
+      out->appendf("  %-*s %s;\n", type_w, f->TypeName, f->Name);
+  }
+
+  // Depth-first mirror emission of a registered schema type: every schema'd type a struct
+  // reaches (member type or ImVector element) is written once per document, before first use.
+  static void AppEmitSchemaTypeMirror(const char* type_name, ImGuiStorage* emitted, ImGuiTextBuffer* out)
+  {
+    const ImGuiAppTypeSchema* s = ImGuiAppFindTypeSchema(type_name);
+    if (s == nullptr)
+      return;
+    const ImGuiID key = ImHashStr(type_name);
+    if (emitted->GetBool(key))
+      return;
+    emitted->SetBool(key, true);
+    for (int i = 0; i < s->Count; i++)
+    {
+      const ImGuiAppLiveFieldDesc* f = &s->Fields[i];
+      if (const char* nested = f->ElemTypeName ? f->ElemTypeName : (f->Kind == ImGuiAppLiveFieldKind_Opaque ? f->TypeName : nullptr))
+        AppEmitSchemaTypeMirror(nested, emitted, out);
+    }
+    out->appendf("// mirror of %s -- the real definition is compiled into the running binary\nstruct %s\n{\n", type_name, type_name);
+    const int type_w = AppLiveFieldDeclTypeWidth(s->Fields, s->Count);
+    for (int i = 0; i < s->Count; i++)
+      AppEmitLiveFieldDecl(out, &s->Fields[i], type_w);
+    out->appendf("};\n\n");
+  }
+
+  // Mirror every schema'd type the given field list reaches (used before emitting the struct
+  // that declares those fields).
+  static void AppEmitSchemaFieldDeps(const ImGuiAppLiveFieldDesc* fields, int count, ImGuiStorage* emitted, ImGuiTextBuffer* out)
+  {
+    for (int i = 0; i < count; i++)
+    {
+      const ImGuiAppLiveFieldDesc* f = &fields[i];
+      if (const char* nested = f->ElemTypeName ? f->ElemTypeName : (f->Kind == ImGuiAppLiveFieldKind_Opaque ? f->TypeName : nullptr))
+        AppEmitSchemaTypeMirror(nested, emitted, out);
+    }
   }
 
   // The runtime control's class name is not recorded, so derive it from the persist data type
@@ -8299,7 +8446,7 @@ namespace ImGui
 
   // Reflected data shapes + the control's interface shell with its dependency pack (from the live
   // data edges GetControlDependencyIDs produced). Returns false when the runtime object is gone.
-  static bool AppEmitLiveControlCode(const ImGuiAppGraph* g, ImGuiApp* live_app, const ImGuiAppNode* n, ImGuiTextBuffer* out)
+  static bool AppEmitLiveControlCode(const ImGuiAppGraph* g, ImGuiApp* live_app, const ImGuiAppNode* n, ImGuiTextBuffer* out, ImGuiStorage* emitted)
   {
     ImGuiAppItemBase* item = AppGraphFindLiveItem(live_app, n);
     if (item == nullptr)
@@ -8320,19 +8467,33 @@ namespace ImGui
     }
     const char* temp_type = tname[0] ? tname : "TempData";
 
+    // The data structs themselves are emitted below with the control; mark them up front so
+    // schema recursion never mirrors them a second time.
+    emitted->SetBool(ImHashStr(pname), true);
+    emitted->SetBool(ImHashStr(temp_type), true);
+
     ImGuiAppLiveFieldDesc fields[64];
+    ImGuiAppLiveFieldDesc temp_fields[64];
+    const int nf = ctrl->GetControlFields(fields, IM_ARRAYSIZE(fields), false);
+    const int nt = ctrl->GetControlFields(temp_fields, IM_ARRAYSIZE(temp_fields), true);
+
+    // Nested schema'd types first (ImGuiAppGraph and friends): the reflected structs below
+    // declare members of these types.
+    AppEmitSchemaFieldDeps(fields, nf, emitted, out);
+    AppEmitSchemaFieldDeps(temp_fields, nt, emitted, out);
+
     out->appendf("// reflected from the running control\nstruct %s\n{\n", pname);
-    int nf = ctrl->GetControlFields(fields, IM_ARRAYSIZE(fields), false);
     if (nf <= 0)
-      out->appendf("  // opaque: not reflectable\n");
+      out->appendf(ctrl->IsControlDataReflectable(false) ? "  // (no members)\n" : "  // opaque: not reflectable\n");
+    int type_w = AppLiveFieldDeclTypeWidth(fields, nf);
     for (int i = 0; i < nf; i++)
-      AppEmitLiveFieldDecl(out, &fields[i]);
+      AppEmitLiveFieldDecl(out, &fields[i], type_w);
     out->appendf("};\n\nstruct %s\n{\n", temp_type);
-    nf = ctrl->GetControlFields(fields, IM_ARRAYSIZE(fields), true);
-    if (nf <= 0)
-      out->appendf("  // opaque: not reflectable\n");
-    for (int i = 0; i < nf; i++)
-      AppEmitLiveFieldDecl(out, &fields[i]);
+    if (nt <= 0)
+      out->appendf(ctrl->IsControlDataReflectable(true) ? "  // (no members)\n" : "  // opaque: not reflectable\n");
+    type_w = AppLiveFieldDeclTypeWidth(temp_fields, nt);
+    for (int i = 0; i < nt; i++)
+      AppEmitLiveFieldDecl(out, &temp_fields[i], type_w);
     out->appendf("};\n\n");
 
     // Dependency producers, from the live data edges (rebuilt each frame from GetControlDependencyIDs).
@@ -8470,6 +8631,7 @@ namespace ImGui
       }
     }
 
+    ImGuiStorage mirrored_types;   // schema'd types already mirrored into this document
     for (int i = 0; i < order.Size; i++)
     {
       const ImGuiAppNode* n = AppGraphFindNodeConst(g, order.Data[i]);
@@ -8477,7 +8639,7 @@ namespace ImGui
         continue;
       const int begin = line_now();
       if (n->IsLive)
-        AppEmitLiveControlCode(g, g->LiveApp, n, out);
+        AppEmitLiveControlCode(g, g->LiveApp, n, out, &mirrored_types);
       else if (!n->IsBuiltin)
         AppEmitControlWithDeps(g, n, out);
       span(n->Id, begin);
@@ -8583,10 +8745,13 @@ namespace ImGui
     switch (n->Kind)
     {
     case ImGuiAppNodeKind_Control:
-      if (n->IsLive && AppEmitLiveControlCode(g, live_app, n, out))
+    {
+      ImGuiStorage mirrored_types;
+      if (n->IsLive && AppEmitLiveControlCode(g, live_app, n, out, &mirrored_types))
         break;                                      // live: the real compiled shape, never a TODO template
       AppEmitControlWithDeps(g, n, out);            // data structs + control struct with derived deps/bindings
       break;
+    }
     case ImGuiAppNodeKind_Layer:
       if (AppNodeIsCommandLayer(n))
         AppEmitCommandEnum(g, out);                 // just the AppCommand enum (the user's example)
@@ -8884,13 +9049,13 @@ namespace ImGui
       {
         int var = 0, active = 1; float x = 0.0f, y = 0.0f;
         if (cur && sscanf(p + 6, "%d,%f,%f,%d", &var, &x, &y, &active) >= 3 && var >= 0 && var < ImGuiStyleVar_COUNT)
-          cur->StyleMods.push_back(ImGuiAppStyleModDesc((ImGuiStyleVar)var, ImVec2(x, y), active != 0));
+          cur->StyleMods.push_back(ImGuiAppStyleModDesc{ (ImGuiStyleVar)var, ImVec2(x, y), active != 0 });
       }
       else if (strncmp(p, "Color=", 6) == 0)
       {
         int col = 0, active = 1; unsigned val = 0;
         if (cur && sscanf(p + 6, "%d,%X,%d", &col, &val, &active) >= 2 && col >= 0 && col < ImGuiCol_COUNT)
-          cur->ColorMods.push_back(ImGuiAppColorModDesc((ImGuiCol)col, (ImU32)val, active != 0));
+          cur->ColorMods.push_back(ImGuiAppColorModDesc{ (ImGuiCol)col, (ImU32)val, active != 0 });
       }
       else if (strncmp(p, "Link=", 5) == 0)
       {

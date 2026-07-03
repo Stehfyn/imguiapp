@@ -3,6 +3,7 @@
 //
 // Index of this file (search for "[SECTION]"):
 // [SECTION] Assert forensics (symbolized backtrace + WAL sink)
+// [SECTION] Type schema registry (auto-materialized manifests)
 // [SECTION] App shell + core phase layers (Task, Command, Status)
 // [SECTION] Style/color mod runtime (desc apply; workbench style system)
 // [SECTION] Window layer (windows, sidebars, hosted controls, .ini handler)
@@ -414,6 +415,38 @@ void ImGuiApp::DrawFrame(ImGuiApp* app)
 }
 
 //-----------------------------------------------------------------------------
+// [SECTION] Type schema registry (auto-materialized manifests; see imguiapp.h)
+//-----------------------------------------------------------------------------
+
+// Function-local static: registration can run from static initializers and from control
+// construction across TUs, so the registry must not itself race static-init order.
+static ImVector<const ImGuiAppTypeSchema*>* AppTypeSchemas()
+{
+    static ImVector<const ImGuiAppTypeSchema*> schemas;
+    return &schemas;
+}
+
+void ImGuiAppRegisterTypeSchema(const ImGuiAppTypeSchema* schema)
+{
+    // Count may still be 0 here: ImGuiAppEnsureTypeRegistered registers the entry before
+    // filling its fields so cyclic member reachability terminates.
+    IM_ASSERT(schema != nullptr && schema->TypeName != nullptr && schema->Fields != nullptr);
+    IM_ASSERT(ImGuiAppFindTypeSchema(schema->TypeName) == nullptr);   // one schema per display name
+    AppTypeSchemas()->push_back(schema);
+}
+
+const ImGuiAppTypeSchema* ImGuiAppFindTypeSchema(const char* type_name)
+{
+    if (type_name == nullptr || type_name[0] == 0)
+        return nullptr;
+    ImVector<const ImGuiAppTypeSchema*>* schemas = AppTypeSchemas();
+    for (int i = 0; i < schemas->Size; i++)
+        if (strcmp(schemas->Data[i]->TypeName, type_name) == 0)
+            return schemas->Data[i];
+    return nullptr;
+}
+
+//-----------------------------------------------------------------------------
 // [SECTION] App shell + core phase layers (Task, Command, Status)
 //-----------------------------------------------------------------------------
 
@@ -709,7 +742,18 @@ void ImGuiAppWindowLayer::OnRender(const ImGuiApp* app) const
     {
       window->OnStylePush(app);
 
+      // Never fight a dock binding: SetNextWindowPos undocks a docked window by design
+      // (BeginDocked's PosUndock), so placement only applies to windows with no dock home
+      // (live window or saved settings).
+      bool dock_bound = false;
       if (window->HasInitialPlacement)
+      {
+        if (const ImGuiWindow* iw = ImGui::FindWindowByName(window->Label))
+          dock_bound = iw->DockId != 0;
+        else if (const ImGuiWindowSettings* ws = ImGui::FindWindowSettingsByID(ImHashStr(window->Label)))
+          dock_bound = ws->DockId != 0;
+      }
+      if (window->HasInitialPlacement && !dock_bound)
       {
         if (window->InitialSize.x > 0.0f && window->InitialSize.y > 0.0f)
           ImGui::SetNextWindowSize(window->InitialSize, ImGuiCond_FirstUseEver);

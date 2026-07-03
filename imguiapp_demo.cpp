@@ -333,10 +333,6 @@ namespace
 
   struct GraphDocData
   {
-    // Leads with the whole ImGuiAppGraph: reflect's arity probe brace-elides into nested
-    // aggregates and explodes MSVC's recursion limit (C1202). Opaque to reflection.
-    using ImGuiAppOpaque = void;
-
     ImGuiAppGraph   Graph;
     int             Selection;        // node selection shared by tree + canvas
     bool            ShowLive;         // show vs hide (never delete) live-mirror nodes
@@ -359,14 +355,9 @@ namespace
     int             LinkErrSeqSeen;   // last Graph.LastLinkErrSeq folded into the log
     ImGuiID         LayoutSavedHash;  // hash of the last-persisted layout fields (change detection)
     float           LayoutSaveT;      // debounce: seconds until the next layout-save check
-    ImGuiApp*       Mirror;           // the ACTIVE mirrored app (resolved each update from MirrorSource below)
-    ImGuiApp*       MirrorSample;     // mirror source 0: the example app (RandomTime/Breathing)
-    ImGuiApp*       MirrorComposer;   // mirror source 1: the editor sub-app hosting the Composer's chrome
-    ImGuiApp*       MirrorHost;       // mirror source 2: the PROCESS's real app (read-only: no time scrub)
-    int             MirrorSource;     // 0 = sample app, 1 = editor sub-app, 2 = host app
-    ImGuiAppStateHistory MirrorHistory;   // the mirrored app's recorded state ring (time travel)
-    bool            TimeScrub;        // true: freeze the mirror at TimeScrubIndex instead of recording
-    int             TimeScrubIndex;
+    ImGuiApp*       Mirror;           // THE running app: the one hosting this control (set in OnInitialize)
+    int             NumUnbuilt;       // frame fact: authored nodes with no live counterpart in the running
+                                      // binary -- nonzero == stale until Generate + recompile + relaunch
   };
   struct GraphDocTempData {};
 
@@ -472,7 +463,6 @@ namespace
   {
     virtual void OnInitialize(ImGuiApp* app, GraphDocData* data) const override final
     {
-      IM_UNUSED(app);
       data->Selection   = -1;
       data->ShowLive    = false;   // live mirror is opt-in (the toolbar eye)
       data->TreeW       = 0.0f;          // 0 -> EditorBody picks a default on first layout
@@ -487,13 +477,8 @@ namespace
       data->LinkErrSeqSeen = 0;
       data->LayoutSavedHash = 0;
       data->LayoutSaveT = 0.0f;
-      data->Mirror      = nullptr;       // set after push by ShowAppLayerDemo
-      data->MirrorSample = nullptr;
-      data->MirrorComposer = nullptr;
-      data->MirrorHost = nullptr;
-      data->MirrorSource = 0;
-      data->TimeScrub   = false;
-      data->TimeScrubIndex = 0;
+      data->Mirror      = app;     // ONE application: the mirror IS the app hosting this control
+      data->NumUnbuilt  = 0;
       ImStrncpy(data->GraphPath,  "imguix_node_graph.txt",      sizeof(data->GraphPath));
       ImStrncpy(data->HeaderPath, "imguix_generated_control.h", sizeof(data->HeaderPath));
       ComposerLayoutLoad(data);
@@ -509,12 +494,6 @@ namespace
       ComposerLayoutSaveIfChanged(data, dt);
 
       // Self-mirroring from inside our own update is safe: BuildAppLiveGraph only reads the object model.
-      data->Mirror = data->MirrorSample;
-      if (data->MirrorSource == 1 && data->MirrorComposer != nullptr)
-        data->Mirror = data->MirrorComposer;
-      else if (data->MirrorSource == 2 && data->MirrorHost != nullptr)
-        data->Mirror = data->MirrorHost;
-
       // Build the live mirror first so every panel reads the reconciled graph this frame.
       if (data->Mirror != nullptr)
       {
@@ -539,23 +518,36 @@ namespace
           DocLog(data, 1, "link refused: %s", data->Graph.LastLinkErr);
       }
 
-      // While scrubbing, re-impose the chosen snapshot every frame (stable freeze); otherwise record.
-      // The HOST perspective is strictly read-only: this update runs inside the host's own render, and
-      // restoring (or snapshotting mid-render) its state would mutate the frame under its feet.
-      if (data->Mirror == data->MirrorHost && data->MirrorHost != nullptr)
-        data->TimeScrub = false;
-      else if (data->Mirror != nullptr && data->Mirror->Layers.Size > 0)   // composed (IsInitialized == platform-only)
+      // Bootstrap staleness: an authored node with no live counterpart exists only in the design,
+      // not in the running binary -- the document is stale until Generate + recompile + relaunch.
+      // Core layers are the foundation representing the live stack; Struct/Field nodes are data
+      // shapes carried by their control.
+      int unbuilt = 0;
+      for (int i = 0; i < data->Graph.Nodes.Size; i++)
       {
-        if (data->TimeScrub)
+        const ImGuiAppNode* n = &data->Graph.Nodes.Data[i];
+        if (n->IsLive)
+          continue;
+        if (n->Kind == ImGuiAppNodeKind_Control)
         {
-          if (!ImGui::AppStateRestore(data->Mirror, &data->MirrorHistory, data->TimeScrubIndex))
-            data->TimeScrub = false;   // composition changed under us -> timeline no longer applies
+          if (!n->IsPromoted)
+            unbuilt++;
+          continue;
         }
-        else
+        const bool needs_twin = n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar
+                             || (n->Kind == ImGuiAppNodeKind_Layer && n->LayerType == ImGuiAppLayerType_Custom);
+        if (!needs_twin)
+          continue;
+        bool built = false;
+        for (int j = 0; j < data->Graph.Nodes.Size && !built; j++)
         {
-          ImGui::AppStateSnapshot(data->Mirror, &data->MirrorHistory);
+          const ImGuiAppNode* m = &data->Graph.Nodes.Data[j];
+          built = m->IsLive && m->Kind == n->Kind && strcmp(m->Draft.Name, n->Draft.Name) == 0;
         }
+        if (!built)
+          unbuilt++;
       }
+      data->NumUnbuilt = unbuilt;
     }
   };
 
@@ -591,8 +583,6 @@ namespace
     bool CopyCode;       // Generate menu: copy the generated C++ to the clipboard
     int  RevealPanel;    // ComposerPanel_* intent from a palette pick (0 = none)
     bool AddNode;        // toolbar "+ Add" -> open the canvas add palette (the loop's entry point)
-    bool MirrorSourceSet; // observe cluster picked a mirror perspective
-    int  MirrorSource;   // 0 = sample app, 1 = the Composer itself
   };
   struct ToolbarControl : ImGuiAppControl<ToolbarData, ToolbarTempData, GraphDocData>
   {
@@ -669,12 +659,6 @@ namespace
       if (temp_data->AddNode)
       {
         ImGui::AppGraphRequestAddPalette();
-      }
-      if (temp_data->MirrorSourceSet && temp_data->MirrorSource != doc->MirrorSource)
-      {
-        doc->MirrorSource = temp_data->MirrorSource;
-        doc->TimeScrub = false;   // old timeline belongs to the previous source
-        DocLog(doc, 0, "live mirror -> %s", doc->MirrorSource == 2 ? "host app" : doc->MirrorSource == 1 ? "the Composer itself" : "sample app");
       }
       if (temp_data->Diff)
       {
@@ -803,42 +787,35 @@ namespace
           ImGui::EndPopup();
         }
 
-        // -- observe (right-aligned): panel toggles + which app the Live eye reflects.
+        // -- observe (right-aligned): bootstrap-state chip + panel toggles. The Live eye always
+        // reflects THE running app -- there is exactly one.
+        const bool  unwritten = doc->WrittenSig != 0 && doc->FrameSig != doc->WrittenSig;
+        const bool  stale     = doc->NumUnbuilt > 0 || unwritten;
+        char        sync_lbl[64];
+        if (stale)
+          ImFormatString(sync_lbl, IM_ARRAYSIZE(sync_lbl), ICON_FA_TRIANGLE_EXCLAMATION "  Stale %d###sync", doc->NumUnbuilt > 0 ? doc->NumUnbuilt : 1);
+        else
+          ImFormatString(sync_lbl, IM_ARRAYSIZE(sync_lbl), "%s", ICON_FA_CIRCLE_CHECK "  Built###sync");
         const char* code_lbl = ICON_FA_CODE "  Code";
         const char* live_lbl = show_live ? ICON_FA_EYE "  Live###live" : ICON_FA_EYE_SLASH "  Live###live";
-        const char* src_lbl  = doc->MirrorSource == 2 ? ICON_FA_HOUSE "  Host###mirsrc"
-                             : doc->MirrorSource == 1 ? ICON_FA_CIRCLE_NODES "  Composer###mirsrc"
-                             :                          ICON_FA_CUBE "  Sample###mirsrc";
         const float pad2 = style.FramePadding.x * 2.0f;
         const float cluster_w = ImGui::CalcTextSize(code_lbl).x + pad2
                               + ImGui::CalcTextSize(live_lbl, ImGui::FindRenderedTextEnd(live_lbl)).x + pad2 + style.ItemSpacing.x
-                              + ImGui::CalcTextSize(src_lbl, ImGui::FindRenderedTextEnd(src_lbl)).x + pad2 + style.ItemSpacing.x;
+                              + ImGui::CalcTextSize(sync_lbl, ImGui::FindRenderedTextEnd(sync_lbl)).x + pad2 + style.ItemSpacing.x;
         ImGui::SameLine(ImMax(ImGui::GetCursorPosX() + em, ImGui::GetContentRegionMax().x - cluster_w - em * 0.2f));
 
-        temp_data->MirrorSourceSet = false;
-        temp_data->MirrorSource = doc->MirrorSource;
-        if (ImGui::Button(src_lbl))
-          ImGui::OpenPopup("##mirror_source");
-        ImGui::SetItemTooltip("Live mirror perspective: which running app the eye reflects");
-        if (ImGui::BeginPopup("##mirror_source"))
-        {
-          if (ImGui::MenuItem(ICON_FA_CUBE "  Sample app", nullptr, doc->MirrorSource == 0))
-          {
-            temp_data->MirrorSourceSet = true;
-            temp_data->MirrorSource = 0;
-          }
-          if (ImGui::MenuItem(ICON_FA_CIRCLE_NODES "  The Composer itself", nullptr, doc->MirrorSource == 1))
-          {
-            temp_data->MirrorSourceSet = true;
-            temp_data->MirrorSource = 1;
-          }
-          if (ImGui::MenuItem(ICON_FA_HOUSE "  Host app", nullptr, doc->MirrorSource == 2, doc->MirrorHost != nullptr))
-          {
-            temp_data->MirrorSourceSet = true;
-            temp_data->MirrorSource = 2;
-          }
-          ImGui::EndPopup();
-        }
+        // Amber ink when authored work is not compiled into the running app; quiet when in sync.
+        const ImVec4 chip_ink = stale ? ImLerp(kDemoGold, style.Colors[ImGuiCol_Text], 0.25f) : style.Colors[ImGuiCol_TextDisabled];
+        ImGui::PushStyleColor(ImGuiCol_Text, chip_ink);
+        if (ImGui::Button(sync_lbl))
+          temp_data->RevealPanel = ComposerPanel_Code;
+        ImGui::PopStyleColor();
+        if (stale)
+          ImGui::SetItemTooltip("Authored changes are NOT in the running app yet.\n"
+                                "Bootstrap: Generate (write the header), recompile, relaunch.\n"
+                                "Live nodes always show what the running binary actually is.");
+        else
+          ImGui::SetItemTooltip("Everything authored is compiled into the running app.");
         ImGui::SameLine();
 
         if (code_open)
@@ -1140,9 +1117,6 @@ namespace
     bool  CodeSnapClosed;      // resolved code height collapsed below threshold while idle
     bool  SelectionChanged;    // tree/canvas changed the selection this frame
     int   Selection;           // the new selection
-    bool  ToggleScrub;         // transport overlay: "App time" freeze button clicked (OnUpdate derives the new state)
-    bool  ScrubIdxSet;         // transport overlay: frame scrubber moved this frame
-    int   ScrubIdx;            // target app-state snapshot index
     bool  InspGripActivated;   // inspector splitter drag started this frame
     float BodyMaxX;            // body row right edge (screen) -- the inspector width derives from it
     bool  ProjLoadGraph;       // Project tab: load the graph file
@@ -1358,17 +1332,6 @@ namespace
         doc->Selection = temp_data->Selection;
       }
 
-      if (temp_data->ToggleScrub)
-      {
-        doc->TimeScrub = !doc->TimeScrub;
-        if (doc->TimeScrub)
-          doc->TimeScrubIndex = ImMax(0, doc->MirrorHistory.Count - 1);   // enter the timeline at "now"
-      }
-      if (temp_data->ScrubIdxSet)
-      {
-        doc->TimeScrubIndex = temp_data->ScrubIdx;
-      }
-
       // Regenerate the code buffers only when graph signature or selection changed. A closed panel keeps
       // stale buffers; the gate makes them correct when next needed.
       if (temp_data->ToggleDiffMode)
@@ -1567,50 +1530,6 @@ namespace
             ImGui::PopStyleVar();
           }
 
-          temp_data->ToggleScrub = false;
-          temp_data->ScrubIdxSet = false;
-          // Transport only appears with the live mirror visible.
-          const int app_frames = doc->MirrorHistory.Count;
-          if (doc->ShowLive && (app_frames > 1 || doc->TimeScrub))
-          {
-            const ImGuiStyle& tstyle  = ImGui::GetStyle();
-            const char*       t_lbl   = doc->TimeScrub ? ICON_FA_CLOCK "  App time###apptime" : ICON_FA_CLOCK "###apptime";
-            const float       t_btn_w = ImGui::CalcTextSize(t_lbl, ImGui::FindRenderedTextEnd(t_lbl)).x + tstyle.FramePadding.x * 2.0f;
-            const float       t_w     = t_btn_w + (doc->TimeScrub ? tstyle.ItemSpacing.x + em * 11.0f : 0.0f);
-            const ImVec2      c_min   = ImGui::GetWindowPos();
-            const ImVec2      c_size  = ImGui::GetWindowSize();
-            const ImVec2      t_pos(c_min.x + (c_size.x - t_w) * 0.5f, c_min.y + c_size.y - ImGui::GetFrameHeight() - em * 0.7f);
-            // Real overlay window, same reason as the health chip.
-            ImGui::SetNextWindowPos(ImVec2(t_pos.x - em * 0.4f, t_pos.y - em * 0.25f));
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, em * 0.5f);
-            ImGui::PushStyleColor(ImGuiCol_WindowBg,
-                DemoThemeMix(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg), ImGui::GetStyleColorVec4(ImGuiCol_Text), 0.04f, 0.99f));
-            if (ImGui::Begin("##canvas_transport", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
-                             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
-                             ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollbar))
-            {
-              if (doc->TimeScrub)
-                ImGui::PushStyleColor(ImGuiCol_Button, tstyle.Colors[ImGuiCol_ButtonActive]);
-              temp_data->ToggleScrub = ImGui::Button(t_lbl);
-              if (doc->TimeScrub)
-                ImGui::PopStyleColor();
-              ImGui::SetItemTooltip("Freeze the running app and scrub its recorded state history (%d frames)", app_frames);
-              if (doc->TimeScrub && app_frames > 0)
-              {
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(em * 11.0f);
-                int idx = ImClamp(doc->TimeScrubIndex, 0, app_frames - 1);
-                if (ImGui::SliderInt("##appscrub", &idx, 0, app_frames - 1, "frame %d"))
-                {
-                  temp_data->ScrubIdxSet = true;
-                  temp_data->ScrubIdx    = idx;
-                }
-              }
-            }
-            ImGui::End();
-            ImGui::PopStyleColor();
-            ImGui::PopStyleVar();
-          }
         }
         ImGui::EndChild();
 
@@ -1988,12 +1907,31 @@ namespace ImGui
   IMGUI_API void SetAppCodeFont(ImFont* font) { g_AppCodeFont = font; }
 
   //-----------------------------------------------------------------------------
-  // [SECTION] Demo bring-up (ShowAppLayerDemo: sample app + editor app composition)
+  // [SECTION] Demo bring-up (ShowAppLayerDemo: ONE application)
   //-----------------------------------------------------------------------------
+  // The demo composes its chrome AND its examples INTO the running app -- the same object model
+  // the live mirror reflects, so Live shows everything that exists. Called from a late layer's
+  // OnRender: windows, sidebars and controls are safe to push/pop here (their phase iterations
+  // for this frame already ran; changes take effect next frame). Layers are NOT safe (the layer
+  // vector is being iterated right now) -- the demo never pushes one; the host's foundation from
+  // InitializeApp is the one layer stack.
 
   IMGUI_API void ShowAppLayerDemo(bool* p_open, ImGuiApp* host)
   {
-      static ImGuiApp app;          // the mirrored "example" app the demo composes
+      // A caller without an ImGuiApp (plain imgui contexts: samples, tests) gets a demo-owned
+      // fallback, which is then the process's one app; the demo drives its frame below.
+      static ImGuiApp s_fallback_app;
+      static bool s_fallback_ready = false;
+      ImGuiApp* app = host;
+      if (app == nullptr)
+      {
+        if (!s_fallback_ready)
+        {
+          InitializeApp(&s_fallback_app);
+          s_fallback_ready = true;
+        }
+        app = &s_fallback_app;
+      }
 
       // Editor canvas theme, applied once per session.
       static bool canvas_theme_ready = false;
@@ -2014,99 +1952,93 @@ namespace ImGui
         canvas_theme_ready = true;
       }
 
-      // editor_app: dedicated, never-rebuilt ImGuiApp hosting the demo control panel + the Composer,
-      // pushed once so graph + toggle state survive example rebuilds.
-      static ImGuiApp editor_app;
-      static bool editor_ready = false;
-      if (!editor_ready)
+      // Chrome composition, once. Examples are pushed/popped AFTER the chrome, so they are always
+      // the tail of their vectors and the toggle rebuild below can pop them back off.
+      static ImGuiApp* s_composed = nullptr;
+      IM_ASSERT(s_composed == nullptr || s_composed == app);   // one application per process
+      if (s_composed != app)
       {
         ImGuiViewport* vp = ImGui::GetMainViewport();
-        // Task layer first: control OnUpdate runs there -- without it every Composer control's update is
-        // silently skipped.
-        ImGui::PushAppLayer<ImGuiAppTaskLayer>(&editor_app);
-        ImGui::PushAppLayer<ImGuiAppWindowLayer>(&editor_app);
-
-        ImGui::PushAppWindow<DemoPanelWindow>(&editor_app);
-        ImGuiAppWindowBase* panel = editor_app.Windows.back();
+        PushAppWindow<DemoPanelWindow>(app);
+        ImGuiAppWindowBase* panel = app->Windows.back();
         panel->HasInitialPlacement = true;
         panel->InitialSize = ImVec2(vp->WorkSize.x * 0.30f, vp->WorkSize.y * 0.40f);
         panel->InitialPos  = vp->WorkPos + ImVec2(vp->WorkSize.x * 0.02f, vp->WorkSize.y * 0.04f);
-        ImGui::PushWindowControl<DemoMenuControl>(&editor_app, panel);
+        PushWindowControl<DemoMenuControl>(app, panel);
 
-        ImGui::PushAppWindow<ComposerWindow>(&editor_app);
-        ImGuiAppWindowBase* metrics = editor_app.Windows.back();
+        PushAppWindow<ComposerWindow>(app);
+        ImGuiAppWindowBase* metrics = app->Windows.back();
         metrics->HasInitialPlacement = true;
         metrics->InitialSize = ImVec2(vp->WorkSize.x * 0.66f, vp->WorkSize.y * 0.66f);
         metrics->InitialPos  = vp->WorkPos + ImVec2(vp->WorkSize.x * 0.10f, vp->WorkSize.y * 0.10f);
-        ImGui::PushWindowControl<GraphDocControl>(&editor_app, metrics);   // producer: owns the doc (push first)
-        ImGui::PushWindowControl<ToolbarControl>(&editor_app, metrics);    // consumers depend on GraphDocData
-        ImGui::PushWindowControl<EditorBodyControl>(&editor_app, metrics);
-        ImGui::PushWindowControl<StatusStripControl>(&editor_app, metrics);   // status bar renders LAST -> window bottom
-        if (GraphDocData* d = GetGraphDoc(&editor_app))
-        {
-          d->Mirror = &app;
-          d->MirrorSample = &app;            // perspective 0: the example app
-          d->MirrorComposer = &editor_app;   // perspective 1: the editor sub-app hosting the Composer's chrome
-        }
-        editor_ready = true;
+        PushWindowControl<GraphDocControl>(app, metrics);   // producer: owns the doc (push first)
+        PushWindowControl<ToolbarControl>(app, metrics);    // consumers depend on GraphDocData
+        PushWindowControl<EditorBodyControl>(app, metrics);
+        PushWindowControl<StatusStripControl>(app, metrics);   // status bar renders LAST -> window bottom
+        s_composed = app;
       }
-      if (GraphDocData* d = GetGraphDoc(&editor_app))
-        d->MirrorHost = host;                // perspective 2: the PROCESS's app (refreshed: host outlives nothing here)
 
-      ImGuiAppWindowBase* panel   = editor_app.Windows[0];
-      ImGuiAppWindowBase* metrics = editor_app.Windows[1];
-      DemoMenuData*       st      = GetDemoMenu(&editor_app);
-
-      // Drive the windows' Open from the external/menu flags, tick the editor app, read the X buttons back.
-      panel->Open   = (p_open == nullptr) || *p_open;
-      metrics->Open = st->ShowMetrics;
-      ImGui::UpdateApp(&editor_app);
-      ImGui::RenderApp(&editor_app);
-      if (p_open != nullptr)     // panel X closes the whole demo
+      // Chrome windows, by label (the vector reallocs as examples push/pop).
+      ImGuiAppWindowBase* panel = nullptr;
+      ImGuiAppWindowBase* metrics = nullptr;
+      for (int i = 0; i < app->Windows.Size; i++)
       {
-        *p_open = panel->Open;
+        if (strcmp(app->Windows.Data[i]->Label, "ImGuiAppLayer Demo") == 0)
+          panel = app->Windows.Data[i];
+        else if (strcmp(app->Windows.Data[i]->Label, "ImGuiApp Composer") == 0)
+          metrics = app->Windows.Data[i];
       }
-      if (!metrics->Open)        // metrics X syncs the menu toggle
-      {
+      DemoMenuData* st = GetDemoMenu(app);
+      IM_ASSERT(panel != nullptr && metrics != nullptr && st != nullptr);
+
+      // This call sits AFTER this frame's window render: consume the X buttons first, then impose
+      // the external/menu flags for the next frame.
+      if (p_open != nullptr && !panel->Open)   // panel X closes the whole demo
+        *p_open = false;
+      panel->Open = (p_open == nullptr) || *p_open;
+      if (!metrics->Open)                      // Composer X syncs the menu toggle
         st->ShowMetrics = false;
-      }
+      metrics->Open = st->ShowMetrics;
 
-      // Full rebuild on toggle change or first frame. NOT !IsInitialized(): that flag belongs to platform
-      // bring-up and never goes true for this embedded app -- gating on it rebuilds every frame.
-      if (app.Layers.empty() ||
-          st->AppliedBaseWindow != st->ShowBaseWindow ||
+      // Example push/pop on toggle change: pop what was applied (reverse push order -- examples
+      // are the tail), re-push what is enabled. Composition changes land in the WAL as usual.
+      if (st->AppliedBaseWindow != st->ShowBaseWindow ||
           st->AppliedStatusBar  != st->ShowStatusBar  ||
           st->AppliedRandomTime != st->ShowRandomTime ||
           st->AppliedBreathing  != st->ShowBreathing)
       {
-        ShutdownApp(&app);
-        InitializeApp(&app);
+        if (st->AppliedBreathing)
+          PopAppControl(app);
+        if (st->AppliedRandomTime)
+          PopAppControl(app);
+        if (st->AppliedStatusBar)
+          PopAppSidebar(app);
+        if (st->AppliedBaseWindow)
+          PopAppWindow(app);
 
         ImGuiViewport* vp = ImGui::GetMainViewport();
         const float em = ImGui::GetFontSize();
 
         if (st->ShowBaseWindow)
         {
-          PushAppWindow<BaseWindow>(&app);
-          ImGuiAppWindowBase* w = app.Windows.back();
+          PushAppWindow<BaseWindow>(app);
+          ImGuiAppWindowBase* w = app->Windows.back();
           w->HasInitialPlacement = true;
           w->InitialSize = ImVec2(em * 16.0f, em * 8.0f);
           w->InitialPos  = ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + em * 2.0f);
-          PushWindowControl<BaseInfoControl>(&app, w);
+          PushWindowControl<BaseInfoControl>(app, w);
         }
-
         if (st->ShowStatusBar)
         {
-          PushAppSidebar<StatusBar>(&app, vp, ImGuiDir_Down, 0.0f, ImGuiWindowFlags_AlwaysAutoResize);
+          PushAppSidebar<StatusBar>(app, vp, ImGuiDir_Down, 0.0f, ImGuiWindowFlags_AlwaysAutoResize);
         }
-
         if (st->ShowRandomTime)
         {
-          PushAppControl<RandomTimeControlDemo>(&app);
+          PushAppControl<RandomTimeControlDemo>(app);
         }
         if (st->ShowBreathing)
         {
-          PushAppControl<BreathingControlDemo>(&app);
+          PushAppControl<BreathingControlDemo>(app);
         }
 
         st->AppliedBaseWindow = st->ShowBaseWindow;
@@ -2115,12 +2047,17 @@ namespace ImGui
         st->AppliedBreathing  = st->ShowBreathing;
       }
 
-      UpdateApp(&app);
-      RenderApp(&app);
-
-      if (app.ShutdownPending)
+      // Hosted mode ends here -- the host runs its own frame. Fallback mode: the demo owns it.
+      if (app == &s_fallback_app)
       {
-        ShutdownApp(&app);
+        UpdateApp(app);
+        RenderApp(app);
+        if (app->ShutdownPending)
+        {
+          ShutdownApp(app);
+          s_fallback_ready = false;
+          s_composed = nullptr;
+        }
       }
   }
 }
