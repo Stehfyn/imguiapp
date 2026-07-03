@@ -1,5 +1,990 @@
 // ImGuiAppAV seam implementation: recorder, encoder thread, sidecar writer/reader,
-// flight-recorder ring (imguiapp_av.h). IMPLEMENTATION PENDING: P2 (docs/av-design.md).
+// flight-recorder ring (imguiapp_av.h, docs/av-design.md).
+//
+// Index of this file (search for "[SECTION]"):
+// [SECTION] Clocks + sidecar primitives
+// [SECTION] Recorder state
+// [SECTION] Encoder thread + queue
+// [SECTION] Per-frame pump (AppRecordPump)
+// [SECTION] Public API: begin/end, blobs, ring
+// [SECTION] Sidecar readers (AppAVMetaDump / ReadInputLog / ReadStateSnapshot)
 
 #include "imguiapp_av.h"
 #include "imguiapp_qoi.h"
+#include "imgui_internal.h"   // ImStrncpy, ImFormatString
+
+#include <cstdio>
+#include <cstring>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <intrin.h>
+#else
+#include <chrono>
+#include <time.h>
+#endif
+
+//-----------------------------------------------------------------------------
+// [SECTION] Clocks + sidecar primitives
+//-----------------------------------------------------------------------------
+
+static ImU64 AvClockTsc()
+{
+#ifdef _WIN32
+  return (ImU64)__rdtsc();
+#else
+  // Must share a domain with AppClockTsc (imgui_applayer.cpp) -- sidecar StartTsc and
+  // FrameID.Tsc are compared: both fall back to CLOCK_MONOTONIC nanoseconds.
+  timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (ImU64)ts.tv_sec * 1000000000ull + (ImU64)ts.tv_nsec;
+#endif
+}
+
+static ImU64 AvClockHz()
+{
+#ifdef _WIN32
+  LARGE_INTEGER f;
+  ::QueryPerformanceFrequency(&f);
+  return (ImU64)f.QuadPart;
+#else
+  return 1000000000ull;
+#endif
+}
+
+static ImU64 AvClockCounter()
+{
+#ifdef _WIN32
+  LARGE_INTEGER c;
+  ::QueryPerformanceCounter(&c);
+  return (ImU64)c.QuadPart;
+#else
+  return (ImU64)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+#endif
+}
+
+// Sidecar header. Field-exact contract with the readers below; version bumps on any change.
+struct ImGuiAppAVMetaHeader
+{
+  char  Magic[8];      // "IMAVMETA"
+  ImU32 Version;       // 1
+  float Fps;
+  ImU64 StartTsc;
+  ImU64 QpcHz;
+  ImU64 StartQpc;
+};
+
+static const char* kAvMetaMagic = "IMAVMETA";
+
+// One framed record: {u32 type, u32 size, payload}. Append-only; buf may already hold records.
+static void AvRecordAppend(ImVector<char>* buf, ImU32 type, const void* payload, ImU32 size)
+{
+  const int base = buf->Size;
+  buf->resize(base + (int)(sizeof(ImU32) * 2 + size));
+  char* dst = buf->Data + base;
+  memcpy(dst, &type, sizeof(ImU32));
+  dst += sizeof(ImU32);
+  memcpy(dst, &size, sizeof(ImU32));
+  dst += sizeof(ImU32);
+  if (size > 0)
+    memcpy(dst, payload, size);
+}
+
+// Little scratch writer for multi-piece payloads.
+static void AvPut(ImVector<char>* buf, const void* src, int size)
+{
+  const int base = buf->Size;
+  buf->resize(base + size);
+  memcpy(buf->Data + base, src, (size_t)size);
+}
+
+//-----------------------------------------------------------------------------
+// [SECTION] Recorder state
+//-----------------------------------------------------------------------------
+
+// One queued frame, pixels owned (CaptureFrame pixels are only valid until the next capture).
+struct ImGuiAppAVJob
+{
+  int             Width;
+  int             Height;
+  ImGuiAppFrameID FrameID;
+  ImVector<char>  Pixels;      // tightly packed RGBA (pitch collapsed at copy)
+};
+
+// One ring entry: QOI-compressed pixels + the frame's already-framed sidecar records.
+struct ImGuiAppAVRingEntry
+{
+  int             Width;
+  int             Height;
+  ImGuiAppFrameID FrameID;
+  ImVector<char>  Qoi;
+  ImVector<char>  MetaRecords;
+};
+
+struct ImGuiAppRecorder
+{
+  ImGuiApp*                 App;
+  ImGuiAppAVEncoder*        Encoder;
+  ImGuiAppAVEncodeConfig    Config;        // Timing resolved (never Auto) before the provider sees it
+  char                      OutputPath[512];
+  bool                      Active;
+  bool                      EncoderOpen;
+  int                       FixedWidth;    // 0 until the first captured frame locks the size
+  int                       FixedHeight;
+
+  // Sidecar (normal mode; the ring writes its sidecar only at dump)
+  FILE*                     Meta;
+  ImGuiAppAVMetaHeader      MetaHeader;
+
+  // Per-frame pending data (set during the frame, consumed by the pump)
+  ImVector<char>            PendingBlob;
+  bool                      PendingBlobSet;
+  ImVector<char>            PendingSnapshotRecord;   // framed StateSnapshot record, if requested this frame
+
+  // Attached input log (caller-owned): new frames since LastInputCount serialize each pump
+  const ImGuiAppInputLog*   InputLog;
+  int                       LastInputCount;
+  ImGuiID                   InputHdrComposition;     // composition the last written InputHdr described
+  ImVector<char>            InputHdrRecord;          // latest framed InputHdr (ring rewrites it at dump)
+
+  // Encoder thread + bounded queue (normal mode only)
+  std::thread               Thread;
+  std::mutex                Mutex;
+  std::condition_variable   CvPush;
+  std::condition_variable   CvPop;
+  ImVector<ImGuiAppAVJob*>  Queue;         // FIFO; front = index 0
+  int                       QueueDepth;
+  ImGuiAppRecordQueuePolicy QueuePolicy;
+  bool                      ThreadStop;
+  bool                      EncodeFailed;
+  ImU64                     DroppedFrames;
+
+  // Ring mode
+  bool                      IsRing;
+  ImGuiAppRingConfig        Ring;
+  ImVector<ImGuiAppAVRingEntry*> RingEntries;   // FIFO; front = oldest
+  size_t                    RingBytes;
+  double                    RingLastAcceptSec;
+  int                       DumpCount;
+
+  ImGuiAppRecorder()
+  {
+    App = nullptr;
+    Encoder = nullptr;
+    OutputPath[0] = 0;
+    Active = false;
+    EncoderOpen = false;
+    FixedWidth = 0;
+    FixedHeight = 0;
+    Meta = nullptr;
+    memset(&MetaHeader, 0, sizeof(MetaHeader));
+    PendingBlobSet = false;
+    InputLog = nullptr;
+    LastInputCount = 0;
+    InputHdrComposition = 0;
+    QueueDepth = 3;
+    QueuePolicy = ImGuiAppRecordQueuePolicy_Block;
+    ThreadStop = false;
+    EncodeFailed = false;
+    DroppedFrames = 0;
+    IsRing = false;
+    RingBytes = 0;
+    RingLastAcceptSec = -1e300;
+    DumpCount = 0;
+  }
+};
+
+IMGUI_API void ImGuiAppAV_DestroyEncoder(ImGuiAppAVEncoder* encoder)
+{
+  if (encoder == nullptr)
+    return;
+  // Providers must make Close idempotent; the recorder closes exactly once after the
+  // last WriteFrame, so a second Close here on an already-closed encoder is a no-op.
+  if (encoder->Close != nullptr)
+    encoder->Close(encoder);
+  if (encoder->Destroy != nullptr)
+    encoder->Destroy(encoder);
+}
+
+//-----------------------------------------------------------------------------
+// [SECTION] Encoder thread + queue
+//-----------------------------------------------------------------------------
+
+static void AvEncoderThread(ImGuiAppRecorder* rec)
+{
+  for (;;)
+  {
+    ImGuiAppAVJob* job = nullptr;
+    {
+      std::unique_lock<std::mutex> lock(rec->Mutex);
+      rec->CvPop.wait(lock, [rec] { return rec->Queue.Size > 0 || rec->ThreadStop; });
+      if (rec->Queue.Size == 0 && rec->ThreadStop)
+        return;
+      job = rec->Queue.Data[0];
+      rec->Queue.erase(rec->Queue.begin());
+      rec->CvPush.notify_one();
+    }
+
+    ImGuiAppAVFrame frame;
+    frame.Width = job->Width;
+    frame.Height = job->Height;
+    frame.PitchBytes = job->Width * 4;
+    frame.Pixels = job->Pixels.Data;
+    frame.FrameID = job->FrameID;
+    if (!rec->Encoder->WriteFrame(rec->Encoder, &frame))
+      rec->EncodeFailed = true;   // sticky; reported at AppRecordEnd
+    IM_DELETE(job);
+  }
+}
+
+// Push with the configured full-queue policy. Returns false when the frame was dropped.
+static bool AvQueuePush(ImGuiAppRecorder* rec, ImGuiAppAVJob* job)
+{
+  std::unique_lock<std::mutex> lock(rec->Mutex);
+  if (rec->QueuePolicy == ImGuiAppRecordQueuePolicy_Block)
+  {
+    rec->CvPush.wait(lock, [rec] { return rec->Queue.Size < rec->QueueDepth || rec->ThreadStop; });
+    if (rec->ThreadStop)
+    {
+      IM_DELETE(job);
+      return false;
+    }
+  }
+  else if (rec->Queue.Size >= rec->QueueDepth)
+  {
+    rec->DroppedFrames++;
+    IM_DELETE(job);
+    return false;
+  }
+  rec->Queue.push_back(job);
+  rec->CvPop.notify_one();
+  return true;
+}
+
+//-----------------------------------------------------------------------------
+// [SECTION] Sidecar record builders
+//-----------------------------------------------------------------------------
+
+// Frame record payload: u64 frame_index | u64 tsc | f64 time_sec | u32 user_size | user bytes.
+static void AvBuildFrameRecord(ImVector<char>* out, const ImGuiAppFrameID* id, const void* user, ImU32 user_size)
+{
+  ImVector<char> payload;
+  AvPut(&payload, &id->FrameIndex, sizeof(ImU64));
+  AvPut(&payload, &id->Tsc, sizeof(ImU64));
+  AvPut(&payload, &id->TimeSec, sizeof(double));
+  AvPut(&payload, &user_size, sizeof(ImU32));
+  if (user_size > 0)
+    AvPut(&payload, user, (int)user_size);
+  AvRecordAppend(out, ImGuiAppAVMetaRecordType_Frame, payload.Data, (ImU32)payload.Size);
+}
+
+// InputHdr payload: u32 composition_id | u32 frame_size | u32 slot_count | {u32 id, s32 offset, s32 size}*.
+static void AvBuildInputHdrRecord(ImVector<char>* out, const ImGuiAppInputLog* log)
+{
+  ImVector<char> payload;
+  const ImU32 comp = (ImU32)log->CompositionID;
+  const ImU32 frame_size = (ImU32)log->FrameSize;
+  const ImU32 slots = (ImU32)log->SlotIds.Size;
+  AvPut(&payload, &comp, sizeof(ImU32));
+  AvPut(&payload, &frame_size, sizeof(ImU32));
+  AvPut(&payload, &slots, sizeof(ImU32));
+  for (int s = 0; s < log->SlotIds.Size; s++)
+  {
+    const ImU32 id = (ImU32)log->SlotIds.Data[s];
+    const ImS32 off = (ImS32)log->SlotOffsets.Data[s];
+    const ImS32 size = (ImS32)log->SlotSizes.Data[s];
+    AvPut(&payload, &id, sizeof(ImU32));
+    AvPut(&payload, &off, sizeof(ImS32));
+    AvPut(&payload, &size, sizeof(ImS32));
+  }
+  out->clear();
+  AvRecordAppend(out, ImGuiAppAVMetaRecordType_InputHdr, payload.Data, (ImU32)payload.Size);
+}
+
+// InputFrame payload: u64 frame_index | u32 state_hash | frame_size bytes (dt + TempData slots).
+static void AvBuildInputFrameRecord(ImVector<char>* out, ImU64 frame_index, ImU32 state_hash, const char* frame_bytes, int frame_size)
+{
+  ImVector<char> payload;
+  AvPut(&payload, &frame_index, sizeof(ImU64));
+  AvPut(&payload, &state_hash, sizeof(ImU32));
+  AvPut(&payload, frame_bytes, frame_size);
+  AvRecordAppend(out, ImGuiAppAVMetaRecordType_InputFrame, payload.Data, (ImU32)payload.Size);
+}
+
+// StateSnapshot payload: u32 composition_id | u64 frame_index | u32 slot_count |
+// {u32 id, s32 size}* | state bytes (slots concatenated in StorageEntries order).
+static bool AvBuildStateSnapshotRecord(ImVector<char>* out, ImGuiApp* app, ImU64 frame_index)
+{
+  ImVector<char> payload;
+  const ImU32 comp = (ImU32)ImGui::GetAppCompositionID(app);
+  AvPut(&payload, &comp, sizeof(ImU32));
+  AvPut(&payload, &frame_index, sizeof(ImU64));
+
+  ImU32 slots = 0;
+  for (int i = 0; i < app->StorageEntries.Size; i++)
+    if (app->StorageEntries.Data[i].Size > 0 && app->StorageEntries.Data[i].Ptr != nullptr)
+      slots++;
+  if (slots == 0)
+    return false;
+  AvPut(&payload, &slots, sizeof(ImU32));
+  for (int i = 0; i < app->StorageEntries.Size; i++)
+  {
+    const ImGuiAppStorageEntry* e = &app->StorageEntries.Data[i];
+    if (e->Size <= 0 || e->Ptr == nullptr)
+      continue;
+    const ImU32 id = (ImU32)e->ID;
+    const ImS32 size = (ImS32)e->Size;
+    AvPut(&payload, &id, sizeof(ImU32));
+    AvPut(&payload, &size, sizeof(ImS32));
+  }
+  for (int i = 0; i < app->StorageEntries.Size; i++)
+  {
+    const ImGuiAppStorageEntry* e = &app->StorageEntries.Data[i];
+    if (e->Size <= 0 || e->Ptr == nullptr)
+      continue;
+    AvPut(&payload, e->Ptr, e->Size);
+  }
+  out->clear();
+  AvRecordAppend(out, ImGuiAppAVMetaRecordType_StateSnapshot, payload.Data, (ImU32)payload.Size);
+  return true;
+}
+
+// Serialize input-log frames recorded since the last pump into framed records.
+static void AvCollectInputRecords(ImGuiAppRecorder* rec, ImVector<char>* out)
+{
+  const ImGuiAppInputLog* log = rec->InputLog;
+  if (log == nullptr || log->FrameSize == 0)
+    return;
+  if (log->CompositionID != rec->InputHdrComposition && log->SlotIds.Size > 0)
+  {
+    const bool first_hdr = rec->InputHdrComposition == 0;
+    AvBuildInputHdrRecord(&rec->InputHdrRecord, log);
+    rec->InputHdrComposition = log->CompositionID;
+    if (!first_hdr)
+      rec->LastInputCount = 0;   // composition changed: the log restarted; frames before attach stay excluded
+    AvPut(out, rec->InputHdrRecord.Data, rec->InputHdrRecord.Size);
+  }
+  if (log->Count < rec->LastInputCount)
+    rec->LastInputCount = 0;   // caller cleared between takes
+  for (int f = rec->LastInputCount; f < log->Count; f++)
+  {
+    const char* bytes = log->Frames.Data + f * log->FrameSize;
+    const ImU32 hash = f < log->StateHashes.Size ? (ImU32)log->StateHashes.Data[f] : 0;
+    AvBuildInputFrameRecord(out, rec->App->FrameID.FrameIndex, hash, bytes, log->FrameSize);
+  }
+  rec->LastInputCount = log->Count;
+}
+
+static void AvMetaWrite(ImGuiAppRecorder* rec, const ImVector<char>* framed)
+{
+  if (rec->Meta == nullptr || framed->Size == 0)
+    return;
+  fwrite(framed->Data, 1, (size_t)framed->Size, rec->Meta);
+  fflush(rec->Meta);   // crash-honest, WAL-style
+}
+
+//-----------------------------------------------------------------------------
+// [SECTION] Per-frame pump
+//-----------------------------------------------------------------------------
+
+IMGUI_API void ImGui::AppRecordPump(ImGuiAppRecorder* rec)
+{
+  if (rec == nullptr || !rec->Active)
+    return;
+
+  const ImGuiAppPlatformBackend* backend = ImGuiApp_GetPlatformBackend();
+  if (backend->CaptureFrame == nullptr)
+    return;
+
+  // Ring subsampling happens before the (expensive) readback decision would matter;
+  // capture still runs so the staging chain stays warm and frame-paced.
+  ImGuiAppAVFrame captured;
+  const bool have_frame = backend->CaptureFrame(rec->App, &captured)
+                       && captured.Pixels != nullptr && captured.Width > 0 && captured.Height > 0;
+  if (!have_frame)
+  {
+    // Frame-scoped records must not shift onto the NEXT frame's identity (the arm
+    // frame and any capture hiccup land here). Same discipline as the ring skip.
+    rec->PendingBlobSet = false;
+    rec->PendingBlob.clear();
+    rec->PendingSnapshotRecord.clear();
+    return;
+  }
+
+  // Fixed-size contract: a resize mid-recording aborts rather than silently rescaling.
+  if (rec->FixedWidth == 0)
+  {
+    rec->FixedWidth = rec->Config.Width > 0 ? rec->Config.Width : captured.Width;
+    rec->FixedHeight = rec->Config.Height > 0 ? rec->Config.Height : captured.Height;
+  }
+  if (captured.Width != rec->FixedWidth || captured.Height != rec->FixedHeight)
+  {
+    ImGui::AppWALWrite(rec->App->WAL, ImGuiAppWALLevel_Lifecycle, "av: abort recording, frame %dx%d != locked %dx%d",
+                       captured.Width, captured.Height, rec->FixedWidth, rec->FixedHeight);
+    rec->Active = false;
+    return;
+  }
+
+  captured.FrameID = rec->App->FrameID;
+
+  // Ring subsample decides BEFORE any record is consumed: skipped frames drop their
+  // frame-scoped blob/snapshot, but the input-log backlog stays unconsumed and lands
+  // with the next accepted frame (replay needs every input frame).
+  if (rec->IsRing)
+  {
+    const double min_step = rec->Ring.Fps > 0.0f ? 1.0 / (double)rec->Ring.Fps : 0.0;
+    if (captured.FrameID.TimeSec - rec->RingLastAcceptSec + 1e-9 < min_step)
+    {
+      rec->PendingBlobSet = false;
+      rec->PendingBlob.clear();
+      rec->PendingSnapshotRecord.clear();
+      return;
+    }
+  }
+
+  // Sidecar records for this frame (built on the app thread; pixel copy below).
+  ImVector<char> meta;
+  const void* user = rec->PendingBlobSet ? (const void*)rec->PendingBlob.Data : nullptr;
+  const ImU32 user_size = rec->PendingBlobSet ? (ImU32)rec->PendingBlob.Size : 0;
+  AvBuildFrameRecord(&meta, &captured.FrameID, user, user_size);
+  AvCollectInputRecords(rec, &meta);
+  if (rec->PendingSnapshotRecord.Size > 0)
+  {
+    AvPut(&meta, rec->PendingSnapshotRecord.Data, rec->PendingSnapshotRecord.Size);
+    rec->PendingSnapshotRecord.clear();
+  }
+  rec->PendingBlobSet = false;
+  rec->PendingBlob.clear();
+
+  if (rec->IsRing)
+  {
+    rec->RingLastAcceptSec = captured.FrameID.TimeSec;
+
+    ImGuiAppAVRingEntry* entry = IM_NEW(ImGuiAppAVRingEntry)();
+    entry->Width = captured.Width;
+    entry->Height = captured.Height;
+    entry->FrameID = captured.FrameID;
+    if (!ImGuiAppAV_QoiEncode(captured.Pixels, captured.Width, captured.Height, captured.PitchBytes, &entry->Qoi))
+    {
+      IM_DELETE(entry);
+      return;
+    }
+    entry->MetaRecords.swap(meta);
+    rec->RingEntries.push_back(entry);
+    rec->RingBytes += (size_t)entry->Qoi.Size + (size_t)entry->MetaRecords.Size;
+
+    // Evict oldest while either bound binds.
+    const double span_limit = (double)rec->Ring.Seconds;
+    const size_t byte_limit = (size_t)rec->Ring.MaxMemoryMB * 1024u * 1024u;
+    while (rec->RingEntries.Size > 1)
+    {
+      ImGuiAppAVRingEntry* oldest = rec->RingEntries.Data[0];
+      const bool too_old = captured.FrameID.TimeSec - oldest->FrameID.TimeSec > span_limit;
+      const bool too_big = rec->RingBytes > byte_limit;
+      if (!too_old && !too_big)
+        break;
+      rec->RingBytes -= (size_t)oldest->Qoi.Size + (size_t)oldest->MetaRecords.Size;
+      IM_DELETE(oldest);
+      rec->RingEntries.erase(rec->RingEntries.begin());
+    }
+    return;
+  }
+
+  // Normal mode: sidecar now (this thread owns the FILE*), pixels to the encoder thread.
+  AvMetaWrite(rec, &meta);
+
+  ImGuiAppAVJob* job = IM_NEW(ImGuiAppAVJob)();
+  job->Width = captured.Width;
+  job->Height = captured.Height;
+  job->FrameID = captured.FrameID;
+  job->Pixels.resize(captured.Width * captured.Height * 4);
+  const char* src = (const char*)captured.Pixels;
+  char* dst = job->Pixels.Data;
+  const int row = captured.Width * 4;
+  for (int y = 0; y < captured.Height; y++)
+  {
+    memcpy(dst, src, (size_t)row);
+    src += captured.PitchBytes;
+    dst += row;
+  }
+
+  const ImU64 drops_before = rec->DroppedFrames;
+  if (!AvQueuePush(rec, job) && rec->DroppedFrames == drops_before + 1 && drops_before == 0)
+    ImGui::AppWALWrite(rec->App->WAL, ImGuiAppWALLevel_Lifecycle, "av: encoder queue full, dropping frames (DropNewest)");
+}
+
+//-----------------------------------------------------------------------------
+// [SECTION] Public API: begin/end, blobs, ring
+//-----------------------------------------------------------------------------
+
+namespace ImGui
+{
+
+static ImGuiAppRecorder* AvBeginCommon(ImGuiApp* app, ImGuiAppAVEncoder* encoder, const ImGuiAppAVEncodeConfig* config)
+{
+  IM_ASSERT(app != nullptr && encoder != nullptr && config != nullptr && config->OutputPath != nullptr);
+  if (app == nullptr || encoder == nullptr || config == nullptr || config->OutputPath == nullptr)
+    return nullptr;
+  const ImGuiAppPlatformBackend* backend = ImGuiApp_GetPlatformBackend();
+  if (backend->CaptureFrame == nullptr)
+  {
+    AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "av: begin refused, platform backend has no CaptureFrame");
+    return nullptr;
+  }
+
+  ImGuiAppRecorder* rec = IM_NEW(ImGuiAppRecorder)();
+  rec->App = app;
+  rec->Encoder = encoder;
+  rec->Config = *config;
+  ImStrncpy(rec->OutputPath, config->OutputPath, IM_ARRAYSIZE(rec->OutputPath));
+  rec->Config.OutputPath = rec->OutputPath;   // config copy must not dangle on the caller's string
+  if (rec->Config.Timing == ImGuiAppAVTimingMode_Auto)
+    rec->Config.Timing = app->Pacer.Mode == ImGuiAppPacerMode_Fixed ? ImGuiAppAVTimingMode_Constant : ImGuiAppAVTimingMode_Realtime;
+
+  rec->MetaHeader.Version = 1;
+  memcpy(rec->MetaHeader.Magic, kAvMetaMagic, 8);
+  rec->MetaHeader.Fps = rec->Config.Fps;
+  rec->MetaHeader.StartTsc = AvClockTsc();
+  rec->MetaHeader.QpcHz = AvClockHz();
+  rec->MetaHeader.StartQpc = AvClockCounter();
+  return rec;
+}
+
+IMGUI_API ImGuiAppRecorder* AppRecordBegin(ImGuiApp* app, ImGuiAppAVEncoder* encoder, const ImGuiAppAVEncodeConfig* config)
+{
+  ImGuiAppRecorder* rec = AvBeginCommon(app, encoder, config);
+  if (rec == nullptr)
+    return nullptr;
+
+  if (!encoder->Open(encoder, &rec->Config))
+  {
+    AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "av: encoder '%s' failed to open '%s'", encoder->Name, rec->OutputPath);
+    IM_DELETE(rec);
+    return nullptr;
+  }
+  rec->EncoderOpen = true;
+
+  if (rec->Config.WriteSidecar)
+  {
+    char path[560];
+    ImFormatString(path, IM_ARRAYSIZE(path), "%s.avmeta", rec->OutputPath);
+    rec->Meta = fopen(path, "wb");
+    if (rec->Meta != nullptr)
+    {
+      fwrite(&rec->MetaHeader, 1, sizeof(rec->MetaHeader), rec->Meta);
+      fflush(rec->Meta);
+    }
+  }
+
+  rec->Active = true;
+  rec->Thread = std::thread(AvEncoderThread, rec);
+  AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "av: recording '%s' via %s (%s)", rec->OutputPath, encoder->Name,
+              rec->Config.Timing == ImGuiAppAVTimingMode_Constant ? "constant" : "realtime");
+  return rec;
+}
+
+IMGUI_API bool AppRecordIsActive(const ImGuiAppRecorder* rec)
+{
+  return rec != nullptr && rec->Active;
+}
+
+IMGUI_API void AppRecordSetQueuePolicy(ImGuiAppRecorder* rec, ImGuiAppRecordQueuePolicy policy, int depth)
+{
+  IM_ASSERT(rec != nullptr && depth > 0);
+  if (rec == nullptr || depth <= 0)
+    return;
+  std::lock_guard<std::mutex> lock(rec->Mutex);
+  rec->QueuePolicy = policy;
+  rec->QueueDepth = depth;
+  rec->CvPush.notify_all();
+}
+
+IMGUI_API void AppRecordSetFrameData(ImGuiAppRecorder* rec, const void* data, int size)
+{
+  IM_ASSERT(rec != nullptr);
+  if (rec == nullptr || data == nullptr || size <= 0)
+    return;
+  rec->PendingBlob.resize(size);
+  memcpy(rec->PendingBlob.Data, data, (size_t)size);
+  rec->PendingBlobSet = true;
+}
+
+IMGUI_API void AppRecordSnapshotState(ImGuiAppRecorder* rec, ImGuiApp* app)
+{
+  IM_ASSERT(rec != nullptr && app != nullptr);
+  if (rec == nullptr || app == nullptr)
+    return;
+  // The snapshot travels as the frame's typed StateSnapshot record (the user blob stays
+  // free for AppRecordSetFrameData); the frame_index inside it binds video frame N to
+  // app state N.
+  AvBuildStateSnapshotRecord(&rec->PendingSnapshotRecord, app, app->FrameID.FrameIndex);
+}
+
+IMGUI_API void AppRecordAttachInputLog(ImGuiAppRecorder* rec, const ImGuiAppInputLog* log)
+{
+  IM_ASSERT(rec != nullptr);
+  if (rec == nullptr)
+    return;
+  rec->InputLog = log;
+  rec->LastInputCount = log != nullptr ? log->Count : 0;   // frames before attach are not part of this take
+  rec->InputHdrComposition = 0;
+}
+
+IMGUI_API void AppRecordEnd(ImGuiAppRecorder* rec)
+{
+  IM_ASSERT(rec != nullptr);
+  if (rec == nullptr)
+    return;
+  rec->Active = false;
+
+  if (!rec->IsRing)
+  {
+    {
+      std::lock_guard<std::mutex> lock(rec->Mutex);
+      rec->ThreadStop = true;
+      rec->CvPop.notify_all();
+      rec->CvPush.notify_all();
+    }
+    if (rec->Thread.joinable())
+      rec->Thread.join();
+    if (rec->EncoderOpen)
+    {
+      rec->Encoder->Close(rec->Encoder);
+      rec->EncoderOpen = false;
+    }
+    if (rec->Meta != nullptr)
+    {
+      fclose(rec->Meta);
+      rec->Meta = nullptr;
+    }
+    if (rec->DroppedFrames > 0)
+      AppWALWrite(rec->App->WAL, ImGuiAppWALLevel_Lifecycle, "av: recording ended, %llu frames dropped", (unsigned long long)rec->DroppedFrames);
+    if (rec->EncodeFailed)
+      AppWALWrite(rec->App->WAL, ImGuiAppWALLevel_Lifecycle, "av: encoder '%s' reported write failures", rec->Encoder->Name);
+  }
+
+  for (int i = 0; i < rec->RingEntries.Size; i++)
+    IM_DELETE(rec->RingEntries.Data[i]);
+  rec->RingEntries.clear();
+  for (int i = 0; i < rec->Queue.Size; i++)
+    IM_DELETE(rec->Queue.Data[i]);
+  rec->Queue.clear();
+  IM_DELETE(rec);
+}
+
+IMGUI_API ImGuiAppRecorder* AppRecordBeginRing(ImGuiApp* app, ImGuiAppAVEncoder* encoder, const ImGuiAppAVEncodeConfig* config, const ImGuiAppRingConfig* ring)
+{
+  IM_ASSERT(ring != nullptr);
+  if (ring == nullptr)
+    return nullptr;
+  ImGuiAppRecorder* rec = AvBeginCommon(app, encoder, config);
+  if (rec == nullptr)
+    return nullptr;
+  // The provider stays closed until a dump; ring compression is synchronous on the app
+  // thread (QOI is fast), so no encoder thread either.
+  rec->IsRing = true;
+  rec->Ring = *ring;
+  rec->Active = true;
+  AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "av: flight recorder armed (%.1fs / %dMB @ %.0f fps)",
+              rec->Ring.Seconds, rec->Ring.MaxMemoryMB, rec->Ring.Fps);
+  return rec;
+}
+
+IMGUI_API bool AppRecordDumpRing(ImGuiAppRecorder* rec, const char* reason)
+{
+  IM_ASSERT(rec != nullptr && rec->IsRing);
+  if (rec == nullptr || !rec->IsRing || rec->RingEntries.Size == 0)
+    return false;
+
+  rec->DumpCount++;
+  char path[560];
+  if (rec->DumpCount == 1)
+    ImStrncpy(path, rec->OutputPath, IM_ARRAYSIZE(path));
+  else
+  {
+    // "-N" before the extension when one exists; appended otherwise.
+    const char* dot = strrchr(rec->OutputPath, '.');
+    const char* slash_f = strrchr(rec->OutputPath, '/');
+    const char* slash_b = strrchr(rec->OutputPath, '\\');
+    const char* slash = slash_b > slash_f ? slash_b : slash_f;
+    if (dot != nullptr && dot > slash)
+      ImFormatString(path, IM_ARRAYSIZE(path), "%.*s-%d%s", (int)(dot - rec->OutputPath), rec->OutputPath, rec->DumpCount, dot);
+    else
+      ImFormatString(path, IM_ARRAYSIZE(path), "%s-%d", rec->OutputPath, rec->DumpCount);
+  }
+
+  AppWALWrite(rec->App->WAL, ImGuiAppWALLevel_Lifecycle, "av: ring dump -> '%s' (%d frames, reason: %s)",
+              path, rec->RingEntries.Size, reason != nullptr ? reason : "unspecified");
+
+  ImGuiAppAVEncodeConfig dump_config = rec->Config;
+  dump_config.OutputPath = path;
+  dump_config.Width = rec->RingEntries.Data[0]->Width;
+  dump_config.Height = rec->RingEntries.Data[0]->Height;
+  if (!rec->Encoder->Open(rec->Encoder, &dump_config))
+  {
+    AppWALWrite(rec->App->WAL, ImGuiAppWALLevel_Lifecycle, "av: ring dump failed, encoder '%s' would not open", rec->Encoder->Name);
+    return false;
+  }
+
+  // Sidecar for the dump: header, reason marker, the take's input header, then per-frame records.
+  FILE* meta = nullptr;
+  if (rec->Config.WriteSidecar)
+  {
+    char meta_path[576];
+    ImFormatString(meta_path, IM_ARRAYSIZE(meta_path), "%s.avmeta", path);
+    meta = fopen(meta_path, "wb");
+  }
+  if (meta != nullptr)
+  {
+    fwrite(&rec->MetaHeader, 1, sizeof(rec->MetaHeader), meta);
+    if (reason != nullptr && reason[0])
+    {
+      // Reason marker: a Frame record with sentinel index ~0 whose user blob is the reason text.
+      ImVector<char> marker;
+      ImGuiAppFrameID sentinel;
+      sentinel.FrameIndex = (ImU64)-1;
+      AvBuildFrameRecord(&marker, &sentinel, reason, (ImU32)strlen(reason));
+      fwrite(marker.Data, 1, (size_t)marker.Size, meta);
+    }
+    if (rec->InputHdrRecord.Size > 0)
+      fwrite(rec->InputHdrRecord.Data, 1, (size_t)rec->InputHdrRecord.Size, meta);
+  }
+
+  bool ok = true;
+  ImVector<char> rgba;
+  for (int i = 0; i < rec->RingEntries.Size; i++)
+  {
+    ImGuiAppAVRingEntry* entry = rec->RingEntries.Data[i];
+    int w = 0;
+    int h = 0;
+    if (!ImGuiAppAV_QoiDecode(entry->Qoi.Data, entry->Qoi.Size, &rgba, &w, &h))
+    {
+      ok = false;
+      break;
+    }
+    ImGuiAppAVFrame frame;
+    frame.Width = w;
+    frame.Height = h;
+    frame.PitchBytes = w * 4;
+    frame.Pixels = rgba.Data;
+    frame.FrameID = entry->FrameID;
+    if (!rec->Encoder->WriteFrame(rec->Encoder, &frame))
+    {
+      ok = false;
+      break;
+    }
+    if (meta != nullptr && entry->MetaRecords.Size > 0)
+      fwrite(entry->MetaRecords.Data, 1, (size_t)entry->MetaRecords.Size, meta);
+  }
+  rec->Encoder->Close(rec->Encoder);
+  if (meta != nullptr)
+    fclose(meta);
+  return ok;
+}
+
+//-----------------------------------------------------------------------------
+// [SECTION] Sidecar readers
+//-----------------------------------------------------------------------------
+
+struct ImGuiAppAVMetaReader
+{
+  ImVector<char>       Bytes;
+  ImGuiAppAVMetaHeader Header;
+  int                  Cursor;   // first record byte
+};
+
+static bool AvMetaLoad(const char* path, ImGuiAppAVMetaReader* r)
+{
+  FILE* f = fopen(path, "rb");
+  if (f == nullptr)
+    return false;
+  fseek(f, 0, SEEK_END);
+  const long size = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  if (size < (long)sizeof(ImGuiAppAVMetaHeader))
+  {
+    fclose(f);
+    return false;
+  }
+  r->Bytes.resize((int)size);
+  const bool read_ok = fread(r->Bytes.Data, 1, (size_t)size, f) == (size_t)size;
+  fclose(f);
+  if (!read_ok)
+    return false;
+  memcpy(&r->Header, r->Bytes.Data, sizeof(r->Header));
+  if (memcmp(r->Header.Magic, kAvMetaMagic, 8) != 0 || r->Header.Version != 1)
+    return false;
+  r->Cursor = (int)sizeof(ImGuiAppAVMetaHeader);
+  return true;
+}
+
+// Advances to the next record; false at end or on a truncated tail (a crash mid-write
+// leaves a partial record -- readers treat it as end-of-stream, WAL-style).
+static bool AvMetaNext(ImGuiAppAVMetaReader* r, ImU32* out_type, const char** out_payload, ImU32* out_size)
+{
+  // 64-bit arithmetic: a corrupted size near UINT32_MAX must not wrap the bounds check.
+  if ((ImS64)r->Cursor + (ImS64)(sizeof(ImU32) * 2) > (ImS64)r->Bytes.Size)
+    return false;
+  ImU32 type = 0;
+  ImU32 size = 0;
+  memcpy(&type, r->Bytes.Data + r->Cursor, sizeof(ImU32));
+  memcpy(&size, r->Bytes.Data + r->Cursor + sizeof(ImU32), sizeof(ImU32));
+  if ((ImS64)r->Cursor + (ImS64)(sizeof(ImU32) * 2) + (ImS64)size > (ImS64)r->Bytes.Size)
+    return false;
+  *out_type = type;
+  *out_payload = r->Bytes.Data + r->Cursor + sizeof(ImU32) * 2;
+  *out_size = size;
+  r->Cursor += (int)(sizeof(ImU32) * 2 + size);
+  return true;
+}
+
+IMGUI_API bool AppAVMetaDump(const char* avmeta_path)
+{
+  ImGuiAppAVMetaReader r;
+  if (!AvMetaLoad(avmeta_path, &r))
+    return false;
+  printf("# %s: v%u fps=%.3f start_tsc=%llu qpc_hz=%llu\n", avmeta_path, r.Header.Version, r.Header.Fps,
+         (unsigned long long)r.Header.StartTsc, (unsigned long long)r.Header.QpcHz);
+  printf("type\tframe\ttsc\ttime_sec\tsize\n");
+  ImU32 type = 0;
+  const char* p = nullptr;
+  ImU32 size = 0;
+  while (AvMetaNext(&r, &type, &p, &size))
+  {
+    switch (type)
+    {
+    case ImGuiAppAVMetaRecordType_Frame:
+    {
+      ImU64 idx = 0;
+      ImU64 tsc = 0;
+      double sec = 0.0;
+      ImU32 user = 0;
+      memcpy(&idx, p, 8); memcpy(&tsc, p + 8, 8); memcpy(&sec, p + 16, 8); memcpy(&user, p + 24, 4);
+      printf("frame\t%llu\t%llu\t%.6f\t%u\n", (unsigned long long)idx, (unsigned long long)tsc, sec, user);
+      break;
+    }
+    case ImGuiAppAVMetaRecordType_InputHdr:
+      printf("input_hdr\t-\t-\t-\t%u\n", size);
+      break;
+    case ImGuiAppAVMetaRecordType_InputFrame:
+    {
+      ImU64 idx = 0;
+      memcpy(&idx, p, 8);
+      printf("input\t%llu\t-\t-\t%u\n", (unsigned long long)idx, size);
+      break;
+    }
+    case ImGuiAppAVMetaRecordType_StateSnapshot:
+    {
+      ImU64 idx = 0;
+      memcpy(&idx, p + 4, 8);
+      printf("state\t%llu\t-\t-\t%u\n", (unsigned long long)idx, size);
+      break;
+    }
+    default:
+      printf("type%u\t-\t-\t-\t%u\n", type, size);
+      break;
+    }
+  }
+  return true;
+}
+
+IMGUI_API bool AppAVMetaReadInputLog(const char* avmeta_path, ImGuiAppInputLog* out_log)
+{
+  IM_ASSERT(out_log != nullptr);
+  if (out_log == nullptr)
+    return false;
+  ImGuiAppAVMetaReader r;
+  if (!AvMetaLoad(avmeta_path, &r))
+    return false;
+  AppInputLogClear(out_log);
+
+  bool have_hdr = false;
+  ImU32 type = 0;
+  const char* p = nullptr;
+  ImU32 size = 0;
+  while (AvMetaNext(&r, &type, &p, &size))
+  {
+    if (type == ImGuiAppAVMetaRecordType_InputHdr)
+    {
+      // A second header restarts the take (composition changed mid-recording).
+      AppInputLogClear(out_log);
+      ImU32 comp = 0;
+      ImU32 frame_size = 0;
+      ImU32 slots = 0;
+      memcpy(&comp, p, 4); memcpy(&frame_size, p + 4, 4); memcpy(&slots, p + 8, 4);
+      if ((ImS64)size < 12 + (ImS64)slots * 12)   // 64-bit: corrupted slot count must not wrap
+        return false;
+      out_log->CompositionID = (ImGuiID)comp;
+      out_log->FrameSize = (int)frame_size;
+      const char* s = p + 12;
+      for (ImU32 i = 0; i < slots; i++)
+      {
+        ImU32 id = 0;
+        ImS32 off = 0;
+        ImS32 sz = 0;
+        memcpy(&id, s, 4); memcpy(&off, s + 4, 4); memcpy(&sz, s + 8, 4);
+        s += 12;
+        out_log->SlotIds.push_back((ImGuiID)id);
+        out_log->SlotOffsets.push_back((int)off);
+        out_log->SlotSizes.push_back((int)sz);
+      }
+      have_hdr = true;
+    }
+    else if (type == ImGuiAppAVMetaRecordType_InputFrame && have_hdr)
+    {
+      if ((int)size != 12 + out_log->FrameSize)
+        return false;
+      ImU32 hash = 0;
+      memcpy(&hash, p + 8, 4);
+      const int base = out_log->Frames.Size;
+      out_log->Frames.resize(base + out_log->FrameSize);
+      memcpy(out_log->Frames.Data + base, p + 12, (size_t)out_log->FrameSize);
+      out_log->StateHashes.push_back((ImGuiID)hash);
+      out_log->Count++;
+    }
+  }
+  return have_hdr && out_log->Count > 0;
+}
+
+IMGUI_API bool AppAVMetaReadStateSnapshot(const char* avmeta_path, ImVector<char>* out_bytes, ImGuiID* out_composition_id)
+{
+  IM_ASSERT(out_bytes != nullptr);
+  if (out_bytes == nullptr)
+    return false;
+  ImGuiAppAVMetaReader r;
+  if (!AvMetaLoad(avmeta_path, &r))
+    return false;
+
+  // First snapshot wins: it is the take's starting state for reproduction runs.
+  ImU32 type = 0;
+  const char* p = nullptr;
+  ImU32 size = 0;
+  while (AvMetaNext(&r, &type, &p, &size))
+  {
+    if (type != ImGuiAppAVMetaRecordType_StateSnapshot)
+      continue;
+    if (size < 16)
+      return false;
+    ImU32 comp = 0;
+    ImU32 slots = 0;
+    memcpy(&comp, p, 4);
+    memcpy(&slots, p + 12, 4);
+    const ImS64 table = 16 + (ImS64)slots * 8;   // 64-bit: corrupted slot count must not wrap
+    if ((ImS64)size < table)
+      return false;
+    if (out_composition_id != nullptr)
+      *out_composition_id = (ImGuiID)comp;
+    out_bytes->resize((int)(size - table));
+    memcpy(out_bytes->Data, p + table, (size_t)(size - table));
+    return true;
+  }
+  return false;
+}
+
+} // namespace ImGui

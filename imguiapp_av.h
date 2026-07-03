@@ -125,6 +125,11 @@ namespace ImGui
   // encoder is REQUIRED (providers live in backends/imguiapp_impl_*.h; the core seam
   // cannot pick one). Fails (null) when the platform backend has no CaptureFrame.
   IMGUI_API ImGuiAppRecorder* AppRecordBegin(ImGuiApp* app, ImGuiAppAVEncoder* encoder, const ImGuiAppAVEncodeConfig* config);
+
+  // Per-frame pump: capture -> queue for encode -> sidecar records. Call once per frame
+  // between render and present (the double-buffered CaptureFrame makes the exact
+  // position forgiving). Null-safe; no-op when inactive.
+  IMGUI_API void              AppRecordPump(ImGuiAppRecorder* rec);
   IMGUI_API bool              AppRecordIsActive(const ImGuiAppRecorder* rec);
   IMGUI_API void              AppRecordSetQueuePolicy(ImGuiAppRecorder* rec, ImGuiAppRecordQueuePolicy policy, int depth /*= 3*/);
   IMGUI_API void              AppRecordEnd(ImGuiAppRecorder* rec);   // flush queue, Close provider, finalize sidecar, free rec
