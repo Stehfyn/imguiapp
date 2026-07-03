@@ -10,6 +10,10 @@
 
 #include "imguiapp_impl_win32_state.h"
 #include "imguiapp.h"
+#include "imguiapp_av.h"
+
+#include <cstdio>
+#include <cstring>
 
 namespace
 {
@@ -28,6 +32,11 @@ namespace
         void* MainGLRC;
         bool  PlatformBackendInitialized;
         bool  RendererBackendInitialized;
+
+        // Frame capture (AV readback): armed by the first CaptureFrame call.
+        bool           CaptureArmed;
+        ImVector<char> CaptureRead;   // glReadPixels scratch, GL's bottom-up row order
+        ImVector<char> CaptureRgba;   // top-down RGBA handed to callers; valid until the next capture
     };
 
     ImGuiApp_Win32OpenGL3_Data GBackend;
@@ -193,6 +202,50 @@ namespace
         if ((config->Flags & ImGuiAppFrameFlags_NoPresent) == 0)
             ::SwapBuffers((HDC)bd->MainDC);
     }
+
+    // Synchronous backbuffer readback: this TU links only GL 1.1 entry points (no
+    // loader), so no PBO ring -- glReadPixels stalls the pipeline for the transfer.
+    // First call arms and returns false (same contract as the vulkan backend). The
+    // encode phase runs before present, so GL_BACK still holds the rendered frame.
+    bool CaptureFrame(ImGuiApp* app, ImGuiAppAVFrame* out_frame)
+    {
+        IM_UNUSED(app);
+        ImGuiApp_Win32OpenGL3_Data* bd = &GBackend;
+        if (out_frame == nullptr || bd->MainDC == nullptr || bd->MainGLRC == nullptr)
+            return false;
+        if (!bd->CaptureArmed)
+        {
+            bd->CaptureArmed = true;
+            return false;
+        }
+
+        int width = 0;
+        int height = 0;
+        GetClientSize(bd->Hwnd, &width, &height);   // resize mid-recording: report it; the recorder aborts by contract
+        if (width <= 0 || height <= 0)
+            return false;
+
+        const int row_bytes = width * 4;
+        bd->CaptureRead.resize(row_bytes * height);
+        bd->CaptureRgba.resize(row_bytes * height);
+
+        wglMakeCurrent((HDC)bd->MainDC, (HGLRC)bd->MainGLRC);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadBuffer(GL_BACK);
+        glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, bd->CaptureRead.Data);
+
+        // GL rows are bottom-up; the recorder expects top-down like the vulkan path.
+        for (int y = 0; y < height; y++)
+            memcpy(bd->CaptureRgba.Data + (size_t)y * row_bytes,
+                   bd->CaptureRead.Data + (size_t)(height - 1 - y) * row_bytes,
+                   (size_t)row_bytes);
+
+        out_frame->Width = width;
+        out_frame->Height = height;
+        out_frame->PitchBytes = row_bytes;
+        out_frame->Pixels = bd->CaptureRgba.Data;
+        return true;   // FrameID is the recorder's to fill
+    }
 }
 
 static bool ImGuiApp_Win32OpenGL3_Init(const ImGuiApp_Win32OpenGL3_InitInfo* init_info)
@@ -243,6 +296,12 @@ static bool ImGuiApp_Win32OpenGL3_Init(const ImGuiApp_Win32OpenGL3_InitInfo* ini
 
 bool ImGuiApp_Win32OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
 {
+    if (config.Headless != ImGuiAppHeadlessMode_None)
+    {
+        std::fprintf(stderr, "imguiapp_impl_win32_opengl3: headless modes are not implemented for this backend (use win32-vulkan).\n");
+        return false;
+    }
+
     ImGuiAppPlatformState* state = IM_NEW(ImGuiAppPlatformState)();
     app->PlatformData = state;
 
@@ -348,6 +407,7 @@ static const ImGuiAppPlatformBackend GPlatformBackend =
     ImGuiApp_Win32OpenGL3_InitPlatform,
     ImGuiApp_Win32OpenGL3_ShutdownPlatform,
     ImGuiApp_ImplWin32_RunLoop,
+    CaptureFrame,
 };
 
 const ImGuiAppPlatformBackend* ImGuiApp_GetPlatformBackend() { return &GPlatformBackend; }
