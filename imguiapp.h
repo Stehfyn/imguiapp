@@ -356,6 +356,11 @@ namespace ImGui
   // spins the rest on QPC; Fixed mode also forces io.DeltaTime to exactly 1/TargetHz.
   IMGUI_API void AppPacerWait(ImGuiApp* app);
 
+  // Consulted by the backend's per-viewport present hook (Renderer_SwapBuffers /
+  // Platform_RenderWindow). True = present this frame; false = skip (contents unchanged
+  // on that monitor until its next deadline). Main viewport never skips; Off pacer never skips.
+  IMGUI_API bool AppPacerViewportShouldPresent(ImGuiApp* app, ImGuiViewport* viewport);
+
   // AppWALWrite appends one record and flushes to disk BEFORE returning; records below the WAL's level
   // are dropped. All three are null-safe on wal.
   IMGUI_API bool AppWALOpen(ImGuiAppWAL* wal, const char* path, ImGuiAppWALLevel level);

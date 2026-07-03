@@ -221,6 +221,62 @@ static float AppPacerPrimaryRefreshHz()
     return 60.0f;
 }
 
+// Per-viewport present deadlines (secondary platform windows; main viewport never skips).
+struct ImGuiAppViewportPace
+{
+  ImGuiID ViewportId;
+  double  NextDeadline;
+  ImU64   LastSeenFrame;   // FrameID.FrameIndex; feeds lazy pruning of vanished viewports
+};
+static ImVector<ImGuiAppViewportPace> s_app_vp_pace;
+
+// Refresh rate of the monitor hosting a viewport. ImGuiPlatformMonitor carries no
+// refresh field, so win32 resolves it from the HMONITOR the platform backend stored in
+// PlatformHandle; cached per monitor (stale after a display-mode change until restart).
+static float AppPacerViewportRefreshHz(const ImGuiViewport* viewport)
+{
+#ifdef _WIN32
+    struct CachedHz
+    {
+      void* Handle;
+      float Hz;
+    };
+    static ImVector<CachedHz> s_monitor_hz;
+
+    const ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+    const short monitor_idx = ((const ImGuiViewportP*)viewport)->PlatformMonitor;   // internal field; public ImGuiViewport has no monitor index
+    void* hmon = nullptr;
+    if (monitor_idx >= 0 && monitor_idx < pio.Monitors.Size)
+        hmon = pio.Monitors[monitor_idx].PlatformHandle;
+    if (hmon == nullptr)
+        return AppPacerPrimaryRefreshHz();
+
+    for (int i = 0; i < s_monitor_hz.Size; i++)
+        if (s_monitor_hz.Data[i].Handle == hmon)
+            return s_monitor_hz.Data[i].Hz;
+
+    float hz = 60.0f;
+    MONITORINFOEXA mi;
+    memset(&mi, 0, sizeof(mi));
+    mi.cbSize = sizeof(mi);
+    if (::GetMonitorInfoA((HMONITOR)hmon, &mi))
+    {
+        DEVMODEA dm = {};
+        dm.dmSize = sizeof(dm);
+        if (::EnumDisplaySettingsExA(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm, 0) && dm.dmDisplayFrequency > 1)
+            hz = (float)dm.dmDisplayFrequency;
+    }
+    CachedHz cached;
+    cached.Handle = hmon;
+    cached.Hz = hz;
+    s_monitor_hz.push_back(cached);
+    return hz;
+#else
+    IM_UNUSED(viewport);
+    return 60.0f;
+#endif
+}
+
 bool ImGuiApp::Initialize(const ImGuiAppConfig* config)
 {
     IM_ASSERT(config != nullptr);
@@ -782,6 +838,53 @@ namespace ImGui
 
       p->LastWaitMs = (t - now) * 1000.0;
       s_app_pacer.NextDeadline = deadline + period;
+  }
+
+  IMGUI_API bool AppPacerViewportShouldPresent(ImGuiApp* app, ImGuiViewport* viewport)
+  {
+      if (app == nullptr || viewport == nullptr)
+        return true;
+      if (app->Pacer.Mode == ImGuiAppPacerMode_Off)
+        return true;
+      if (viewport == GetMainViewport())
+        return true;   // the run loop's AppPacerWait already paces the main viewport
+
+      const float hz = AppPacerViewportRefreshHz(viewport);
+      const double period = 1.0 / (double)(hz > 1.0f ? hz : 60.0f);
+      const double now = AppClockNowSec();
+
+      ImGuiAppViewportPace* pace = nullptr;
+      for (int i = 0; i < s_app_vp_pace.Size; i++)
+        if (s_app_vp_pace.Data[i].ViewportId == viewport->ID)
+        {
+          pace = &s_app_vp_pace.Data[i];
+          break;
+        }
+      if (pace == nullptr)
+      {
+        // Lazy prune: entries unseen for ~10s at 60fps are vanished viewports.
+        if (s_app_vp_pace.Size > 8)
+          for (int i = s_app_vp_pace.Size - 1; i >= 0; i--)
+            if (s_app_vp_pace.Data[i].LastSeenFrame + 600 < app->FrameID.FrameIndex)
+              s_app_vp_pace.erase(s_app_vp_pace.begin() + i);
+        ImGuiAppViewportPace fresh;
+        fresh.ViewportId = viewport->ID;
+        fresh.NextDeadline = now + period;
+        fresh.LastSeenFrame = app->FrameID.FrameIndex;
+        s_app_vp_pace.push_back(fresh);
+        return true;   // first sighting presents and starts the deadline chain
+      }
+
+      pace->LastSeenFrame = app->FrameID.FrameIndex;
+      if (now + 1e-6 < pace->NextDeadline)
+        return false;
+
+      // Deadline chain like AppPacerWait: advance by whole periods; re-anchor when badly
+      // late so a stall doesn't cascade into a burst of presents.
+      pace->NextDeadline += period;
+      if (now - pace->NextDeadline > 4.0 * period)
+        pace->NextDeadline = now + period;
+      return true;
   }
 
   IMGUI_API bool AppWALOpen(ImGuiAppWAL* wal, const char* path, ImGuiAppWALLevel level)

@@ -1197,6 +1197,30 @@ namespace
     }
 }
 
+// Per-viewport pacing wrappers (secondary platform windows). Decision made ONCE per
+// viewport per frame in the RenderWindow wrapper (the deadline chain advances on each
+// consult) and consumed by the SwapBuffers wrapper.
+static ImGuiApp*    g_pacer_app = nullptr;
+static ImGuiStorage g_vp_skip;
+static void (*g_underlying_viewport_render_window)(ImGuiViewport* viewport, void* render_arg) = nullptr;
+static void (*g_underlying_viewport_swap_buffers)(ImGuiViewport* viewport, void* render_arg) = nullptr;
+
+static void Pace_Viewport_RenderWindow(ImGuiViewport* viewport, void* render_arg)
+{
+    const bool present = ImGui::AppPacerViewportShouldPresent(g_pacer_app, viewport);
+    g_vp_skip.SetBool(viewport->ID, !present);
+    if (present && g_underlying_viewport_render_window != nullptr)
+        g_underlying_viewport_render_window(viewport, render_arg);
+}
+
+static void Pace_Viewport_SwapBuffers(ImGuiViewport* viewport, void* render_arg)
+{
+    if (g_vp_skip.GetBool(viewport->ID))
+        return;
+    if (g_underlying_viewport_swap_buffers != nullptr)
+        g_underlying_viewport_swap_buffers(viewport, render_arg);
+}
+
 static bool ImGuiApp_Win32Vulkan_Init(const ImGuiApp_Win32Vulkan_InitInfo* init_info)
 {
     if (ImGuiX::GetCurrentContext() == nullptr)
@@ -1296,6 +1320,22 @@ static bool ImGuiApp_Win32Vulkan_Init(const ImGuiApp_Win32Vulkan_InitInfo* init_
     }
     GBackend.RendererBackendInitialized = true;
 
+    // Per-viewport pacing: wrap the upstream vulkan viewport hooks. A skipped viewport
+    // skips BOTH RenderWindow (acquire + submit) and SwapBuffers (present) -- the same
+    // both-skipped shape upstream takes on VK_ERROR_OUT_OF_DATE_KHR, so SemaphoreIndex
+    // and per-frame state stay consistent. Presenting without its paired acquire/submit
+    // would not be safe; the pair is decided once in the RenderWindow wrapper.
+    {
+        ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
+        g_underlying_viewport_render_window = platform_io.Renderer_RenderWindow;
+        g_underlying_viewport_swap_buffers  = platform_io.Renderer_SwapBuffers;
+        if (g_underlying_viewport_render_window != nullptr && g_underlying_viewport_swap_buffers != nullptr)
+        {
+            platform_io.Renderer_RenderWindow = Pace_Viewport_RenderWindow;
+            platform_io.Renderer_SwapBuffers  = Pace_Viewport_SwapBuffers;
+        }
+    }
+
     ImGuiXInitInfo imguix_init_info;
     imguix_init_info.Backend.Name = "imguiapp_impl_win32_vulkan";
     imguix_init_info.Backend.UserData = &GBackend;
@@ -1318,6 +1358,7 @@ bool ImGuiApp_Win32Vulkan_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
     ImGuiAppPlatformState* state = IM_NEW(ImGuiAppPlatformState)();
     app->PlatformData = state;
     GBackend.App = app;
+    g_pacer_app = app;
 
     // Offscreen headless keeps a HIDDEN window: ImGui_ImplWin32 needs an HWND for input/DPI,
     // and the test engine synthesizes inputs through it. Nothing renders to it.
@@ -1392,6 +1433,10 @@ void ImGuiApp_Win32Vulkan_ShutdownPlatform(ImGuiApp* app)
         ::UnregisterClassA(state->WindowClass.lpszClassName, state->WindowClass.hInstance);
         state->WindowClass = {};
     }
+    g_pacer_app = nullptr;
+    g_underlying_viewport_render_window = nullptr;
+    g_underlying_viewport_swap_buffers = nullptr;
+    g_vp_skip.Clear();
 
     IM_DELETE(state);
     app->PlatformData = nullptr;

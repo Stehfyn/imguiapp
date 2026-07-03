@@ -107,16 +107,38 @@ namespace
         }
     }
 
+    // Per-viewport pacing: the decision is made ONCE per viewport per frame (the deadline
+    // chain advances on each consult) in Platform_RenderWindow -- the first per-viewport
+    // hook RenderPlatformWindowsDefault runs -- and consumed by the draw + swap hooks. A
+    // skipped viewport does no GL work and no swap; its window keeps its last contents.
+    static ImGuiApp*    g_pacer_app = nullptr;
+    static ImGuiStorage g_vp_skip;
+    static void (*g_underlying_renderer_render_window)(ImGuiViewport* viewport, void* render_arg) = nullptr;
+
     static void Hook_Platform_RenderWindow(ImGuiViewport* viewport, void*)
     {
         if (GState == nullptr)
+            return;
+        const bool present = ImGui::AppPacerViewportShouldPresent(g_pacer_app, viewport);
+        g_vp_skip.SetBool(viewport->ID, !present);
+        if (!present)
             return;
         if (ImGuiAppPlatformState::WGLWindowData* data = (ImGuiAppPlatformState::WGLWindowData*)viewport->RendererUserData)
             wglMakeCurrent(data->hDC, GState->MainGLRC);
     }
 
+    static void Pace_Renderer_RenderWindow(ImGuiViewport* viewport, void* render_arg)
+    {
+        if (g_vp_skip.GetBool(viewport->ID))
+            return;
+        if (g_underlying_renderer_render_window != nullptr)
+            g_underlying_renderer_render_window(viewport, render_arg);
+    }
+
     static void Hook_Renderer_SwapBuffers(ImGuiViewport* viewport, void*)
     {
+        if (g_vp_skip.GetBool(viewport->ID))
+            return;
         if (ImGuiAppPlatformState::WGLWindowData* data = (ImGuiAppPlatformState::WGLWindowData*)viewport->RendererUserData)
             ::SwapBuffers(data->hDC);
     }
@@ -363,6 +385,12 @@ bool ImGuiApp_Win32OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
         platform_io.Renderer_DestroyWindow = Hook_Renderer_DestroyWindow;
         platform_io.Renderer_SwapBuffers   = Hook_Renderer_SwapBuffers;
         platform_io.Platform_RenderWindow  = Hook_Platform_RenderWindow;
+
+        // Wrap the upstream GL renderer's per-viewport draw (registered by
+        // ImGui_ImplOpenGL3_Init above) so a pacing-skipped viewport draws nothing.
+        g_pacer_app = app;
+        g_underlying_renderer_render_window = platform_io.Renderer_RenderWindow;
+        platform_io.Renderer_RenderWindow = Pace_Renderer_RenderWindow;
     }
 
     app->Platform.Name               = config.Platform.Name;
@@ -397,6 +425,9 @@ void ImGuiApp_Win32OpenGL3_ShutdownPlatform(ImGuiApp* app)
     }
     if (GState == state)
         GState = nullptr;
+    g_pacer_app = nullptr;
+    g_underlying_renderer_render_window = nullptr;
+    g_vp_skip.Clear();
 
     IM_DELETE(state);
     app->PlatformData = nullptr;
