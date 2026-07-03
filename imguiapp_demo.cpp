@@ -1853,7 +1853,7 @@ namespace
     ComposerWindow()
     {
       // Fixed label (not type-derived) so the saved .ini dock binding still matches.
-      ImStrncpy(this->Label, "ImGuiAppLayer Composer", sizeof(this->Label));
+      ImStrncpy(this->Label, "ImGuiApp Composer", sizeof(this->Label));
       // The composition fills the window exactly; a window scrollbar is always a layout bug.
       this->Flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
     }
