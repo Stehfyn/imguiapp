@@ -1,6 +1,7 @@
 ﻿
 #include "imapp_impl_win32_vulkan.h"
 #include "imgui_applayer.h"
+#include "imguiapp_av.h"          // ImGuiAppAVFrame (CaptureFrame payload)
 #include "imapp_impl_win32_state.h"
 
 #include "imgui_impl_win32.h"
@@ -22,9 +23,12 @@ namespace
 {
     struct ImGuiApp_Win32Vulkan_InitInfo
     {
-        void*        Hwnd;
-        unsigned int MinImageCount;
-        bool         EnableValidation;
+        void*                Hwnd;
+        unsigned int         MinImageCount;
+        bool                 EnableValidation;
+        ImGuiAppHeadlessMode Headless;
+        int                  OffscreenWidth;    // Offscreen mode render target size
+        int                  OffscreenHeight;
     };
 
     struct ImGuiApp_Win32Vulkan_Data
@@ -50,6 +54,37 @@ namespace
         bool                           PlatformBackendInitialized;
         bool                           RendererBackendInitialized;
         bool                           VulkanInitialized;
+
+        // Headless offscreen target (ImGuiAppHeadlessMode_Offscreen): renders into OffscreenImage
+        // instead of a swapchain; render pass finalLayout is TRANSFER_SRC_OPTIMAL so capture copies
+        // need no layout round-trip. Single command buffer + fence: headless frames run lockstep.
+        bool                           OffscreenActive;
+        int                            OffscreenWidth;
+        int                            OffscreenHeight;
+        VkImage                        OffscreenImage;
+        VkDeviceMemory                 OffscreenMemory;
+        VkImageView                    OffscreenView;
+        VkRenderPass                   OffscreenRenderPass;
+        VkFramebuffer                  OffscreenFramebuffer;
+        VkCommandPool                  OffscreenCommandPool;
+        VkCommandBuffer                OffscreenCommandBuffer;
+        VkFence                        OffscreenFence;
+
+        // Frame capture (AV readback, docs/av-design.md): armed by the first CaptureFrame call;
+        // FrameRender then records a copy into one of two host-visible staging buffers and
+        // CaptureFrame returns the other (previous frame's) buffer -- no pipeline stall.
+        bool                           CaptureSupported;      // swapchain surface allows TRANSFER_SRC (always true offscreen)
+        bool                           CaptureArmed;
+        int                            CaptureWriteIndex;     // staging buffer the next recorded copy targets
+        VkBuffer                       CaptureBuffer[2];
+        VkDeviceMemory                 CaptureMemory[2];
+        void*                          CaptureMapped[2];
+        VkDeviceSize                   CaptureCapacity[2];
+        int                            CaptureCopyWidth[2];   // geometry/format of the copy each buffer holds; 0 = none yet
+        int                            CaptureCopyHeight[2];
+        VkFormat                       CaptureCopyFormat[2];
+        VkFence                        CapturePendingFence[2];// fence of the submit containing the copy; null = data at rest
+        ImVector<char>                 CaptureRgba;           // RGBA8 conversion buffer handed to CaptureFrame callers
     };
 
     struct D3DKMTApi
@@ -82,6 +117,409 @@ namespace
     bool IsInitInfoValid(const ImGuiApp_Win32Vulkan_InitInfo* init_info)
     {
         return init_info != nullptr && init_info->Hwnd != nullptr;
+    }
+
+    uint32_t FindMemoryType(VkPhysicalDevice physical_device, uint32_t type_bits, VkMemoryPropertyFlags properties)
+    {
+        VkPhysicalDeviceMemoryProperties mem_properties;
+        vkGetPhysicalDeviceMemoryProperties(physical_device, &mem_properties);
+        for (uint32_t i = 0; i < mem_properties.memoryTypeCount; i++)
+            if ((type_bits & (1u << i)) != 0 && (mem_properties.memoryTypes[i].propertyFlags & properties) == properties)
+                return i;
+        return (uint32_t)-1;
+    }
+
+    void DestroyCaptureBuffers(ImGuiApp_Win32Vulkan_Data* bd)
+    {
+        if (bd == nullptr || bd->Device == VK_NULL_HANDLE)
+            return;
+        for (int i = 0; i < 2; i++)
+        {
+            if (bd->CapturePendingFence[i] != VK_NULL_HANDLE)
+            {
+                vkWaitForFences(bd->Device, 1, &bd->CapturePendingFence[i], VK_TRUE, UINT64_MAX);
+                bd->CapturePendingFence[i] = VK_NULL_HANDLE;
+            }
+            if (bd->CaptureMapped[i] != nullptr)
+            {
+                vkUnmapMemory(bd->Device, bd->CaptureMemory[i]);
+                bd->CaptureMapped[i] = nullptr;
+            }
+            if (bd->CaptureBuffer[i] != VK_NULL_HANDLE)
+            {
+                vkDestroyBuffer(bd->Device, bd->CaptureBuffer[i], bd->Allocator);
+                bd->CaptureBuffer[i] = VK_NULL_HANDLE;
+            }
+            if (bd->CaptureMemory[i] != VK_NULL_HANDLE)
+            {
+                vkFreeMemory(bd->Device, bd->CaptureMemory[i], bd->Allocator);
+                bd->CaptureMemory[i] = VK_NULL_HANDLE;
+            }
+            bd->CaptureCapacity[i] = 0;
+            bd->CaptureCopyWidth[i] = 0;
+            bd->CaptureCopyHeight[i] = 0;
+        }
+    }
+
+    // Persistently mapped host-visible+coherent staging buffer of at least `size` bytes.
+    // current_submit_fence: this frame's (already waited + reset, unsubmitted) fence -- waiting
+    // on it here would deadlock; equality means the old copy already retired at frame start.
+    bool EnsureCaptureBuffer(ImGuiApp_Win32Vulkan_Data* bd, int index, VkDeviceSize size, VkFence current_submit_fence)
+    {
+        if (bd->CaptureBuffer[index] != VK_NULL_HANDLE && bd->CaptureCapacity[index] >= size)
+            return true;
+
+        // The old buffer may still be a transfer target of an in-flight submit.
+        if (bd->CapturePendingFence[index] != VK_NULL_HANDLE)
+        {
+            if (bd->CapturePendingFence[index] != current_submit_fence)
+                vkWaitForFences(bd->Device, 1, &bd->CapturePendingFence[index], VK_TRUE, UINT64_MAX);
+            bd->CapturePendingFence[index] = VK_NULL_HANDLE;
+        }
+        if (bd->CaptureMapped[index] != nullptr)
+        {
+            vkUnmapMemory(bd->Device, bd->CaptureMemory[index]);
+            bd->CaptureMapped[index] = nullptr;
+        }
+        if (bd->CaptureBuffer[index] != VK_NULL_HANDLE)
+        {
+            vkDestroyBuffer(bd->Device, bd->CaptureBuffer[index], bd->Allocator);
+            bd->CaptureBuffer[index] = VK_NULL_HANDLE;
+        }
+        if (bd->CaptureMemory[index] != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(bd->Device, bd->CaptureMemory[index], bd->Allocator);
+            bd->CaptureMemory[index] = VK_NULL_HANDLE;
+        }
+        bd->CaptureCapacity[index] = 0;
+        bd->CaptureCopyWidth[index] = 0;
+        bd->CaptureCopyHeight[index] = 0;
+
+        VkBufferCreateInfo buffer_info = {};
+        buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        buffer_info.size = size;
+        buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VkResult err = vkCreateBuffer(bd->Device, &buffer_info, bd->Allocator, &bd->CaptureBuffer[index]);
+        CheckVkResult(err);
+        if (bd->CaptureBuffer[index] == VK_NULL_HANDLE)
+            return false;
+
+        VkMemoryRequirements req;
+        vkGetBufferMemoryRequirements(bd->Device, bd->CaptureBuffer[index], &req);
+        const uint32_t type = FindMemoryType(bd->PhysicalDevice, req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        if (type == (uint32_t)-1)
+            return false;
+
+        VkMemoryAllocateInfo alloc_info = {};
+        alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        alloc_info.allocationSize = req.size;
+        alloc_info.memoryTypeIndex = type;
+        err = vkAllocateMemory(bd->Device, &alloc_info, bd->Allocator, &bd->CaptureMemory[index]);
+        CheckVkResult(err);
+        if (bd->CaptureMemory[index] == VK_NULL_HANDLE)
+            return false;
+
+        err = vkBindBufferMemory(bd->Device, bd->CaptureBuffer[index], bd->CaptureMemory[index], 0);
+        CheckVkResult(err);
+        err = vkMapMemory(bd->Device, bd->CaptureMemory[index], 0, VK_WHOLE_SIZE, 0, &bd->CaptureMapped[index]);
+        CheckVkResult(err);
+        if (bd->CaptureMapped[index] == nullptr)
+            return false;
+
+        bd->CaptureCapacity[index] = size;
+        return true;
+    }
+
+    // Records image -> staging copy into the frame's command buffer (before vkEndCommandBuffer).
+    // `layout` is the image's layout at this point in the command buffer; it is restored after.
+    void RecordCaptureCopy(ImGuiApp_Win32Vulkan_Data* bd, VkCommandBuffer cb, VkImage image, int width, int height, VkFormat format, VkImageLayout layout, VkFence submit_fence)
+    {
+        if (!bd->CaptureArmed || width <= 0 || height <= 0)
+            return;
+
+        const int w = bd->CaptureWriteIndex;
+        if (!EnsureCaptureBuffer(bd, w, (VkDeviceSize)width * (VkDeviceSize)height * 4, submit_fence))
+            return;
+
+        // The staging buffer's previous copy (2 frames ago) must have retired before it is
+        // rewritten. Equality with this frame's fence means that submission was already waited
+        // at frame start (the fence sits reset and unsubmitted -- waiting would deadlock).
+        if (bd->CapturePendingFence[w] != VK_NULL_HANDLE)
+        {
+            if (bd->CapturePendingFence[w] != submit_fence)
+                vkWaitForFences(bd->Device, 1, &bd->CapturePendingFence[w], VK_TRUE, UINT64_MAX);
+            bd->CapturePendingFence[w] = VK_NULL_HANDLE;
+        }
+
+        // Always issued: even without a layout change (offscreen), the copy needs the
+        // COLOR_ATTACHMENT_WRITE -> TRANSFER_READ memory dependency.
+        VkImageMemoryBarrier barrier = {};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        barrier.oldLayout = layout;
+        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = image;
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.layerCount = 1;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+        VkBufferImageCopy region = {};
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.layerCount = 1;
+        region.imageExtent.width = (uint32_t)width;
+        region.imageExtent.height = (uint32_t)height;
+        region.imageExtent.depth = 1;
+        vkCmdCopyImageToBuffer(cb, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, bd->CaptureBuffer[w], 1, &region);
+
+        if (layout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+        {
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            barrier.dstAccessMask = 0;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            barrier.newLayout = layout;
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+        }
+
+        bd->CaptureCopyWidth[w] = width;
+        bd->CaptureCopyHeight[w] = height;
+        bd->CaptureCopyFormat[w] = format;
+        bd->CapturePendingFence[w] = submit_fence;
+        bd->CaptureWriteIndex = w ^ 1;
+    }
+
+    void DestroyOffscreenTarget(ImGuiApp_Win32Vulkan_Data* bd)
+    {
+        if (bd == nullptr || bd->Device == VK_NULL_HANDLE)
+            return;
+        if (bd->OffscreenFence != VK_NULL_HANDLE)
+        {
+            vkWaitForFences(bd->Device, 1, &bd->OffscreenFence, VK_TRUE, UINT64_MAX);
+            vkDestroyFence(bd->Device, bd->OffscreenFence, bd->Allocator);
+            bd->OffscreenFence = VK_NULL_HANDLE;
+        }
+        if (bd->OffscreenCommandPool != VK_NULL_HANDLE)
+        {
+            vkDestroyCommandPool(bd->Device, bd->OffscreenCommandPool, bd->Allocator);
+            bd->OffscreenCommandPool = VK_NULL_HANDLE;
+            bd->OffscreenCommandBuffer = VK_NULL_HANDLE;
+        }
+        if (bd->OffscreenFramebuffer != VK_NULL_HANDLE)
+        {
+            vkDestroyFramebuffer(bd->Device, bd->OffscreenFramebuffer, bd->Allocator);
+            bd->OffscreenFramebuffer = VK_NULL_HANDLE;
+        }
+        if (bd->OffscreenRenderPass != VK_NULL_HANDLE)
+        {
+            vkDestroyRenderPass(bd->Device, bd->OffscreenRenderPass, bd->Allocator);
+            bd->OffscreenRenderPass = VK_NULL_HANDLE;
+        }
+        if (bd->OffscreenView != VK_NULL_HANDLE)
+        {
+            vkDestroyImageView(bd->Device, bd->OffscreenView, bd->Allocator);
+            bd->OffscreenView = VK_NULL_HANDLE;
+        }
+        if (bd->OffscreenImage != VK_NULL_HANDLE)
+        {
+            vkDestroyImage(bd->Device, bd->OffscreenImage, bd->Allocator);
+            bd->OffscreenImage = VK_NULL_HANDLE;
+        }
+        if (bd->OffscreenMemory != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(bd->Device, bd->OffscreenMemory, bd->Allocator);
+            bd->OffscreenMemory = VK_NULL_HANDLE;
+        }
+        bd->OffscreenActive = false;
+    }
+
+    // Fixed-size RGBA8 render target. finalLayout is TRANSFER_SRC_OPTIMAL: the capture copy
+    // then needs no layout round-trip, and nothing ever presents this image.
+    bool CreateOffscreenTarget(ImGuiApp_Win32Vulkan_Data* bd, int width, int height)
+    {
+        const VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
+        VkResult err;
+
+        VkImageCreateInfo image_info = {};
+        image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        image_info.imageType = VK_IMAGE_TYPE_2D;
+        image_info.format = format;
+        image_info.extent.width = (uint32_t)width;
+        image_info.extent.height = (uint32_t)height;
+        image_info.extent.depth = 1;
+        image_info.mipLevels = 1;
+        image_info.arrayLayers = 1;
+        image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+        image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+        image_info.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        err = vkCreateImage(bd->Device, &image_info, bd->Allocator, &bd->OffscreenImage);
+        CheckVkResult(err);
+        if (bd->OffscreenImage == VK_NULL_HANDLE)
+            return false;
+
+        VkMemoryRequirements req;
+        vkGetImageMemoryRequirements(bd->Device, bd->OffscreenImage, &req);
+        const uint32_t type = FindMemoryType(bd->PhysicalDevice, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (type == (uint32_t)-1)
+            return false;
+
+        VkMemoryAllocateInfo alloc_info = {};
+        alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        alloc_info.allocationSize = req.size;
+        alloc_info.memoryTypeIndex = type;
+        err = vkAllocateMemory(bd->Device, &alloc_info, bd->Allocator, &bd->OffscreenMemory);
+        CheckVkResult(err);
+        if (bd->OffscreenMemory == VK_NULL_HANDLE)
+            return false;
+        err = vkBindImageMemory(bd->Device, bd->OffscreenImage, bd->OffscreenMemory, 0);
+        CheckVkResult(err);
+
+        VkImageViewCreateInfo view_info = {};
+        view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        view_info.image = bd->OffscreenImage;
+        view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view_info.format = format;
+        view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        view_info.subresourceRange.levelCount = 1;
+        view_info.subresourceRange.layerCount = 1;
+        err = vkCreateImageView(bd->Device, &view_info, bd->Allocator, &bd->OffscreenView);
+        CheckVkResult(err);
+        if (bd->OffscreenView == VK_NULL_HANDLE)
+            return false;
+
+        VkAttachmentDescription attachment = {};
+        attachment.format = format;
+        attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        attachment.finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+
+        VkAttachmentReference color_ref = {};
+        color_ref.attachment = 0;
+        color_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+        VkSubpassDescription subpass = {};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &color_ref;
+
+        VkSubpassDependency dependency = {};
+        dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+        dependency.dstSubpass = 0;
+        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependency.srcAccessMask = 0;
+        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+        VkRenderPassCreateInfo pass_info = {};
+        pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        pass_info.attachmentCount = 1;
+        pass_info.pAttachments = &attachment;
+        pass_info.subpassCount = 1;
+        pass_info.pSubpasses = &subpass;
+        pass_info.dependencyCount = 1;
+        pass_info.pDependencies = &dependency;
+        err = vkCreateRenderPass(bd->Device, &pass_info, bd->Allocator, &bd->OffscreenRenderPass);
+        CheckVkResult(err);
+        if (bd->OffscreenRenderPass == VK_NULL_HANDLE)
+            return false;
+
+        VkFramebufferCreateInfo fb_info = {};
+        fb_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fb_info.renderPass = bd->OffscreenRenderPass;
+        fb_info.attachmentCount = 1;
+        fb_info.pAttachments = &bd->OffscreenView;
+        fb_info.width = (uint32_t)width;
+        fb_info.height = (uint32_t)height;
+        fb_info.layers = 1;
+        err = vkCreateFramebuffer(bd->Device, &fb_info, bd->Allocator, &bd->OffscreenFramebuffer);
+        CheckVkResult(err);
+        if (bd->OffscreenFramebuffer == VK_NULL_HANDLE)
+            return false;
+
+        VkCommandPoolCreateInfo pool_info = {};
+        pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        pool_info.queueFamilyIndex = bd->QueueFamily;
+        err = vkCreateCommandPool(bd->Device, &pool_info, bd->Allocator, &bd->OffscreenCommandPool);
+        CheckVkResult(err);
+        if (bd->OffscreenCommandPool == VK_NULL_HANDLE)
+            return false;
+
+        VkCommandBufferAllocateInfo cb_info = {};
+        cb_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cb_info.commandPool = bd->OffscreenCommandPool;
+        cb_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cb_info.commandBufferCount = 1;
+        err = vkAllocateCommandBuffers(bd->Device, &cb_info, &bd->OffscreenCommandBuffer);
+        CheckVkResult(err);
+
+        VkFenceCreateInfo fence_info = {};
+        fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+        err = vkCreateFence(bd->Device, &fence_info, bd->Allocator, &bd->OffscreenFence);
+        CheckVkResult(err);
+        if (bd->OffscreenFence == VK_NULL_HANDLE)
+            return false;
+
+        bd->OffscreenWidth = width;
+        bd->OffscreenHeight = height;
+        bd->OffscreenActive = true;
+        bd->CaptureSupported = true;   // our image always carries TRANSFER_SRC
+        return true;
+    }
+
+    // Lockstep offscreen frame: wait fence -> record -> submit. No acquire, no semaphores,
+    // no present; the render pass leaves the image in TRANSFER_SRC for capture.
+    void FrameRenderOffscreen(ImGuiApp_Win32Vulkan_Data* bd, ImDrawData* draw_data, const VkClearValue* clear_value)
+    {
+        VkResult err = vkWaitForFences(bd->Device, 1, &bd->OffscreenFence, VK_TRUE, UINT64_MAX);
+        CheckVkResult(err);
+        err = vkResetFences(bd->Device, 1, &bd->OffscreenFence);
+        CheckVkResult(err);
+
+        err = vkResetCommandBuffer(bd->OffscreenCommandBuffer, 0);
+        CheckVkResult(err);
+        VkCommandBufferBeginInfo begin_info = {};
+        begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        err = vkBeginCommandBuffer(bd->OffscreenCommandBuffer, &begin_info);
+        CheckVkResult(err);
+
+        VkRenderPassBeginInfo render_pass_info = {};
+        render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        render_pass_info.renderPass = bd->OffscreenRenderPass;
+        render_pass_info.framebuffer = bd->OffscreenFramebuffer;
+        render_pass_info.renderArea.extent.width = (uint32_t)bd->OffscreenWidth;
+        render_pass_info.renderArea.extent.height = (uint32_t)bd->OffscreenHeight;
+        render_pass_info.clearValueCount = 1;
+        render_pass_info.pClearValues = clear_value;
+        vkCmdBeginRenderPass(bd->OffscreenCommandBuffer, &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
+
+        ImGui_ImplVulkan_RenderDrawData(draw_data, bd->OffscreenCommandBuffer);
+
+        vkCmdEndRenderPass(bd->OffscreenCommandBuffer);
+
+        if (bd->CaptureArmed)
+            RecordCaptureCopy(bd, bd->OffscreenCommandBuffer, bd->OffscreenImage, bd->OffscreenWidth, bd->OffscreenHeight, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, bd->OffscreenFence);
+
+        err = vkEndCommandBuffer(bd->OffscreenCommandBuffer);
+        CheckVkResult(err);
+
+        VkSubmitInfo submit_info = {};
+        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit_info.commandBufferCount = 1;
+        submit_info.pCommandBuffers = &bd->OffscreenCommandBuffer;
+        err = vkQueueSubmit(bd->Queue, 1, &submit_info, bd->OffscreenFence);
+        CheckVkResult(err);
     }
 
     bool IsNtSuccess(NTSTATUS status)
@@ -455,6 +893,14 @@ namespace
             present_modes,
             IM_COUNTOF(present_modes));
 
+        // Frame capture copies straight from the swapchain image, which requires TRANSFER_SRC
+        // usage the surface must support (universally true on desktop; capture degrades to
+        // unavailable rather than failing the swapchain when it is not).
+        VkSurfaceCapabilitiesKHR surface_caps = {};
+        err = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(bd->PhysicalDevice, wd->Surface, &surface_caps);
+        CheckVkResult(err);
+        bd->CaptureSupported = (surface_caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
+
         IM_ASSERT(bd->MinImageCount >= 3);
         ImGui_ImplVulkanH_CreateOrResizeWindow(
             bd->Instance,
@@ -466,7 +912,7 @@ namespace
             width,
             height,
             bd->MinImageCount,
-            0);
+            bd->CaptureSupported ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0);
         return true;
     }
 
@@ -522,7 +968,7 @@ namespace
 
     void ResizeMainWindowIfNeeded(ImGuiApp_Win32Vulkan_Data* bd)
     {
-        if (bd == nullptr || bd->Device == VK_NULL_HANDLE || bd->MainWindow.Surface == VK_NULL_HANDLE)
+        if (bd == nullptr || bd->Device == VK_NULL_HANDLE || bd->OffscreenActive || bd->MainWindow.Surface == VK_NULL_HANDLE)
             return;
 
         int width = 0;
@@ -546,7 +992,7 @@ namespace
             width,
             height,
             bd->MinImageCount,
-            0);
+            bd->CaptureSupported ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0);
         bd->MainWindow.FrameIndex = 0;
         bd->SwapChainRebuild = false;
     }
@@ -594,6 +1040,11 @@ namespace
         ImGui_ImplVulkan_RenderDrawData(draw_data, fd->CommandBuffer);
 
         vkCmdEndRenderPass(fd->CommandBuffer);
+
+        // The render pass left the backbuffer in PRESENT_SRC; capture rides the same
+        // command buffer and fence, so it adds no extra submit or synchronization.
+        if (bd->CaptureArmed && bd->CaptureSupported)
+            RecordCaptureCopy(bd, fd->CommandBuffer, fd->Backbuffer, wd->Width, wd->Height, wd->SurfaceFormat.format, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, fd->Fence);
 
         VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
         VkSubmitInfo submit_info = {};
@@ -666,6 +1117,8 @@ namespace
             ImGui_ImplWin32_Shutdown();
 
         CloseVBlankWaitAdapter(bd);
+        DestroyCaptureBuffers(bd);
+        DestroyOffscreenTarget(bd);
         CleanupVulkanWindow(bd, &bd->MainWindow);
         CleanupVulkan(bd);
 
@@ -698,6 +1151,13 @@ namespace
         bd->MainWindow.ClearValue.color.float32[1] = config->ClearColor.y * config->ClearColor.w;
         bd->MainWindow.ClearValue.color.float32[2] = config->ClearColor.z * config->ClearColor.w;
         bd->MainWindow.ClearValue.color.float32[3] = config->ClearColor.w;
+
+        if (bd->OffscreenActive)
+        {
+            if (!minimized)
+                FrameRenderOffscreen(bd, draw_data, &bd->MainWindow.ClearValue);
+            return;   // no platform windows, no present
+        }
 
         if (!minimized)
             FrameRender(bd, &bd->MainWindow, draw_data);
@@ -737,28 +1197,49 @@ static bool ImGuiApp_Win32Vulkan_Init(const ImGuiApp_Win32Vulkan_InitInfo* init_
         return false;
     }
 
+    const bool offscreen = init_info->Headless == ImGuiAppHeadlessMode_Offscreen;
+
     int width = 0;
     int height = 0;
-    GetClientSize(GBackend.Hwnd, &width, &height);
+    if (offscreen)
+    {
+        width = init_info->OffscreenWidth;
+        height = init_info->OffscreenHeight;
+    }
+    else
+    {
+        GetClientSize(GBackend.Hwnd, &width, &height);
+    }
     if (width <= 0 || height <= 0)
     {
         ShutdownBackend(&GBackend);
         return false;
     }
 
-    VkSurfaceKHR surface = VK_NULL_HANDLE;
-    VkWin32SurfaceCreateInfoKHR surface_info = {};
-    surface_info.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-    surface_info.hwnd = GBackend.Hwnd;
-    surface_info.hinstance = ::GetModuleHandle(nullptr);
-    VkResult err = vkCreateWin32SurfaceKHR(GBackend.Instance, &surface_info, GBackend.Allocator, &surface);
-    CheckVkResult(err);
-    if (surface == VK_NULL_HANDLE || !SetupVulkanWindow(&GBackend, &GBackend.MainWindow, surface, width, height))
+    if (offscreen)
     {
-        if (surface != VK_NULL_HANDLE)
-            vkDestroySurfaceKHR(GBackend.Instance, surface, GBackend.Allocator);
-        ShutdownBackend(&GBackend);
-        return false;
+        if (!CreateOffscreenTarget(&GBackend, width, height))
+        {
+            ShutdownBackend(&GBackend);
+            return false;
+        }
+    }
+    else
+    {
+        VkSurfaceKHR surface = VK_NULL_HANDLE;
+        VkWin32SurfaceCreateInfoKHR surface_info = {};
+        surface_info.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+        surface_info.hwnd = GBackend.Hwnd;
+        surface_info.hinstance = ::GetModuleHandle(nullptr);
+        VkResult err = vkCreateWin32SurfaceKHR(GBackend.Instance, &surface_info, GBackend.Allocator, &surface);
+        CheckVkResult(err);
+        if (surface == VK_NULL_HANDLE || !SetupVulkanWindow(&GBackend, &GBackend.MainWindow, surface, width, height))
+        {
+            if (surface != VK_NULL_HANDLE)
+                vkDestroySurfaceKHR(GBackend.Instance, surface, GBackend.Allocator);
+            ShutdownBackend(&GBackend);
+            return false;
+        }
     }
 
     if (!ImGui_ImplWin32_Init(GBackend.Hwnd))
@@ -777,10 +1258,10 @@ static bool ImGuiApp_Win32Vulkan_Init(const ImGuiApp_Win32Vulkan_InitInfo* init_
     vulkan_init_info.Queue = GBackend.Queue;
     vulkan_init_info.PipelineCache = GBackend.PipelineCache;
     vulkan_init_info.DescriptorPool = GBackend.DescriptorPool;
-    vulkan_init_info.MinImageCount = GBackend.MinImageCount;
-    vulkan_init_info.ImageCount = GBackend.MainWindow.ImageCount;
+    vulkan_init_info.MinImageCount = offscreen ? 2 : GBackend.MinImageCount;
+    vulkan_init_info.ImageCount = offscreen ? 2 : GBackend.MainWindow.ImageCount;
     vulkan_init_info.Allocator = GBackend.Allocator;
-    vulkan_init_info.PipelineInfoMain.RenderPass = GBackend.MainWindow.RenderPass;
+    vulkan_init_info.PipelineInfoMain.RenderPass = offscreen ? GBackend.OffscreenRenderPass : GBackend.MainWindow.RenderPass;
     vulkan_init_info.PipelineInfoMain.Subpass = 0;
     vulkan_init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
     vulkan_init_info.CheckVkResultFn = CheckVkResult;
@@ -813,22 +1294,34 @@ bool ImGuiApp_Win32Vulkan_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
     ImGuiAppPlatformState* state = IM_NEW(ImGuiAppPlatformState)();
     app->PlatformData = state;
 
+    // Offscreen headless keeps a HIDDEN window: ImGui_ImplWin32 needs an HWND for input/DPI,
+    // and the test engine synthesizes inputs through it. Nothing renders to it.
+    const bool offscreen = config.Headless == ImGuiAppHeadlessMode_Offscreen;
+    IM_ASSERT(config.Headless != ImGuiAppHeadlessMode_Null && "Null headless mode has no renderer; use the test engine's null backend or Offscreen.");
+
     ImGui_ImplWin32_EnableDpiAwareness();
-    const float main_scale    = ImGui_ImplWin32_GetDpiScaleForMonitor(::MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY));
+    const float main_scale    = offscreen ? 1.0f : ImGui_ImplWin32_GetDpiScaleForMonitor(::MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY));
     const int   window_width  = (int)(config.WindowWidth  * main_scale);
     const int   window_height = (int)(config.WindowHeight * main_scale);
     config.DpiScale    = main_scale;
-    config.ConfigFlags = ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_ViewportsEnable;
+    config.ConfigFlags = ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_DockingEnable;
+    if (!offscreen)
+        config.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;   // offscreen has no OS windows to spawn
 
     HINSTANCE instance = ::GetModuleHandle(nullptr);
     state->WindowClass = { sizeof(state->WindowClass), CS_CLASSDC, ImGuiApp_ImplWin32_WndProc, 0L, 0L, instance, nullptr, LoadCursor(nullptr, IDC_ARROW), (HBRUSH)(GetStockObject(BLACK_BRUSH)), nullptr, "ImGuiXWindow", nullptr };
     ::RegisterClassExA(&state->WindowClass);
-    state->Hwnd = ::CreateWindowA(state->WindowClass.lpszClassName, config.WindowTitle, WS_OVERLAPPEDWINDOW, 100, 100, window_width, window_height, nullptr, nullptr, state->WindowClass.hInstance, nullptr);
+    // Offscreen uses WS_POPUP so the client rect (io.DisplaySize) exactly equals the render target.
+    const DWORD window_style = offscreen ? WS_POPUP : WS_OVERLAPPEDWINDOW;
+    state->Hwnd = ::CreateWindowA(state->WindowClass.lpszClassName, config.WindowTitle, window_style, 100, 100, window_width, window_height, nullptr, nullptr, state->WindowClass.hInstance, nullptr);
     if (state->Hwnd == nullptr)
         return false;
 
-    ::ShowWindow(state->Hwnd, SW_SHOWDEFAULT);
-    ::UpdateWindow(state->Hwnd);
+    if (!offscreen)
+    {
+        ::ShowWindow(state->Hwnd, SW_SHOWDEFAULT);
+        ::UpdateWindow(state->Hwnd);
+    }
 
     ImGuiX::CreateContext();
 
@@ -840,6 +1333,9 @@ bool ImGuiApp_Win32Vulkan_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
 #else
     init_info.EnableValidation = false;
 #endif
+    init_info.Headless         = config.Headless;
+    init_info.OffscreenWidth   = window_width;
+    init_info.OffscreenHeight  = window_height;
     if (!ImGuiApp_Win32Vulkan_Init(&init_info))
     {
         ImGuiX::DestroyContext();
@@ -876,11 +1372,76 @@ void ImGuiApp_Win32Vulkan_ShutdownPlatform(ImGuiApp* app)
     app->PlatformData = nullptr;
 }
 
+// Readback of the frame just rendered. First call arms capture (copies start with the NEXT
+// recorded frame); afterwards returns the previous frame's pixels as tightly packed RGBA8.
+// The caller (recorder) fills out_frame->FrameID; pixels stay valid until the next call.
+bool ImGuiApp_Win32Vulkan_CaptureFrame(ImGuiApp* app, ImGuiAppAVFrame* out_frame)
+{
+    IM_UNUSED(app);
+    ImGuiApp_Win32Vulkan_Data* bd = &GBackend;
+    if (out_frame == nullptr || !bd->VulkanInitialized || !bd->CaptureSupported)
+        return false;
+
+    if (!bd->CaptureArmed)
+    {
+        bd->CaptureArmed = true;
+        return false;
+    }
+
+    // The most recent recorded copy landed in the buffer the write index just moved off.
+    const int r = bd->CaptureWriteIndex ^ 1;
+    if (bd->CaptureCopyWidth[r] <= 0 || bd->CaptureMapped[r] == nullptr)
+        return false;
+
+    if (bd->CapturePendingFence[r] != VK_NULL_HANDLE)
+    {
+        // Submitted last frame; in steady state long signaled. If the swapchain reused the
+        // fence for a newer submit, the wait only lengthens -- this buffer's copy completed
+        // before the fence's first signal, so the data cannot be torn.
+        vkWaitForFences(bd->Device, 1, &bd->CapturePendingFence[r], VK_TRUE, UINT64_MAX);
+        bd->CapturePendingFence[r] = VK_NULL_HANDLE;
+    }
+
+    const int      width = bd->CaptureCopyWidth[r];
+    const int      height = bd->CaptureCopyHeight[r];
+    const VkFormat format = bd->CaptureCopyFormat[r];
+    const unsigned char* src = (const unsigned char*)bd->CaptureMapped[r];
+
+    bd->CaptureRgba.resize(width * height * 4);
+    unsigned char* dst = (unsigned char*)bd->CaptureRgba.Data;
+    if (format == VK_FORMAT_R8G8B8A8_UNORM || format == VK_FORMAT_R8G8B8A8_SRGB)
+    {
+        memcpy(dst, src, (size_t)width * (size_t)height * 4);
+    }
+    else if (format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB)
+    {
+        const size_t n = (size_t)width * (size_t)height;
+        for (size_t i = 0; i < n; i++)
+        {
+            dst[i * 4 + 0] = src[i * 4 + 2];
+            dst[i * 4 + 1] = src[i * 4 + 1];
+            dst[i * 4 + 2] = src[i * 4 + 0];
+            dst[i * 4 + 3] = src[i * 4 + 3];
+        }
+    }
+    else
+    {
+        return false;   // non-32-bit swapchain format: capture unsupported
+    }
+
+    out_frame->Width = width;
+    out_frame->Height = height;
+    out_frame->PitchBytes = width * 4;
+    out_frame->Pixels = bd->CaptureRgba.Data;
+    return true;
+}
+
 static const ImGuiAppPlatformBackend GPlatformBackend =
 {
     ImGuiApp_Win32Vulkan_InitPlatform,
     ImGuiApp_Win32Vulkan_ShutdownPlatform,
     ImGuiApp_ImplWin32_RunLoop,
+    ImGuiApp_Win32Vulkan_CaptureFrame,
 };
 
 const ImGuiAppPlatformBackend* ImGuiApp_GetPlatformBackend() { return &GPlatformBackend; }
