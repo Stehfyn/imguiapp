@@ -75,6 +75,41 @@ enum ImGuiAppCommandPrivate
   ImGuiAppCommandPrivate_ = ImGuiAppCommand_COUNT,
 };
 
+// Frame identity: one id per frame, taken at the top of OnDrawFrame. The correlation key across
+// video frames, sidecar records, WAL lines, and test logs (docs/av-design.md).
+struct ImGuiAppFrameID
+{
+  ImU64  FrameIndex;   // monotonic from run start (not ImGui's frame count: survives context recreation)
+  ImU64  Tsc;          // __rdtsc / platform equivalent at frame begin
+  double TimeSec;      // QPC seconds since run start
+
+  ImGuiAppFrameID() { FrameIndex = 0; Tsc = 0; TimeSec = 0.0; }
+};
+
+// Advisory frame pacer. Backend run loops call AppPacerWait once per iteration, before OnDrawFrame;
+// Off returns immediately. The pacer decides what time the app SIMULATES; video timing is separate
+// (imapp_av.h ImGuiAppAVTimingMode) -- honest-realtime video takes PTS from FrameID.TimeSec.
+typedef int ImGuiAppPacerMode;
+enum ImGuiAppPacerMode_
+{
+  ImGuiAppPacerMode_Off = 0,     // free-run; vsync/present mode governs
+  ImGuiAppPacerMode_Target,      // pace wall clock to TargetHz (sleep + spin hybrid)
+  ImGuiAppPacerMode_Fixed,       // Target pacing AND io.DeltaTime forced to exactly 1/TargetHz (determinism: replay, tests)
+};
+
+struct ImGuiAppPacer
+{
+  ImGuiAppPacerMode Mode;
+  float  TargetHz;         // <= 0 with Mode_Target = pace to primary monitor refresh
+  float  SleepSlackMs;     // spin the last N ms (OS sleep granularity guard)
+  // read-only telemetry
+  double LastFrameMs;
+  double LastWaitMs;
+  ImU64  MissedDeadlines;  // frames that arrived after their deadline
+
+  ImGuiAppPacer() { Mode = ImGuiAppPacerMode_Off; TargetHz = 0.0f; SleepSlackMs = 2.0f; LastFrameMs = 0.0; LastWaitMs = 0.0; MissedDeadlines = 0; }
+};
+
 // Write-ahead logger. Each record is appended and flushed BEFORE the operation it names executes, so after
 // a crash the file tail names the in-flight operation. Attach to ImGuiApp::WAL; null = silent.
 typedef int ImGuiAppWALLevel;
@@ -87,13 +122,16 @@ enum ImGuiAppWALLevel_
 
 struct ImGuiAppWAL
 {
-  void*            File;        // FILE*; typed void* to keep <cstdio> out of this header
-  int              Seq;         // monotonic record number
-  ImGuiAppWALLevel Level;
-  char             Path[256];
+  void*                  File;      // FILE*; typed void* to keep <cstdio> out of this header
+  int                    Seq;       // monotonic record number
+  ImGuiAppWALLevel       Level;
+  const ImGuiAppFrameID* FrameID;   // optional (point at ImGuiApp::FrameID): prefixes records "[f:N tsc:T]"
+  char                   Path[256];
 
-  ImGuiAppWAL() { File = nullptr; Seq = 0; Level = ImGuiAppWALLevel_Off; Path[0] = 0; }
+  ImGuiAppWAL() { File = nullptr; Seq = 0; Level = ImGuiAppWALLevel_Off; FrameID = nullptr; Path[0] = 0; }
 };
+
+struct ImGuiAppAVFrame;   // imapp_av.h: one captured frame (pixels + FrameID + per-frame blob)
 
 // Platform backend interface. The core app layer depends only on this vtable. Exactly one backend
 // translation unit is linked per build; it defines ImGuiApp_GetPlatformBackend().
@@ -102,6 +140,11 @@ struct ImGuiAppPlatformBackend
   bool (*InitPlatform)(ImGuiApp* app, ImGuiAppConfig& config);
   void (*ShutdownPlatform)(ImGuiApp* app);
   int  (*RunLoop)(ImGuiApp* app);
+  // Optional (null = backend cannot capture; recording fails with a clear error). Readback of the
+  // frame just rendered, called after render, before present. Double-buffered staging is expected:
+  // returning frame N-1's pixels is fine -- the FrameID travels inside ImGuiAppAVFrame, so latency
+  // never misaligns identity. Pixels stay valid until the next CaptureFrame call.
+  bool (*CaptureFrame)(ImGuiApp* app, ImGuiAppAVFrame* out_frame);
 };
 
 IMGUI_API const ImGuiAppPlatformBackend* ImGuiApp_GetPlatformBackend();
@@ -305,6 +348,11 @@ namespace ImGui
   IMGUI_API bool AppInputRecord(ImGuiApp* app, ImGuiAppInputLog* log, float dt);
   IMGUI_API bool AppInputReplay(ImGuiApp* app, const ImGuiAppInputLog* log, int* out_first_divergence);
   IMGUI_API void AppInputLogClear(ImGuiAppInputLog* log);
+
+  // Advisory frame pacing. Backend run loops call this once per iteration before OnDrawFrame; Off
+  // returns immediately (the call is unconditional in the loops). Sleeps until deadline - SleepSlackMs,
+  // spins the rest on QPC; Fixed mode also forces io.DeltaTime to exactly 1/TargetHz.
+  IMGUI_API void AppPacerWait(ImGuiApp* app);
 
   // AppWALWrite appends one record and flushes to disk BEFORE returning; records below the WAL's level
   // are dropped. All three are null-safe on wal.
@@ -513,6 +561,8 @@ struct ImGuiApp : ImGuiAppBase
   ImVec4                         ClearColor;
   void*                          PlatformData;
   ImGuiAppWAL*                   WAL;           // optional write-ahead logger (caller-owned); null = silent
+  ImGuiAppFrameID                FrameID;       // updated at the top of OnDrawFrame; correlation key for WAL/video/sidecar
+  ImGuiAppPacer                  Pacer;         // advisory; consulted by the backend run loop via AppPacerWait
   bool                           Initialized;
 
   ImGuiApp() : PlatformData(nullptr), WAL(nullptr), Initialized(false) {}

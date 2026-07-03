@@ -137,6 +137,7 @@ struct ImGuiAppAVEncoder
   bool (*Open)(ImGuiAppAVEncoder* self, const ImGuiAppAVEncodeConfig* config);
   bool (*WriteFrame)(ImGuiAppAVEncoder* self, const ImGuiAppAVFrame* frame);   // PTS from frame->FrameID.TimeSec in Realtime mode
   void (*Close)(ImGuiAppAVEncoder* self);
+  void (*Destroy)(ImGuiAppAVEncoder* self);   // frees the encoder itself (providers allocate their own)
   void* UserData;              // provider state
 };
 ```
@@ -152,67 +153,77 @@ struct ImGuiAppAVEncoder
 The sidecar always records real TSC/QPC times regardless of mode -- ground truth
 survives even a Constant-mode encode.
 
-### Built-in providers (all ship by default)
+### Built-in encoder backends (all ship by default; each declared in its own header)
 
 ```cpp
-// Zero-dependency lossless sequence: <dir>/NNNNNN.qoi + index.tsv. Deterministic,
-// byte-stable across machines -- the CI/golden-image provider.
+// backends/imguiapp_impl_qoi.h -- zero-dependency lossless sequence:
+// <dir>/NNNNNN.qoi + index.tsv. Deterministic, byte-stable across machines -- the
+// CI/golden-image provider.
 IMGUI_API ImGuiAppAVEncoder* ImGuiAppAV_CreateQoiSequenceEncoder();
 
-// ffmpeg process pipe (DEFAULT video provider): spawns ffmpeg, feeds rawvideo RGBA on
-// stdin ("-f rawvideo -pix_fmt rgba -s WxH -r <fps> -i - <extra_args> <OutputPath>").
-// No link-time dependency; Open fails cleanly when the exe is absent. exe = nullptr
-// searches PATH. extra_args = nullptr -> "-c:v libx264 -preset veryfast -crf 18".
+// backends/imguiapp_impl_ffmpeg.h -- ffmpeg process pipe (DEFAULT video provider):
+// spawns ffmpeg, feeds rawvideo RGBA on stdin ("-f rawvideo -pix_fmt rgba -s WxH
+// -r <fps> -i - <extra_args> <OutputPath>"). No link-time dependency; Open fails
+// cleanly when the exe is absent. exe = nullptr searches PATH. extra_args = nullptr ->
+// "-c:v libx264 -preset veryfast -crf 18".
 IMGUI_API ImGuiAppAVEncoder* ImGuiAppAV_CreateFfmpegEncoder(const char* ffmpeg_exe, const char* extra_args);
 
-// Windows Media Foundation mp4 (H.264/HEVC), no external exe needed. Windows-only.
-IMGUI_API ImGuiAppAVEncoder* ImGuiAppAV_CreateMfEncoder();
+// backends/imguiapp_impl_mediafoundation.h -- Windows Media Foundation mp4
+// (H.264/HEVC), no external exe needed. Windows-only; explicit choice, never a silent
+// default (lossy + driver-variant output is wrong for test artifacts).
+IMGUI_API ImGuiAppAVEncoder* ImGuiAppAV_CreateMediaFoundationEncoder();
 
+// core seam (imguiapp_av.h): frees any provider's encoder via its vtable Destroy.
 IMGUI_API void ImGuiAppAV_DestroyEncoder(ImGuiAppAVEncoder* encoder);
-
-// Default resolution order used when a config passes encoder = null:
-// ffmpeg-on-PATH -> QOI sequence. (MF must be chosen explicitly: lossy + driver-variant
-// output is the wrong silent default for test artifacts.)
-IMGUI_API ImGuiAppAVEncoder* ImGuiAppAV_CreateDefaultEncoder();
 ```
 
 ### Sidecar track: `<output>.avmeta`
 
 Written by the recorder, not the provider, so every provider gets it uniformly.
 Binary, WAL-flavored: fixed header (magic `IMAVMETA`, version, fps, start TSC + QPC Hz
-for TSC->seconds conversion), then one record per frame:
+for TSC->seconds conversion), then a TYPED-RECORD stream -- `{u32 type, u32 size,
+payload}` -- so tracks extend without format breaks:
 
 ```
-u64 frame_index | u64 tsc | f64 time_sec | u32 user_size | user_size bytes
+type Frame:     u64 frame_index | u64 tsc | f64 time_sec | u32 user_size | user bytes
+type InputHdr:  ImGuiAppInputLog layout (composition id, slot table) -- once per take
+type InputFrm:  u64 frame_index | one ImGuiAppInputLog frame (TempData + dt) | state hash
+type StateSnap: composition id | snapshottable-state bytes (ImGuiAppStateHistory layout)
+type AudioPcm:  RESERVED in v1 (defined, no producer yet): u64 frame_index | sample
+                format header | PCM chunk
 ```
 
 TSC is the *default* per-frame payload (always present); `user_size` covers the optional
 arbitrary blob. A tiny `AppAVMetaDump(path)` debug helper prints it as TSV.
 
 The user blob is OPAQUE BYTES by contract -- the sidecar format knows nothing of app
-types. One typed helper rides on top:
+types. One typed helper rides on top, built on the EXISTING snapshot machinery
+(`AppStateSnapshot` / `ImGuiAppStateHistory` byte layout):
 
 ```cpp
-// Serialize app->Data (the ImGuiType-keyed persist storage) as this frame's blob.
-// Restoring those bytes IS time travel (see imgui_applayer.h state snapshots), so a
-// recording made with this helper scrubs: video frame N <-> app state N.
-IMGUI_API void AppRecordSnapshotAppData(ImGuiAppRecorder* rec, ImGuiApp* app);
+// Serialize the app's snapshottable state (same byte layout as ImGuiAppStateHistory
+// frames) as this frame's blob. Restoring those bytes IS time travel, so a recording
+// made with this helper scrubs: video frame N <-> app state N.
+IMGUI_API void AppRecordSnapshotState(ImGuiAppRecorder* rec, ImGuiApp* app);
 ```
 
 ### Input track
 
-Raw input is recorded per frame so a run can be REPLAYED, not just watched: the sidecar
-carries an event list per FrameID record (mouse pos/buttons/wheel, key events, text
-input -- the io event queue, captured before NewFrame consumes it).
+The framework already has record/replay at the right level: `ImGuiAppInputLog` records
+every control's TempData + dt per frame with a post-update state hash, and
+`AppInputReplay` re-runs it with divergence detection (imgui_applayer.h). AV does not
+reinvent this -- the sidecar PERSISTS it:
 
 ```cpp
-// Feed a recorded input track back into io, frame by frame. With PacerMode_Fixed and
-// randomness kept in state (ImAppRandom), this reproduces the recorded run exactly --
-// the input half of the replay theorem.
-struct ImGuiAppInputReplay;   // opaque; reads <path>.avmeta
-IMGUI_API ImGuiAppInputReplay* AppInputReplayOpen(const char* avmeta_path);
-IMGUI_API bool                 AppInputReplayFrame(ImGuiAppInputReplay* rp, ImU64 frame_index);   // false past end
-IMGUI_API void                 AppInputReplayClose(ImGuiAppInputReplay* rp);
+// Attach a live input log: the recorder serializes its frames into the sidecar as they
+// are recorded (call AppInputRecord once per frame as usual). AppRecordEnd finalizes.
+IMGUI_API void AppRecordAttachInputLog(ImGuiAppRecorder* rec, const ImGuiAppInputLog* log);
+
+// Load a persisted run back: the input log and (if recorded) the starting state
+// snapshot. Reproduction = restore snapshot, then AppInputReplay(app, &log, &div) --
+// the existing divergence check pinpoints any non-determinism.
+IMGUI_API bool AppAVMetaReadInputLog(const char* avmeta_path, ImGuiAppInputLog* out_log);
+IMGUI_API bool AppAVMetaReadStateSnapshot(const char* avmeta_path, ImVector<char>* out_bytes, ImGuiID* out_composition_id);
 ```
 
 ### Recorder (glue between app, backend capture, and provider)
@@ -220,7 +231,7 @@ IMGUI_API void                 AppInputReplayClose(ImGuiAppInputReplay* rp);
 ```cpp
 struct ImGuiAppRecorder;   // opaque
 
-IMGUI_API ImGuiAppRecorder* AppRecordBegin(ImGuiApp* app, ImGuiAppAVEncoder* encoder /* null = default */, const ImGuiAppAVEncodeConfig* config);
+IMGUI_API ImGuiAppRecorder* AppRecordBegin(ImGuiApp* app, ImGuiAppAVEncoder* encoder /* required; providers in backends/ */, const ImGuiAppAVEncodeConfig* config);
 IMGUI_API void              AppRecordSetFrameData(ImGuiAppRecorder* rec, const void* data, int size);   // this frame's blob; copied immediately
 IMGUI_API bool              AppRecordIsActive(const ImGuiAppRecorder* rec);
 IMGUI_API void              AppRecordEnd(ImGuiAppRecorder* rec);   // flush queue, Close provider, finalize sidecar
@@ -318,7 +329,7 @@ struct ImGuiAppTestHarnessConfig
   ImGuiAppPacerMode PacerMode;                        // default Fixed (reproducible tests); Target/Off for honest-clock benchmark captures
   float       Fps;                                    // Fixed pacer rate / Constant-timing rate; default 60
   ImGuiAppAVTimingMode Timing;                        // default Auto: Fixed pacer -> Constant video, else Realtime (honest) video
-  ImGuiAppAVEncoder* Encoder;                         // null = ImGuiAppAV_CreateDefaultEncoder()
+  ImGuiAppAVEncoder* Encoder;                         // null = harness default: ffmpeg on PATH, else QOI sequence
   ImGuiAppWALLevel   WALLevel;                        // default Frame
   const char* TestFilter;                             // test-engine filter; null = all
   void (*RegisterTests)(ImGuiTestEngine* engine);     // required
@@ -345,23 +356,62 @@ Benchmarking falls out of the same artifacts either way: the sidecar's TSC delta
 real per-frame costs regardless of timing mode; the harness additionally emits
 `<Name>.frametimes.csv` (frame_index, tsc_delta, ms) and prints p50/p95/p99/max.
 
-## 6. Phasing
+## 6. File layout
+
+P1 concepts (frame identity, pacing) are app-loop machinery with no AV dependency --
+they live in core. Encoder providers follow the idiom Dear ImGui set with its
+platform/renderer impl backends: one self-contained TU per provider in /backends with
+its own small header, the core seam never includes them, and the app (or harness)
+wires a provider exactly like imgui apps wire imgui_impl_win32 + imgui_impl_vulkan.
+The harness is its own pair because it alone drags the test engine.
+
+```
+imguix/ImGuiAppLayer/
+  imgui_applayer.h / .cpp                  P1: ImGuiAppFrameID, ImGuiAppPacer + AppPacerWait,
+                                           WAL frame-id source, CaptureFrame backend vtable slot
+  imapp_config.h                           P1: ImGuiAppHeadlessMode field on ImGuiAppConfig
+  imguiapp_av.h / imguiapp_av.cpp          AV seam: timing, ImGuiAppAVFrame, encoder vtable,
+                                           recorder, ring, sidecar writer/reader
+  imguiapp_testharness.h / .cpp            ImGuiAppTestHarness (gated on the test-engine
+                                           option; owns the ffmpeg -> QOI default fallback)
+  backends/imguiapp_impl_qoi.h / .cpp      encoder backend: QOI sequence (zero-dep, lossless)
+  backends/imguiapp_impl_ffmpeg.h / .cpp   encoder backend: ffmpeg pipe (default video provider)
+  backends/imguiapp_impl_mediafoundation.h / .cpp
+                                           encoder backend: Media Foundation (compiled WIN32
+                                           only; the only TU linking mfplat/mfreadwrite)
+  backends/imapp_impl_*                    platform backends: CaptureFrame impls,
+                                           Headless_Offscreen, the unconditional AppPacerWait
+                                           call in RunLoop
+```
+
+Because core cannot reference providers, there is no CreateDefaultEncoder in the seam:
+`AppRecordBegin(encoder = null)` is an error, and the null-Encoder convenience default
+(ffmpeg on PATH -> QOI sequence) is implemented by the harness, which includes the
+provider headers it ships with.
+
+Interface-first: the headers above are written and committed BEFORE implementation so
+phase work can proceed in parallel against frozen signatures.
+
+## 7. Phasing
 
 - **P1** — FrameID on ImGuiApp; WAL frame-id prefix; ImGuiAppPacer + `AppPacerWait`
   in both win32 run loops (message-pump loop calls it unconditionally).
 - **P2** — Encoder seam; QOI-sequence + ffmpeg-pipe providers; recorder + sidecar
-  (input events recorded from day one -- the format is v1); `CaptureFrame` for
-  win32-vulkan; `Headless_Offscreen` for vulkan; `AppRecordSnapshotAppData`.
+  (input-log and state-snapshot record types from day one -- the format is v1);
+  `CaptureFrame` for win32-vulkan; `Headless_Offscreen` for vulkan;
+  `AppRecordSnapshotState` + `AppRecordAttachInputLog`.
 - **P3** — ImGuiAppTestHarness + tests_main migration; flight recorder ring + assert
-  hook; input replay (`AppInputReplay*`); Media Foundation provider; per-viewport
-  pacing (`AppPacerViewportShouldPresent` wired into the viewport present hooks);
-  OpenGL3 capture.
+  hook; sidecar readback (`AppAVMetaRead*`) for reproduction runs; Media Foundation
+  provider; per-viewport pacing (`AppPacerViewportShouldPresent` wired into the
+  viewport present hooks); OpenGL3 capture.
 
-## 7. Non-goals / constraints
+## 8. Non-goals / constraints
 
 - No upstream edits: everything sits at the applayer seam (backend vtable is ours).
-- Audio: out of scope ("AV" here is frame video + data tracks; the sidecar format
-  reserves record space via its version field if that ever changes).
+- Audio: capture is out of scope, but the sidecar RESERVES its track now: .avmeta is a
+  typed-record stream ({u32 type, u32 size, payload}); type AudioPcm is defined in v1
+  (PCM chunk + FrameID + sample format header) with no producer yet, so a later
+  capture lands without a format break.
 - Live streaming, GPU-side encode (NVENC et al): possible later behind the same
   provider vtable; not in P1-P3.
 - Resize during recording: recorder aborts with a WAL line rather than silently
