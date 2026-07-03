@@ -166,34 +166,34 @@ struct ImGuiCanvasState
     IO.ZoomMin            = 0.3f;
     IO.ZoomMax            = 2.5f;
 
-    Pan = ImVec2(0.0f, 0.0f);
-    Zoom = 1.0f;
-    FontRatio = 1.0f;
+    Pan               = ImVec2(0.0f, 0.0f);
+    Zoom              = 1.0f;
+    FontRatio         = 1.0f;
     HoveredNode = HoveredPin = HoveredWire = SelectedWire = -1;
     Origin = CanvasSize = ImVec2(0.0f, 0.0f);
-    DrawList = nullptr;
-    InsideCanvas = false;
-    CurNode = -1;
-    CurNodeScreen = ImVec2(0.0f, 0.0f);
-    NextTitle[0] = 0;
-    NextTitleColor = 0;
-    Interaction = ImGuiCanvasInteraction_None;
+    DrawList          = nullptr;
+    InsideCanvas      = false;
+    CurNode           = -1;
+    CurNodeScreen     = ImVec2(0.0f, 0.0f);
+    NextTitle[0]      = 0;
+    NextTitleColor    = 0;
+    Interaction       = ImGuiCanvasInteraction_None;
     GestureStartMouse = GestureStartPan = ImVec2(0.0f, 0.0f);
-    DragWireFromPin = -1;
+    DragWireFromPin   = -1;
     EditBuf = nullptr; EditBufSize = 0; EditFlag = nullptr; EditNodeIdx = -1; EditFocusPending = false;
     LastEditingNodeId = -1;
-    MiniMapReq = false;
-    MiniMapFraction = 0.2f;
+    MiniMapReq        = false;
+    MiniMapFraction   = 0.2f;
     MiniRectMin = MiniRectMax = ImVec2(0.0f, 0.0f);
     MiniContentMin = MiniModelMin = ImVec2(0.0f, 0.0f);
-    MiniScale = 0.0f;
+    MiniScale         = 0.0f;
     NodeDblClickReq = false; NodeDblClickId = -1;
     MenuNodeReq = MenuWireReq = MenuEmptyReq = false;
     MenuNodeId = MenuWireId = -1;
-    MenuEmptyModel = ImVec2(0.0f, 0.0f);
+    MenuEmptyModel    = ImVec2(0.0f, 0.0f);
     WireCreatedReq = WireDroppedReq = WireDetachedReq = false;
     CreatedPinA = CreatedPinB = DroppedFromPin = DetachedWireId = DetachedGrabbedPin = -1;
-    DroppedModel = ImVec2(0.0f, 0.0f);
+    DroppedModel      = ImVec2(0.0f, 0.0f);
   }
 };
 
@@ -981,8 +981,12 @@ namespace ImGui
     const int    frame = GetFrameCount();
 
     // Hover against THIS frame's geometry: pins beat nodes beat wires. Feeds this frame's draw
-    // colors and the next frame's press decisions.
+    // colors and the next frame's press decisions. The minimap is an overlay with its own
+    // interaction: nothing under it hovers.
+    const bool over_minimap = mouse.x >= c->MiniRectMin.x && mouse.x < c->MiniRectMax.x
+                           && mouse.y >= c->MiniRectMin.y && mouse.y < c->MiniRectMax.y;
     c->HoveredPin = -1;
+    if (!over_minimap)
     {
       float best = c->Style.PinHoverRadius * z;
       best *= best;
@@ -1001,7 +1005,7 @@ namespace ImGui
       }
     }
     c->HoveredWire = -1;
-    if (c->HoveredPin == -1 && c->HoveredNode == -1)
+    if (!over_minimap && c->HoveredPin == -1 && c->HoveredNode == -1)
     {
       float reach = ImMax(GetFontSize() * 0.375f, c->Style.WireThickness * z * 2.0f);
       reach *= reach;
