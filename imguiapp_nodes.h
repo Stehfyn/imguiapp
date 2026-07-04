@@ -480,6 +480,101 @@ struct ImGuiAppGroupFrame
   ImVec2 MaxM = ImVec2(0.0f, 0.0f);
 };
 
+namespace ImGui
+{
+  struct ImGuiAppGraphHostCmd;   // fwd (declared with the palette API below)
+  struct ImGuiAppGraphIssue;     // fwd (declared with the validation API below)
+}
+
+// Canvas view settings: presentation-only, never model state. Not serialized by Save/Load; the
+// host may persist them across sessions.
+struct ImGuiAppGraphViewState
+{
+  bool  SnapGrid;
+  bool  OvGrid;
+  bool  OvBands;
+  bool  OvFrames;
+  bool  OvMinimap;
+  float Zoom; // canvas zoom, wheel-driven, [0.3, 2.5]; authored positions stay zoom-independent
+};
+
+// Undo history: serialized-graph snapshots, linear with a cursor at the live state; pushing after
+// an undo truncates the redo tail. Snapshot/label strings are owned heap allocations.
+// A saved subtree: serialized nodes + links, instantiable into any graph.
+struct ImGuiAppPrefab
+{
+  char  Name[64];
+  char* Data;   // serialized subtree, owned
+};
+
+struct ImGuiAppEditorUndo
+{
+  ImVector<char*>              Snaps;            // owned snapshot strings, oldest..newest
+  ImVector<char*>              Labels;           // owned operation names, parallel to Snaps (derived by diffing)
+  int                          Cursor = -1;      // index of the snapshot matching the live graph (-1 = empty)
+  const struct ImGuiAppGraph*  Owner = nullptr;  // identity guard
+  ImGuiID                      LiveHash = 0;     // hash of Snaps[Cursor], for cheap change detection
+};
+
+// Editor session state, one per graph (the document): the editor's cross-frame values ride the
+// model object they describe, like Selection/ViewScope/ScopeCams. All transient, not serialized.
+struct ImGuiAppEditorState
+{
+  mutable ImGuiCanvasState*            Canvas = nullptr;        // this graph's canvas engine (created on first editor frame; freed with the process)
+  bool                                 DragWasDetach = false;
+  mutable int                          HoverNode = -1;          // brushing bus: render-phase reports (TempData), read next frame
+  mutable int                          HoverLink = -1;
+  mutable int                          HoverNodeSrc = 0;
+  mutable int                          HoverLinkSrc = 0;
+  mutable int                          HoverPrevNode = -1;      // ... and last frame's, what readers see
+  mutable int                          HoverPrevLink = -1;
+  mutable int                          HoverPrevNodeSrc = 0;
+  mutable int                          HoverPrevLinkSrc = 0;
+  mutable int                          HoverFrame = -1;
+  ImGuiAppGraphViewState               View = { false, true, true, true, true, 1.0f };   // snap off; overlays on; 1:1
+  mutable ImVector<ImGui::ImGuiAppGraphIssue> IssuesCache;
+  mutable ImGuiID                      IssuesSig = 0;
+  mutable bool                         IssuesValid = false;
+  mutable ImGuiStorage                 IssuesSeverity;          // node id -> worst severity
+  ImVector<int>                        PoolIds;                 // node ids the canvas holds
+  ImVector<int>                        PrevPoolIds;
+  char                                 StatusHint[256] = "";
+  int                                  StatusSev = 0;
+  mutable const ImGui::ImGuiAppGraphHostCmd* HostCmds = nullptr;  // registered per frame; host-owned
+  mutable int                          HostCmdCount = 0;
+  mutable int                          HostCmdPicked = -1;
+  mutable bool                         AddPaletteRequest = false;   // one-shot
+  mutable bool                         FitAllRequest = false;       // one-shot
+  bool                                 HelpOverlay = false;         // F1 shortcut cheat sheet
+  bool                                 QuickInspector = false;      // N: floating quick inspector
+  bool                                 PrevShowLive = true;
+  bool                                 TitleEditing = false;        // one node renames at a time
+  ImVec2                               AddPopupGrid = ImVec2(0.0f, 0.0f);
+  int                                  CtxNodeId = -1;
+  int                                  CtxLinkId = -1;
+  int                                  FitAllCountdown = 0;
+  ImGuiTextFilter                      AddFilter;                   // add-palette search
+  ImGuiTextFilter                      CmdFilter;                   // command-palette search
+  int                                  ErrSeqSeen = 0;
+  double                               ErrTime = -1000.0;
+  int                                  DropSrcAttr = -1;
+  int                                  ToastSeq = -1;
+  float                                ToastT0 = 0.0f;
+  int                                  AppliedSel = -1;
+  int                                  OutlinerRename = -1;         // node id being renamed in the tree, -1 = none
+  bool                                 OutlinerRenameFocus = false;
+  bool                                 OutlinerKindVis[ImGuiAppNodeKind_COUNT] = { true, true, true, true, true, true, true };
+  ImGuiTextFilter                      OutlinerFilter;
+  ImVector<ImGuiAppStyleModDesc>       StyleClipMods;               // style-section clipboard (session-lived, value-typed)
+  ImVector<ImGuiAppColorModDesc>       StyleClipCols;
+  bool                                 StyleClipHas = false;
+  char*                                ClipText = nullptr;          // serialized partial graph, or null (owned)
+  int                                  ClipPaste = 0;               // cascade counter so repeated pastes fan out
+  ImVector<ImGuiAppPrefab>             Prefabs;                     // saved subtrees (owned strings)
+  ImFont*                              CodeFont = nullptr;          // code panels; null -> UI font
+  ImGuiAppEditorUndo                   Undo;
+};
+
 // The whole authored graph. One monotonic id allocator shared by every node/port/body-attr/link:
 // ids are globally unique, never reused.
 struct ImGuiAppGraph
@@ -499,6 +594,13 @@ struct ImGuiAppGraph
   bool                           _GroupDragMoved            = false;   // chip gesture latch: drag vs fold-click (transient)
   ImVector<ImGuiAppGroupFrame>   _GroupFrames;                         // THIS frame's published group frames, model units (transient)
   ImVector<ImGuiAppGroupFrame>   _GroupFramesPrev;                     // last frame's publication, what consumers read (transient)
+  mutable ImGuiAppEditorState*   _Ed                        = nullptr; // editor session state; opaque to reflection/serialization (created on first editor use, freed with the process)
+  float                          _LayerUniformW             = 0.0f;    // uniform layer-column content width, model units; 0 = floor (transient)
+  int                            _LayerDragId               = 0;       // layer node under an active vertical drag, 0 = none (transient)
+  float                          _LayerDragMouseY0          = 0.0f;    // screen-y mouse origin of that drag (transient)
+  float                          _LayerDragNodeY0           = 0.0f;    // dragged layer's model y at grab (transient)
+  float                          _LayerDragMaxY             = 0.0f;    // clamp edges captured at grab, model units (transient)
+  float                          _LayerDragMinY             = 0.0f;
   int                            NextId                     = 1;
   int                            EditingNodeId              = -1;      // node whose title is being renamed inline, or -1
   char                           LastLinkErr[IM_LABEL_SIZE] = "";      // last refused-link reason; transient, NOT in Save/Load
@@ -614,12 +716,12 @@ namespace ImGui
   // Context keymap hint + transient refused-link errors, computed by ShowAppGraphEditor every frame.
   // Render it OUTSIDE the canvas (host status bar). severity: 0 = plain hint, 2 = error (refused
   // link). Valid for the frame after the editor ran.
-  IMGUI_API const char*         AppGraphStatusHint(int* out_severity);
+  IMGUI_API const char*         AppGraphStatusHint(const ImGuiAppGraph* g, int* out_severity);
 
-  IMGUI_API void                AppGraphHoverNode(int node_id, ImGuiAppHoverSource source);
-  IMGUI_API void                AppGraphHoverLink(int link_id, ImGuiAppHoverSource source);
-  IMGUI_API int                 AppGraphHoveredNode(ImGuiAppHoverSource* out_source);   // -1 = none; out_source may be null
-  IMGUI_API int                 AppGraphHoveredLink(ImGuiAppHoverSource* out_source);
+  IMGUI_API void                AppGraphHoverNode(const ImGuiAppGraph* g, int node_id, ImGuiAppHoverSource source);
+  IMGUI_API void                AppGraphHoverLink(const ImGuiAppGraph* g, int link_id, ImGuiAppHoverSource source);
+  IMGUI_API int                 AppGraphHoveredNode(const ImGuiAppGraph* g, ImGuiAppHoverSource* out_source);   // -1 = none; out_source may be null
+  IMGUI_API int                 AppGraphHoveredLink(const ImGuiAppGraph* g, ImGuiAppHoverSource* out_source);
 
   // Host verbs surfaced in the canvas command palette (workbench W2). Register each frame before
   // ShowAppGraphEditor (pointers must outlive the frame); a picked command is reported back through
@@ -630,15 +732,15 @@ namespace ImGui
     const char* Shortcut; // displayed dim + right-aligned; "" = none
     int         Id;       // host-defined, returned by AppGraphConsumeHostCommand
   };
-  IMGUI_API void                AppGraphSetHostCommands(const ImGuiAppGraphHostCmd* cmds, int count);
-  IMGUI_API int                 AppGraphConsumeHostCommand();   // picked host cmd id since last call, or -1
+  IMGUI_API void                AppGraphSetHostCommands(const ImGuiAppGraph* g, const ImGuiAppGraphHostCmd* cmds, int count);
+  IMGUI_API int                 AppGraphConsumeHostCommand(const ImGuiAppGraph* g);   // picked host cmd id since last call, or -1
 
   // One-shot: open the add-node palette at the canvas center on the editor's next submission (same
   // palette as RMB / Space / the + gizmo).
-  IMGUI_API void                AppGraphRequestAddPalette();
+  IMGUI_API void                AppGraphRequestAddPalette(const ImGuiAppGraph* g);
 
   // One-shot: frame the whole graph on the editor's next submission.
-  IMGUI_API void                AppGraphRequestFitAll();
+  IMGUI_API void                AppGraphRequestFitAll(const ImGuiAppGraph* g);
 
   // Composer chrome palette, derived from the current ImGuiStyle theme (AppComposerStyleFromTheme):
   // neutrals ride the WindowBg -> Text axis, semantic hues are pulled toward Text for light-theme
@@ -708,22 +810,13 @@ namespace ImGui
   };
   IMGUI_API ImGuiAppChromeTheme*    AppGraphChromeTheme();
 
-  // Canvas view settings: presentation-only, never model state. Stable pointer (single editor
-  // instance) so the host can persist them across sessions.
-  struct ImGuiAppGraphViewState
-  {
-    bool  SnapGrid;
-    bool  OvGrid;
-    bool  OvBands;
-    bool  OvFrames;
-    bool  OvMinimap;
-    float Zoom; // canvas zoom, wheel-driven, [0.3, 2.5]; authored positions stay zoom-independent
-  };
-  IMGUI_API ImGuiAppGraphViewState* AppGraphViewState();
+  // Canvas view settings live on the graph (`_Ed.View`); stable pointer for host persistence.
+  IMGUI_API ImGuiAppEditorState*    AppGraphEditorState(const ImGuiAppGraph* g);   // created on first use
+  IMGUI_API ImGuiAppGraphViewState* AppGraphViewState(ImGuiAppGraph* g);
 
-  // The editor's canvas-engine state (single editor instance; see imguiapp_canvas.h): hosts and
-  // tests can query geometry or drive the camera.
-  IMGUI_API ::ImGuiCanvasState* AppGraphEditorCanvas();
+  // The graph's canvas-engine state (see imguiapp_canvas.h): hosts and tests can query geometry
+  // or drive the camera. Created on the graph's first editor frame.
+  IMGUI_API ::ImGuiCanvasState* AppGraphEditorCanvas(const ImGuiAppGraph* g);
 
   // Cached validation, keyed by AppGraphSignature (+ bindings): cheap enough to query every frame.
   // Worst per-node severity: 0 = clean, 1 = warning, 2 = error.
@@ -796,8 +889,8 @@ namespace ImGui
   // same name); Instantiate stamps a saved prefab into g with fresh ids at `origin` and selects it.
   // Count/Name enumerate the registry (in-memory, session-lived).
   IMGUI_API void                AppGraphSavePrefab(const ImGuiAppGraph* g, const ImVector<int>& roots, const char* name);
-  IMGUI_API int                 AppGraphPrefabCount();
-  IMGUI_API const char*         AppGraphPrefabName(int index);
+  IMGUI_API int                 AppGraphPrefabCount(const ImGuiAppGraph* g);
+  IMGUI_API const char*         AppGraphPrefabName(const ImGuiAppGraph* g, int index);
   IMGUI_API int                 AppGraphInstantiatePrefab(ImGuiAppGraph* g, int index, ImVec2 origin);
 
   // Ensure the four foundation layers (Window, Task, Command, Status) exist in g -- adds missing,

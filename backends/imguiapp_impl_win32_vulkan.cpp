@@ -12,7 +12,6 @@
 #include "imgui_impl_vulkan.h"
 
 #include <windows.h>
-#include <d3dkmthk.h>
 
 
 #include <cstdio>
@@ -46,11 +45,6 @@ namespace
         VkDescriptorPool               DescriptorPool;
         ImGui_ImplVulkanH_Window       MainWindow;
         uint32_t                       MinImageCount;
-        D3DKMT_HANDLE                  VBlankAdapter;
-        D3DDDI_VIDEO_PRESENT_SOURCE_ID VBlankSourceId;
-        HMONITOR                       VBlankMonitor;
-        bool                           VBlankWaitAvailable;
-        bool                           VBlankWaitDisabled;
         bool                           SwapChainRebuild;
         bool                           LastFrameRendered; // set by RenderDrawData, consumed by PresentFrame
         bool                           PlatformBackendInitialized;
@@ -92,22 +86,6 @@ namespace
         VkCommandBuffer CaptureSyncCmd;
         VkFence         CaptureSyncFence;
         ImVector<char>  CaptureRgba;            // RGBA8 conversion buffer handed to CaptureFrame callers
-    };
-
-    struct D3DKMTApi
-    {
-        bool                                Loaded;
-        HMODULE                             Module;
-        PFND3DKMT_OPENADAPTERFROMHDC        OpenAdapterFromHdc;
-        PFND3DKMT_CLOSEADAPTER              CloseAdapter;
-        PFND3DKMT_WAITFORVERTICALBLANKEVENT WaitForVerticalBlankEvent;
-
-        bool IsAvailable() const
-        {
-            return OpenAdapterFromHdc != nullptr &&
-                   CloseAdapter != nullptr &&
-                   WaitForVerticalBlankEvent != nullptr;
-        }
     };
 
     ImGuiApp_ImplWin32Vulkan_Data GBackend;
@@ -548,30 +526,6 @@ namespace
         CheckVkResult(err);
     }
 
-    bool IsNtSuccess(NTSTATUS status)
-    {
-        return status >= 0;
-    }
-
-    D3DKMTApi& GetD3DKMTApi()
-    {
-        static D3DKMTApi api;
-        if (api.Loaded)
-            return api;
-
-        api.Loaded = true;
-        api.Module = ::GetModuleHandleA("gdi32.dll");
-        if (api.Module == nullptr)
-            api.Module = ::LoadLibraryA("gdi32.dll");
-        if (api.Module == nullptr)
-            return api;
-
-        api.OpenAdapterFromHdc = reinterpret_cast<PFND3DKMT_OPENADAPTERFROMHDC>(::GetProcAddress(api.Module, "D3DKMTOpenAdapterFromHdc"));
-        api.CloseAdapter = reinterpret_cast<PFND3DKMT_CLOSEADAPTER>(::GetProcAddress(api.Module, "D3DKMTCloseAdapter"));
-        api.WaitForVerticalBlankEvent = reinterpret_cast<PFND3DKMT_WAITFORVERTICALBLANKEVENT>(::GetProcAddress(api.Module, "D3DKMTWaitForVerticalBlankEvent"));
-        return api;
-    }
-
     bool IsExtensionAvailable(const ImVector<VkExtensionProperties>& properties, const char* extension)
     {
         for (const VkExtensionProperties& property : properties)
@@ -604,96 +558,6 @@ namespace
         const ImGuiIO& io = ImGui::GetIO();
         *width = (int)io.DisplaySize.x;
         *height = (int)io.DisplaySize.y;
-    }
-
-    void CloseVBlankWaitAdapter(ImGuiApp_ImplWin32Vulkan_Data* bd)
-    {
-        if (bd == nullptr || bd->VBlankAdapter == 0)
-            return;
-
-        D3DKMTApi& api = GetD3DKMTApi();
-        if (api.CloseAdapter != nullptr)
-        {
-            D3DKMT_CLOSEADAPTER close_adapter = {};
-            close_adapter.hAdapter = bd->VBlankAdapter;
-            api.CloseAdapter(&close_adapter);
-        }
-
-        bd->VBlankAdapter = 0;
-        bd->VBlankSourceId = 0;
-        bd->VBlankMonitor = nullptr;
-        bd->VBlankWaitAvailable = false;
-    }
-
-    bool OpenVBlankWaitAdapter(ImGuiApp_ImplWin32Vulkan_Data* bd)
-    {
-        if (bd == nullptr || bd->Hwnd == nullptr)
-            return false;
-
-        D3DKMTApi& api = GetD3DKMTApi();
-        if (!api.IsAvailable())
-            return false;
-
-        HDC hdc = ::GetDC(bd->Hwnd);
-        if (hdc == nullptr)
-            return false;
-
-        D3DKMT_OPENADAPTERFROMHDC open_adapter = {};
-        open_adapter.hDc = hdc;
-        NTSTATUS status = api.OpenAdapterFromHdc(&open_adapter);
-        ::ReleaseDC(bd->Hwnd, hdc);
-
-        if (!IsNtSuccess(status) || open_adapter.hAdapter == 0)
-            return false;
-
-        CloseVBlankWaitAdapter(bd);
-        bd->VBlankAdapter = open_adapter.hAdapter;
-        bd->VBlankSourceId = open_adapter.VidPnSourceId;
-        bd->VBlankMonitor = ::MonitorFromWindow(bd->Hwnd, MONITOR_DEFAULTTONEAREST);
-        bd->VBlankWaitAvailable = true;
-        return true;
-    }
-
-    void WaitForVBlankBeforePresent(ImGuiApp_ImplWin32Vulkan_Data* bd, ImGui_ImplVulkanH_Window* wd)
-    {
-        if (bd == nullptr || wd == nullptr || bd->VBlankWaitDisabled || wd->PresentMode != VK_PRESENT_MODE_IMMEDIATE_KHR)
-            return;
-
-        HMONITOR monitor = ::MonitorFromWindow(bd->Hwnd, MONITOR_DEFAULTTONEAREST);
-        if (!bd->VBlankWaitAvailable || bd->VBlankMonitor != monitor)
-        {
-            if (!OpenVBlankWaitAdapter(bd))
-            {
-                bd->VBlankWaitDisabled = true;
-                return;
-            }
-        }
-
-        D3DKMTApi& api = GetD3DKMTApi();
-        D3DKMT_WAITFORVERTICALBLANKEVENT wait = {};
-        wait.hAdapter = bd->VBlankAdapter;
-        wait.VidPnSourceId = bd->VBlankSourceId;
-
-        NTSTATUS status = api.WaitForVerticalBlankEvent(&wait);
-        if (IsNtSuccess(status))
-            return;
-
-        CloseVBlankWaitAdapter(bd);
-        if (!OpenVBlankWaitAdapter(bd))
-        {
-            bd->VBlankWaitDisabled = true;
-            return;
-        }
-
-        wait = {};
-        wait.hAdapter = bd->VBlankAdapter;
-        wait.VidPnSourceId = bd->VBlankSourceId;
-        status = api.WaitForVerticalBlankEvent(&wait);
-        if (!IsNtSuccess(status))
-        {
-            CloseVBlankWaitAdapter(bd);
-            bd->VBlankWaitDisabled = true;
-        }
     }
 
     VKAPI_ATTR VkBool32 VKAPI_CALL DebugReportCallback(
@@ -907,10 +771,10 @@ namespace
             (int)IM_COUNTOF(request_formats),
             request_color_space);
 
+        // Immediate present: the pacer owns frame timing. FIFO only as the spec-mandated fallback.
         VkPresentModeKHR present_modes[] =
         {
             VK_PRESENT_MODE_IMMEDIATE_KHR,
-            VK_PRESENT_MODE_MAILBOX_KHR,
             VK_PRESENT_MODE_FIFO_KHR,
         };
         wd->PresentMode = ImGui_ImplVulkanH_SelectPresentMode(
@@ -1103,7 +967,6 @@ namespace
         present_info.pSwapchains = &wd->Swapchain;
         present_info.pImageIndices = &wd->FrameIndex;
 
-        WaitForVBlankBeforePresent(bd, wd);
         VkResult err = vkQueuePresentKHR(bd->Queue, &present_info);
         if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR)
             bd->SwapChainRebuild = true;
@@ -1142,7 +1005,6 @@ namespace
         if (bd->PlatformBackendInitialized)
             ImGui_ImplWin32_Shutdown();
 
-        CloseVBlankWaitAdapter(bd);
         DestroyCaptureBuffers(bd);
         DestroyOffscreenTarget(bd);
         CleanupVulkanWindow(bd, &bd->MainWindow);

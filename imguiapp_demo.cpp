@@ -26,8 +26,6 @@
 
 namespace
 {
-  // Set via ImGui::SetAppCodeFont; null -> UI font.
-  static ImFont* g_AppCodeFont = nullptr;
 
   // Theme-derived colors (same vocabulary as CanvasStyleFromTheme, imguiapp_canvas.cpp):
   // neutrals blend WindowBg toward Text; semantic hues pull toward Text for light-theme legibility.
@@ -127,15 +125,14 @@ namespace
 
   struct BreathingControlData
   {
-    char            label[128];
-    char            type[128];
-    char            text[128];
-    char            timer_text[128];
-    const ImGuiApp* app; // reads the optional Random Time source control
-    float           timer_secs;
-    float           t_value;
-    float           t_direction;
-    ImVec4          col;
+    char   label[128];
+    char   type[128];
+    char   text[128];
+    char   timer_text[128];
+    float  timer_secs;
+    float  t_value;
+    float  t_direction;
+    ImVec4 col;
   };
 
   struct BreathingControlTempData
@@ -143,23 +140,25 @@ namespace
     bool hovered;
   };
 
-  struct BreathingControlDemo : ImGuiAppControl<BreathingControlData, BreathingControlTempData>
+  // RandomTimeData is an Optional dependency: null while the Random Time example is disabled,
+  // rebound live when it is pushed/popped (the push site passes the Optional binding).
+  struct BreathingControlDemo : ImGuiAppControl<BreathingControlData, BreathingControlTempData, RandomTimeData>
   {
     static constexpr float DefaultMaxTimerSecs = 5.0f;
 
-    float SourceMaxTimerSecs(const BreathingControlData* data) const
+    static float SourceMaxTimerSecs(const RandomTimeData* src)
     {
-      if (data->app != nullptr)
-        if (const RandomTimeData* src = static_cast<const RandomTimeData*>(data->app->Data.GetVoidPtr(ImGuiType<RandomTimeData>::ID)))
-          return src->max_timer_secs;
+      if (src != nullptr)
+        return src->max_timer_secs;
       return DefaultMaxTimerSecs;
     }
 
-    virtual void OnInitialize(ImGuiApp* app, BreathingControlData* data) const override final
+    virtual void OnInitialize(ImGuiApp* app, BreathingControlData* data, const RandomTimeData* src) const override final
     {
-      std::string_view sv;
+      IM_UNUSED(app);
+      IM_UNUSED(src);
 
-      data->app = app;
+      std::string_view sv;
 
       sv = ImGuiType<decltype(this)>::Name;
 
@@ -167,13 +166,13 @@ namespace
       ImFormatString(data->label, sizeof(data->label), "%s", data->type);
     }
 
-    virtual void OnUpdate(float dt, BreathingControlData* data, const BreathingControlTempData* temp_data, const BreathingControlTempData* last_temp_data) const override final
+    virtual void OnUpdate(float dt, BreathingControlData* data, const BreathingControlTempData* temp_data, const BreathingControlTempData* last_temp_data, const RandomTimeData* src) const override final
     {
       data->timer_secs = ImMax(0.0f, data->timer_secs - dt);
 
       if (temp_data->hovered ^ last_temp_data->hovered)
       {
-        data->timer_secs = temp_data->hovered * SourceMaxTimerSecs(data);
+        data->timer_secs = temp_data->hovered * SourceMaxTimerSecs(src);
         data->t_value = 0.0f;
         data->t_direction = 1.0f;
       }
@@ -195,8 +194,10 @@ namespace
       }
     }
 
-    virtual void OnRender(const BreathingControlData* data, BreathingControlTempData* temp_data) const override final
+    virtual void OnRender(const BreathingControlData* data, BreathingControlTempData* temp_data, const RandomTimeData* src) const override final
     {
+      IM_UNUSED(src);
+
       const ImGuiViewport* vp = ImGui::GetMainViewport();
       const float em = ImGui::GetFontSize();
       ImGui::SetNextWindowSize(ImVec2(em * 18.0f, em * 9.0f), ImGuiCond_FirstUseEver);
@@ -378,7 +379,7 @@ namespace
   {
     float TreeW, InspW, CodeH;
     bool                          ShowLive;
-    ImGui::ImGuiAppGraphViewState View;
+    ImGuiAppGraphViewState View;
   };
   static ComposerLayoutFields ComposerLayoutCapture(const GraphDocData* doc)
   {
@@ -386,7 +387,7 @@ namespace
     memset(&f, 0, sizeof(f));   // padding participates in the hash -- keep it deterministic
     f.TreeW = doc->TreeW; f.InspW = doc->InspW; f.CodeH = doc->CodeH;
     f.ShowLive = doc->ShowLive;
-    f.View = *ImGui::AppGraphViewState();
+    f.View = ImGui::AppGraphEditorState(&doc->Graph)->View;
     return f;
   }
 
@@ -396,7 +397,7 @@ namespace
     char* text = (char*)ImFileLoadToMemory(kComposerLayoutPath, "rb", &size, 1);
     if (text == nullptr)
       return;
-    ImGui::ImGuiAppGraphViewState* view = ImGui::AppGraphViewState();
+    ImGuiAppGraphViewState* view = &ImGui::AppGraphEditorState(&doc->Graph)->View;
     for (char* p = text; *p; )
     {
       char* eol = p;
@@ -487,7 +488,7 @@ namespace
         SeedAppGraph(&data->Graph);
         ImGui::AppGraphAutoLayout(&data->Graph, false);
       }
-      ImGui::AppGraphRequestFitAll();
+      ImGui::AppGraphRequestFitAll(&data->Graph);
     }
     virtual void OnUpdate(float dt, GraphDocData* data, const GraphDocTempData*, const GraphDocTempData*) const override final
     {
@@ -604,7 +605,7 @@ namespace
       {
         ImGui::LoadAppGraph(doc->GraphPath, &doc->Graph);
         ImGui::AppGraphEnsureFoundation(&doc->Graph);
-        ImGui::AppGraphRequestFitAll();
+        ImGui::AppGraphRequestFitAll(&doc->Graph);
         DocLog(doc, 0, "loaded graph <- %s", doc->GraphPath);
       }
       if (temp_data->WriteHeader)
@@ -658,7 +659,7 @@ namespace
       }
       if (temp_data->AddNode)
       {
-        ImGui::AppGraphRequestAddPalette();
+        ImGui::AppGraphRequestAddPalette(&doc->Graph);
       }
       if (temp_data->Diff)
       {
@@ -835,7 +836,7 @@ namespace
         ImGui::SetItemTooltip("Show / hide read-only nodes mirrored from the running app");
 
         // Palette pick from last frame's canvas folds into the same temp flags the buttons set.
-        switch (ImGui::AppGraphConsumeHostCommand())
+        switch (ImGui::AppGraphConsumeHostCommand(&doc->Graph))
         {
         case ComposerHostCmd_Save:         temp_data->Save = true; break;
         case ComposerHostCmd_Load:         temp_data->Load = true; break;
@@ -937,7 +938,7 @@ namespace
       ImStrncpy(data->Msg, doc->WriteMsg, IM_ARRAYSIZE(data->Msg));
     }
 
-    virtual void OnRender(const StatusStripData* data, StatusStripTempData*, const GraphDocData*) const override final
+    virtual void OnRender(const StatusStripData* data, StatusStripTempData*, const GraphDocData* doc_dep) const override final
     {
       const float       em    = ImGui::GetFontSize();
       const ImGuiStyle& style = ImGui::GetStyle();
@@ -945,7 +946,7 @@ namespace
       {
         // Left: live keymap hint; refused links show in red.
         int sev = 0;
-        const char* hint = ImGui::AppGraphStatusHint(&sev);
+        const char* hint = ImGui::AppGraphStatusHint(&doc_dep->Graph, &sev);
         ImGui::AlignTextToFramePadding();
         ImGui::TextColored(sev >= 2 ? ImVec4(0.90f, 0.42f, 0.38f, 1.0f) : style.Colors[ImGuiCol_TextDisabled], "%s", hint);
 
@@ -972,11 +973,12 @@ namespace
   // Shared by every code tab. With a source map it carries the coordinated-view interactions
   // (selection highlight + scroll, hover brushing, click-to-select). Pure view: reads const data,
   // records the click into *selection.
-  static void ShowGeneratedCodeView(const char* str_id, const ImGuiTextBuffer& text, const ImVector<int>& lines,
+  static void ShowGeneratedCodeView(const ImGuiAppGraph* graph, const char* str_id, const ImGuiTextBuffer& text, const ImVector<int>& lines,
                                     const ImVector<ImGui::ImGuiAppCodeSpan>* spans, int* selection)
   {
-    if (g_AppCodeFont)
-      ImGui::PushFont(g_AppCodeFont, 0.0f);
+    ImFont* code_font = graph != nullptr ? ImGui::AppGraphEditorState(graph)->CodeFont : nullptr;
+    if (code_font)
+      ImGui::PushFont(code_font, 0.0f);
     if (ImGui::BeginChild(str_id, ImVec2(-FLT_MIN, -FLT_MIN), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar))
     {
       const char* buf        = text.Buf.Data;
@@ -994,7 +996,7 @@ namespace
       const ImVec4 row_gold = ImLerp(kDemoGold, row_ink, 0.15f);
 
       ImGui::ImGuiAppHoverSource hsrc = ImGui::ImGuiAppHoverSource_None;
-      const int brushed_node = spans != nullptr ? ImGui::AppGraphHoveredNode(&hsrc) : -1;
+      const int brushed_node = spans != nullptr && graph != nullptr ? ImGui::AppGraphHoveredNode(graph, &hsrc) : -1;
       const int sel = selection != nullptr ? *selection : -1;
       auto span_owner = [&](int ln) -> int
       {
@@ -1056,7 +1058,7 @@ namespace
 
           if (owner >= 0 && ImGui::IsItemHovered())
           {
-            ImGui::AppGraphHoverNode(owner, ImGui::ImGuiAppHoverSource_External);
+            ImGui::AppGraphHoverNode(graph, owner, ImGui::ImGuiAppHoverSource_External);
             if (selection != nullptr && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
               *selection = owner;
           }
@@ -1065,7 +1067,7 @@ namespace
       ImGui::PopStyleVar();
     }
     ImGui::EndChild();
-    if (g_AppCodeFont)
+    if (code_font)
       ImGui::PopFont();
   }
 
@@ -1207,13 +1209,13 @@ namespace
 
     if (ImGui::AppInspectorSection("##psec_prefabs", ICON_FA_CUBES, "Prefabs", nullptr, nullptr))
     {
-      if (ImGui::AppGraphPrefabCount() == 0)
+      if (ImGui::AppGraphPrefabCount(&doc->Graph) == 0)
         ImGui::TextDisabled("Save a selection as a prefab from the canvas context menu.");
-      for (int i = 0; i < ImGui::AppGraphPrefabCount(); i++)
+      for (int i = 0; i < ImGui::AppGraphPrefabCount(&doc->Graph); i++)
       {
         ImGui::PushID(i);
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(ImGui::AppGraphPrefabName(i));
+        ImGui::TextUnformatted(ImGui::AppGraphPrefabName(&doc->Graph, i));
         ImGui::SameLine(ImGui::GetContentRegionMax().x - em * 4.0f);
         if (ImGui::SmallButton("Stamp"))
           temp_data->StampPrefab = i;
@@ -1296,13 +1298,13 @@ namespace
       {
         ImGui::LoadAppGraph(doc->GraphPath, &doc->Graph);
         ImGui::AppGraphEnsureFoundation(&doc->Graph);
-        ImGui::AppGraphRequestFitAll();
+        ImGui::AppGraphRequestFitAll(&doc->Graph);
         DocLog(doc, 0, "loaded graph <- %s (Project)", doc->GraphPath);
       }
       if (temp_data->StampPrefab >= 0)
       {
         ImGui::AppGraphInstantiatePrefab(&doc->Graph, temp_data->StampPrefab, ImVec2(140.0f, 140.0f));
-        DocLog(doc, 0, "stamped prefab '%s'", ImGui::AppGraphPrefabName(temp_data->StampPrefab));
+        DocLog(doc, 0, "stamped prefab '%s'", ImGui::AppGraphPrefabName(&doc->Graph, temp_data->StampPrefab));
       }
       data->ProjRescan -= dt;
       if (data->ProjRescan <= 0.0f)
@@ -1407,6 +1409,24 @@ namespace
       ImGuiApp*      app   = doc->Mirror;                    // non-const: the viewer/canvas APIs edit through it
       ImGuiAppGraph* graph = &doc->Graph;
 
+      // Canvas theme rides the graph's canvas; GridSpacing doubles as the applied sentinel.
+      {
+        ImGuiCanvasStyle* cs = ImGui::CanvasGetStyle(ImGui::AppGraphEditorCanvas(graph));
+        if (cs->GridSpacing != 26.0f)
+        {
+          const ImVec4 wire_ink = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+          cs->WireHovered    = DemoThemeCol(ImLerp(kDemoGold, wire_ink, 0.10f), 1.0f);
+          cs->WireSelected   = DemoThemeCol(ImLerp(kDemoGold, wire_ink, 0.18f), 1.0f);
+          cs->NodeRounding   = 5.0f;
+          cs->NodePadding    = ImVec2(9.0f, 7.0f);
+          cs->NodeBorder     = 1.0f;
+          cs->WireThickness  = 2.6f;
+          cs->PinRadius      = 4.2f;
+          cs->PinHoverRadius = 10.0f;
+          cs->GridSpacing    = 26.0f;
+        }
+      }
+
       // Layout is local + display-only; nothing is written to the doc from OnRender.
       const float    em            = ImGui::GetFontSize();
       const ImGuiIO& io            = ImGui::GetIO();
@@ -1475,7 +1495,7 @@ namespace
             { "Panel: Output", "", ComposerHostCmd_PanelOutput },
             { "View: Toggle live mirror", "", ComposerHostCmd_ToggleLive },
           };
-          ImGui::AppGraphSetHostCommands(host_cmds, IM_ARRAYSIZE(host_cmds));
+          ImGui::AppGraphSetHostCommands(graph, host_cmds, IM_ARRAYSIZE(host_cmds));
 
           ImGui::ShowAppGraphEditor(app, graph, &selection, doc->ShowLive);
 
@@ -1582,7 +1602,7 @@ namespace
                   else if (data->DiffText.size() == 0)
                     ImGui::TextDisabled("No differences: the graph matches the save.");
                   else
-                    ShowGeneratedCodeView("##codediff", data->DiffText, data->DiffLines, nullptr, nullptr);
+                    ShowGeneratedCodeView(&doc->Graph, "##codediff", data->DiffText, data->DiffLines, nullptr, nullptr);
                 }
                 else if (!data->HasCode)
                 {
@@ -1590,7 +1610,7 @@ namespace
                 }
                 else
                 {
-                  ShowGeneratedCodeView("##codeall", data->CodeText, data->CodeLines, &data->CodeSpans, &selection);
+                  ShowGeneratedCodeView(&doc->Graph, "##codeall", data->CodeText, data->CodeLines, &data->CodeSpans, &selection);
                 }
                 ImGui::EndTabItem();
               }
@@ -1705,7 +1725,7 @@ namespace
                       selection = it.NodeId;
                     }
                     if (it.NodeId >= 0 && ImGui::IsItemHovered())
-                      ImGui::AppGraphHoverNode(it.NodeId, ImGui::ImGuiAppHoverSource_External);
+                      ImGui::AppGraphHoverNode(&doc->Graph, it.NodeId, ImGui::ImGuiAppHoverSource_External);
                     ImGui::PopStyleColor();
                     ImGui::PopID();
                   }
@@ -1776,7 +1796,7 @@ namespace
             {
               ImGui::SetClipboardText(data->CodeNodeText.c_str());
             }
-            ShowGeneratedCodeView("##inspcode", data->CodeNodeText, data->NodeLines, nullptr, nullptr);
+            ShowGeneratedCodeView(&doc->Graph, "##inspcode", data->CodeNodeText, data->NodeLines, nullptr, nullptr);
           }
         }
       }
@@ -1908,7 +1928,19 @@ namespace
 
 namespace ImGui
 {
-  IMGUI_API void SetAppCodeFont(ImFont* font) { g_AppCodeFont = font; }
+  IMGUI_API void SetAppCodeFont(ImGuiAppGraph* g, ImFont* font) { AppGraphEditorState(g)->CodeFont = font; }
+
+  IMGUI_API ImGuiAppGraph* AppLayerDemoGraph(ImGuiApp* host)
+  {
+    if (host == nullptr)
+      return nullptr;
+    // Instance data is keyed by data type id in app->Data regardless of which window hosts
+    // the control (GraphDocControl is Composer-window-hosted, never in host->Controls).
+    GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiType<GraphDocData>::ID);
+    if (doc == nullptr)
+      return nullptr;
+    return &doc->Graph;
+  }
 
   //-----------------------------------------------------------------------------
   // [SECTION] Demo bring-up (ShowAppLayerDemo: ONE application)
@@ -1937,25 +1969,6 @@ namespace ImGui
         app = &s_fallback_app;
       }
 
-      // Editor canvas theme, applied once per session.
-      static bool canvas_theme_ready = false;
-      if (!canvas_theme_ready)
-      {
-        // Neutrals come from CanvasStyleFromTheme (CanvasCreate); the demo only accents wires gold.
-        ImGuiCanvasStyle* cs = ImGui::CanvasGetStyle(ImGui::AppGraphEditorCanvas());
-        const ImVec4 wire_ink = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-        cs->WireHovered     = DemoThemeCol(ImLerp(kDemoGold, wire_ink, 0.10f), 1.0f);
-        cs->WireSelected    = DemoThemeCol(ImLerp(kDemoGold, wire_ink, 0.18f), 1.0f);
-        cs->NodeRounding    = 5.0f;
-        cs->NodePadding     = ImVec2(9.0f, 7.0f);
-        cs->NodeBorder      = 1.0f;
-        cs->WireThickness   = 2.6f;
-        cs->PinRadius       = 4.2f;
-        cs->PinHoverRadius  = 10.0f;
-        cs->GridSpacing     = 26.0f;
-        canvas_theme_ready = true;
-      }
-
       // Chrome composition, once. Examples are pushed/popped AFTER the chrome, so they are always
       // the tail of their vectors and the toggle rebuild below can pop them back off.
       static ImGuiApp* s_composed = nullptr;
@@ -1963,13 +1976,7 @@ namespace ImGui
       if (s_composed != app)
       {
         ImGuiViewport* vp = ImGui::GetMainViewport();
-        PushAppWindow<DemoPanelWindow>(app);
-        ImGuiAppWindowBase* panel = app->Windows.back();
-        panel->HasInitialPlacement = true;
-        panel->InitialSize = ImVec2(vp->WorkSize.x * 0.30f, vp->WorkSize.y * 0.40f);
-        panel->InitialPos  = vp->WorkPos + ImVec2(vp->WorkSize.x * 0.02f, vp->WorkSize.y * 0.04f);
-        PushWindowControl<DemoMenuControl>(app, panel);
-
+        // The Composer is ALWAYS the first window pushed: first in app->Windows, first to Begin.
         PushAppWindow<ComposerWindow>(app);
         ImGuiAppWindowBase* metrics = app->Windows.back();
         metrics->HasInitialPlacement = true;
@@ -1979,6 +1986,13 @@ namespace ImGui
         PushWindowControl<ToolbarControl>(app, metrics);    // consumers depend on GraphDocData
         PushWindowControl<EditorBodyControl>(app, metrics);
         PushWindowControl<StatusStripControl>(app, metrics);   // status bar renders LAST -> window bottom
+
+        PushAppWindow<DemoPanelWindow>(app);
+        ImGuiAppWindowBase* panel = app->Windows.back();
+        panel->HasInitialPlacement = true;
+        panel->InitialSize = ImVec2(vp->WorkSize.x * 0.30f, vp->WorkSize.y * 0.40f);
+        panel->InitialPos  = vp->WorkPos + ImVec2(vp->WorkSize.x * 0.02f, vp->WorkSize.y * 0.04f);
+        PushWindowControl<DemoMenuControl>(app, panel);
         s_composed = app;
       }
 
@@ -2042,7 +2056,10 @@ namespace ImGui
         }
         if (st->ShowBreathing)
         {
-          PushAppControl<BreathingControlDemo>(app);
+          // Soft-wired to the Random Time example: reads its roll when it is on, falls back to
+          // the default otherwise (RandomTimeControlDemo pushes first when both are enabled).
+          const ImGuiAppDepBinding binds[] = { { ImGuiType<RandomTimeData>::ID, 0, true } };
+          PushAppControl<BreathingControlDemo>(app, 0, binds, IM_ARRAYSIZE(binds));
         }
 
         st->AppliedBaseWindow = st->ShowBaseWindow;

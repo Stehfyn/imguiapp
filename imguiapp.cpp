@@ -464,12 +464,11 @@ void ImGuiAppTaskLayer::OnUpdate(ImGuiApp* app, float dt) const
 {
     // OnUpdate consumes the TempData recorded by last frame's OnRender and mutates PersistData.
     // Runs before the Command layer collects OnGetCommand, so state updated this frame can emit
-    // a command the same frame.
-    ImGui::ForEachAppControl(app, [app, dt](ImGuiAppControlBase* control, ImGuiAppWindowBase* host)
-    {
-        IM_UNUSED(host);
-        control->OnUpdate(app, dt);
-    });
+    // a command the same frame. Dependency order: every producer updates before its consumers,
+    // so a dependent reads THIS frame's dependency data regardless of hosting order.
+    const ImVector<ImGuiAppControlBase*>* order = ImGui::AppRebuildUpdateOrder(app);
+    for (int i = 0; i < order->Size; i++)
+        order->Data[i]->OnUpdate(app, dt);
 }
 
 void ImGuiAppTaskLayer::OnRender(const ImGuiApp* app) const
@@ -1018,6 +1017,8 @@ namespace ImGui
           return;
       }
 
+      app->CompositionRevision++;
+
       ImGuiAppStorageEntry entry;
       entry.ID = id;
       entry.Ptr = ptr;
@@ -1258,6 +1259,7 @@ namespace ImGui
           entry.Destroy(entry.Ptr);
         app->StorageEntries.erase(app->StorageEntries.Data + i);
         app->Data.SetVoidPtr(id, nullptr);   // ImGuiStorage keeps the key; a null slot reads as absent
+        app->CompositionRevision++;
         return;
       }
   }
@@ -1280,6 +1282,70 @@ namespace ImGui
         h = ImHashData(&id, sizeof(id), h);
       });
       return h;
+  }
+
+  IMGUI_API const ImVector<ImGuiAppControlBase*>* AppRebuildUpdateOrder(ImGuiApp* app)
+  {
+      IM_ASSERT(app);
+
+      // Revision, not the composition hash: popping and re-pushing the same control type returns
+      // to an identical hash, but the control object and its instance data are NEW allocations --
+      // the order and every consumer's cached dependency pointers must rebuild anyway.
+      if (app->CompositionRevision != app->UpdateOrderRevision)
+      {
+        app->UpdateOrder.resize(0);
+        ImVector<ImGuiAppControlBase*> nodes;
+        ForEachAppControl(app, [&nodes](ImGuiAppControlBase* control, ImGuiAppWindowBase* host)
+        {
+            IM_UNUSED(host);
+            nodes.push_back(control);
+        });
+
+        // Stable topological emit over the resolved dependency wiring: each pass emits, in
+        // composition order, every control whose producers are all already emitted. Push-time
+        // resolution requires a producer to exist before its consumer pushes, so cycles cannot
+        // be composed and every pass progresses.
+        ImVector<bool> emitted;
+        emitted.resize(nodes.Size);
+        for (int i = 0; i < emitted.Size; i++)
+          emitted[i] = false;
+        int remaining = nodes.Size;
+        while (remaining > 0)
+        {
+          int progressed = 0;
+          for (int i = 0; i < nodes.Size; i++)
+          {
+            if (emitted[i])
+              continue;
+            ImGuiID deps[64];
+            const int dep_count = nodes[i]->GetControlDependencyIDs(deps, IM_ARRAYSIZE(deps));
+            bool ready = true;
+            for (int d = 0; d < dep_count && ready; d++)
+              for (int j = 0; j < nodes.Size && ready; j++)
+                if (!emitted[j] && j != i && nodes[j]->GetControlDataID() == deps[d])
+                  ready = false;
+            if (!ready)
+              continue;
+            emitted[i] = true;
+            app->UpdateOrder.push_back(nodes[i]);
+            progressed++;
+          }
+          IM_ASSERT(progressed > 0);
+          if (progressed == 0)
+          {
+            for (int i = 0; i < nodes.Size; i++)
+              if (!emitted[i])
+                app->UpdateOrder.push_back(nodes[i]);
+            break;
+          }
+          remaining -= progressed;
+        }
+        for (int i = 0; i < app->UpdateOrder.Size; i++)
+          app->UpdateOrder.Data[i]->RefreshControlDependencyData(app);
+        app->UpdateOrderRevision = app->CompositionRevision;
+        AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "update order rebuilt (%d controls, revision %d)", app->UpdateOrder.Size, app->CompositionRevision);
+      }
+      return &app->UpdateOrder;
   }
 
   IMGUI_API void ClearAppStorage(ImGuiApp* app)

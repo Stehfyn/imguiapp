@@ -68,6 +68,7 @@ template <typename PersistDataT, typename TempDataT, typename... DataDependencie
 
 // Forward declarations: ImGuiAppWindow layer
 struct ImGuiAppWindowBase;
+struct ImGuiAppGraph;   // authored node graph (imguiapp_nodes.h)
 
 // Forward declarations: ImGuiAppSidebar layer
 struct ImGuiAppSidebarBase;
@@ -331,6 +332,25 @@ struct ImGuiAppColorModDesc
   bool     Active = true;
 };
 
+// Routes one of a control's data dependencies to a specific producer instance at push time.
+// TypeID names WHICH dependency of the pack is routed; Instance names the producer.
+struct ImGuiAppDepBinding
+{
+  ImGuiID TypeID;           // ImGuiType<Dep>::ID of the dependency being routed
+  ImGuiID Instance;         // producer's instance id (0 = the type singleton)
+  bool    Optional = false; // absent producer resolves to null instead of asserting; the consumer
+                            // handles null (and is rebound live when the producer is pushed/popped)
+};
+
+// Storage key for a control's instance data in ImGuiApp::Data: instance 0 keeps the bare
+// data type id (the type singleton), any other instance qualifies it.
+inline ImGuiID ImGuiAppInstanceKey(ImGuiID type_id, ImGuiID instance)
+{
+  if (instance == 0)
+    return type_id;
+  return (ImGuiID)ImHashData(&instance, sizeof(instance), type_id);
+}
+
 //-----------------------------------------------------------------------------
 // [SECTION] Dear ImGui end-user API functions
 //-----------------------------------------------------------------------------
@@ -395,6 +415,12 @@ namespace ImGui
   // when something is pushed or popped; mirrors poll it and reconcile only on change.
   IMGUI_API ImGuiID GetAppCompositionID(const ImGuiApp* app);
 
+  // Controls sorted by the resolved dependency wiring: every producer before its consumers,
+  // composition order among independents. Rebuilt when the composition changes. ONLY the Task
+  // layer's OnUpdate pass iterates this -- update is the pass where producers write what
+  // consumers read same-frame. Command collection and rendering stay composition order.
+  IMGUI_API const ImVector<ImGuiAppControlBase*>* AppRebuildUpdateOrder(ImGuiApp* app);
+
   template <typename T>
   inline void PushAppSidebar(ImGuiApp* app, ImGuiViewport* vp, ImGuiDir dir, float size = 0.0f, ImGuiWindowFlags flags = 0);
   inline void PopAppSidebar(ImGuiApp* app);
@@ -403,20 +429,28 @@ namespace ImGui
   IMGUI_API inline void PushAppLayer(ImGuiApp* app);
   IMGUI_API inline void PopAppLayer(ImGuiApp* app);
 
+  // instance: client-chosen discriminator; 0 = the type singleton (bare type-id key), any other
+  // value keys a distinct instance of the same control data type. binds routes individual
+  // dependencies to specific producer instances; an unrouted dependency resolves to the pushing
+  // control's own instance id, then to the singleton (producer must be pushed first either way).
   template <typename T>
-  IMGUI_API inline void PushAppControl(ImGuiApp* app);
+  IMGUI_API inline void PushAppControl(ImGuiApp* app, ImGuiID instance = 0, const ImGuiAppDepBinding* binds = nullptr, int binds_count = 0);
   IMGUI_API inline void PopAppControl(ImGuiApp* app);
 
   template <typename T>
-  IMGUI_API inline void PushWindowControl(ImGuiApp* app, ImGuiAppWindowBase* window);
+  IMGUI_API inline void PushWindowControl(ImGuiApp* app, ImGuiAppWindowBase* window, ImGuiID instance = 0, const ImGuiAppDepBinding* binds = nullptr, int binds_count = 0);
 
   template <typename T>
-  IMGUI_API inline void PushSidebarControl(ImGuiApp* app, ImGuiAppSidebarBase* sidebar);
+  IMGUI_API inline void PushSidebarControl(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, ImGuiID instance = 0, const ImGuiAppDepBinding* binds = nullptr, int binds_count = 0);
 
   // host: the PROCESS's real app, offered as the "Host app" live-mirror perspective
   // (strictly read-only there: time scrub is disabled for the host -- restoring its
   // state from inside its own render would mutate mid-frame).
   IMGUI_API void ShowAppLayerDemo(bool* p_open = nullptr, ImGuiApp* host = nullptr);
+
+  // The demo Composer's document graph inside `host` (its GraphDocData storage entry), or null
+  // before composition. Test harnesses drive the editor camera through it.
+  IMGUI_API ::ImGuiAppGraph* AppLayerDemoGraph(ImGuiApp* host);
 
   // Push every Active (in-range) entry; returns the number pushed -- pop with PopStyleVar/PopStyleColor(count).
   IMGUI_API int PushAppStyleMods(const ImGuiAppStyleModDesc* mods, int count);
@@ -424,7 +458,7 @@ namespace ImGui
 
   // Monospace font for the generated-code inspector (space-padded alignment needs fixed width). Register
   // at font-init time; null leaves the inspector on the UI font.
-  IMGUI_API void SetAppCodeFont(ImFont* font);
+  IMGUI_API void SetAppCodeFont(::ImGuiAppGraph* g, ImFont* font);   // code panels; null -> UI font
 }
 
 struct ImGuiAppLayerBase : ImGuiInterface
@@ -514,6 +548,17 @@ struct ImGuiAppControlBase : ImGuiAppItemBase
   virtual bool    GetControlLiveData(const void** out_persist, const void** out_temp) const { IM_UNUSED(out_persist); IM_UNUSED(out_temp); return false; }
   // False = outside the reflectable contract (not trivially copyable): opaque, exactly like snapshots.
   virtual bool    IsControlDataReflectable(bool temp_data) const { IM_UNUSED(temp_data); return false; }
+  // Rebind the cached dependency pointers from their resolved keys. AppRebuildUpdateOrder calls
+  // this after any push/pop, so a re-pushed producer's fresh instance data is picked up (and a
+  // popped producer with live consumers asserts instead of dangling).
+  virtual void    RefreshControlDependencyData(const ImGuiApp* app) { IM_UNUSED(app); }
+  // Declared dependency TYPE ids (the compile-time pack, before resolution): what CAN be wired.
+  // GetControlDependencyIDs returns where each slot is wired NOW (resolved storage keys).
+  virtual int     GetControlDependencyTypeIDs(ImGuiID* out, int cap) const { IM_UNUSED(out); IM_UNUSED(cap); return 0; }
+  // Re-route one declared dependency at runtime (Composer edge rewiring, no pop/re-push): the
+  // slot whose type matches bind->TypeID re-resolves to that producer instance and the app's
+  // update order rebuilds. False when TypeID is not in this control's pack.
+  virtual bool    SetControlDependencyBinding(ImGuiApp* app, const ImGuiAppDepBinding* bind) { IM_UNUSED(app); IM_UNUSED(bind); return false; }
 };
 
 // Snapshot contract: aggregate + trivially copyable = byte-snapshottable. Owning containers
@@ -819,6 +864,9 @@ struct ImGuiApp : ImGuiAppBase
   ImVector<ImGuiAppWindowBase*>  Windows;
   ImVector<ImGuiAppSidebarBase*> Sidebars;
   ImVector<ImGuiAppControlBase*> Controls;
+  ImVector<ImGuiAppControlBase*> UpdateOrder;         // dependency-sorted OnUpdate iteration (AppRebuildUpdateOrder)
+  int                            CompositionRevision; // bumped by every storage register/unregister; unlike the composition HASH, pop+repush of the same type still advances it
+  int                            UpdateOrderRevision; // revision UpdateOrder and the cached dependency bindings were built at
   ImGuiAppPlatform               Platform;
   ImVec4                         ClearColor;
   void*                          PlatformData;
@@ -828,7 +876,7 @@ struct ImGuiApp : ImGuiAppBase
   ImGuiAppPacer                  Pacer;    // advisory; consulted by the backend run loop via AppPacerWait
   bool                           Initialized;
 
-  ImGuiApp() : PlatformData(nullptr), WAL(nullptr), Recorder(nullptr), Initialized(false) {}
+  ImGuiApp() : CompositionRevision(0), UpdateOrderRevision(-1), PlatformData(nullptr), WAL(nullptr), Recorder(nullptr), Initialized(false) {}
   virtual ~ImGuiApp();
   int                         Run(int argc, char** argv);
   bool                        Initialize(const ImGuiAppConfig* config);
@@ -852,22 +900,82 @@ struct ImGuiApp : ImGuiAppBase
 template <typename Base, typename PersistDataT, typename TempDataT, typename... DataDependencies>
 struct ImGuiInterfaceAdapter : Base, ImGuiInterfaceAdapterBase<PersistDataT, TempDataT, DataDependencies...>
 {
-    // Created and registered in ImGuiApp::Data by PushAppControl<>().
-    mutable struct InstanceData
+    // Created, registered in ImGuiApp::Data, and bound here by PushAppControl<>() before OnInitialize.
+    struct InstanceData
     {
       PersistDataT PersistData;
       TempDataT    LastTempData;
       TempDataT    TempData;
-    } *_InstanceData;
+    } *_InstanceData = nullptr;
 
-    // Asserts when this control's instance data or a DataDependency was not pushed before it (both done by PushAppControl<>()).
-    template <typename T> inline T* GetData(const ImGuiApp* app) const { T* data = static_cast<T*>(app->Data.GetVoidPtr(ImGuiType<T>::ID)); IM_ASSERT(data); return static_cast<T*>(data); }
-    inline std::tuple<DataDependencies*...> GetAllDependencyData(const ImGuiApp* app) const { return { GetData<DataDependencies>(app)... }; }
+    // Instance identity + dependency routing, resolved once by PushAppControl<>() before OnInitialize.
+    ImGuiID                          _InstanceID = 0;
+    std::tuple<DataDependencies*...> _Dependencies = {};
+    ImGuiID                          _DependencyKeys[sizeof...(DataDependencies) > 0 ? sizeof...(DataDependencies) : 1] = {};
+    bool                             _DependencyOptional[sizeof...(DataDependencies) > 0 ? sizeof...(DataDependencies) : 1] = {};
+
+    // Resolution order: explicit binding -> this control's own instance id -> the type singleton.
+    // Asserts when the resolved producer was not pushed before this control, unless the binding
+    // marks the dependency Optional (then null, rebound live as the producer comes and goes).
+    template <typename Dep>
+    inline Dep* ResolveDependency(const ImGuiApp* app, const ImGuiAppDepBinding* binds, int binds_count, int slot)
+    {
+      const ImGuiID type_id = ImGuiType<Dep>::ID;
+      for (int i = 0; i < binds_count; i++)
+        if (binds[i].TypeID == type_id)
+        {
+          _DependencyKeys[slot] = ImGuiAppInstanceKey(type_id, binds[i].Instance);
+          _DependencyOptional[slot] = binds[i].Optional;
+          Dep* data = static_cast<Dep*>(app->Data.GetVoidPtr(_DependencyKeys[slot]));
+          IM_ASSERT(data != nullptr || binds[i].Optional);
+          return data;
+        }
+      if (_InstanceID != 0)
+      {
+        const ImGuiID own_key = ImGuiAppInstanceKey(type_id, _InstanceID);
+        Dep* data = static_cast<Dep*>(app->Data.GetVoidPtr(own_key));
+        if (data != nullptr)
+        {
+          _DependencyKeys[slot] = own_key;
+          return data;
+        }
+      }
+      _DependencyKeys[slot] = type_id;
+      Dep* data = static_cast<Dep*>(app->Data.GetVoidPtr(type_id));
+      IM_ASSERT(data != nullptr);
+      return data;
+    }
+
+    inline void ResolveDependencies(const ImGuiApp* app, const ImGuiAppDepBinding* binds, int binds_count)
+    {
+      int slot = 0;
+      IM_UNUSED(slot);
+      _Dependencies = { ResolveDependency<DataDependencies>(app, binds, binds_count, slot++)... };
+    }
+
+    // Re-fetch each cached dependency pointer by its resolved key. Asserts when a producer was
+    // popped while this consumer is still alive -- except Optional dependencies, which go null.
+    template <typename Dep>
+    inline Dep* LookupDependency(const ImGuiApp* app, int slot) const
+    {
+      Dep* data = static_cast<Dep*>(app->Data.GetVoidPtr(_DependencyKeys[slot]));
+      IM_ASSERT(data != nullptr || _DependencyOptional[slot]);
+      return data;
+    }
+
+    inline void RebindDependencies(const ImGuiApp* app)
+    {
+      int slot = 0;
+      IM_UNUSED(slot);
+      _Dependencies = { LookupDependency<DataDependencies>(app, slot++)... };
+    }
+
+    inline std::tuple<DataDependencies*...> GetAllDependencyData(const ImGuiApp* app) const { IM_UNUSED(app); return _Dependencies; }
 
     virtual void OnInitialize(ImGuiApp*, PersistDataT*, const DataDependencies*...) const override {}
     virtual void OnInitialize(ImGuiApp* app) const override final
     {
-      _InstanceData = reinterpret_cast<InstanceData*>(GetData<PersistDataT>(app));
+      IM_ASSERT(_InstanceData != nullptr);
       std::apply([=, this](DataDependencies*... dependencies) { OnInitialize(app, &_InstanceData->PersistData, dependencies...); }, GetAllDependencyData(app));
     }
 
@@ -915,18 +1023,18 @@ struct ImGuiAppControl : ImGuiInterfaceAdapter<ImGuiAppControlBase, PersistDataT
 #endif
   }
 
-  // Dependency ids are the ImGuiType<>::ID values -- the same keys app->Data uses.
-  virtual ImGuiID GetControlDataID() const override final { return ImGuiType<PersistDataT>::ID; }
+  // Instance-qualified storage keys -- the same keys app->Data uses. Dependency ids are the
+  // RESOLVED producer keys (push-time routing), so mirrors draw the actual wiring.
+  virtual ImGuiID GetControlDataID() const override final { return ImGuiAppInstanceKey(ImGuiType<PersistDataT>::ID, this->_InstanceID); }
 
   virtual int GetControlDependencyIDs(ImGuiID* out, int cap) const override final
   {
     const int count = (int)(sizeof...(DataDependencies));
     if (out == nullptr || cap <= 0)
       return count;
-    const ImGuiID ids[] = { (ImGuiID)0, ImGuiType<DataDependencies>::ID... }; // leading 0 -> never zero-size
     const int n = count < cap ? count : cap;
     for (int i = 0; i < n; i++)
-      out[i] = ids[i + 1];
+      out[i] = this->_DependencyKeys[i];
     return n;
   }
 
@@ -946,6 +1054,42 @@ struct ImGuiAppControl : ImGuiInterfaceAdapter<ImGuiAppControlBase, PersistDataT
   virtual bool IsControlDataReflectable(bool temp_data) const override final
   {
     return temp_data ? ImGuiAppDataReflectable<TempDataT> : ImGuiAppDataReflectable<PersistDataT>;
+  }
+
+  virtual void RefreshControlDependencyData(const ImGuiApp* app) override final
+  {
+    this->RebindDependencies(app);
+  }
+
+  virtual int GetControlDependencyTypeIDs(ImGuiID* out, int cap) const override final
+  {
+    const int count = (int)(sizeof...(DataDependencies));
+    if (out == nullptr || cap <= 0)
+      return count;
+    const ImGuiID ids[] = { (ImGuiID)0, ImGuiType<DataDependencies>::ID... }; // leading 0 -> never zero-size
+    const int n = count < cap ? count : cap;
+    for (int i = 0; i < n; i++)
+      out[i] = ids[i + 1];
+    return n;
+  }
+
+  virtual bool SetControlDependencyBinding(ImGuiApp* app, const ImGuiAppDepBinding* bind) override final
+  {
+    if (app == nullptr || bind == nullptr)
+      return false;
+    constexpr int count = (int)(sizeof...(DataDependencies));
+    const ImGuiID ids[] = { (ImGuiID)0, ImGuiType<DataDependencies>::ID... };
+    for (int slot = 0; slot < count; slot++)
+    {
+      if (ids[slot + 1] != bind->TypeID)
+        continue;
+      this->_DependencyKeys[slot] = ImGuiAppInstanceKey(bind->TypeID, bind->Instance);
+      this->_DependencyOptional[slot] = bind->Optional;
+      this->RebindDependencies(app);
+      app->CompositionRevision++;   // rewiring changes the dependency DAG: update order must rebuild
+      return true;
+    }
+    return false;
   }
 
   virtual bool GetControlLiveData(const void** out_persist, const void** out_temp) const override final
@@ -1133,18 +1277,18 @@ namespace ImGui
   }
 
   template <typename T>
-  inline void PushAppControl(ImGuiApp* app)
+  inline void PushAppControl(ImGuiApp* app, ImGuiID instance, const ImGuiAppDepBinding* binds, int binds_count)
   {
       IM_ASSERT(app);
 
       char name[IM_LABEL_SIZE];
       GenerateLabel<T>(name, sizeof(name));
-      AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push control %s", name);
+      AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push control %s (instance %u)", name, (unsigned)instance);
 
-      // Instance data is keyed by the control's data type id so dependents can resolve it.
-      ImGuiID id = ImGuiType<typename T::ControlDataType>::ID;
+      // Instance data is keyed by the instance-qualified data type id so dependents can resolve it.
+      ImGuiID id = ImGuiAppInstanceKey(ImGuiType<typename T::ControlDataType>::ID, instance);
 
-      // One instance per control data type.
+      // One instance per (control data type, instance id).
       typename T::ControlInstanceDataType* instance_data = static_cast<typename T::ControlInstanceDataType*>(app->Data.GetVoidPtr(id));
       IM_ASSERT(nullptr == instance_data);
 
@@ -1165,6 +1309,9 @@ namespace ImGui
             snapshottable ? (int)sizeof(instance_data->TempData) : 0,
             DestroyAppStorageValue<typename T::ControlInstanceDataType>);
       }
+      control->_InstanceID = instance;
+      control->_InstanceData = instance_data;
+      control->ResolveDependencies(app, binds, binds_count);
       app->Controls.push_back(control);
       app->Controls.back()->OnInitialize(app);
   }
@@ -1194,18 +1341,18 @@ namespace ImGui
   // Host a control inside a window: instance data registers in app->Data as usual, but the control joins
   // window->Controls and renders between the host window's Begin/End (no Begin of its own).
   template <typename T>
-  IMGUI_API inline void PushWindowControl(ImGuiApp* app, ImGuiAppWindowBase* window)
+  IMGUI_API inline void PushWindowControl(ImGuiApp* app, ImGuiAppWindowBase* window, ImGuiID instance, const ImGuiAppDepBinding* binds, int binds_count)
   {
       IM_ASSERT(app && window);
 
       char name[IM_LABEL_SIZE];
       GenerateLabel<T>(name, sizeof(name));
-      AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push control %s into window '%s'", name, window->Label);
+      AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push control %s (instance %u) into window '%s'", name, (unsigned)instance, window->Label);
 
-      // Instance data is keyed by the control's data type id so dependents can resolve it.
-      ImGuiID id = ImGuiType<typename T::ControlDataType>::ID;
+      // Instance data is keyed by the instance-qualified data type id so dependents can resolve it.
+      ImGuiID id = ImGuiAppInstanceKey(ImGuiType<typename T::ControlDataType>::ID, instance);
 
-      // One instance per control data type.
+      // One instance per (control data type, instance id).
       typename T::ControlInstanceDataType* instance_data = static_cast<typename T::ControlInstanceDataType*>(app->Data.GetVoidPtr(id));
       IM_ASSERT(nullptr == instance_data);
 
@@ -1226,12 +1373,15 @@ namespace ImGui
             snapshottable ? (int)sizeof(instance_data->TempData) : 0,
             DestroyAppStorageValue<typename T::ControlInstanceDataType>);
       }
+      control->_InstanceID = instance;
+      control->_InstanceData = instance_data;
+      control->ResolveDependencies(app, binds, binds_count);
       window->Controls.push_back(control);
       window->Controls.back()->OnInitialize(app);
   }
 
   template <typename T>
-  IMGUI_API inline void PushSidebarControl(ImGuiApp* app, ImGuiAppSidebarBase* sidebar)
+  IMGUI_API inline void PushSidebarControl(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, ImGuiID instance, const ImGuiAppDepBinding* binds, int binds_count)
   {
       ImGuiID id;
       T* control;
@@ -1241,12 +1391,12 @@ namespace ImGui
 
       char name[IM_LABEL_SIZE];
       GenerateLabel<T>(name, sizeof(name));
-      AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push control %s into sidebar '%s'", name, sidebar ? sidebar->Label : "(null)");
+      AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push control %s (instance %u) into sidebar '%s'", name, (unsigned)instance, sidebar ? sidebar->Label : "(null)");
 
-      // Instance data is keyed by the control's data type id so dependents can resolve it.
-      id = ImGuiType<typename T::ControlDataType>::ID;
+      // Instance data is keyed by the instance-qualified data type id so dependents can resolve it.
+      id = ImGuiAppInstanceKey(ImGuiType<typename T::ControlDataType>::ID, instance);
 
-      // One instance per control data type.
+      // One instance per (control data type, instance id).
       instance_data = static_cast<decltype(instance_data)>(app->Data.GetVoidPtr(id));
       IM_ASSERT(nullptr == instance_data);
 
@@ -1267,6 +1417,9 @@ namespace ImGui
             snapshottable ? (int)sizeof(instance_data->TempData) : 0,
             DestroyAppStorageValue<typename T::ControlInstanceDataType>);
       }
+      control->_InstanceID = instance;
+      control->_InstanceData = instance_data;
+      control->ResolveDependencies(app, binds, binds_count);
       sidebar->Controls.push_back(control);
       sidebar->Controls.back()->OnInitialize(app);
   }
