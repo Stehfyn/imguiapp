@@ -121,6 +121,10 @@ namespace ImGui
   IMGUI_API void   CanvasSetNodePos(ImGuiCanvasState* c, int node_id, ImVec2 model_pos);
   IMGUI_API ImVec2 CanvasNodeSize(const ImGuiCanvasState* c, int node_id);       // model; this frame if submitted, else last known
   IMGUI_API void   CanvasSetNodeDraggable(ImGuiCanvasState* c, int node_id, bool draggable);
+  IMGUI_API void   CanvasSetNodeSolid(ImGuiCanvasState* c, int node_id, bool solid);   // solid nodes cannot be dragged into overlap with other solid nodes (slide to contact)
+  // Declare a solid region (model units) for THIS frame: solid-node drags cannot enter it (the
+  // next frame's drag consumes it, like node geometry). Call between CanvasBegin/CanvasEnd.
+  IMGUI_API void   CanvasAddSolidRect(ImGuiCanvasState* c, ImVec2 model_min, ImVec2 model_max);
 
   // ---- pins + wires -----------------------------------------------------------------------------
   // Kind is the interaction role (which end pairs with which when wiring). Side is the node edge the

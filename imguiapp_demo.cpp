@@ -74,6 +74,11 @@ namespace
     bool generate;
   };
 
+  // The one host for the sample controls: every control is composed into a window or sidebar.
+  struct SampleWindow : ImGuiAppWindow<SampleWindow>
+  {
+  };
+
   struct RandomTimeControlDemo : ImGuiAppControl <RandomTimeData, RandomTimeTempData>
   {
     static float GenerateTime(ImU64* rng) { return (float)ImAppRandomInt(rng, 1, 30); }
@@ -102,24 +107,13 @@ namespace
 
     virtual void OnRender(const RandomTimeData* data, RandomTimeTempData* temp_data) const override final
     {
-      IM_UNUSED(data);
-      IM_UNUSED(temp_data);
+      // Renders between the host window's Begin/End.
+      ImGui::Text("%s", "Max Timer Seconds");
 
-      const ImGuiViewport* vp = ImGui::GetMainViewport();
-      const float em = ImGui::GetFontSize();
-      ImGui::SetNextWindowSize(ImVec2(em * 14.0f, 0.0f), ImGuiCond_FirstUseEver);
-      ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + em * 2.0f, vp->WorkPos.y + vp->WorkSize.y * 0.55f), ImGuiCond_FirstUseEver);
+      temp_data->generate = ImGui::Button("Generate");
+      ImGui::SameLine();
 
-      if (ImGui::Begin(data->label))
-      {
-        ImGui::Text("%s", "Max Timer Seconds");
-
-        temp_data->generate = ImGui::Button("Generate");
-        ImGui::SameLine();
-
-        ImGui::Text("%.1f", data->max_timer_secs);
-      }
-      ImGui::End();
+      ImGui::Text("%.1f", data->max_timer_secs);
     }
   };
 
@@ -198,30 +192,22 @@ namespace
     {
       IM_UNUSED(src);
 
-      const ImGuiViewport* vp = ImGui::GetMainViewport();
-      const float em = ImGui::GetFontSize();
-      ImGui::SetNextWindowSize(ImVec2(em * 18.0f, em * 9.0f), ImGuiCond_FirstUseEver);
-      ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + em * 18.0f, vp->WorkPos.y + vp->WorkSize.y * 0.55f), ImGuiCond_FirstUseEver);
+      // Renders between the host window's Begin/End.
+      ImVec2 size = ImVec2(ImGui::GetContentRegionAvail().x, 2.0f * ImGui::GetFrameHeight());
 
-      if (ImGui::Begin(data->label))
-      {
-        ImVec2 size = ImVec2(ImGui::GetContentRegionAvail().x, 2.0f * ImGui::GetFrameHeight());
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, data->col);
+      ImGui::Button("Hover Me!", size);
+      temp_data->hovered = ImGui::IsItemHovered();
+      ImGui::PopStyleColor();
 
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, data->col);
-        ImGui::Button("Hover Me!", size);
-        temp_data->hovered = ImGui::IsItemHovered();
-        ImGui::PopStyleColor();
+      ImVec2 pos = ImGui::GetCursorScreenPos();
+      size = ImGui::GetContentRegionAvail();
+      ImRect r = { pos, pos + size };
 
-        ImVec2 pos = ImGui::GetCursorScreenPos();
-        size = ImGui::GetContentRegionAvail();
-        ImRect r = { pos, pos + size };
-
-        ImGui::PushClipRect(r.Min, r.Max, true);
-        ImGui::NewLine();
-        RenderTextT(data->timer_text, ImGui::CalcTextSize(data->timer_text), ImGui::GetCursorScreenPos(), ImGui::GetContentRegionAvail(), data->t_value);
-        ImGui::PopClipRect();
-      }
-      ImGui::End();
+      ImGui::PushClipRect(r.Min, r.Max, true);
+      ImGui::NewLine();
+      RenderTextT(data->timer_text, ImGui::CalcTextSize(data->timer_text), ImGui::GetCursorScreenPos(), ImGui::GetContentRegionAvail(), data->t_value);
+      ImGui::PopClipRect();
     }
   };
 
@@ -229,7 +215,7 @@ namespace
   {
     virtual void OnRender(const ImGuiApp*) const override final
     {
-      ImGui::TextWrapped("%s", "This is a base window managed by ImGuiAppWindowLayer.");
+      ImGui::TextWrapped("%s", "This is a base window managed by ImGuiAppDisplayLayer.");
     }
   };
 
@@ -2025,10 +2011,8 @@ namespace ImGui
           st->AppliedRandomTime != st->ShowRandomTime ||
           st->AppliedBreathing  != st->ShowBreathing)
       {
-        if (st->AppliedBreathing)
-          PopAppControl(app);
-        if (st->AppliedRandomTime)
-          PopAppControl(app);
+        if (st->AppliedBreathing || st->AppliedRandomTime)
+          PopAppWindow(app);   // the sample window pops its hosted controls with it
         if (st->AppliedStatusBar)
           PopAppSidebar(app);
         if (st->AppliedBaseWindow)
@@ -2050,16 +2034,22 @@ namespace ImGui
         {
           PushAppSidebar<StatusBar>(app, vp, ImGuiDir_Down, 0.0f, ImGuiWindowFlags_AlwaysAutoResize);
         }
-        if (st->ShowRandomTime)
+        if (st->ShowRandomTime || st->ShowBreathing)
         {
-          PushAppControl<RandomTimeControlDemo>(app);
-        }
-        if (st->ShowBreathing)
-        {
-          // Soft-wired to the Random Time example: reads its roll when it is on, falls back to
-          // the default otherwise (RandomTimeControlDemo pushes first when both are enabled).
-          const ImGuiAppDepBinding binds[] = { { ImGuiType<RandomTimeData>::ID, 0, true } };
-          PushAppControl<BreathingControlDemo>(app, 0, binds, IM_ARRAYSIZE(binds));
+          PushAppWindow<SampleWindow>(app);
+          ImGuiAppWindowBase* w = app->Windows.back();
+          w->HasInitialPlacement = true;
+          w->InitialSize = ImVec2(em * 18.0f, 0.0f);
+          w->InitialPos  = ImVec2(vp->WorkPos.x + em * 2.0f, vp->WorkPos.y + vp->WorkSize.y * 0.55f);
+          if (st->ShowRandomTime)
+            PushWindowControl<RandomTimeControlDemo>(app, w);
+          if (st->ShowBreathing)
+          {
+            // Soft-wired to the Random Time example: reads its roll when it is on, falls back
+            // to the default otherwise (Random Time pushes first when both are enabled).
+            const ImGuiAppDepBinding binds[] = { { ImGuiType<RandomTimeData>::ID, 0, true } };
+            PushWindowControl<BreathingControlDemo>(app, w, 0, binds, IM_ARRAYSIZE(binds));
+          }
         }
 
         st->AppliedBaseWindow = st->ShowBaseWindow;

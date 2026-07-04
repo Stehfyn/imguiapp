@@ -28,6 +28,7 @@ struct ImGuiCanvasNodeRec
   ImU32  TitleColor; // 0 = style default
   char   Title[64];
   bool   Draggable;
+  bool   Solid;      // cannot be dragged into overlap with other Solid nodes (slide to contact)
   int    LastFrame;  // ImGui frame count of the last submission (cull/hit bookkeeping)
 };
 
@@ -84,6 +85,12 @@ struct ImGuiCanvasState
   ImVector<ImGuiCanvasWireRec> WiresPrev;   // last frame's wires: press decisions run at CanvasBegin
   ImVector<int>                CurNodePins; // pin indices submitted inside the current node (anchor.x resolves at EndNode)
 
+  // Host-declared solid regions (model units, x0 y0 x1 y1): obstacles for solid-node drags.
+  // Submitted between Begin/End, consumed by the NEXT frame's drag FSM -- the same T+1 posture
+  // as the node geometry the drag itself runs on.
+  ImVector<ImVec4> SolidRects;
+  ImVector<ImVec4> SolidRectsPrev;
+
   // Selection + hover
   ImVector<int> Selection;
   int           HoveredNode;  // resolved against current camera + model geometry
@@ -110,6 +117,7 @@ struct ImGuiCanvasState
   ImVec2           GestureStartPan;
   ImVector<ImVec2> DragStartPos;    // model pos of each selected node at drag start
   ImVector<int>    DragNodes;
+  ImVec2           DragAppliedDisp; // solid drags: displacement actually granted so far (greedy catch-up)
   int              DragWireFromPin; // DragWire: the fixed end
 
   // Rename hook: per-frame pointers captured by CanvasNextNodeTitleEditable (host-owned storage).
@@ -490,11 +498,25 @@ static bool CanvasIsSelected(const ImGuiCanvasState* c, int node_id)
   return false;
 }
 
+// Wire drags ORIGINATE only from a press on the pin glyph itself; the looser PinHoverRadius
+// stays for hover highlight and mid-drag snap targets. An origin as loose as the hover radius
+// turned title grabs near an edge pin into a wire rubber band instead of a node drag.
+static bool CanvasPinPressOnGlyph(ImGuiCanvasState* c, int pin_id, ImVec2 mouse)
+{
+  const ImGuiCanvasPinRec* p = CanvasFindPin(c, pin_id);
+  if (p == nullptr)
+    return false;
+  const ImVec2 s = ImGui::CanvasToScreen(c, p->Anchor);
+  const float r = c->Style.PinRadius * 1.5f * CanvasScale(c);
+  return (mouse.x - s.x) * (mouse.x - s.x) + (mouse.y - s.y) * (mouse.y - s.y) <= r * r;
+}
+
 static void CanvasBeginNodeDrag(ImGuiCanvasState* c)
 {
   c->Interaction = ImGuiCanvasInteraction_DragNodes;
   c->DragNodes.resize(0);
   c->DragStartPos.resize(0);
+  c->DragAppliedDisp = ImVec2(0.0f, 0.0f);
   for (int i = 0; i < c->Selection.Size; i++)
     if (const ImGuiCanvasNodeRec* n = CanvasFindNode(c, c->Selection.Data[i]))
       if (n->Draggable)
@@ -502,6 +524,125 @@ static void CanvasBeginNodeDrag(ImGuiCanvasState* c)
         c->DragNodes.push_back(n->Id);
         c->DragStartPos.push_back(n->Pos);
       }
+}
+
+// Solid-drag containment: dragged Solid nodes slide to contact against every Solid node outside
+// the drag set and keep tracking the mouse the moment it retreats (placement is ABSOLUTE from the
+// drag start; both axis orders are tried and the one landing closest to the mouse wins -- same
+// policy as the editor's group drag). kNoiseM bounds T+1 size-republication wobble (font rounding,
+// sub-unit content growth): penetration within it clamps back to contact; a deeper pre-existing
+// overlap drops that mover/obstacle pair so one overlap cannot freeze the whole drag.
+static bool CanvasDragHasSolid(ImGuiCanvasState* c)
+{
+  for (int i = 0; i < c->DragNodes.Size; i++)
+    if (const ImGuiCanvasNodeRec* n = CanvasFindNode(c, c->DragNodes.Data[i]))
+      if (n->Solid && n->Size.x > 0.0f && n->Size.y > 0.0f)
+        return true;
+  return false;
+}
+
+static ImVec2 CanvasResolveSolidDrag(ImGuiCanvasState* c, ImVec2 disp)
+{
+  const float kNoiseM = 1.0f;
+
+  if (!CanvasDragHasSolid(c))
+    return disp;
+
+  auto overlap = [](float a0, float a1, float b0, float b1) { return a0 < b1 && a1 > b0; };
+  auto dragged = [c](int id)
+  {
+    for (int i = 0; i < c->DragNodes.Size; i++)
+      if (c->DragNodes.Data[i] == id)
+        return true;
+    return false;
+  };
+
+  // Obstacles (x0 y0 x1 y1): solid nodes outside the drag set + host-declared solid regions
+  // (last frame's, the same T+1 posture as the node geometry the movers themselves run on).
+  ImVector<ImVec4> ob;
+  ob.reserve(c->Nodes.Size + c->SolidRectsPrev.Size);
+  for (int o = 0; o < c->Nodes.Size; o++)
+  {
+    const ImGuiCanvasNodeRec* n = &c->Nodes.Data[o];
+    if (!n->Solid || n->Size.x <= 0.0f || n->Size.y <= 0.0f || dragged(n->Id))
+      continue;
+    ob.push_back(ImVec4(n->Pos.x, n->Pos.y, n->Pos.x + n->Size.x, n->Pos.y + n->Size.y));
+  }
+  for (int o = 0; o < c->SolidRectsPrev.Size; o++)
+    ob.push_back(c->SolidRectsPrev.Data[o]);
+  if (ob.Size == 0)
+    return disp;
+
+  // Clamp dx for every (dragged solid mover, obstacle) pair. Movers stand at their CURRENT
+  // placement (start + DragAppliedDisp): the step being resolved is this frame's remaining
+  // catch-up toward the mouse, not the whole displacement since the drag started. dy_ctx
+  // shifts the movers' y-band by the step already granted on the other axis.
+  auto slide_x = [&](float dx, float dy_ctx) -> float
+  {
+    for (int i = 0; i < c->DragNodes.Size; i++)
+    {
+      const ImGuiCanvasNodeRec* m = CanvasFindNode(c, c->DragNodes.Data[i]);
+      if (m == nullptr || !m->Solid || m->Size.x <= 0.0f || m->Size.y <= 0.0f)
+        continue;
+      const ImVec2 s = c->DragStartPos.Data[i] + c->DragAppliedDisp;
+      const float mx0 = s.x;
+      const float mx1 = s.x + m->Size.x;
+      for (int o = 0; o < ob.Size; o++)
+      {
+        const float ox0 = ob.Data[o].x;
+        const float oy0 = ob.Data[o].y;
+        const float ox1 = ob.Data[o].z;
+        const float oy1 = ob.Data[o].w;
+        if (overlap(mx0, mx1, ox0 + kNoiseM, ox1 - kNoiseM) && overlap(s.y, s.y + m->Size.y, oy0 + kNoiseM, oy1 - kNoiseM))
+          continue;
+        if (!overlap(s.y + dy_ctx, s.y + m->Size.y + dy_ctx, oy0, oy1))
+          continue;
+        if (dx > 0.0f && mx1 <= ox0 + kNoiseM && mx1 + dx > ox0)
+          dx = ox0 - mx1;
+        if (dx < 0.0f && mx0 >= ox1 - kNoiseM && mx0 + dx < ox1)
+          dx = ox1 - mx0;
+      }
+    }
+    return dx;
+  };
+  auto slide_y = [&](float dy, float dx_ctx) -> float
+  {
+    for (int i = 0; i < c->DragNodes.Size; i++)
+    {
+      const ImGuiCanvasNodeRec* m = CanvasFindNode(c, c->DragNodes.Data[i]);
+      if (m == nullptr || !m->Solid || m->Size.x <= 0.0f || m->Size.y <= 0.0f)
+        continue;
+      const ImVec2 s = c->DragStartPos.Data[i] + c->DragAppliedDisp;
+      const float my0 = s.y;
+      const float my1 = s.y + m->Size.y;
+      for (int o = 0; o < ob.Size; o++)
+      {
+        const float ox0 = ob.Data[o].x;
+        const float oy0 = ob.Data[o].y;
+        const float ox1 = ob.Data[o].z;
+        const float oy1 = ob.Data[o].w;
+        if (overlap(s.x, s.x + m->Size.x, ox0 + kNoiseM, ox1 - kNoiseM) && overlap(my0, my1, oy0 + kNoiseM, oy1 - kNoiseM))
+          continue;
+        if (!overlap(s.x + dx_ctx, s.x + m->Size.x + dx_ctx, ox0, ox1))
+          continue;
+        if (dy > 0.0f && my1 <= oy0 + kNoiseM && my1 + dy > oy0)
+          dy = oy0 - my1;
+        if (dy < 0.0f && my0 >= oy1 - kNoiseM && my0 + dy < oy1)
+          dy = oy1 - my0;
+      }
+    }
+    return dy;
+  };
+
+  ImVec2 a;
+  a.x = slide_x(disp.x, 0.0f);
+  a.y = slide_y(disp.y, a.x);
+  ImVec2 b;
+  b.y = slide_y(disp.y, 0.0f);
+  b.x = slide_x(disp.x, b.y);
+  const float ea = (a.x - disp.x) * (a.x - disp.x) + (a.y - disp.y) * (a.y - disp.y);
+  const float eb = (b.x - disp.x) * (b.x - disp.x) + (b.y - disp.y) * (b.y - disp.y);
+  return ea <= eb ? a : b;
 }
 
 static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, bool canvas_item_activated)
@@ -548,7 +689,7 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
   {
     c->GestureStartMouse = mouse;
     c->GestureStartPan = c->Pan;
-    if (c->HoveredPin >= 0)
+    if (c->HoveredPin >= 0 && CanvasPinPressOnGlyph(c, c->HoveredPin, mouse))
     {
       c->Interaction = ImGuiCanvasInteraction_DragWire;
       c->DragWireFromPin = c->HoveredPin;
@@ -637,12 +778,34 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
   case ImGuiCanvasInteraction_DragNodes:
     if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
     {
-      const ImVec2 delta_model = (mouse - c->GestureStartMouse) / CanvasScale(c);   // pixels -> model, once, here
+      ImVec2 delta_model = (mouse - c->GestureStartMouse) / CanvasScale(c);   // pixels -> model, once, here
+      const bool solid_drag = CanvasDragHasSolid(c);
+      if (solid_drag)
+      {
+        if (c->Style.GridSnap && c->Style.GridSpacing > 0.0f && c->DragNodes.Size > 0)
+        {
+          // Snap the SHARED displacement before the solid clamp (per-node re-snap after the clamp
+          // could round back into overlap); the clamped contact position wins over the grid.
+          const ImVec2 s0 = c->DragStartPos.Data[0];
+          const ImVec2 t(ImFloor((s0.x + delta_model.x) / c->Style.GridSpacing + 0.5f) * c->Style.GridSpacing,
+                         ImFloor((s0.y + delta_model.y) / c->Style.GridSpacing + 0.5f) * c->Style.GridSpacing);
+          delta_model = t - s0;
+        }
+        // Greedy catch-up: seek this frame's mouse-anchored target from the placement actually
+        // reached so far. Granted progress accumulates -- a diagonal along an obstacle edge
+        // slides now and continues later, and a blocked frame never resets earlier progress
+        // (the absolute re-derivation from the drag start snapped the node back whenever both
+        // axis orders clamped). In free space the step equals the full remainder, so the node
+        // stays exactly mouse-anchored.
+        const ImVec2 want = delta_model - c->DragAppliedDisp;
+        c->DragAppliedDisp += CanvasResolveSolidDrag(c, want);
+        delta_model = c->DragAppliedDisp;
+      }
       for (int i = 0; i < c->DragNodes.Size; i++)
         if (ImGuiCanvasNodeRec* n = CanvasFindNode(c, c->DragNodes.Data[i]))
         {
           ImVec2 p = c->DragStartPos.Data[i] + delta_model;
-          if (c->Style.GridSnap && c->Style.GridSpacing > 0.0f)
+          if (!solid_drag && c->Style.GridSnap && c->Style.GridSpacing > 0.0f)
             p = ImVec2(ImFloor(p.x / c->Style.GridSpacing + 0.5f) * c->Style.GridSpacing,
                        ImFloor(p.y / c->Style.GridSpacing + 0.5f) * c->Style.GridSpacing);
           n->Pos = p;
@@ -735,6 +898,7 @@ namespace ImGui
     c->WireCreatedReq = c->WireDroppedReq = c->WireDetachedReq = false;
     c->NodeDblClickReq = false;
     c->Wires.resize(0);
+    c->SolidRects.resize(0);
     for (int i = 0; i < c->Pins.Size; i++)
       c->Pins.Data[i].WiredCount = 0;
 
@@ -887,8 +1051,17 @@ namespace ImGui
     // font is pushed at GetFontSize() * Zoom and GetFontSize already carries FontRatio, so content
     // screen size is model * (Zoom * FontRatio). Dividing by CanvasScale is exact, not c->Zoom.
     const ImVec2 content_px(ImMax(content_mx.x - content_mn.x, GetFontSize() * 2.0f), ImMax(content_mx.y - content_mn.y, 0.0f));
-    n->Size.x = (content_px.x + c->Style.NodePadding.x * z * 2.0f) / z;
-    n->Size.y = (content_px.y + c->Style.NodePadding.y * z * 2.0f + title_h) / z;
+    const ImVec2 fresh((content_px.x + c->Style.NodePadding.x * z * 2.0f) / z,
+                       (content_px.y + c->Style.NodePadding.y * z * 2.0f + title_h) / z);
+    // Deadband (kNoiseM): zoom changes perturb glyph rasterization and pixel snapping, so the
+    // px/scale round-trip re-measures a hair differently per wheel tick. The stored model size
+    // moves only when the measurement exceeds the noise bound -- every consumer (layout, group
+    // frames, wire routing) reads a zoom-idempotent size, and genuine content growth still
+    // propagates in one frame (docs/phase-coherence.md section 1b).
+    const float kNoiseM = 2.0f;
+    if (n->Size.x <= 0.0f || n->Size.y <= 0.0f
+        || ImFabs(fresh.x - n->Size.x) > kNoiseM || ImFabs(fresh.y - n->Size.y) > kNoiseM)
+      n->Size = fresh;
 
     // Pin anchors resolve NOW, with the final node size known; model units, this frame. Left/Right sit on
     // a vertical edge at their row's center (y already set by CanvasEndPin). Top/Bottom are edge-centered
@@ -1134,6 +1307,7 @@ namespace ImGui
     c->Splitter.Merge(c->DrawList);
     c->SubmitOrder = c->SubmitOrderNow;   // this frame's z-order becomes the hit-test order
     c->WiresPrev = c->Wires;              // press decisions at the next CanvasBegin walk these
+    c->SolidRectsPrev = c->SolidRects;    // next frame's solid-drag clamp walks these
 
     // Pins draw over everything, post-merge.
     for (int i = 0; i < c->Pins.Size; i++)
@@ -1308,6 +1482,16 @@ namespace ImGui
   {
     const ImGuiCanvasNodeRec* n = CanvasFindNode(const_cast<ImGuiCanvasState*>(c), node_id);
     return n != nullptr ? n->Size : ImVec2(0.0f, 0.0f);
+  }
+
+  void CanvasSetNodeSolid(ImGuiCanvasState* c, int node_id, bool solid)
+  {
+    CanvasFindOrCreateNode(c, node_id)->Solid = solid;
+  }
+
+  void CanvasAddSolidRect(ImGuiCanvasState* c, ImVec2 model_min, ImVec2 model_max)
+  {
+    c->SolidRects.push_back(ImVec4(model_min.x, model_min.y, model_max.x, model_max.y));
   }
 
   void CanvasSetNodeDraggable(ImGuiCanvasState* c, int node_id, bool draggable)

@@ -6,7 +6,7 @@
 // [SECTION] Type schema registry (auto-materialized manifests)
 // [SECTION] App shell + core phase layers (Task, Command, Status)
 // [SECTION] Style/color mod runtime (desc apply; workbench style system)
-// [SECTION] Window layer (windows, sidebars, hosted controls, .ini handler)
+// [SECTION] Display layer (windows, sidebars, hosted controls, .ini handler)
 // [SECTION] Write-ahead log (ImGuiAppWAL)
 // [SECTION] State snapshots + input record/replay (time travel)
 // [SECTION] App bring-up (InitializeApp / UpdateApp / RenderApp / storage)
@@ -572,28 +572,28 @@ void ImGuiAppStatusLayer::OnRender(const ImGuiApp* app) const
 
 namespace
 {
-  static void AppWindowLayerSettingsHandler_ClearAll(ImGuiContext*, ImGuiSettingsHandler*)
+  static void AppDisplayLayerSettingsHandler_ClearAll(ImGuiContext*, ImGuiSettingsHandler*)
   {
   }
 
-  static void AppWindowLayerSettingsHandler_ReadInit(ImGuiContext*, ImGuiSettingsHandler*)
+  static void AppDisplayLayerSettingsHandler_ReadInit(ImGuiContext*, ImGuiSettingsHandler*)
   {
   }
 
-  static void* AppWindowLayerSettingsHandler_ReadOpen(ImGuiContext*, ImGuiSettingsHandler*, const char* name)
+  static void* AppDisplayLayerSettingsHandler_ReadOpen(ImGuiContext*, ImGuiSettingsHandler*, const char* name)
   {
     return nullptr;
   }
 
-  static void AppWindowLayerSettingsHandler_ReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const char* line)
+  static void AppDisplayLayerSettingsHandler_ReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const char* line)
   {
   }
 
-  static void AppWindowLayerSettingsHandler_ApplyAll(ImGuiContext*, ImGuiSettingsHandler*)
+  static void AppDisplayLayerSettingsHandler_ApplyAll(ImGuiContext*, ImGuiSettingsHandler*)
   {
   }
 
-  static void AppWindowLayerSettingsHandler_WriteAll(ImGuiContext*, ImGuiSettingsHandler*, ImGuiTextBuffer*)
+  static void AppDisplayLayerSettingsHandler_WriteAll(ImGuiContext*, ImGuiSettingsHandler*, ImGuiTextBuffer*)
   {
   }
 }
@@ -657,34 +657,34 @@ void ImGuiAppItemBase::OnStylePop(const ImGuiApp* app) const
 }
 
 //-----------------------------------------------------------------------------
-// [SECTION] Window layer (windows, sidebars, hosted controls, .ini handler)
+// [SECTION] Display layer (windows, sidebars, hosted controls, .ini handler)
 //-----------------------------------------------------------------------------
 
-void ImGuiAppWindowLayer::OnAttach(ImGuiApp* app) const
+void ImGuiAppDisplayLayer::OnAttach(ImGuiApp* app) const
 {
     IM_UNUSED(app);
 
-    if (ImGui::FindSettingsHandler("AppWindowLayer") != nullptr)
+    if (ImGui::FindSettingsHandler("AppDisplayLayer") != nullptr)
         return;
 
     ImGuiSettingsHandler ini_handler;
-    ini_handler.TypeName = "AppWindowLayer";
-    ini_handler.TypeHash = ImHashStr("AppWindowLayer");
-    ini_handler.ClearAllFn = AppWindowLayerSettingsHandler_ClearAll;
-    ini_handler.ReadInitFn = AppWindowLayerSettingsHandler_ReadInit;
-    ini_handler.ReadOpenFn = AppWindowLayerSettingsHandler_ReadOpen;
-    ini_handler.ReadLineFn = AppWindowLayerSettingsHandler_ReadLine;
-    ini_handler.ApplyAllFn = AppWindowLayerSettingsHandler_ApplyAll;
-    ini_handler.WriteAllFn = AppWindowLayerSettingsHandler_WriteAll;
+    ini_handler.TypeName = "AppDisplayLayer";
+    ini_handler.TypeHash = ImHashStr("AppDisplayLayer");
+    ini_handler.ClearAllFn = AppDisplayLayerSettingsHandler_ClearAll;
+    ini_handler.ReadInitFn = AppDisplayLayerSettingsHandler_ReadInit;
+    ini_handler.ReadOpenFn = AppDisplayLayerSettingsHandler_ReadOpen;
+    ini_handler.ReadLineFn = AppDisplayLayerSettingsHandler_ReadLine;
+    ini_handler.ApplyAllFn = AppDisplayLayerSettingsHandler_ApplyAll;
+    ini_handler.WriteAllFn = AppDisplayLayerSettingsHandler_WriteAll;
     ImGui::AddSettingsHandler(&ini_handler);
 }
 
-void ImGuiAppWindowLayer::OnDetach(ImGuiApp* app) const
+void ImGuiAppDisplayLayer::OnDetach(ImGuiApp* app) const
 {
     IM_UNUSED(app);
 }
 
-void ImGuiAppWindowLayer::OnUpdate(ImGuiApp* app, float dt) const
+void ImGuiAppDisplayLayer::OnUpdate(ImGuiApp* app, float dt) const
 {
     // Hosted controls update in the Task layer; hosts here always see this frame's control state.
     for (auto& sidebar : app->Sidebars)
@@ -694,7 +694,7 @@ void ImGuiAppWindowLayer::OnUpdate(ImGuiApp* app, float dt) const
       window->OnUpdate(app, dt);
 }
 
-void ImGuiAppWindowLayer::OnRender(const ImGuiApp* app) const
+void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
 {
     for (auto& sidebar : app->Sidebars)
     {
@@ -1412,7 +1412,7 @@ namespace ImGui
       PushAppLayer<ImGuiAppTaskLayer>(app);
       PushAppLayer<ImGuiAppCommandLayer>(app);
       PushAppLayer<ImGuiAppStatusLayer>(app);
-      PushAppLayer<ImGuiAppWindowLayer>(app);
+      PushAppLayer<ImGuiAppDisplayLayer>(app);
   }
 
   IMGUI_API void ShutdownApp(ImGuiApp* app)

@@ -66,7 +66,7 @@ template <typename PersistDataT, typename TempDataT, typename... DataDependencie
 template <typename Base, typename PersistDataT, typename TempDataT, typename... DataDependencies> struct ImGuiInterfaceAdapter;
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies> struct ImGuiAppControl;
 
-// Forward declarations: ImGuiAppWindow layer
+// Forward declarations: ImGuiAppDisplay layer
 struct ImGuiAppWindowBase;
 struct ImGuiAppGraph;   // authored node graph (imguiapp_nodes.h)
 
@@ -276,8 +276,6 @@ using ImGuiType = ImGuiStatic<std::remove_cvref_t<std::remove_pointer_t<T>>>;
 
 template <typename T>
 inline static void GenerateLabel(char* label, size_t size) { std::string_view sv = ImGuiType<T>::Name; ImFormatString(label, size, "%.*s", (int)sv.size(), sv.data()); }
-template <typename T>
-inline static void GenerateUniqueLabel(char* label, size_t size) { std::string_view sv = ImGuiType<T>::Name; ImFormatString(label, size, "%.*s##%d", (int)sv.size(), sv.data(), ImGuiType<T>::GetRelativeID()); }
 
 // State-delta event helpers over (this frame, last frame): rising = started, falling = ended, changed = either.
 inline static bool ImAppRising (bool now, bool last) { return now && !last; }
@@ -555,6 +553,8 @@ struct ImGuiAppControlBase : ImGuiAppItemBase
   // Declared dependency TYPE ids (the compile-time pack, before resolution): what CAN be wired.
   // GetControlDependencyIDs returns where each slot is wired NOW (resolved storage keys).
   virtual int     GetControlDependencyTypeIDs(ImGuiID* out, int cap) const { IM_UNUSED(out); IM_UNUSED(cap); return 0; }
+  // Per-slot Optional flags, same slot order as the id queries (mirror draws soft wires dimmed).
+  virtual int     GetControlDependencyOptional(bool* out, int cap) const { IM_UNUSED(out); IM_UNUSED(cap); return 0; }
   // Re-route one declared dependency at runtime (Composer edge rewiring, no pop/re-push): the
   // slot whose type matches bind->TypeID re-resolves to that producer instance and the app's
   // update order rebuilds. False when TypeID is not in this control's pack.
@@ -802,7 +802,7 @@ struct ImGuiAppStatusLayer : ImGuiAppLayer
   virtual void OnRender(const ImGuiApp*)  const override final;
 };
 
-struct ImGuiAppWindowLayer : ImGuiAppLayer
+struct ImGuiAppDisplayLayer : ImGuiAppLayer
 {
   virtual void OnAttach(ImGuiApp*)        const override final;
   virtual void OnDetach(ImGuiApp*)        const override final;
@@ -1073,6 +1073,17 @@ struct ImGuiAppControl : ImGuiInterfaceAdapter<ImGuiAppControlBase, PersistDataT
     return n;
   }
 
+  virtual int GetControlDependencyOptional(bool* out, int cap) const override final
+  {
+    const int count = (int)(sizeof...(DataDependencies));
+    if (out == nullptr || cap <= 0)
+      return count;
+    const int n = count < cap ? count : cap;
+    for (int i = 0; i < n; i++)
+      out[i] = this->_DependencyOptional[i];
+    return n;
+  }
+
   virtual bool SetControlDependencyBinding(ImGuiApp* app, const ImGuiAppDepBinding* bind) override final
   {
     if (app == nullptr || bind == nullptr)
@@ -1107,7 +1118,7 @@ struct ImGuiAppControl : ImGuiInterfaceAdapter<ImGuiAppControlBase, PersistDataT
 template <typename T>
 struct ImGuiAppWindow : ImGuiAppWindowBase
 {
-  ImGuiAppWindow() { GenerateUniqueLabel<T>(this->Label, sizeof(this->Label)); }
+  ImGuiAppWindow() { GenerateLabel<T>(this->Label, sizeof(this->Label)); }   // bare class name; PushAppWindow suffixes only real duplicates
 
   virtual void OnInitialize(ImGuiApp*)                         const override {};
   virtual void OnShutdown(ImGuiApp*)                           const override {};
@@ -1119,7 +1130,7 @@ struct ImGuiAppWindow : ImGuiAppWindowBase
 template <typename T>
 struct ImGuiAppSidebar : ImGuiAppSidebarBase
 {
-  ImGuiAppSidebar() { GenerateUniqueLabel<T>(this->Label, sizeof(this->Label)); }
+  ImGuiAppSidebar() { GenerateLabel<T>(this->Label, sizeof(this->Label)); }   // bare class name; PushAppSidebar suffixes only real duplicates
 
   virtual void OnInitialize(ImGuiApp*)                         const override {};
   virtual void OnShutdown(ImGuiApp*)                           const override {};
@@ -1217,6 +1228,27 @@ namespace ImGui
       IM_DELETE(layer);
   }
 
+  // The sole instance of a window type keeps its bare class name; a second live instance of the
+  // same type gets "##N" so imgui window ids stay distinct.
+  inline void AppDeduplicateItemLabel(char* label, int label_size, const ImVector<ImGuiAppWindowBase*>* windows, const ImVector<ImGuiAppSidebarBase*>* sidebars)
+  {
+    char base[IM_LABEL_SIZE];
+    ImStrncpy(base, label, IM_ARRAYSIZE(base));
+    for (int suffix = 2; ; suffix++)
+    {
+      bool taken = false;
+      if (windows != nullptr)
+        for (int i = 0; i < windows->Size && !taken; i++)
+          taken = strcmp(windows->Data[i]->Label, label) == 0;
+      if (sidebars != nullptr)
+        for (int i = 0; i < sidebars->Size && !taken; i++)
+          taken = strcmp(sidebars->Data[i]->Label, label) == 0;
+      if (!taken)
+        return;
+      ImFormatString(label, (size_t)label_size, "%s##%d", base, suffix);
+    }
+  }
+
   template <typename T>
   inline void PushAppWindow(ImGuiApp* app)
   {
@@ -1226,6 +1258,7 @@ namespace ImGui
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push window %s", name);
     T* window = IM_NEW(T)();
     IM_ASSERT(window);
+    AppDeduplicateItemLabel(window->Label, IM_ARRAYSIZE(window->Label), &app->Windows, &app->Sidebars);
     app->Windows.push_back(window);
     app->Windows.back()->OnInitialize(app);
   }
@@ -1254,6 +1287,7 @@ namespace ImGui
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push sidebar %s", name);
     T* sidebar = IM_NEW(T)();
     IM_ASSERT(sidebar);
+    AppDeduplicateItemLabel(sidebar->Label, IM_ARRAYSIZE(sidebar->Label), &app->Windows, &app->Sidebars);
     sidebar->Viewport = vp;
     sidebar->DockDir = dir;
     sidebar->Size = size;
@@ -1294,6 +1328,8 @@ namespace ImGui
 
       T* control = IM_NEW(T)();
       IM_ASSERT(control);
+      ImGuiAppControlBase* control_base = control;
+      ImStrncpy(control_base->Label, name, sizeof(control_base->Label));
 
       instance_data = IM_NEW(typename T::ControlInstanceDataType)();
       IM_ASSERT(instance_data);
@@ -1358,6 +1394,8 @@ namespace ImGui
 
       T* control = IM_NEW(T)();
       IM_ASSERT(control);
+      ImGuiAppControlBase* control_base = control;
+      ImStrncpy(control_base->Label, name, sizeof(control_base->Label));
 
       instance_data = IM_NEW(typename T::ControlInstanceDataType)();
       IM_ASSERT(instance_data);
@@ -1402,6 +1440,8 @@ namespace ImGui
 
       control = IM_NEW(T)();
       IM_ASSERT(control);
+      ImGuiAppControlBase* control_base = control;
+      ImStrncpy(control_base->Label, name, sizeof(control_base->Label));
 
       instance_data = IM_NEW(typename T::ControlInstanceDataType)();
       IM_ASSERT(instance_data);

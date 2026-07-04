@@ -256,7 +256,7 @@ enum ImGuiAppLayerType_
   ImGuiAppLayerType_Task = 0,
   ImGuiAppLayerType_Command,
   ImGuiAppLayerType_Status,
-  ImGuiAppLayerType_Window,
+  ImGuiAppLayerType_Display,
   ImGuiAppLayerType_Custom,
   ImGuiAppLayerType_COUNT,
 };
@@ -297,6 +297,7 @@ struct ImGuiAppNodeLink
   int              StartAttr;
   int              EndAttr;
   ImGuiAppEdgeKind Kind = ImGuiAppEdgeKind_Data;
+  bool             Soft = false; // Optional data dependency (live mirror): drawn dimmed; transient, never saved
 };
 
 namespace ImGui
@@ -545,6 +546,7 @@ struct ImGuiAppEditorState
   mutable int                          HostCmdPicked = -1;
   mutable bool                         AddPaletteRequest = false;   // one-shot
   mutable bool                         FitAllRequest = false;       // one-shot
+  int                                  AutoLayoutCountdown = 2;     // launch default is a TIDIED layout: fires once real sizes exist (frame 2)
   bool                                 HelpOverlay = false;         // F1 shortcut cheat sheet
   bool                                 QuickInspector = false;      // N: floating quick inspector
   bool                                 PrevShowLive = true;
@@ -591,6 +593,7 @@ struct ImGuiAppGraph
   ImVector<ImVec4>               _GroupDragOrig;                       // (id, x, y) member originals for the active group-chip drag (transient)
   ImVec2                         _GroupDragMouse0           = ImVec2(0.0f, 0.0f); // model-space mouse origin of that drag (transient)
   ImVec4                         _GroupDragFrame0           = ImVec4(0.0f, 0.0f, 0.0f, 0.0f); // the dragged group's frame at drag start, model (transient)
+  ImVec2                         _GroupDragApplied          = ImVec2(0.0f, 0.0f); // displacement actually granted so far (greedy catch-up; transient)
   bool                           _GroupDragMoved            = false;   // chip gesture latch: drag vs fold-click (transient)
   ImVector<ImGuiAppGroupFrame>   _GroupFrames;                         // THIS frame's published group frames, model units (transient)
   ImVector<ImGuiAppGroupFrame>   _GroupFramesPrev;                     // last frame's publication, what consumers read (transient)
@@ -759,7 +762,7 @@ namespace ImGui
     ImU32 LayerTask;
     ImU32 LayerCommand;  // also marks hidden nodes
     ImU32 LayerStatus;
-    ImU32 LayerWindow;
+    ImU32 LayerDisplay;
     ImU32 AccentNeutral; // fallback accent for typeless rows/ports
                          // Pins
     ImU32 PinData;

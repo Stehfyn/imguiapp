@@ -221,7 +221,7 @@ namespace ImGui
   static const ImVec4 kAppHueTask       = ImVec4(0.43f, 0.59f, 0.80f, 1.0f);   // blue: logic
   static const ImVec4 kAppHueCommand    = ImVec4(0.82f, 0.59f, 0.35f, 1.0f);   // amber: commands + hidden markers
   static const ImVec4 kAppHueStatus     = ImVec4(0.55f, 0.73f, 0.47f, 1.0f);   // green: status
-  static const ImVec4 kAppHueWindowLayer= ImVec4(0.65f, 0.53f, 0.82f, 1.0f);   // violet: windows
+  static const ImVec4 kAppHueDisplayLayer= ImVec4(0.65f, 0.53f, 0.82f, 1.0f);   // violet: windows
   static const ImVec4 kAppHueWindow     = ImVec4(0.47f, 0.67f, 0.90f, 1.0f);   // window kind + data pins
   static const ImVec4 kAppHueSidebar    = ImVec4(0.47f, 0.78f, 0.78f, 1.0f);
   static const ImVec4 kAppHueControl    = ImVec4(0.84f, 0.65f, 0.37f, 1.0f);
@@ -273,7 +273,7 @@ namespace ImGui
     style->LayerTask      = AppThemeAccent(kAppHueTask);
     style->LayerCommand   = AppThemeAccent(kAppHueCommand);
     style->LayerStatus    = AppThemeAccent(kAppHueStatus);
-    style->LayerWindow    = AppThemeAccent(kAppHueWindowLayer);
+    style->LayerDisplay    = AppThemeAccent(kAppHueDisplayLayer);
     style->AccentNeutral  = AppThemeNeutral(0.63f);
     style->PinData        = AppThemeAccent(kAppHueWindow);
     style->PinChild       = AppThemeAccent(kAppHuePinChild);
@@ -905,12 +905,20 @@ namespace ImGui
     }
   }
 
+  // Optional-dependency wires keep the style hue at reduced alpha, so soft wiring reads as tentative.
+  static ImU32 AppSoftWireColor(ImGuiCanvasState* c)
+  {
+    const ImU32 base = ImGui::CanvasGetStyle(c)->Wire;
+    return (base & ~IM_COL32_A_MASK) | ((ImU32)(((base >> IM_COL32_A_SHIFT) & 0xFF) * 42 / 100) << IM_COL32_A_SHIFT);
+  }
+
   void DrawAppNodeLinks(ImGuiCanvasState* c, const ImVector<ImGuiAppNodeLink>* links)
   {
     IM_ASSERT(c != nullptr && links != nullptr);
 
     for (int i = 0; i < links->Size; i++)
-      ImGui::CanvasWire(c, links->Data[i].Id, links->Data[i].StartAttr, links->Data[i].EndAttr, 0);
+      ImGui::CanvasWire(c, links->Data[i].Id, links->Data[i].StartAttr, links->Data[i].EndAttr,
+                        links->Data[i].Soft ? AppSoftWireColor(c) : 0);
   }
 
   bool CaptureAppNodeLinks(ImGuiCanvasState* c, ImVector<ImGuiAppNodeLink>* links, int* next_link_id)
@@ -1359,7 +1367,7 @@ namespace ImGui
 
   // A node's engine-measured size in MODEL units; false until it has been submitted once.
   // Last frame's MODEL measurement (the engine record), consumed this frame -- the framework's
-  // T+1 law; invariant units, no settledness state.
+  // T+1 law; invariant units. The engine's deadband keeps the value zoom-idempotent.
   static bool AppNodeModelSize(const ImGuiAppGraph* g, int node_id, ImVec2* out)
   {
     const ImVec2 s = ImGui::CanvasNodeSize(AppEditorCanvas(g), node_id);
@@ -1413,11 +1421,11 @@ namespace ImGui
   }
 
   //-----------------------------------------------------------------------------
-  // [SECTION] Window section (windows + sidebars compose INTO the Window layer)
+  // [SECTION] Window section (windows + sidebars compose INTO the Display layer)
   //-----------------------------------------------------------------------------
-  // Window and sidebar nodes are CONTAINED by the Window layer's pipeline section: the section
+  // Window and sidebar nodes are CONTAINED by the Display layer's pipeline section: the section
   // packer owns their positions (the same ownership the column packer has over layer Y), stacking
-  // them VERTICALLY beneath the WindowLayer node's header -- one node per row, top-to-bottom in
+  // them VERTICALLY beneath the DisplayLayer node's header -- one node per row, top-to-bottom in
   // execution order (the same law the layer rail teaches). Sidebars stack above windows: they run
   // first, consuming viewport workrects, so the windows below them fit the remaining rect. The
   // column reserves the section's extent so the next row seats below it, and the section boundary
@@ -1472,7 +1480,7 @@ namespace ImGui
     return extent;
   }
 
-  // The section's stack origin against a given Window layer height (callers off the editor
+  // The section's stack origin against a given Display layer height (callers off the editor
   // canvas pass the guarded AppLayoutNodeSize height; the editor passes the measured one).
   static ImVec2 AppGraphWindowSectionOrigin(const ImGuiAppNode* wl, float wl_h)
   {
@@ -1510,13 +1518,13 @@ namespace ImGui
       }
       else
       {
-        // Windows and sidebars are contained by the Window layer's section: the new node's seat
+        // Windows and sidebars are contained by the Display layer's section: the new node's seat
         // is its slot in the section stack (sidebars above windows, each population in graph
         // order). The editor's section packer re-stacks every frame; this seat only has to agree
-        // with it. Falls through to the generic default only when no Window layer node exists.
+        // with it. Falls through to the generic default only when no Display layer node exists.
         if (n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar)
         {
-          if (const ImGuiAppNode* wl = AppGraphLayerOfType(g, ImGuiAppLayerType_Window))
+          if (const ImGuiAppNode* wl = AppGraphLayerOfType(g, ImGuiAppLayerType_Display))
           {
             ImVector<int> ids;
             AppGraphCollectSectionMembers(g, true, nullptr, &ids);   // includes n (already in Nodes)
@@ -1586,14 +1594,14 @@ namespace ImGui
     return h > 1.0f ? h : kAppGraphLayerRowH;
   }
 
-  // A layer row's FOOTPRINT in the column: the node plus, for the canonical Window layer, the
+  // A layer row's FOOTPRINT in the column: the node plus, for the canonical Display layer, the
   // section stack packed beneath it -- the column reserves the section's space so the next row
   // seats below the contained windows/sidebars, not through them.
   static float AppGraphLayerRowFootprint(const ImGuiAppGraph* g, bool show_live, int node_id)
   {
     float h = AppGraphLayerNodeHeight(g, node_id);
     const ImGuiAppNode* n = AppGraphFindNodeConst(g, node_id);
-    if (n != nullptr && n == AppGraphLayerOfType(g, ImGuiAppLayerType_Window))
+    if (n != nullptr && n == AppGraphLayerOfType(g, ImGuiAppLayerType_Display))
     {
       ImVector<int> ids;
       AppGraphCollectSectionMembers(g, show_live, nullptr, &ids);
@@ -1605,12 +1613,12 @@ namespace ImGui
   }
 
   // The section packer: assigns every contained window/sidebar its stack slot beneath the
-  // (already packed) WindowLayer row. Runs each root-scope editor frame right after the column
+  // (already packed) DisplayLayer row. Runs each root-scope editor frame right after the column
   // pack, so members track the row through provisional packs and anchor drags -- position is
   // OWNED here, the nodes are not user-draggable.
   static void AppGraphSeatWindowSection(ImGuiAppGraph* g, bool show_live)
   {
-    const ImGuiAppNode* wl = AppGraphLayerOfType(g, ImGuiAppLayerType_Window);
+    const ImGuiAppNode* wl = AppGraphLayerOfType(g, ImGuiAppLayerType_Display);
     if (wl == nullptr)
       return;
     ImVector<int> ids;
@@ -1854,7 +1862,7 @@ namespace ImGui
     }
     else
     {
-      // No drag this frame: top-down separation. A row that grew (the Window layer's footprint
+      // No drag this frame: top-down separation. A row that grew (the Display layer's footprint
       // includes its section stack) pushes later rows down instead of overlapping them.
       for (int i = 1; i < ids.Size; i++)
       {
@@ -1904,7 +1912,7 @@ namespace ImGui
     {
       if (strstr(name, "Command") != nullptr) n->LayerType = ImGuiAppLayerType_Command;
       else if (strstr(name, "Status") != nullptr) n->LayerType = ImGuiAppLayerType_Status;
-      else if (strstr(name, "Window") != nullptr) n->LayerType = ImGuiAppLayerType_Window;
+      else if (strstr(name, "Display") != nullptr) n->LayerType = ImGuiAppLayerType_Display;
       else n->LayerType = ImGuiAppLayerType_Task;
     }
     n->BodyAttrId = AppGraphAllocId(g);
@@ -1944,7 +1952,7 @@ namespace ImGui
   static bool AppLayerIsCore(ImGuiAppLayerType t);                         // fwd (defined by the editor section)
 
   // Replace the AUTHORED graph with a starter template (live mirror nodes re-reconcile next frame). 0 = empty app
-  // (Task+Window layers + a window), 1 = single-window + control, 2 = struct producer + a control consuming it.
+  // (Task+Display layers + a window), 1 = single-window + control, 2 = struct producer + a control consuming it.
   // The four app layers (Window, Task, Command, Status) are the guaranteed framework foundation every app builds
   // on. Add any that are missing; never duplicates (one per type). Permanent -- AppGraphRemoveNode refuses them.
   void AppGraphEnsureFoundation(ImGuiAppGraph* g)
@@ -1957,7 +1965,7 @@ namespace ImGui
       { ImGuiAppLayerType_Task,    "TaskLayer"    },
       { ImGuiAppLayerType_Command, "CommandLayer" },
       { ImGuiAppLayerType_Status,  "StatusLayer"  },
-      { ImGuiAppLayerType_Window,  "WindowLayer"  },
+      { ImGuiAppLayerType_Display,  "DisplayLayer"  },
     };
     for (int i = 0; i < IM_ARRAYSIZE(base); i++)
       if (!AppGraphHasLayerType(g, base[i].T))
@@ -3210,7 +3218,7 @@ namespace ImGui
     case ImGuiAppLayerType_Task:    return "ImGuiAppTaskLayer";
     case ImGuiAppLayerType_Command: return "ImGuiAppCommandLayer";
     case ImGuiAppLayerType_Status:  return "ImGuiAppStatusLayer";
-    case ImGuiAppLayerType_Window:  return "ImGuiAppWindowLayer";
+    case ImGuiAppLayerType_Display:  return "ImGuiAppDisplayLayer";
     default:                        return "ImGuiAppLayer";
     }
   }
@@ -3222,7 +3230,7 @@ namespace ImGui
     case ImGuiAppLayerType_Task:    return "TaskLayer";
     case ImGuiAppLayerType_Command: return "CommandLayer";
     case ImGuiAppLayerType_Status:  return "StatusLayer";
-    case ImGuiAppLayerType_Window:  return "WindowLayer";
+    case ImGuiAppLayerType_Display:  return "DisplayLayer";
     case ImGuiAppLayerType_Custom:  return "CustomLayer";
     default:                        return "Layer";
     }
@@ -3233,7 +3241,7 @@ namespace ImGui
   static bool AppLayerIsCore(ImGuiAppLayerType t)
   {
     return t == ImGuiAppLayerType_Task || t == ImGuiAppLayerType_Command
-        || t == ImGuiAppLayerType_Status || t == ImGuiAppLayerType_Window;
+        || t == ImGuiAppLayerType_Status || t == ImGuiAppLayerType_Display;
   }
 
   // One identity per layer kind (icon, role line, accent), shared by the canvas node header, body, and
@@ -3245,7 +3253,7 @@ namespace ImGui
     case ImGuiAppLayerType_Task:    return ICON_FA_GEARS;
     case ImGuiAppLayerType_Command: return ICON_FA_TERMINAL;
     case ImGuiAppLayerType_Status:  return ICON_FA_CIRCLE_INFO;
-    case ImGuiAppLayerType_Window:  return ICON_FA_TABLE_COLUMNS;
+    case ImGuiAppLayerType_Display:  return ICON_FA_TABLE_COLUMNS;
     default:                        return ICON_FA_LAYER_GROUP;
     }
   }
@@ -3260,7 +3268,7 @@ namespace ImGui
     case ImGuiAppLayerType_Task:    return "ingests module status & updates app state";
     case ImGuiAppLayerType_Command: return "receives & dispatches commands";
     case ImGuiAppLayerType_Status:  return "publishes the app's own status";
-    case ImGuiAppLayerType_Window:  return "renders the world -- presentation only";
+    case ImGuiAppLayerType_Display:  return "renders the world -- presentation only";
     case ImGuiAppLayerType_Custom:  return "your ImGuiAppLayer subclass, at its stack position";
     default:                        return "orchestration layer";
     }
@@ -3273,7 +3281,7 @@ namespace ImGui
     case ImGuiAppLayerType_Task:    return AppComposerGetStyle()->LayerTask;
     case ImGuiAppLayerType_Command: return AppComposerGetStyle()->LayerCommand;
     case ImGuiAppLayerType_Status:  return AppComposerGetStyle()->LayerStatus;
-    case ImGuiAppLayerType_Window:  return AppComposerGetStyle()->LayerWindow;
+    case ImGuiAppLayerType_Display:  return AppComposerGetStyle()->LayerDisplay;
     default:                        return AppComposerGetStyle()->AccentNeutral;
     }
   }
@@ -3494,7 +3502,7 @@ namespace ImGui
     bool have_wl = false;
     ImVec2 wl_min(0.0f, 0.0f);
     ImVec2 wl_max(0.0f, 0.0f);
-    const ImGuiAppNode* wl_canonical = AppGraphLayerOfType(g, ImGuiAppLayerType_Window);
+    const ImGuiAppNode* wl_canonical = AppGraphLayerOfType(g, ImGuiAppLayerType_Display);
     for (int i = 0; i < g->Nodes.Size; i++)
     {
       const ImGuiAppNode* n = &g->Nodes.Data[i];
@@ -3537,13 +3545,13 @@ namespace ImGui
           rows.Data[b] = t;
         }
 
-    // Windows and sidebars compose into the Window layer: fold each section member into the
+    // Windows and sidebars compose into the Display layer: fold each section member into the
     // row's band and the box, so the band reads as the SECTION CONTAINING the member nodes, not
     // a strip beside them. The rail gutter keeps its layer-column x (node_left untouched).
     LRow* wr = nullptr;
     float sect_right = -FLT_MAX;
     for (int r = 0; r < rows.Size && wr == nullptr; r++)
-      if (rows.Data[r].LT == ImGuiAppLayerType_Window)
+      if (rows.Data[r].LT == ImGuiAppLayerType_Display)
         wr = &rows.Data[r];
     if (wr != nullptr)
     {
@@ -3629,11 +3637,11 @@ namespace ImGui
       dl->AddRectFilled(ImVec2(band_x0, y0), ImVec2(band_x1, y1), band, em * 0.1875f, rf);
     }
 
-    // One boundary around the Window layer node and its seated section stack: contained
+    // One boundary around the Display layer node and its seated section stack: contained
     // windows/sidebars read as INSIDE the layer's section, never floating beneath its border.
     if (wr != nullptr && have_wl && wr->BandBot > wl_max.y + 0.5f)
     {
-      const ImU32 accent = AppLayerAccent(ImGuiAppLayerType_Window);
+      const ImU32 accent = AppLayerAccent(ImGuiAppLayerType_Display);
       const ImU32 sect_fill = (accent & 0x00FFFFFF) | (IM_COL32(0, 0, 0, 22) & 0xFF000000);
       const ImU32 sect_line = (accent & 0x00FFFFFF) | (IM_COL32(0, 0, 0, 160) & 0xFF000000);
       const ImVec2 smn(wl_min.x - em * 0.25f, wl_min.y - em * 0.25f);
@@ -4425,7 +4433,7 @@ namespace ImGui
   // Drill-down scopes (Blender node-group semantics for the composition hierarchy)
   //
   // The graph mirrors the layer architecture's composition tree: layers root the app, windows/sidebars compose
-  // onto the Window layer, controls onto their host (or the Task layer at app level), data structs onto their
+  // onto the Display layer, controls onto their host (or the Task layer at app level), data structs onto their
   // control, fields onto their struct. ViewScope is a stack of entered nodes: Tab (or double-click a layer)
   // drills into the selected node's composition, Esc goes back up, the breadcrumb bar jumps anywhere. Inside a
   // scope only that node's composition is submitted, and members carry execution-order badges -- the event
@@ -4465,7 +4473,7 @@ namespace ImGui
     case ImGuiAppNodeKind_Window:
     case ImGuiAppNodeKind_Sidebar:
     {
-      const ImGuiAppNode* wl = AppGraphFindLayerOfType(g, ImGuiAppLayerType_Window);
+      const ImGuiAppNode* wl = AppGraphFindLayerOfType(g, ImGuiAppLayerType_Display);
       return wl != nullptr ? wl->Id : -1;
     }
     default:
@@ -4685,68 +4693,91 @@ namespace ImGui
 
   static const int kAppLayoutMaxDepth = 12;
 
-  // Pass 1: per-depth ROW heights from MEASURED node sizes (the tallest node in a depth sets its row). The
-  // containment tree runs top-down: depth advances on Y, siblings spread on X.
-  static void AppLayoutMeasure(const ImGuiAppGraph* g, int id, int depth, float* max_h)
-  {
-    const ImGuiAppNode* n = AppGraphFindNodeConst(g, id);
-    if (n == nullptr)
-      return;
-    const int d = ImMin(depth, kAppLayoutMaxDepth - 1);
-    max_h[d] = ImMax(max_h[d], AppLayoutNodeSize(g, n).y);
-    ImVector<int> kids;
-    AppLayoutKids(g, n, &kids);
-    for (int k = 0; k < kids.Size; k++)
-      AppLayoutMeasure(g, kids.Data[k], depth + 1, max_h);
-  }
+  static ImVec2 AppLayoutPureSize(const ImGuiAppGraph* g, const ImGuiAppNode* n);
 
-  // Pass 2: layered tree placement with MEASURED sizes -- siblings spread by their real widths, parents center
-  // on their children's span, and every depth keeps its own cursor so no row can ever overlap itself.
-  // Returns the placed node's horizontal CENTER.
-  static float AppLayoutPlace(ImGuiAppGraph* g, int id, int depth, const float* row_y, float* row_cur)
+  // Depth-first vertical stack: every node sits UNDERNEATH the previous one (vertical order =
+  // containment order), indented by depth so ownership still reads at a glance. *y advances past
+  // each placed node's MEASURED height; *max_r (when given) tracks the stack's right edge.
+  static void AppLayoutStack(ImGuiAppGraph* g, int id, int depth, float x0, float* y, float* max_r)
   {
     ImGuiAppNode* n = AppGraphFindNode(g, id);
     if (n == nullptr)
-      return row_cur[0];
-    const int d = ImMin(depth, kAppLayoutMaxDepth - 1);
-    const ImVec2 sz = AppLayoutNodeSize(g, n);
-    const float kGapX = 60.0f;
-
-    ImVector<int> kids;
-    AppLayoutKids(g, n, &kids);
-    float x;
-    if (kids.Size == 0)
-    {
-      x = row_cur[d];
-    }
-    else
-    {
-      float c_first = 0.0f, c_last = 0.0f;
-      for (int k = 0; k < kids.Size; k++)
-      {
-        const float c = AppLayoutPlace(g, kids.Data[k], depth + 1, row_y, row_cur);
-        if (k == 0) c_first = c;
-        c_last = c;
-      }
-      n = AppGraphFindNode(g, id);   // recursion only repositions (never adds), but re-find to be safe
-      x = ImMax((c_first + c_last) * 0.5f - sz.x * 0.5f, row_cur[d]);
-    }
-    n->GridPos = ImVec2(x, row_y[d]);
+      return;
+    const float kGapNodeY = 40.0f;
+    const float kIndentX = 48.0f;
+    const ImVec2 sz = AppLayoutPureSize(g, n);   // pure model size: tidy is zoom-idempotent
+    n->GridPos = ImVec2(x0 + (float)ImMin(depth, kAppLayoutMaxDepth - 1) * kIndentX, *y);
     n->HasGridPos = true;
     n->_NeedsPlace = true;
-    row_cur[d] = x + sz.x + kGapX;
-    return x + sz.x * 0.5f;
+    if (max_r != nullptr)
+      *max_r = ImMax(*max_r, n->GridPos.x + sz.x);
+    *y += sz.y + kGapNodeY;
+    ImVector<int> kids;
+    AppLayoutKids(g, n, &kids);
+    for (int k = 0; k < kids.Size; k++)
+      AppLayoutStack(g, kids.Data[k], depth + 1, x0, y, max_r);
+  }
+
+  // Tidy sizes are PURE MODEL functions (docs/phase-coherence.md: the camera is never an input
+  // to a model-derived value): measured sizes vary with zoom because font metrics are not linear
+  // in size, so a layout derived from them cannot be idempotent across zooms. Estimated from the
+  // node's CONTENT instead -- identical model, identical layout, at any zoom, any time. Estimates
+  // run generous so the vertical stack never visually overlaps the (tighter) measured nodes.
+  static ImVec2 AppLayoutPureSize(const ImGuiAppGraph* g, const ImGuiAppNode* n)
+  {
+    IM_UNUSED(g);
+    const float em = ImGui::GetStyle().FontSizeBase;   // model-unit em, zoom-free
+    int rows = 3;
+    int wchars = 24;
+    switch (n->Kind)
+    {
+    case ImGuiAppNodeKind_Window:
+    case ImGuiAppNodeKind_Sidebar:
+      rows = 2;
+      break;
+    case ImGuiAppNodeKind_Control:
+      // Live card: title, dependencies pin, origin note, data type, bindings, data pin.
+      rows = 6 + n->Events.Size;
+      wchars = 40;
+      break;
+    case ImGuiAppNodeKind_Struct:
+      rows = 3 + n->Draft.PersistFields.Size;
+      break;
+    case ImGuiAppNodeKind_Field:
+      rows = 2 + n->Draft.PersistFields.Size;
+      break;
+    default:
+      break;
+    }
+    const int name_chars = (int)strlen(n->Draft.Name);
+    if (name_chars + 6 > wchars)
+      wchars = name_chars + 6;
+    return ImVec2((float)wchars * em * 0.62f + em * 2.0f, (float)rows * em * 2.0f + em);
+  }
+
+  // Containment host of a layout root (window/sidebar id), -1 when it has none. Consecutive
+  // roots sharing a host form one group unit in the tidy flow.
+  static int AppLayoutHostOf(const ImGuiAppGraph* g, int id)
+  {
+    const ImGuiAppNode* n = AppGraphFindNodeConst(g, id);
+    if (n == nullptr || n->Kind != ImGuiAppNodeKind_Control)
+      return -1;
+    const int parent = AppGraphParentOf(g, id);
+    if (parent < 0)
+      return -1;
+    const ImGuiAppNode* p = AppGraphFindNodeConst(g, parent);
+    return (p != nullptr && (p->Kind == ImGuiAppNodeKind_Window || p->Kind == ImGuiAppNodeKind_Sidebar)) ? parent : -1;
   }
 
   void AppGraphAutoLayout(ImGuiAppGraph* g, bool show_live)
   {
     IM_ASSERT(g != nullptr);
 
-    // Window section is active only at root scope with a Window layer present: there the section
+    // Window section is active only at root scope with a Display layer present: there the section
     // packer owns window positions, so tidy leaves windows out and their hosted controls tidy as
-    // their own free trees. Without a section (drilled in, or no Window layer) containment tidies
+    // their own free trees. Without a section (drilled in, or no Display layer) containment tidies
     // as the classic vertical tree (window over its children).
-    const bool section_active = AppScopeCurrent(g) < 0 && AppGraphLayerOfType(g, ImGuiAppLayerType_Window) != nullptr;
+    const bool section_active = AppScopeCurrent(g) < 0 && AppGraphLayerOfType(g, ImGuiAppLayerType_Display) != nullptr;
 
     // Layout roots (containment tree tops in the current scope).
     ImVector<int> roots;
@@ -4790,33 +4821,60 @@ namespace ImGui
         roots.push_back(n->Id);
     }
 
-    // Row y-offsets from MEASURED heights (pass 1), shared across all roots so the depth rows line up
-    // graph-wide; the trees themselves start clear of the layer pipeline column at the root scope.
-    float max_h[kAppLayoutMaxDepth] = {};
-    for (int r = 0; r < roots.Size; r++)
-      AppLayoutMeasure(g, roots.Data[r], 0, max_h);
-
-    const float kGapY = 80.0f;
+    // Groups stack UNDERNEATH one another in composition order (roots discovered in node order),
+    // all aligned at one left edge. INSIDE a group, a run of control roots hosted by the same
+    // window flows in TWO columns -- producer first at the left, consumers to its right and then
+    // wrapping -- so dependency wires read left-to-right within the frame. Everything else (a
+    // lone control, a window tree off the section, struct chains) stacks vertically, indented by
+    // containment depth. Vertical order = order, the same law as the section stacks.
+    // (Window nodes are excluded above at root scope -- the section packer owns their positions.)
+    const float kGapGroupY = 80.0f;
+    const float kGapNodeY = 40.0f;
+    const float kGapColX = 60.0f;
+    const float kColStaggerY = 18.0f;
     const bool  scoped = AppScopeCurrent(g) >= 0;
-    float row_y[kAppLayoutMaxDepth];
-    row_y[0] = scoped ? 60.0f : kAppGraphY0;
-    for (int d = 1; d < kAppLayoutMaxDepth; d++)
-      row_y[d] = row_y[d - 1] + (max_h[d - 1] > 0.0f ? max_h[d - 1] + kGapY : 0.0f);
-
-    // Place each root's tree (pass 2); trees start right of the layer rail and, between roots, every row
-    // cursor advances past the widest one so group frames of adjacent trees can never interleave.
-    // (Window nodes are excluded above -- the section packer owns their positions.)
-    float row_cur[kAppLayoutMaxDepth];
-    for (int d = 0; d < kAppLayoutMaxDepth; d++)
-      row_cur[d] = scoped ? 80.0f : AppLayoutContentX0(g);
-    for (int r = 0; r < roots.Size; r++)
+    const float x0 = scoped ? 80.0f : AppLayoutContentX0(g);
+    float y = scoped ? 60.0f : kAppGraphY0;
+    int r = 0;
+    while (r < roots.Size)
     {
-      AppLayoutPlace(g, roots.Data[r], 0, row_y, row_cur);
-      float widest = 0.0f;
-      for (int d = 0; d < kAppLayoutMaxDepth; d++)
-        widest = ImMax(widest, row_cur[d]);
-      for (int d = 0; d < kAppLayoutMaxDepth; d++)
-        row_cur[d] = widest + 34.0f;
+      int unit_end = r + 1;
+      const int host = AppLayoutHostOf(g, roots.Data[r]);
+      if (host >= 0)
+        while (unit_end < roots.Size && AppLayoutHostOf(g, roots.Data[unit_end]) == host)
+          unit_end++;
+
+      if (unit_end - r >= 2)
+      {
+        float row_y = y;
+        float row_bottom = y;
+        float col1_x = x0;
+        for (int i = r; i < unit_end; i++)
+        {
+          if ((i - r) % 2 == 0)
+          {
+            float yy = row_y;
+            float right = x0;
+            AppLayoutStack(g, roots.Data[i], 0, x0, &yy, &right);
+            row_bottom = ImMax(row_bottom, yy - kGapNodeY);
+            col1_x = right + kGapColX;
+          }
+          else
+          {
+            float yy = row_y + kColStaggerY;
+            AppLayoutStack(g, roots.Data[i], 0, col1_x, &yy, nullptr);
+            row_bottom = ImMax(row_bottom, yy - kGapNodeY);
+            row_y = row_bottom + kGapNodeY;
+          }
+        }
+        y = row_bottom + kGapGroupY;
+      }
+      else
+      {
+        AppLayoutStack(g, roots.Data[r], 0, x0, &y, nullptr);
+        y += kGapGroupY - kGapNodeY;
+      }
+      r = unit_end;
     }
   }
 
@@ -4866,7 +4924,7 @@ namespace ImGui
     if (tn == nullptr)
       return;
 
-    if (tn->Kind == ImGuiAppNodeKind_Layer && tn->LayerType == ImGuiAppLayerType_Window)
+    if (tn->Kind == ImGuiAppNodeKind_Layer && tn->LayerType == ImGuiAppLayerType_Display)
     {
       for (int pass = 0; pass < 2; pass++)   // windows render first, then sidebars
         for (int i = 0; i < g->Nodes.Size; i++)
@@ -4928,7 +4986,7 @@ namespace ImGui
       case ImGuiAppLayerType_Task:    return "state collection: module status ingest + control updates in dependency order --  OnUpdate(dt, temp, last_temp)";
       case ImGuiAppLayerType_Command: return "controls that emit commands:  OnGetCommand collects ->  app dispatches OnExecuteCommand";
       case ImGuiAppLayerType_Status:  return "publishes the app's own status for other modules (today: the status bar) -- nothing composes here yet";
-      case ImGuiAppLayerType_Window:  return "presentation only -- windows & sidebars render the collected state, in push order, mutating nothing";
+      case ImGuiAppLayerType_Display:  return "presentation only -- windows & sidebars render the collected state, in push order, mutating nothing";
       case ImGuiAppLayerType_Custom:  return "your ImGuiAppLayer subclass:  OnAttach/OnDetach at push/pop, OnUpdate -> OnRender at its stack position";
       default: break;
       }
@@ -5026,7 +5084,7 @@ namespace ImGui
   }
   static ImU32 AppPinTieColor() { return AppComposerGetStyle()->PinTie; }
 
-  // Editor path chips at the canvas top-left: "App > WindowLayer > Mixer". Always shown -- at the
+  // Editor path chips at the canvas top-left: "App > DisplayLayer > Mixer". Always shown -- at the
   // root a single App tail chip anchors WHERE you are; drilled in, clicking a segment jumps back to
   // that depth (selecting the scope just exited). A caption underneath states the scope's per-frame
   // contract. A CHILD window overlaying the canvas, not draw-list chips in the canvas window (the
@@ -5159,7 +5217,7 @@ namespace ImGui
     const char* sub = AppScopeCaption(g);
 
     const char* action = nullptr;
-    if (kind == ImGuiAppNodeKind_Layer && lt == ImGuiAppLayerType_Window)       action = "+ Window";
+    if (kind == ImGuiAppNodeKind_Layer && lt == ImGuiAppLayerType_Display)       action = "+ Window";
     else if (kind == ImGuiAppNodeKind_Layer && lt == ImGuiAppLayerType_Task)    action = "+ Control";
     else if (kind == ImGuiAppNodeKind_Window || kind == ImGuiAppNodeKind_Sidebar) action = "+ Control";
     else if (kind == ImGuiAppNodeKind_Struct)                                   action = "+ Field";
@@ -5186,7 +5244,7 @@ namespace ImGui
       if (ImGui::Button(action, ImVec2(bw, em * 1.7f)))
       {
         ImGuiAppNode* added = nullptr;
-        if (kind == ImGuiAppNodeKind_Layer && lt == ImGuiAppLayerType_Window)
+        if (kind == ImGuiAppNodeKind_Layer && lt == ImGuiAppLayerType_Display)
           added = AppGraphAddNode(g, ImGuiAppNodeKind_Window, "Window");
         else if ((kind == ImGuiAppNodeKind_Layer && lt == ImGuiAppLayerType_Task)
               || kind == ImGuiAppNodeKind_Window || kind == ImGuiAppNodeKind_Sidebar)
@@ -5235,10 +5293,20 @@ namespace ImGui
     // each one is re-seated at its saved GridPos. Single editor instance in the demo, so a function-local
     // latch is enough.
     if (show_live && !AppGraphEditorState(g)->PrevShowLive)
+    {
       for (int i = 0; i < g->Nodes.Size; i++)
         if (g->Nodes.Data[i].IsLive)
           g->Nodes.Data[i]._NeedsPlace = true;
+      // The live population just joined the canvas: re-arm the launch tidy so the default view
+      // of the mirrored composition is the tidied layout too.
+      AppGraphEditorState(g)->AutoLayoutCountdown = 2;
+    }
     AppGraphEditorState(g)->PrevShowLive = show_live;
+
+    // Launch default is a TIDIED layout: fires once real sizes exist (the previous frame's
+    // submission measured them).
+    if (AppGraphEditorState(g)->AutoLayoutCountdown > 0 && --AppGraphEditorState(g)->AutoLayoutCountdown == 0)
+      AppGraphAutoLayout(g, show_live);
 
     // Drill-down scope upkeep: repair dangling entries; on any scope change re-seat every now-visible node at its
     // stored GridPos (it left the canvas while out of scope) and arm a deferred fit-all (dims valid post-submit).
@@ -5280,7 +5348,7 @@ namespace ImGui
     int pending_node = -1;
     int pending_list = 0;
 
-    // "Build onto a layer" requests from layer-node pills (e.g. WindowLayer -> + Window). Deferred for the same
+    // "Build onto a layer" requests from layer-node pills (e.g. DisplayLayer -> + Window). Deferred for the same
     // reason: adding a node mid-submission reallocs g->Nodes. pending_build_owner is the layer requesting it.
     ImGuiAppNodeKind pending_build_kind = ImGuiAppNodeKind_COUNT;   // COUNT = none
     int              pending_build_owner = -1;
@@ -5308,6 +5376,11 @@ namespace ImGui
     if (at_root)
       AppDrawLayerGroupBox(g, show_live, s_ov_bands, em_base, fh_base, &col_geom);
 
+    // The layer column is solid ground: window-group nodes can never be dragged into it
+    // (engine solid-drag clamp; consumed by the next frame's FSM in model units).
+    if (col_geom.Valid)
+      ImGui::CanvasAddSolidRect(cv, ImGui::CanvasFromScreen(cv, col_geom.BoxMin), ImGui::CanvasFromScreen(cv, col_geom.BoxMax));
+
     // Owners whose group frame swallowed their containment fan this frame: one trunk connector
     // per owner replaces the per-control wires (rebuilt every frame; consumed by the link loop).
     ImVector<int> trunked_owners;
@@ -5332,7 +5405,7 @@ namespace ImGui
         else
         {
           // Owner excluded: frame only the hosted-control cluster. A section-seated window/sidebar
-          // lives inside the Window layer's boundary; framing it too would drag this box across
+          // lives inside the Display layer's boundary; framing it too would drag this box across
           // every row between the section and its controls.
           for (int i = 0; i < g->Nodes.Size; i++)
             if (g->Nodes.Data[i].Kind == ImGuiAppNodeKind_Control && AppGraphParentOf(g, g->Nodes.Data[i].Id) == owner_id)
@@ -5392,7 +5465,7 @@ namespace ImGui
           // moving the hidden members would teleport them on expand.
           const bool owner_seated = at_root
               && (owner->Kind == ImGuiAppNodeKind_Window || owner->Kind == ImGuiAppNodeKind_Sidebar)
-              && AppGraphLayerOfType(g, ImGuiAppLayerType_Window) != nullptr;
+              && AppGraphLayerOfType(g, ImGuiAppLayerType_Display) != nullptr;
           ImGui::SetCursorScreenPos(chip_mn);
           ImGui::PushID(owner_id);
           ImGui::InvisibleButton("##grouphandle", chip_mx - chip_mn);
@@ -5403,6 +5476,7 @@ namespace ImGui
             g->_GroupDragMoved = false;
             g->_GroupDragMouse0 = ImGui::CanvasFromScreen(cv, ImGui::GetIO().MousePos);   // MODEL-space origin: pan/zoom mid-drag cannot corrupt the displacement
             g->_GroupDragFrame0 = ImVec4(fr_mn_m.x, fr_mn_m.y, fr_mx_m.x, fr_mx_m.y);     // own frame at drag start, model
+            g->_GroupDragApplied = ImVec2(0.0f, 0.0f);
             g->_GroupDragOrig.resize(0);
             for (int m = 0; m < members.Size; m++)
             {
@@ -5416,17 +5490,21 @@ namespace ImGui
           }
           if (act && ImGui::IsMouseDragging(ImGuiMouseButton_Left) && !(owner_seated && owner->GroupCollapsed) && g->_GroupDragOrig.Size > 0)
           {
-            // Placement is ABSOLUTE from the drag origin, clamped per axis against the other
-            // window groups' FRAMES (title band included) and the layer group's box -- the group
-            // slides to contact and keeps tracking the mouse the moment it retreats; a filtered
-            // per-frame delta would desync them for the rest of the drag.
-            ImVec2 disp = ImGui::CanvasFromScreen(cv, ImGui::GetIO().MousePos) - g->_GroupDragMouse0;
+            // Greedy catch-up: each frame resolves the REMAINING displacement toward the
+            // mouse-anchored target from the placement actually granted so far, clamped per axis
+            // against the other window groups' FRAMES (title band included) and the layer
+            // group's box. Granted progress accumulates: a diagonal along an obstacle edge
+            // slides now and continues later, and a blocked frame never resets earlier progress
+            // (absolute re-derivation from the drag start snapped the group back whenever both
+            // axis orders clamped). In free space the step equals the full remainder, so the
+            // group stays exactly mouse-anchored.
+            ImVec2 disp = ImGui::CanvasFromScreen(cv, ImGui::GetIO().MousePos) - g->_GroupDragMouse0 - g->_GroupDragApplied;
 
-            // The moving FRAME at its drag-start position.
-            const float mv_x0 = g->_GroupDragFrame0.x;
-            const float mv_y0 = g->_GroupDragFrame0.y;
-            const float mv_x1 = g->_GroupDragFrame0.z;
-            const float mv_y1 = g->_GroupDragFrame0.w;
+            // The moving FRAME at its CURRENT placement (drag-start frame + granted displacement).
+            const float mv_x0 = g->_GroupDragFrame0.x + g->_GroupDragApplied.x;
+            const float mv_y0 = g->_GroupDragFrame0.y + g->_GroupDragApplied.y;
+            const float mv_x1 = g->_GroupDragFrame0.z + g->_GroupDragApplied.x;
+            const float mv_y1 = g->_GroupDragFrame0.w + g->_GroupDragApplied.y;
 
             // kNoise: bound on T+1 measurement variance (font rounding, sub-unit content wobble)
             // republished into frame extents. Penetration within it clamps -- resolving to the
@@ -5493,7 +5571,8 @@ namespace ImGui
               const float eb = (b.x - disp.x) * (b.x - disp.x) + (b.y - disp.y) * (b.y - disp.y);
               disp = ea <= eb ? a : b;
             }
-            if (disp.x != 0.0f || disp.y != 0.0f)
+            g->_GroupDragApplied += disp;
+            if (g->_GroupDragApplied.x != 0.0f || g->_GroupDragApplied.y != 0.0f)
               g->_GroupDragMoved = true;
             for (int m = 0; m < g->_GroupDragOrig.Size; m++)
             {
@@ -5501,7 +5580,7 @@ namespace ImGui
               ImGuiAppNode* mm = AppGraphFindNode(g, mid);
               if (mm == nullptr)
                 continue;
-              const ImVec2 np(g->_GroupDragOrig.Data[m].y + disp.x, g->_GroupDragOrig.Data[m].z + disp.y);
+              const ImVec2 np(g->_GroupDragOrig.Data[m].y + g->_GroupDragApplied.x, g->_GroupDragOrig.Data[m].z + g->_GroupDragApplied.y);
               if (AppNodeHiddenByCollapse(g, mid) || !AppEditorNodeWasSubmitted(g, mid))
               {
                 mm->GridPos = np;   // not on the canvas: move its stored (model) pos only
@@ -5516,9 +5595,9 @@ namespace ImGui
             }
 
             // [Phase-coherent geometry] the members' THIS-frame submission moved: frame, chip, and
-            // published rect shift rigidly (drag-start frame + this frame's clamped displacement).
-            fr_mn_m = ImVec2(g->_GroupDragFrame0.x + disp.x, g->_GroupDragFrame0.y + disp.y);
-            fr_mx_m = ImVec2(g->_GroupDragFrame0.z + disp.x, g->_GroupDragFrame0.w + disp.y);
+            // published rect shift rigidly (drag-start frame + the granted displacement).
+            fr_mn_m = ImVec2(g->_GroupDragFrame0.x + g->_GroupDragApplied.x, g->_GroupDragFrame0.y + g->_GroupDragApplied.y);
+            fr_mx_m = ImVec2(g->_GroupDragFrame0.z + g->_GroupDragApplied.x, g->_GroupDragFrame0.w + g->_GroupDragApplied.y);
             mn = ImGui::CanvasToScreen(cv, fr_mn_m);
             mx = ImGui::CanvasToScreen(cv, fr_mx_m);
             chip_mn = ImVec2(mn.x + pad, mn.y);
@@ -5867,7 +5946,7 @@ namespace ImGui
       };
 
       // Pass 1: windows/sidebars hosting controls (outermost). At root these owners are seated in
-      // the Window layer's section, so their frames cover only the control cluster (the collapsed
+      // the Display layer's section, so their frames cover only the control cluster (the collapsed
       // state keeps the owner: the chip must survive as the re-expand handle).
       for (int i = 0; i < g->Nodes.Size; i++)
       {
@@ -5921,6 +6000,10 @@ namespace ImGui
       const bool owned = n->Kind == ImGuiAppNodeKind_Layer
                       || ((n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar) && at_root_scope);
       ImGui::CanvasSetNodeDraggable(cv, n->Id, !owned);
+      // Control/window/sidebar nodes are mutually solid: a drag slides to contact, never overlaps.
+      ImGui::CanvasSetNodeSolid(cv, n->Id, n->Kind == ImGuiAppNodeKind_Control
+                                        || n->Kind == ImGuiAppNodeKind_Window
+                                        || n->Kind == ImGuiAppNodeKind_Sidebar);
 
       if (n->_NeedsPlace)
       {
@@ -5975,10 +6058,11 @@ namespace ImGui
           continue;
         if (port->Kind != ImGuiAppPortKind_DataIn)
           continue;
-        // Data pins circular -- the engine draws pins.
+        // Data pins circular -- the engine draws pins. The "deps" identity stays stable for
+        // saved graphs and port lookups; only the on-canvas label speaks the full vocabulary.
         ImGui::CanvasNextPinColor(AppPinColor(port->Kind));
         ImGui::CanvasBeginPin(cv, port->Id, ImGui::ImGuiCanvasPin_In, ImGui::ImGuiCanvasPinShape_Circle);
-        ImGui::TextUnformatted(port->Name);
+        ImGui::TextUnformatted(strcmp(port->Name, "deps") == 0 ? "dependencies" : port->Name);
         ImGui::CanvasEndPin(cv);
       }
 
@@ -6100,7 +6184,7 @@ namespace ImGui
 
         // Build-onto affordances: each foundation layer offers what you can build on top of it (the builder flow).
         // Shown even on a live foundation layer -- the pills AUTHOR new design nodes, they don't edit the layer.
-        if (lt == ImGuiAppLayerType_Window)
+        if (lt == ImGuiAppLayerType_Display)
         {
           if (AppBlAddPill("##bw", "Window"))  { pending_build_kind = ImGuiAppNodeKind_Window;  pending_build_owner = n->Id; }
           ImGui::SameLine();
@@ -6227,8 +6311,12 @@ namespace ImGui
       // Brushing echo on wires: the link another view (inspector binding rows) points at renders bright.
       ImGuiAppHoverSource lsrc = ImGuiAppHoverSource_None;
       const bool brushed = g->Links.Data[li].Id == AppGraphHoveredLink(g, &lsrc) && lsrc != ImGuiAppHoverSource_Canvas && lsrc != ImGuiAppHoverSource_None;
-      ImGui::CanvasWire(cv, g->Links.Data[li].Id, g->Links.Data[li].StartAttr, g->Links.Data[li].EndAttr,
-                        brushed ? AppThemeNeutral(0.98f, 0.86f) : 0);
+      ImU32 wire_col = 0;
+      if (brushed)
+        wire_col = AppThemeNeutral(0.98f, 0.86f);
+      else if (g->Links.Data[li].Soft)
+        wire_col = AppSoftWireColor(cv);
+      ImGui::CanvasWire(cv, g->Links.Data[li].Id, g->Links.Data[li].StartAttr, g->Links.Data[li].EndAttr, wire_col);
     }
 
     // Overview minimap (engine inset, bottom-right; click/drag to jump). Lets the user see and reach
@@ -6358,7 +6446,7 @@ namespace ImGui
           g->_LayerUniformW = w;
       }
       AppGraphConstrainLayerColumn(g, show_live, moved_layer_id, moved_layer_id != 0 ? &moved_layer_pos : nullptr);
-      AppGraphSeatWindowSection(g, show_live);   // stack contained windows/sidebars beneath the packed Window layer row
+      AppGraphSeatWindowSection(g, show_live);   // stack contained windows/sidebars beneath the packed Display layer row
       AppGraphDragStickClusters(g, show_live, moved_layer_id);   // edge drags push occluded clusters, stuck for the drag's life
     }
     else
@@ -7714,6 +7802,10 @@ namespace ImGui
           }
         }
       }
+
+      // Every control is hosted: composed into a window or sidebar (no app-level controls).
+      if (n->Kind == ImGuiAppNodeKind_Control && AppGraphParentOf(g, n->Id) < 0)
+        AppValidatePushIssue(out, n->Id, 1, "control '%s' has no host window or sidebar", n->Draft.Name);
 
       if (n->Kind == ImGuiAppNodeKind_Struct)
       {
@@ -9295,12 +9387,18 @@ namespace ImGui
     }
   }
 
-  // The runtime control's class name is not recorded, so derive it from the persist data type
-  // ("GraphDocData" -> "GraphDocControl"); a name without the Data suffix gets Control appended.
+  // The RECORDED class name when the mirror stamped one (node named by the control's Label,
+  // distinct from its data type); graphs recorded before the label existed carry the data type
+  // as the node name -- derive "GraphDocData" -> "GraphDocControl" for those.
   static void AppLiveControlClassName(const ImGuiAppNode* n, char* out, size_t out_size)
   {
     char dtype[IM_LABEL_SIZE];
     AppNodeDataTypeName(n, dtype, IM_ARRAYSIZE(dtype));
+    if (n->Draft.Name[0] != 0 && strcmp(n->Draft.Name, dtype) != 0)
+    {
+      AppSanitizeIdentifier(out, (int)out_size, n->Draft.Name);
+      return;
+    }
     char base[IM_LABEL_SIZE];
     AppSanitizeIdentifier(base, IM_ARRAYSIZE(base), dtype);
     const size_t len = strlen(base);
@@ -10770,10 +10868,12 @@ namespace ImGui
   {
     ImGuiID                 Key;       // stable upsert key (so the node keeps its canvas position across frames)
     ImGuiAppNodeKind        Kind;
-    char                    Name[IM_LABEL_SIZE];
+    char                    Name[IM_LABEL_SIZE];     // display name (controls: the CLASS name)
+    char                    DataType[IM_LABEL_SIZE]; // controls only: PersistData type name (structs/codegen/promotion)
     ImGuiAppLayerType       LayerType;
     ImGuiID                 DataId;    // control PersistData id (0 for non-controls)
     ImGuiID                 Deps[16];
+    bool                    DepSoft[16];   // per-slot Optional flag (soft wires draw dimmed)
     int                     DepCount;
     ImGuiID                 ParentKey; // host window/sidebar Key for a hosted control (0 == app-level / no parent)
     ImGuiWindowFlags        Flags;     // Window/Sidebar: live window flags
@@ -10815,11 +10915,20 @@ namespace ImGui
       w.ParentKey = parent_key;
       w.Flags = 0; w.HasPlacement = false; w.InitialPos = ImVec2(0.0f, 0.0f); w.InitialSize = ImVec2(0.0f, 0.0f); w.DockDir = ImGuiDir_None; w.DockSize = 0.0f;
       w.Item = ctrl;
-      ctrl->GetControlDataTypeName(w.Name, IM_ARRAYSIZE(w.Name));
-      if (w.Name[0] == 0) ImStrncpy(w.Name, "Control", IM_ARRAYSIZE(w.Name));
+      // Name: the control class (Push*Control stamps the Label). DataType: the PersistData type.
+      ctrl->GetControlDataTypeName(w.DataType, IM_ARRAYSIZE(w.DataType));
+      if (ctrl->Label[0])
+        ImStrncpy(w.Name, ctrl->Label, IM_ARRAYSIZE(w.Name));
+      else if (w.DataType[0])
+        ImStrncpy(w.Name, w.DataType, IM_ARRAYSIZE(w.Name));
+      else
+        ImStrncpy(w.Name, "Control", IM_ARRAYSIZE(w.Name));
       int n = ctrl->GetControlDependencyIDs(w.Deps, IM_ARRAYSIZE(w.Deps));
       if (n < 0) n = 0; if (n > IM_ARRAYSIZE(w.Deps)) n = IM_ARRAYSIZE(w.Deps);
       w.DepCount = n;
+      for (int d = 0; d < IM_ARRAYSIZE(w.DepSoft); d++)
+        w.DepSoft[d] = false;
+      ctrl->GetControlDependencyOptional(w.DepSoft, n);
       want.push_back(w);
     };
 
@@ -10829,7 +10938,7 @@ namespace ImGui
     // design/live phase twins). Custom live layers always mirror, named by their stamped type label.
     for (int i = 0; i < app->Layers.Size; i++)
     {
-      const ImGuiAppLayerType lt = (i <= (int)ImGuiAppLayerType_Window) ? (ImGuiAppLayerType)i : ImGuiAppLayerType_Custom;
+      const ImGuiAppLayerType lt = (i <= (int)ImGuiAppLayerType_Display) ? (ImGuiAppLayerType)i : ImGuiAppLayerType_Custom;
       if (AppLayerIsCore(lt))
       {
         bool has_design_twin = false;
@@ -10911,7 +11020,7 @@ namespace ImGui
       if (!present)
       {
         ImGuiAppNode* node = (want.Data[w].Kind == ImGuiAppNodeKind_Control)
-          ? AppGraphAddBuiltin(g, ImGuiAppNodeKind_Control, want.Data[w].Name, want.Data[w].Name)
+          ? AppGraphAddBuiltin(g, ImGuiAppNodeKind_Control, want.Data[w].Name, want.Data[w].DataType)
           : AppGraphAddNode(g, want.Data[w].Kind, want.Data[w].Name);
         node->IsLive = true;
         node->LiveKey = want.Data[w].Key;
@@ -10922,7 +11031,40 @@ namespace ImGui
 
         // New live nodes share the same composition-first placement as authored nodes:
         // layers/app | windows/sidebars | controls. Existing live nodes keep user-dragged positions.
-        AppGraphPlaceNode(g, node, nullptr);
+        // A hosted control clusters BESIDE its host window/sidebar node (right of it, siblings
+        // stacked) instead of the global stagger, so a window's group is born spatially together --
+        // frame, chip, and containment wiring all land in one place instead of a 480-unit column
+        // scattered far from the window.
+        const ImGuiAppNode* host = nullptr;
+        if (want.Data[w].Kind == ImGuiAppNodeKind_Control && want.Data[w].ParentKey != 0)
+          for (int i = 0; i < g->Nodes.Size && host == nullptr; i++)
+            if (g->Nodes.Data[i].IsLive && g->Nodes.Data[i].LiveKey == want.Data[w].ParentKey)
+              host = &g->Nodes.Data[i];
+        if (host != nullptr)
+        {
+          // Siblings chain below the previous member's REAL footprint (a fixed pitch under-shoots
+          // measured cluster nodes, cascading the open-placement march far from the window).
+          ImVec2 preferred(host->GridPos.x + 520.0f, host->GridPos.y);
+          const ImGuiAppNode* prev = nullptr;
+          for (int w2 = 0; w2 < w; w2++)
+          {
+            if (want.Data[w2].Kind != ImGuiAppNodeKind_Control || want.Data[w2].ParentKey != want.Data[w].ParentKey)
+              continue;
+            for (int i = 0; i < g->Nodes.Size; i++)
+              if (g->Nodes.Data[i].IsLive && g->Nodes.Data[i].LiveKey == want.Data[w2].Key)
+              {
+                prev = &g->Nodes.Data[i];
+                break;
+              }
+          }
+          if (prev != nullptr)
+            preferred.y = prev->GridPos.y + AppLayoutNodeSize(g, prev).y + 60.0f;
+          AppGraphPlaceNode(g, node, &preferred);
+        }
+        else
+        {
+          AppGraphPlaceNode(g, node, nullptr);
+        }
       }
     }
     // Build the per-key port map (after all adds, pointers are stable until next mutation; we only read here).
@@ -10936,8 +11078,11 @@ namespace ImGui
         for (int p = 0; p < node->Ports.Size; p++)
         {
           const ImGuiAppNodePort* port = &node->Ports.Data[p];
+          // InPort must be the "deps" pin: a control also carries persist/temp DataIn tie ports,
+          // and live nodes never submit those pins -- a wire anchored there is dropped unseen.
           if      (port->Kind == ImGuiAppPortKind_DataOut)  lm.OutPort = port->Id;
-          else if (port->Kind == ImGuiAppPortKind_DataIn)   lm.InPort = port->Id;
+          else if (port->Kind == ImGuiAppPortKind_DataIn && (lm.InPort == 0 || strcmp(port->Name, "deps") == 0))
+            lm.InPort = port->Id;
           else if (port->Kind == ImGuiAppPortKind_ChildOut) lm.ChildOutPort = port->Id;
           else if (port->Kind == ImGuiAppPortKind_ChildIn)  lm.ChildInPort = port->Id;
         }
@@ -10979,6 +11124,7 @@ namespace ImGui
         for (int m = 0; m < made.Size; m++) if (made.Data[m].Key == want.Data[w].Deps[d]) { producer_out = made.Data[m].OutPort; break; }
         if (producer_out == 0) continue;
         ImGuiAppNodeLink l; l.Id = AppGraphAllocId(g); l.StartAttr = producer_out; l.EndAttr = consumer_in; l.Kind = ImGuiAppEdgeKind_Data;
+        l.Soft = want.Data[w].DepSoft[d];
         g->Links.push_back(l);
       }
     }
@@ -11017,10 +11163,10 @@ namespace ImGui
   // [SECTION] Scene-hierarchy tree (ECS-style outliner)
   //-----------------------------------------------------------------------------
 
-  static int AppTreeWindowLayerId(const ImGuiAppGraph* g)
+  static int AppTreeDisplayLayerId(const ImGuiAppGraph* g)
   {
     for (int i = 0; i < g->Nodes.Size; i++)
-      if (g->Nodes.Data[i].Kind == ImGuiAppNodeKind_Layer && g->Nodes.Data[i].LayerType == ImGuiAppLayerType_Window)
+      if (g->Nodes.Data[i].Kind == ImGuiAppNodeKind_Layer && g->Nodes.Data[i].LayerType == ImGuiAppLayerType_Display)
         return g->Nodes.Data[i].Id;
     return -1;
   }
@@ -11036,14 +11182,14 @@ namespace ImGui
     return -1;
   }
 
-  // Outliner parent of a node (-1 = a root): windows nest under the Window layer; hosted controls under their
+  // Outliner parent of a node (-1 = a root): windows nest under the Display layer; hosted controls under their
   // window/sidebar; a control's exploded Persist/Temp structs under the control; fields under their struct.
   static int AppNodeTreeParent(const ImGuiAppGraph* g, const ImGuiAppNode* n)
   {
     switch (n->Kind)
     {
     case ImGuiAppNodeKind_Window:
-      return AppTreeWindowLayerId(g);
+      return AppTreeDisplayLayerId(g);
     case ImGuiAppNodeKind_Control:
     {
       const int p = AppGraphParentOf(g, n->Id);
