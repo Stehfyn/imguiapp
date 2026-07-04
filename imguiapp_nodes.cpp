@@ -1606,6 +1606,142 @@ namespace ImGui
     }
   }
 
+  static void AppGraphCollectSubtree(const ImGuiAppGraph* g, int root_id, ImVector<int>* out);   // fwd
+
+  // Layer drags push occluded window groups (control clusters) ahead of the dragged edge and
+  // keep them STUCK to it for the drag's whole life: positions derive from originals captured
+  // at drag start, so a drag that returns home returns the clusters home. The bottom layer node
+  // pushes clusters below it down; the top layer node pushes clusters above it up.
+  static void AppGraphDragStickClusters(ImGuiAppGraph* g, bool show_live, int dragged_id)
+  {
+    if (dragged_id == 0)
+    {
+      g->_DragStickAnchor = 0;
+      g->_DragStick.resize(0);
+      return;
+    }
+    const ImGuiAppNode* dn = AppGraphFindNodeConst(g, dragged_id);
+    if (dn == nullptr || dn->Kind != ImGuiAppNodeKind_Layer)
+      return;
+    // Only the column's TOP or BOTTOM row drives the stick.
+    bool is_top = true;
+    bool is_bot = true;
+    for (int i = 0; i < g->Nodes.Size; i++)
+    {
+      const ImGuiAppNode* n = &g->Nodes.Data[i];
+      if (n->Kind != ImGuiAppNodeKind_Layer || n->Id == dragged_id || (!show_live && n->IsLive))
+        continue;
+      if (n->GridPos.y < dn->GridPos.y)
+        is_top = false;
+      if (n->GridPos.y > dn->GridPos.y)
+        is_bot = false;
+    }
+    if (!is_top && !is_bot)
+      return;
+
+    // Originals captured once per drag.
+    if (g->_DragStickAnchor != dragged_id)
+    {
+      g->_DragStickAnchor = dragged_id;
+      g->_DragStick.resize(0);
+      for (int i = 0; i < g->Nodes.Size; i++)
+      {
+        const ImGuiAppNode* n = &g->Nodes.Data[i];
+        if ((n->Kind != ImGuiAppNodeKind_Window && n->Kind != ImGuiAppNodeKind_Sidebar) || (!show_live && n->IsLive))
+          continue;
+        ImVector<int> members;
+        AppGraphCollectSubtree(g, n->Id, &members);
+        for (int m = 0; m < members.Size; m++)
+        {
+          if (members.Data[m] == n->Id)
+            continue;
+          const ImGuiAppNode* mm = AppGraphFindNodeConst(g, members.Data[m]);
+          if (mm == nullptr)
+            continue;
+          ImGuiAppDragStick st;
+          st.NodeId = members.Data[m];
+          st.OrigY = mm->GridPos.y;
+          g->_DragStick.push_back(st);
+        }
+      }
+    }
+    auto orig_y = [&](int node_id, float fallback)
+    {
+      for (int si = 0; si < g->_DragStick.Size; si++)
+        if (g->_DragStick.Data[si].NodeId == node_id)
+          return g->_DragStick.Data[si].OrigY;
+      return fallback;
+    };
+
+    // The dragged edge (model): bottom of the bottom row's footprint or top of the top row,
+    // plus the column gap.
+    const float sgn = is_bot ? 1.0f : -1.0f;
+    const float gap = 12.0f;
+    const float edge = is_bot ? dn->GridPos.y + AppGraphLayerRowFootprint(g, show_live, dragged_id) + gap
+                              : dn->GridPos.y - gap;
+    const float row_x0 = dn->GridPos.x;
+    const float row_x1 = dn->GridPos.x + ImMax(g_app_layer_uniform_w, AppLayoutNodeSize(g, dn).x);
+
+    // Per cluster: x-overlap with the row, and the stick delta from ORIGINALS -- how far the
+    // edge stands past the cluster's original near face (never negative: not yet touching, or
+    // the drag has returned; either way the cluster sits at its original spot).
+    for (int i = 0; i < g->Nodes.Size; i++)
+    {
+      const ImGuiAppNode* n = &g->Nodes.Data[i];
+      if ((n->Kind != ImGuiAppNodeKind_Window && n->Kind != ImGuiAppNodeKind_Sidebar) || (!show_live && n->IsLive))
+        continue;
+      ImVector<int> members;
+      AppGraphCollectSubtree(g, n->Id, &members);
+      bool any = false;
+      float bb_x0 = 0.0f;
+      float bb_x1 = 0.0f;
+      float near_face = 0.0f;
+      for (int m = 0; m < members.Size; m++)
+      {
+        if (members.Data[m] == n->Id)
+          continue;
+        const ImGuiAppNode* mm = AppGraphFindNodeConst(g, members.Data[m]);
+        if (mm == nullptr)
+          continue;
+        const float oy = orig_y(members.Data[m], mm->GridPos.y);
+        const ImVec2 sz = AppLayoutNodeSize(g, mm);
+        const float face = is_bot ? oy : oy + sz.y;
+        if (!any)
+        {
+          bb_x0 = mm->GridPos.x;
+          bb_x1 = mm->GridPos.x + sz.x;
+          near_face = face;
+          any = true;
+        }
+        else
+        {
+          bb_x0 = ImMin(bb_x0, mm->GridPos.x);
+          bb_x1 = ImMax(bb_x1, mm->GridPos.x + sz.x);
+          near_face = is_bot ? ImMin(near_face, face) : ImMax(near_face, face);
+        }
+      }
+      if (!any || bb_x1 < row_x0 || bb_x0 > row_x1)
+        continue;
+      const float delta = sgn * (edge - near_face) > 0.0f ? edge - near_face : 0.0f;
+      for (int m = 0; m < members.Size; m++)
+      {
+        if (members.Data[m] == n->Id)
+          continue;
+        ImGuiAppNode* mm = AppGraphFindNodeById(g, members.Data[m]);
+        if (mm == nullptr)
+          continue;
+        const float ny = orig_y(members.Data[m], mm->GridPos.y) + delta;
+        if (ImAbs(ny - mm->GridPos.y) > 0.01f)
+        {
+          mm->GridPos.y = ny;
+          mm->HasGridPos = true;
+          AppCanvasSetNodePos(mm->Id, mm->GridPos);
+        }
+      }
+    }
+  }
+
+
   static void AppGraphConstrainLayerColumn(ImGuiAppGraph* g, bool show_live, int anchor_node_id, const ImVec2* anchor_pos)
   {
     ImVector<int> ids;
@@ -3321,6 +3457,8 @@ namespace ImGui
   {
     bool   Valid = false;
     float  NodeRight = 0.0f;    // right edge shared by the layer nodes
+    float  SilRight = 0.0f;     // the SILHOUETTE's right edge: nodes, seated members, AND the
+                                // section boundary -- the outermost thing a wire must clear
     ImVec2 BoxMin = ImVec2(0.0f, 0.0f);   // the layer GROUP's boundary (the App Layers box)
     ImVec2 BoxMax = ImVec2(0.0f, 0.0f);
     int    RowCount = 0;
@@ -3440,6 +3578,9 @@ namespace ImGui
     {
       out_geom->Valid = true;
       out_geom->NodeRight = node_right;
+      // Seated members can outgrow the layer nodes; the section boundary wraps them at +0.25em.
+      // The silhouette edge is the outermost of all of it -- what a wire must actually clear.
+      out_geom->SilRight = ImMax(node_right, sect_right > -FLT_MAX ? sect_right + em * 0.25f : node_right);
       out_geom->BoxMin = bb_min;
       out_geom->BoxMax = bb_max;
       out_geom->RowCount = ImMin(rows.Size, (int)IM_ARRAYSIZE(out_geom->RowTop));
@@ -5180,7 +5321,10 @@ namespace ImGui
     ImGui::CanvasBegin(cv, "##app_canvas", ImVec2(0.0f, 0.0f));
 
     // In-canvas decorations size against em like node content, so they render under the zoomed font
-    // (the engine only pushes it per node).
+    // (the engine only pushes it per node). The UNZOOMED metrics are the zoom-invariant truth for
+    // model-space margins -- the zoomed font clamps at extreme zooms and must never define bounds.
+    const float em_base = ImGui::GetFontSize();
+    const float fh_base = ImGui::GetFrameHeight();
     ImGui::PushFont(nullptr, ImGui::GetFontSize() * AppCanvasZoom());
 
     // Pipeline box, drawn on the engine's background channel between the grid and the nodes: grid under
@@ -5200,6 +5344,9 @@ namespace ImGui
     // channel as the pipeline box -- the grid can never cut through a frame or its caption chip, and
     // nodes render on top of their frame.
     // Passes are depth-ordered: windows/sidebars behind, control data clusters, then structs in front.
+    // Sole producer of _GroupFrames (model units); consumers read _GroupFramesPrev.
+    g->_GroupFramesPrev.swap(g->_GroupFrames);
+    g->_GroupFrames.resize(0);
     if (s_ov_frames)
     {
       auto group_box = [&](int owner_id, ImU32 kind_col, int depth, bool include_owner)
@@ -5251,6 +5398,17 @@ namespace ImGui
           const ImVec2 chip_mn(mn.x + pad, mn.y);
           const ImVec2 chip_mx(chip_mn.x + tri_w + ts.x + em * 0.5f, mn.y + title_h);
 
+          // Frame rect publication, model units, title band included.
+          const ImVec2 fr_mn_m = ImGui::CanvasFromScreen(cv, mn);
+          const ImVec2 fr_mx_m = ImGui::CanvasFromScreen(cv, mx);
+          {
+            ImGuiAppGroupFrame gf;
+            gf.OwnerId = owner_id;
+            gf.MinM = fr_mn_m;
+            gf.MaxM = fr_mx_m;
+            g->_GroupFrames.push_back(gf);
+          }
+
           // The chip is both a fold toggle and a move handle: a click (no drag) collapses/expands the group; a
           // drag moves the group together. One gesture at a time, tracked across frames.
           // A section-seated owner's position is OWNED by the window-section packer (one producer per
@@ -5260,44 +5418,124 @@ namespace ImGui
           const bool owner_seated = at_root
               && (owner->Kind == ImGuiAppNodeKind_Window || owner->Kind == ImGuiAppNodeKind_Sidebar)
               && AppGraphLayerOfType(g, ImGuiAppLayerType_Window) != nullptr;
-          static bool s_group_moved = false;
           ImGui::SetCursorScreenPos(chip_mn);
           ImGui::PushID(owner_id);
           ImGui::InvisibleButton("##grouphandle", chip_mx - chip_mn);
           const bool hov = ImGui::IsItemHovered();
           const bool act = ImGui::IsItemActive();
           if (ImGui::IsItemActivated())
-            s_group_moved = false;
-          if (act && ImGui::IsMouseDragging(ImGuiMouseButton_Left) && !(owner_seated && owner->GroupCollapsed))
           {
-            const ImVec2 d = ImGui::GetIO().MouseDelta;
-            if (d.x != 0.0f || d.y != 0.0f)
+            g->_GroupDragMoved = false;
+            g->_GroupDragMouse0 = ImGui::CanvasFromScreen(cv, ImGui::GetIO().MousePos);   // MODEL-space origin: pan/zoom mid-drag cannot corrupt the displacement
+            g->_GroupDragFrame0 = ImVec4(fr_mn_m.x, fr_mn_m.y, fr_mx_m.x, fr_mx_m.y);     // own frame at drag start, model
+            g->_GroupDragOrig.resize(0);
+            for (int m = 0; m < members.Size; m++)
             {
-              s_group_moved = true;
-              for (int m = 0; m < members.Size; m++)
+              if (owner_seated && members.Data[m] == owner_id)
+                continue;
+              const ImGuiAppNode* mm = AppGraphFindNodeConst(g, members.Data[m]);
+              if (mm == nullptr || (!show_live && mm->IsLive))
+                continue;
+              g->_GroupDragOrig.push_back(ImVec4((float)members.Data[m], mm->GridPos.x, mm->GridPos.y, 0.0f));
+            }
+          }
+          if (act && ImGui::IsMouseDragging(ImGuiMouseButton_Left) && !(owner_seated && owner->GroupCollapsed) && g->_GroupDragOrig.Size > 0)
+          {
+            // Placement is ABSOLUTE from the drag origin, clamped per axis against the other
+            // window groups' FRAMES (title band included) and the layer group's box -- the group
+            // slides to contact and keeps tracking the mouse the moment it retreats; a filtered
+            // per-frame delta would desync them for the rest of the drag.
+            ImVec2 disp = ImGui::CanvasFromScreen(cv, ImGui::GetIO().MousePos) - g->_GroupDragMouse0;
+
+            // The moving FRAME at its drag-start position.
+            const float mv_x0 = g->_GroupDragFrame0.x;
+            const float mv_y0 = g->_GroupDragFrame0.y;
+            const float mv_x1 = g->_GroupDragFrame0.z;
+            const float mv_y1 = g->_GroupDragFrame0.w;
+
+            ImVector<ImVec4> ob;
+            ob.reserve(g->_GroupFramesPrev.Size + 1);
+            if (col_geom.Valid)
+            {
+              const ImVec2 bmn = ImGui::CanvasFromScreen(cv, col_geom.BoxMin);
+              const ImVec2 bmx = ImGui::CanvasFromScreen(cv, col_geom.BoxMax);
+              ob.push_back(ImVec4(bmn.x, bmn.y, bmx.x, bmx.y));
+            }
+            for (int i2 = 0; i2 < g->_GroupFramesPrev.Size; i2++)
+            {
+              const ImGuiAppGroupFrame& gf = g->_GroupFramesPrev.Data[i2];
+              if (gf.OwnerId == owner_id)
+                continue;
+              ob.push_back(ImVec4(gf.MinM.x, gf.MinM.y, gf.MaxM.x, gf.MaxM.y));
+            }
+            auto overlap = [](float a0, float a1, float b0, float b1) { return a0 < b1 && a1 > b0; };
+            bool start_clear = true;
+            for (int oi = 0; oi < ob.Size; oi++)
+              if (overlap(mv_x0, mv_x1, ob.Data[oi].x, ob.Data[oi].z) && overlap(mv_y0, mv_y1, ob.Data[oi].y, ob.Data[oi].w))
+                start_clear = false;
+            if (start_clear && mv_x0 <= mv_x1)
+            {
+              // Slide-to-contact, both axis orders; the order that lands closest to the mouse
+              // wins. A single fixed order clamps the first axis against the drag-START band of
+              // the other, which can pin the group to an obstacle edge for the whole drag even
+              // after it has cleared the obstacle on the other axis.
+              auto slide_x = [&](float dx, float y0, float y1) -> float
               {
-                if (owner_seated && members.Data[m] == owner_id)
-                  continue;
-                ImGuiAppNode* mm = AppGraphFindNode(g, members.Data[m]);
-                if (mm == nullptr || (!show_live && mm->IsLive))
-                  continue;
-                if (AppNodeHiddenByCollapse(g, members.Data[m]) || !AppEditorNodeWasSubmitted(members.Data[m]))
-                {
-                  mm->GridPos += d / AppCanvasScale();   // not on the canvas: move its stored (model) pos only
-                  mm->HasGridPos = true;
-                  mm->_NeedsPlace = true;  // re-seat it at this pos when it next submits
-                }
-                else
-                {
-                  // Drag delta is pixels; the stored GridPos and the engine's positions are model units.
-                  const ImVec2 np = AppCanvasNodePos(members.Data[m]) + d / AppCanvasScale();
-                  AppCanvasSetNodePos(members.Data[m], np);
-                  mm->GridPos = np;
-                }
+                for (int oi = 0; oi < ob.Size; oi++)
+                  if (overlap(y0, y1, ob.Data[oi].y, ob.Data[oi].w))
+                  {
+                    if (dx > 0.0f && mv_x1 <= ob.Data[oi].x && mv_x1 + dx > ob.Data[oi].x)
+                      dx = ob.Data[oi].x - mv_x1;
+                    if (dx < 0.0f && mv_x0 >= ob.Data[oi].z && mv_x0 + dx < ob.Data[oi].z)
+                      dx = ob.Data[oi].z - mv_x0;
+                  }
+                return dx;
+              };
+              auto slide_y = [&](float dy, float x0, float x1) -> float
+              {
+                for (int oi = 0; oi < ob.Size; oi++)
+                  if (overlap(x0, x1, ob.Data[oi].x, ob.Data[oi].z))
+                  {
+                    if (dy > 0.0f && mv_y1 <= ob.Data[oi].y && mv_y1 + dy > ob.Data[oi].y)
+                      dy = ob.Data[oi].y - mv_y1;
+                    if (dy < 0.0f && mv_y0 >= ob.Data[oi].w && mv_y0 + dy < ob.Data[oi].w)
+                      dy = ob.Data[oi].w - mv_y0;
+                  }
+                return dy;
+              };
+              ImVec2 a;
+              a.x = slide_x(disp.x, mv_y0, mv_y1);
+              a.y = slide_y(disp.y, mv_x0 + a.x, mv_x1 + a.x);
+              ImVec2 b;
+              b.y = slide_y(disp.y, mv_x0, mv_x1);
+              b.x = slide_x(disp.x, mv_y0 + b.y, mv_y1 + b.y);
+              const float ea = (a.x - disp.x) * (a.x - disp.x) + (a.y - disp.y) * (a.y - disp.y);
+              const float eb = (b.x - disp.x) * (b.x - disp.x) + (b.y - disp.y) * (b.y - disp.y);
+              disp = ea <= eb ? a : b;
+            }
+            if (disp.x != 0.0f || disp.y != 0.0f)
+              g->_GroupDragMoved = true;
+            for (int m = 0; m < g->_GroupDragOrig.Size; m++)
+            {
+              const int mid = (int)g->_GroupDragOrig.Data[m].x;
+              ImGuiAppNode* mm = AppGraphFindNode(g, mid);
+              if (mm == nullptr)
+                continue;
+              const ImVec2 np(g->_GroupDragOrig.Data[m].y + disp.x, g->_GroupDragOrig.Data[m].z + disp.y);
+              if (AppNodeHiddenByCollapse(g, mid) || !AppEditorNodeWasSubmitted(mid))
+              {
+                mm->GridPos = np;   // not on the canvas: move its stored (model) pos only
+                mm->HasGridPos = true;
+                mm->_NeedsPlace = true;  // re-seat it at this pos when it next submits
+              }
+              else
+              {
+                AppCanvasSetNodePos(mid, np);
+                mm->GridPos = np;
               }
             }
           }
-          if (ImGui::IsItemDeactivated() && !s_group_moved)
+          if (ImGui::IsItemDeactivated() && !g->_GroupDragMoved)
           {
             if (ImGuiAppNode* o = AppGraphFindNode(g, owner_id))
             {
@@ -5354,140 +5592,270 @@ namespace ImGui
             //     through the side the pin faces -- never over or under the destination group's
             //     boundaries, nothing to overshoot
             //   * constant stroke width: one path, deduped joints, one stroke
-            const float m_hug = em * 0.6f;
-            const float r_hug = em * 1.1f;
-            const float dx = end.x - start.x;
-            const float dy = end.y - start.y;
-            const float sgn = dy > 0.0f ? 1.0f : -1.0f;
+            // Inputs in MODEL units. The route is computed ONCE from these and cached on the
+            // graph; the camera only transforms the cached primitives -- zooming in or out can
+            // never re-route a settled link (phase-coherence rule 1). A route is re-derived only
+            // when its model inputs move (endpoints, column geometry, destination frame).
+            const float zc = AppCanvasScale();
+            // Margins are MODEL quantities derived from the UNZOOMED font: exact at every zoom,
+            // no clamp drift, no invisible geometry (scale = zoom * font-ratio).
+            const float em_m = em_base * ImGui::CanvasGetZoom(cv) / zc;
+            const float m_hug = em_m * 0.6f;
+            const float r_hug = em_m * 1.1f;
+            const ImVec2 start_m = ImGui::CanvasFromScreen(cv, start);
+            const ImVec2 end_m = ImGui::CanvasFromScreen(cv, end);
+            const float mn_left_m = ImGui::CanvasFromScreen(cv, mn).x;
+            const float dxm = end_m.x - start_m.x;
+            const float dym = end_m.y - start_m.y;
+            const float sgn = dym > 0.0f ? 1.0f : -1.0f;
 
-            // Facing edges in the travel direction, from the published geometry: section tops
-            // going down, node bottoms going up (the wire's own node blocks its own ascent);
-            // far_y = the node group's far boundary, sections included.
             bool has_q = false;
             float q_y = 0.0f;
-            float far_y = start.y;
-            float x_h = start.x + em;
+            float box_l = start_m.x;
+            float box_r = start_m.x;
+            float far_y = start_m.y;
+            float x_h = start_m.x + em_m;
             if (col_geom.Valid)
             {
-              // The vertical hugs the layer GROUP's boundary; the far wrap rounds the GROUP's
-              // corner ("hug the layer group boundary, not the node, on the 2nd corner").
-              x_h = col_geom.BoxMax.x + m_hug;
-              far_y = sgn > 0.0f ? col_geom.BoxMax.y : col_geom.BoxMin.y;
+              box_l = ImGui::CanvasFromScreen(cv, col_geom.BoxMin).x;
+              box_r = ImGui::CanvasFromScreen(cv, col_geom.BoxMax).x;
+              // The VERTICAL hugs the layer NODES' edge ("hug the layer node corners"); only the
+              // far wrap -- the 2nd corner -- keys off the group box's boundary.
+              x_h = ImGui::CanvasFromScreen(cv, ImVec2(col_geom.SilRight, 0.0f)).x + m_hug;
+              far_y = ImGui::CanvasFromScreen(cv, sgn > 0.0f ? col_geom.BoxMax : col_geom.BoxMin).y;
               for (int ri = 0; ri < col_geom.RowCount; ri++)
               {
-                const float lead = sgn > 0.0f ? col_geom.RowTop[ri] : col_geom.RowBot[ri];
-                if (sgn * (lead - start.y) > 1.0f && (!has_q || sgn * (q_y - lead) > 0.0f))
+                const float lead = ImGui::CanvasFromScreen(cv, ImVec2(0.0f, sgn > 0.0f ? col_geom.RowTop[ri] : col_geom.RowBot[ri])).y;
+                if (sgn * (lead - start_m.y) > 0.25f && (!has_q || sgn * (q_y - lead) > 0.0f))
                 {
                   q_y = lead;
                   has_q = true;
                 }
               }
             }
-            const bool dest_past_q = has_q && sgn * (end.y - q_y) > 0.0f;
-            const bool dest_past_far = col_geom.Valid && sgn * (end.y - far_y) > 0.0f;
+            const float m_far = m_hug;
+            const bool dest_past_q = has_q && sgn * (end_m.y - q_y) > 0.0f;
+            const bool dest_past_far = col_geom.Valid && sgn * (end_m.y - far_y) > 0.0f;
+            const bool dest_left = end_m.x < start_m.x;
+            // A right-side chip close to the column pulls the hug line inward (never inside the
+            // base margin): the wire must reach the chip from ITS left, and a hug line past the
+            // chip would fold the route into a hairpin.
+            if (!dest_left && col_geom.Valid && end_m.x - em_m < x_h)
+              x_h = ImMax(ImGui::CanvasFromScreen(cv, ImVec2(col_geom.SilRight, 0.0f)).x + m_hug, end_m.x - em_m);
 
-            bool drawn = false;
-            // Free sweep: nothing of the column stands between pin and chip.
-            if (!dest_past_q && dx > em * 2.0f && ImAbs(dy) > 2.0f)
+            // The wire's own row: its section bottom is the DOWNWARD exit (through the gap) and
+            // a routing input in its own right.
+            float sec_bot_m = start_m.y;
+            bool own_row = false;
+            float node_r_m = x_h;
+            if (col_geom.Valid)
             {
-              const float theta = 2.0f * ImAtan2(ImAbs(dy), dx);
-              const float r_sum = dx / ImSin(theta);   // (r1 + r2) sin(theta) == dx, by construction
-              const float r1 = r_sum * 0.5f;
-              const float r2 = r_sum - r1;
-              dl->PathClear();
-              if (sgn > 0.0f)
+              node_r_m = ImGui::CanvasFromScreen(cv, ImVec2(col_geom.NodeRight, 0.0f)).x;
+              for (int ri = 0; ri < col_geom.RowCount; ri++)
               {
-                dl->PathArcTo(ImVec2(start.x, start.y + r1), r1, -IM_PI * 0.5f, -IM_PI * 0.5f + theta, 0);
-                dl->PathArcTo(ImVec2(end.x, end.y - r2), r2, IM_PI * 0.5f + theta, IM_PI * 0.5f, 0);
-              }
-              else
-              {
-                dl->PathArcTo(ImVec2(start.x, start.y - r1), r1, IM_PI * 0.5f, IM_PI * 0.5f - theta, 0);
-                dl->PathArcTo(ImVec2(end.x, end.y + r2), r2, -IM_PI * 0.5f - theta, -IM_PI * 0.5f, 0);
-              }
-              AppWirePathStroke(dl, wire_col, th);
-              drawn = true;
-            }
-            // Hug route.
-            if (!drawn && dest_past_q && x_h > start.x + em * 0.5f)
-            {
-              // Lead: one curve from the pin through home ground, arriving on the hug line
-              // already vertical, tight past the first layer node corner.
-              const float c1_y = q_y + sgn * m_hug;
-              dl->PathClear();
-              dl->PathLineTo(start);
-              dl->PathBezierCubicCurveTo(ImVec2(start.x + (x_h - start.x) * 0.55f, start.y),
-                                         ImVec2(x_h, c1_y - sgn * ImMin(em * 1.6f, ImAbs(c1_y - start.y) * 0.5f)),
-                                         ImVec2(x_h, c1_y), 0);
-              if (end.x >= x_h + em * 1.5f)
-              {
-                // Beside the column: ride the node group's edge to chip level, one loose
-                // corner, enter the pin through its facing side at pin level.
-                const float r_in = ImMax(2.0f, ImMin(ImMin(end.x - x_h, em * 4.0f), ImAbs(end.y - c1_y) * 0.8f));
-                dl->PathLineTo(ImVec2(x_h, end.y - sgn * r_in));
-                dl->PathArcTo(ImVec2(x_h + r_in, end.y - sgn * r_in), r_in, IM_PI, IM_PI - sgn * IM_PI * 0.5f, 0);
-                dl->PathLineTo(end);
-                AppWirePathStroke(dl, wire_col, th);
-                drawn = true;
-              }
-              else if (dest_past_far)
-              {
-                const float y_b = far_y + sgn * m_hug;
-                const float k = 0.5523f;                            // circular-arc cubic constant
-                if (end.x < x_h - r_hug - 1.0f)
+                const float rt_m = ImGui::CanvasFromScreen(cv, ImVec2(0.0f, col_geom.RowTop[ri])).y;
+                const float rb_m = ImGui::CanvasFromScreen(cv, ImVec2(0.0f, col_geom.RowSecBot[ri])).y;
+                if (start_m.y >= rt_m && start_m.y <= rb_m)
                 {
-                  // 180 degrees: straight along the group's edge, wrap the group's far corner,
-                  // hug its far boundary, then two symmetric loose arcs into the pin.
-                  dl->PathLineTo(ImVec2(x_h, y_b - sgn * r_hug));
-                  dl->PathArcTo(ImVec2(x_h - r_hug, y_b - sgn * r_hug), r_hug, 0.0f, sgn * IM_PI * 0.5f, 0);
-                  const float drop = ImAbs(end.y - y_b);
-                  const float ry = ImMax(em, drop * 0.5f);
-                  // Lateral radius scales with how far the chip sits from the boundary line --
-                  // near-boundary chips get a calm shallow slide, deep 180s keep the wide arcs
-                  // -- while never cutting into the destination group.
-                  const float lateral = (x_h - r_hug) - end.x;
-                  const float rx = ImMax(ImMin(ry, ImMax(em * 1.5f, lateral * 0.8f)), end.x - mn.x + m_hug);
-                  dl->PathLineTo(ImVec2(end.x, y_b));               // hug the far boundary to the S
-                  const float my = (y_b + end.y) * 0.5f;
-                  dl->PathBezierCubicCurveTo(ImVec2(end.x - rx * k, y_b), ImVec2(end.x - rx, my - sgn * ry * k), ImVec2(end.x - rx, my), 0);
-                  dl->PathBezierCubicCurveTo(ImVec2(end.x - rx, my + sgn * ry * k), ImVec2(end.x - rx * k, end.y), end, 0);
+                  sec_bot_m = rb_m;
+                  own_row = true;
+                  break;
                 }
-                else
+              }
+            }
+
+            // Cache lookup + staleness (model-unit epsilon; the key carries every routing input).
+            ImGuiAppTrunkRoute* rt = nullptr;
+            for (int ti = 0; ti < g->_TrunkRoutes.Size; ti++)
+              if (g->_TrunkRoutes.Data[ti].OwnerId == owner_id)
+              {
+                rt = &g->_TrunkRoutes.Data[ti];
+                break;
+              }
+            if (rt == nullptr)
+            {
+              g->_TrunkRoutes.push_back(ImGuiAppTrunkRoute());
+              rt = &g->_TrunkRoutes.back();
+              rt->OwnerId = owner_id;
+              rt->KeyA = ImVec4(FLT_MAX, 0.0f, 0.0f, 0.0f);
+            }
+            const ImVec4 keyA(x_h, has_q ? q_y : -FLT_MAX * 0.5f, far_y, box_l);
+            const ImVec4 keyB(mn_left_m, sgn, sec_bot_m, em_m);   // em_m: the box pads scale with the zoomed font -- zoom must re-derive against current bounds
+            const float eps = 0.5f;
+            const bool stale = ImAbs(rt->StartM.x - start_m.x) > eps || ImAbs(rt->StartM.y - start_m.y) > eps
+                            || ImAbs(rt->EndM.x - end_m.x) > eps || ImAbs(rt->EndM.y - end_m.y) > eps
+                            || ImAbs(rt->KeyA.x - keyA.x) > eps || ImAbs(rt->KeyA.y - keyA.y) > eps
+                            || ImAbs(rt->KeyA.z - keyA.z) > eps || ImAbs(rt->KeyA.w - keyA.w) > eps
+                            || ImAbs(rt->KeyB.x - keyB.x) > eps || ImAbs(rt->KeyB.y - keyB.y) > eps
+                            || ImAbs(rt->KeyB.z - keyB.z) > eps || ImAbs(rt->KeyB.w - keyB.w) > eps
+                            || rt->Segs.Size == 0;
+            if (stale)
+            {
+              rt->StartM = start_m;
+              rt->EndM = end_m;
+              rt->KeyA = keyA;
+              rt->KeyB = keyB;
+              rt->Segs.resize(0);
+              auto seg_line = [&](ImVec2 pnt)
+              {
+                ImGuiAppTrunkSeg sg; sg.Kind = 0; sg.P0 = pnt; rt->Segs.push_back(sg);
+              };
+              auto seg_arc = [&](ImVec2 c, float r, float a0, float a1)
+              {
+                ImGuiAppTrunkSeg sg; sg.Kind = 1; sg.P0 = c; sg.R = r; sg.A0 = a0; sg.A1 = a1; rt->Segs.push_back(sg);
+              };
+              auto seg_cubic = [&](ImVec2 c1, ImVec2 c2, ImVec2 pnt)
+              {
+                ImGuiAppTrunkSeg sg; sg.Kind = 2; sg.P0 = c1; sg.P1 = c2; sg.P2 = pnt; rt->Segs.push_back(sg);
+              };
+              const float k = 0.5523f;   // circular-arc cubic constant
+
+              bool routed = false;
+              // EVERY trunk takes the hug route: out at pin level, onto the hug line, ride, and
+              // end per the destination. There is no free-sweep shortcut -- a sweep from an
+              // in-section pin inevitably pierces the section's side wall mid-descent, the bug
+              // this router exists to kill. The lead is emitted only when one of the endings
+              // below can actually complete the route -- an orphaned lead would force the
+              // fallback to restart from the pin, folding the wire into a hairpin.
+              const bool can_beside = !dest_left && end_m.x >= x_h + em_m * 0.25f;
+              if (x_h > start_m.x + em_m * 0.5f && (can_beside || dest_past_far || dest_left))
+              {
+                // The lead is a PIN-LEVEL exit and nothing more: DEAD FLAT to the wall -- the
+                // crossing is exactly horizontal, at pin level -- then a tight corner wrapping
+                // the section boundary's corner from OUTSIDE. Every bend lives outside the
+                // section; all vertical travel rides the hug line.
+                float c1_y = start_m.y + sgn * em_m * 1.2f;
+                if (has_q && sgn * (c1_y - (q_y - sgn * m_hug)) > 0.0f)
+                  c1_y = q_y - sgn * m_hug;
+                if (sgn * (c1_y - (end_m.y - sgn * em_m)) > 0.0f)
+                  c1_y = end_m.y - sgn * em_m;
+                const float r_b = ImMax(0.5f, ImMin(r_hug, sgn * (c1_y - start_m.y)));
+                c1_y = start_m.y + sgn * r_b;
+                seg_line(start_m);
+                seg_line(ImVec2(x_h - r_b, start_m.y));
+                seg_arc(ImVec2(x_h - r_b, start_m.y + sgn * r_b), r_b, sgn > 0.0f ? -IM_PI * 0.5f : IM_PI * 0.5f, 0.0f);
+                if (can_beside)
                 {
-                  // Edge case: the chip hangs just past the group at (or right of) the hug line
-                  // -- no room to wrap toward it. Pass the boundary ON the line, then a gentle
-                  // S in the open ground beyond it, and enter the pin horizontally.
-                  const float avail = ImAbs(end.y - y_b);
-                  const float r_f = ImMax(2.0f, ImMin(em * 2.0f, avail * 0.5f));
-                  const float x_e = end.x - r_f;
-                  const float shift = x_e - x_h;
-                  const float ry_s = ImMax(2.0f, ImMin(em * 1.2f, avail * 0.25f));
-                  if (ImAbs(shift) > 1.0f)
+                  // Beside the column: ride the group's edge to chip level, one loose corner,
+                  // enter the pin through its facing side at pin level.
+                  const float r_in = ImMax(0.5f, ImMin(ImMin(end_m.x - x_h, em_m * 4.0f), ImAbs(end_m.y - c1_y) * 0.8f));
+                  seg_line(ImVec2(x_h, end_m.y - sgn * r_in));
+                  seg_arc(ImVec2(x_h + r_in, end_m.y - sgn * r_in), r_in, IM_PI, IM_PI - sgn * IM_PI * 0.5f);
+                  seg_line(end_m);
+                  routed = true;
+                }
+                else if (dest_past_far)
+                {
+                  const float y_b = far_y + sgn * m_far;
+                  if (end_m.x < x_h - r_hug - 0.5f)
                   {
-                    const float y0 = end.y - sgn * (r_f + 2.0f * ry_s);
-                    dl->PathLineTo(ImVec2(x_h, y0));
-                    dl->PathBezierCubicCurveTo(ImVec2(x_h, y0 + sgn * ry_s * 1.1f),
-                                               ImVec2(x_e, y0 + sgn * ry_s * 0.9f),
-                                               ImVec2(x_e, y0 + sgn * 2.0f * ry_s), 0);
+                    // 180 degrees: wrap the group's far corner, hug its far boundary (and past
+                    // its far-left corner for far-left chips), then two symmetric loose arcs
+                    // into the pin. A chip sitting ON the hug leg's line (no drop left) is
+                    // entered straight -- folding the S into zero height loops at the pin.
+                    seg_line(ImVec2(x_h, y_b - sgn * r_hug));
+                    seg_arc(ImVec2(x_h - r_hug, y_b - sgn * r_hug), r_hug, 0.0f, sgn * IM_PI * 0.5f);
+                    const float drop = ImAbs(end_m.y - y_b);
+                    if (drop < em_m * 1.5f)
+                    {
+                      seg_line(end_m);
+                    }
+                    else
+                    {
+                      const float ry = ImMax(em_m, drop * 0.5f);
+                      const float lateral = (x_h - r_hug) - end_m.x;
+                      const float rx = ImMax(ImMin(ry, ImMax(em_m * 1.5f, lateral * 0.8f)), end_m.x - mn_left_m + m_hug);
+                      seg_line(ImVec2(end_m.x, y_b));
+                      const float my = (y_b + end_m.y) * 0.5f;
+                      seg_cubic(ImVec2(end_m.x - rx * k, y_b), ImVec2(end_m.x - rx, my - sgn * ry * k), ImVec2(end_m.x - rx, my));
+                      seg_cubic(ImVec2(end_m.x - rx, my + sgn * ry * k), ImVec2(end_m.x - rx * k, end_m.y), end_m);
+                    }
                   }
                   else
                   {
-                    dl->PathLineTo(ImVec2(x_e, end.y - sgn * r_f));
+                    // Chip hangs just past the group at (or right of) the hug line: pass the
+                    // boundary ON the line, gentle S beyond it, horizontal entry.
+                    const float avail = ImAbs(end_m.y - y_b);
+                    const float r_f = ImMax(0.5f, ImMin(em_m * 2.0f, avail * 0.5f));
+                    const float x_e = end_m.x - r_f;
+                    const float shift = x_e - x_h;
+                    const float ry_s = ImMax(0.5f, ImMin(em_m * 1.2f, avail * 0.25f));
+                    if (ImAbs(shift) > 0.5f)
+                    {
+                      const float y0 = end_m.y - sgn * (r_f + 2.0f * ry_s);
+                      seg_line(ImVec2(x_h, y0));
+                      seg_cubic(ImVec2(x_h, y0 + sgn * ry_s * 1.1f), ImVec2(x_e, y0 + sgn * ry_s * 0.9f), ImVec2(x_e, y0 + sgn * 2.0f * ry_s));
+                    }
+                    else
+                    {
+                      seg_line(ImVec2(x_e, end_m.y - sgn * r_f));
+                    }
+                    seg_arc(ImVec2(end_m.x, end_m.y - sgn * r_f), r_f, IM_PI, IM_PI - sgn * IM_PI * 0.5f);
+                    seg_line(end_m);
                   }
-                  dl->PathArcTo(ImVec2(end.x, end.y - sgn * r_f), r_f, IM_PI, IM_PI - sgn * IM_PI * 0.5f, 0);
-                  dl->PathLineTo(end);
+                  routed = true;
                 }
-                AppWirePathStroke(dl, wire_col, th);
-                drawn = true;
+                else if (dest_left)
+                {
+                  // Destination level with the group on its LEFT: around the far side. Wrap the
+                  // far corner (2nd), hug the far boundary west, wrap the far-LEFT corner (3rd,
+                  // same behavior as the 2nd), ride the LEFT edge to chip level, and turn in.
+                  const float y_b = far_y + sgn * m_far;
+                  const float x_l = box_l - m_hug;
+                  seg_line(ImVec2(x_h, y_b - sgn * r_hug));
+                  seg_arc(ImVec2(x_h - r_hug, y_b - sgn * r_hug), r_hug, 0.0f, sgn * IM_PI * 0.5f);
+                  seg_line(ImVec2(x_l + r_hug, y_b));
+                  seg_arc(ImVec2(x_l + r_hug, y_b - sgn * r_hug), r_hug, sgn * IM_PI * 0.5f, sgn * IM_PI);   // sign-matched end angle: the wrap takes the SHORT quarter, never the 270-degree pigtail
+                  const float r_f = ImMax(0.5f, ImMin(em_m * 2.0f, ImAbs((y_b - sgn * r_hug) - end_m.y) * 0.5f));
+                  seg_line(ImVec2(x_l, end_m.y + sgn * r_f));
+                  seg_arc(ImVec2(x_l - r_f, end_m.y + sgn * r_f), r_f, 0.0f, -sgn * IM_PI * 0.5f);
+                  seg_line(end_m);
+                  routed = true;
+                }
+              }
+              // Last resort stays LEGAL: flat exit, down the hug line to chip level, and in --
+              // from the left when there is room, from the right when the chip overlaps the hug
+              // line. NEVER a diagonal through the column.
+              if (!routed)
+              {
+                const float r_f = ImMax(0.5f, ImMin(em_m * 1.5f, ImAbs(end_m.y - start_m.y) * 0.4f));
+                seg_line(start_m);
+                if (x_h > start_m.x + 1.0f)
+                {
+                  seg_line(ImVec2(x_h - r_f, start_m.y));
+                  seg_arc(ImVec2(x_h - r_f, start_m.y + sgn * r_f), r_f, sgn > 0.0f ? -IM_PI * 0.5f : IM_PI * 0.5f, 0.0f);
+                }
+                if (end_m.x > x_h + 0.5f)
+                {
+                  const float r_i = ImMax(0.5f, ImMin(end_m.x - x_h, em_m * 2.0f));
+                  seg_line(ImVec2(x_h, end_m.y - sgn * r_i));
+                  seg_arc(ImVec2(x_h + r_i, end_m.y - sgn * r_i), r_i, IM_PI, IM_PI - sgn * IM_PI * 0.5f);
+                }
+                else
+                {
+                  const float r_i = em_m;
+                  seg_line(ImVec2(x_h, end_m.y - sgn * r_i));
+                  seg_arc(ImVec2(x_h - r_i, end_m.y - sgn * r_i), r_i, 0.0f, sgn * IM_PI * 0.5f);
+                }
+                seg_line(end_m);
               }
             }
-            // Degenerate span: a small S through passable ground.
-            if (!drawn)
+
+            // Render the cached model route with THIS frame's camera.
+            dl->PathClear();
+            if (rt->Segs.Size > 0 && rt->Segs.Data[0].Kind != 0)
+              dl->PathLineTo(start);
+            for (int si = 0; si < rt->Segs.Size; si++)
             {
-              const float mid_x = ImMax((start.x + end.x) * 0.5f, start.x + em);
-              const ImVec2 pts[4] = { start, ImVec2(mid_x, start.y), ImVec2(mid_x, end.y), end };
-              AppDrawWireArcPath(dl, pts, 4, nullptr, wire_col, th);
+              const ImGuiAppTrunkSeg* sg = &rt->Segs.Data[si];
+              if (sg->Kind == 0)
+                dl->PathLineTo(ImGui::CanvasToScreen(cv, sg->P0));
+              else if (sg->Kind == 1)
+                dl->PathArcTo(ImGui::CanvasToScreen(cv, sg->P0), sg->R * zc, sg->A0, sg->A1, 0);
+              else
+                dl->PathBezierCubicCurveTo(ImGui::CanvasToScreen(cv, sg->P0), ImGui::CanvasToScreen(cv, sg->P1), ImGui::CanvasToScreen(cv, sg->P2), 0);
             }
+            AppWirePathStroke(dl, wire_col, th);
             // Square endpoints: the containment-pin idiom, so the trunk reads as a child wire.
             const float ps = em * 0.28f;
             dl->AddRectFilled(ImVec2(start.x - ps, start.y - ps), ImVec2(start.x + ps, start.y + ps), wire_col, ps * 0.4f);
@@ -5977,6 +6345,7 @@ namespace ImGui
     {
       AppGraphConstrainLayerColumn(g, show_live, moved_layer_id, moved_layer_id != 0 ? &moved_layer_pos : nullptr);
       AppGraphSeatWindowSection(g, show_live);   // stack contained windows/sidebars beneath the packed Window layer row
+      AppGraphDragStickClusters(g, show_live, moved_layer_id);   // edge drags push occluded clusters, stuck for the drag's life
     }
     else
     {

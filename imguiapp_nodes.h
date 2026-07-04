@@ -438,6 +438,48 @@ struct ImGuiAppScopeCamera
   float  Zoom    = 1.0f;
 };
 
+// One cached trunk-route drawing primitive, in MODEL units (line-to / arc / cubic). The route is
+// computed once from model inputs and only re-derived when those inputs move -- the camera never
+// re-routes a settled link (transient, not serialized).
+struct ImGuiAppTrunkSeg
+{
+  int    Kind = 0;                        // 0 = line-to P0; 1 = arc (P0 center, R, A0..A1); 2 = cubic (P0,P1 cps, P2 end)
+  ImVec2 P0   = ImVec2(0.0f, 0.0f);
+  ImVec2 P1   = ImVec2(0.0f, 0.0f);
+  ImVec2 P2   = ImVec2(0.0f, 0.0f);
+  float  R    = 0.0f;
+  float  A0   = 0.0f;
+  float  A1   = 0.0f;
+};
+
+struct ImGuiAppTrunkRoute
+{
+  int                       OwnerId = 0;
+  ImVec2                    StartM  = ImVec2(0.0f, 0.0f);   // model endpoints + obstacle key: recompute triggers
+  ImVec2                    EndM    = ImVec2(0.0f, 0.0f);
+  ImVec4                    KeyA    = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+  ImVec4                    KeyB    = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+  ImVector<ImGuiAppTrunkSeg> Segs;
+};
+
+// One cluster's original position captured at layer-drag start, so groups pushed by a dragged
+// edge stay STUCK to it and return with it within the same drag (transient, not serialized).
+struct ImGuiAppDragStick
+{
+  int   NodeId = 0;
+  float OrigY  = 0.0f;
+};
+
+// One group frame as PUBLISHED by the frames pass, in model units -- the single producer of
+// group geometry. Consumers (drag clamping) read last frame's publication: a coherent T-1 pair
+// (docs/phase-coherence.md rule 1). Transient, not serialized.
+struct ImGuiAppGroupFrame
+{
+  int    OwnerId = 0;
+  ImVec2 MinM = ImVec2(0.0f, 0.0f);
+  ImVec2 MaxM = ImVec2(0.0f, 0.0f);
+};
+
 // The whole authored graph. One monotonic id allocator shared by every node/port/body-attr/link:
 // ids are globally unique, never reused.
 struct ImGuiAppGraph
@@ -448,6 +490,15 @@ struct ImGuiAppGraph
   ImVector<int>                  Selection;                            // multi-selection (node ids); the single selected_node_id is primary
   ImVector<int>                  ViewScope;                            // drill-down scope stack (node ids, outer->inner); empty = whole app; transient, not serialized
   ImVector<ImGuiAppScopeCamera>  ScopeCams;                            // per-branch camera memory (transient, not serialized)
+  ImVector<ImGuiAppTrunkRoute>   _TrunkRoutes;                         // cached trunk routes, model units (transient, not serialized)
+  ImVector<ImGuiAppDragStick>    _DragStick;                           // cluster originals for the active layer drag (transient)
+  int                            _DragStickAnchor           = 0;       // layer node the sticks belong to (0 = no active capture)
+  ImVector<ImVec4>               _GroupDragOrig;                       // (id, x, y) member originals for the active group-chip drag (transient)
+  ImVec2                         _GroupDragMouse0           = ImVec2(0.0f, 0.0f); // model-space mouse origin of that drag (transient)
+  ImVec4                         _GroupDragFrame0           = ImVec4(0.0f, 0.0f, 0.0f, 0.0f); // the dragged group's frame at drag start, model (transient)
+  bool                           _GroupDragMoved            = false;   // chip gesture latch: drag vs fold-click (transient)
+  ImVector<ImGuiAppGroupFrame>   _GroupFrames;                         // THIS frame's published group frames, model units (transient)
+  ImVector<ImGuiAppGroupFrame>   _GroupFramesPrev;                     // last frame's publication, what consumers read (transient)
   int                            NextId                     = 1;
   int                            EditingNodeId              = -1;      // node whose title is being renamed inline, or -1
   char                           LastLinkErr[IM_LABEL_SIZE] = "";      // last refused-link reason; transient, NOT in Save/Load
