@@ -4,7 +4,7 @@
 // [SECTION] Sample controls (RandomTime, Breathing) -- the framework idioms, showcased
 // [SECTION] Composer document (GraphDocData) + workspace layout persistence
 // [SECTION] Composer toolbar (flow-ordered: compose -> iterate -> persist -> produce | observe)
-// [SECTION] Composer status strip (keymap hints + document facts)
+// [SECTION] Composer status strip (keymap hints + document counts)
 // [SECTION] Generated-code view (source-mapped, shared by every code surface)
 // [SECTION] Composer editor body (outliner | canvas + bottom console | inspector; project inspector)
 // [SECTION] Composer host window + demo menu
@@ -329,8 +329,8 @@ namespace
     char          WriteMsg[64]; // transient "wrote header" confirmation
     ImGuiID       WrittenSig;   // AppGraphSignature at the last header write (0 = never) -> Generate state
 
-    // Frame-published facts: derived once per frame in GraphDocControl::OnUpdate, read everywhere;
-    // never re-derive in a render path (docs/phase-coherence.md).
+    // Frame-published values: derived once per frame in GraphDocControl::OnUpdate, read
+    // everywhere; never re-derived in a render path.
     ImGuiID FrameSig;  // this frame's AppGraphSignature
     int     NumErrors; // cached-validation counts
     int     NumWarnings;
@@ -343,7 +343,7 @@ namespace
     ImGuiID              LayoutSavedHash; // hash of the last-persisted layout fields (change detection)
     float                LayoutSaveT;     // debounce: seconds until the next layout-save check
     ImGuiApp*            Mirror;          // THE running app: the one hosting this control (set in OnInitialize)
-    int                  NumUnbuilt;      // frame fact: authored nodes with no live counterpart in the running
+    int                  NumUnbuilt;      // per-frame count: authored nodes with no live counterpart in the running
                                       // binary -- nonzero == stale until Generate + recompile + relaunch
   };
   struct GraphDocTempData {};
@@ -487,7 +487,7 @@ namespace
         ImGui::BuildAppLiveGraph(data->Mirror, &data->Graph);
       }
 
-      // Publish frame facts once; GraphDoc updates first (push order), so all consumers see the same values.
+      // Publish the frame's derived values once; GraphDoc updates first (push order), so all consumers see the same values.
       data->FrameSig = ImGui::AppGraphSignature(&data->Graph);
       {
         const ImVector<ImGui::ImGuiAppGraphIssue>* issues = ImGui::AppGraphIssuesCached(&data->Graph);
@@ -774,8 +774,8 @@ namespace
           ImGui::EndPopup();
         }
 
-        // -- observe (right-aligned): bootstrap-state chip + panel toggles. The Live eye always
-        // reflects THE running app -- there is exactly one.
+        // -- observe (right-aligned): bootstrap-state readout + panel toggles. The Live eye
+        // always reflects THE running app -- there is exactly one.
         const bool  unwritten = doc->WrittenSig != 0 && doc->FrameSig != doc->WrittenSig;
         const bool  stale     = doc->NumUnbuilt > 0 || unwritten;
         char        sync_lbl[64];
@@ -792,8 +792,8 @@ namespace
         ImGui::SameLine(ImMax(ImGui::GetCursorPosX() + em, ImGui::GetContentRegionMax().x - cluster_w - em * 0.2f));
 
         // Amber ink when authored work is not compiled into the running app; quiet when in sync.
-        const ImVec4 chip_ink = stale ? ImLerp(kDemoGold, style.Colors[ImGuiCol_Text], 0.25f) : style.Colors[ImGuiCol_TextDisabled];
-        ImGui::PushStyleColor(ImGuiCol_Text, chip_ink);
+        const ImVec4 sync_ink = stale ? ImLerp(kDemoGold, style.Colors[ImGuiCol_Text], 0.25f) : style.Colors[ImGuiCol_TextDisabled];
+        ImGui::PushStyleColor(ImGuiCol_Text, sync_ink);
         if (ImGui::Button(sync_lbl))
           temp_data->RevealPanel = ComposerPanel_Code;
         ImGui::PopStyleColor();
@@ -855,10 +855,10 @@ namespace
   };
 
   //-----------------------------------------------------------------------------
-  // [SECTION] Composer status strip (keymap hints + document facts)
+  // [SECTION] Composer status strip (keymap hints + document counts)
   //-----------------------------------------------------------------------------
 
-  // Rendered last -> window bottom. Keymap hints left, document facts right; all right-side text is
+  // Rendered last -> window bottom. Keymap hints left, document counts right; all right-side text is
   // derived in OnUpdate, OnRender only lays out text.
   struct StatusStripData
   {
@@ -1485,8 +1485,8 @@ namespace
 
           ImGui::ShowAppGraphEditor(app, graph, &selection, doc->ShowLive);
 
-          // Viewport overlays (health chip bottom-left, transport bottom-center): real ImGui items
-          // submitted after the editor, so they win hover over the canvas.
+          // Viewport overlays (health readout bottom-left, transport bottom-center): real ImGui
+          // items submitted after the editor, so they win hover over the canvas.
           {
             const int nerr = doc->NumErrors, nwarn = doc->NumWarnings;
 
@@ -1661,9 +1661,6 @@ namespace
               temp_data->AckReveal = doc->RevealPanel != ComposerPanel_None;   // consume the one-shot select
               if (ImGui::BeginTabItem(output_label, nullptr, doc->RevealPanel == ComposerPanel_Output ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
               {
-                // Filter state is pure view state, session-lived.
-                static bool s_out_err = true, s_out_warn = true, s_out_info = true;
-                static ImGuiTextFilter s_out_filter;
                 int nerr2 = 0, nwarn2 = 0;
                 for (int i = 0; i < data->Issues.Size; i++)
                   (data->Issues.Data[i].Severity >= 2 ? nerr2 : nwarn2)++;
@@ -1673,18 +1670,19 @@ namespace
                 {
                   const float right = ImGui::GetContentRegionMax().x;
                   ImGui::SameLine(right - em * 22.0f);
-                  auto sev_chip = [](const char* lbl, bool* on, const ImVec4& col) {
+                  auto sev_toggle = [](const char* lbl, bool* on, const ImVec4& col) {
                     ImGui::PushStyleColor(ImGuiCol_Text, *on ? col : ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
                     if (ImGui::SmallButton(lbl))
                       *on = !*on;
                     ImGui::PopStyleColor();
                     ImGui::SameLine();
                   };
-                  sev_chip("err",  &s_out_err,  ImVec4(0.92f, 0.45f, 0.45f, 1.0f));
-                  sev_chip("warn", &s_out_warn, ImVec4(0.92f, 0.80f, 0.40f, 1.0f));
-                  sev_chip("info", &s_out_info, ImGui::GetStyle().Colors[ImGuiCol_Text]);
+                  ImGuiAppEditorState* ed = ImGui::AppGraphEditorState(&doc->Graph);
+                  sev_toggle("err",  &ed->OutputShowErr,  ImVec4(0.92f, 0.45f, 0.45f, 1.0f));
+                  sev_toggle("warn", &ed->OutputShowWarn, ImVec4(0.92f, 0.80f, 0.40f, 1.0f));
+                  sev_toggle("info", &ed->OutputShowInfo, ImGui::GetStyle().Colors[ImGuiCol_Text]);
                   ImGui::SetNextItemWidth(em * 9.0f);
-                  s_out_filter.Draw("##outfilter");
+                  ed->OutputFilter.Draw("##outfilter");
                   ImGui::SetItemTooltip("Filter the stream");
                   ImGui::SameLine();
                   temp_data->ClearLog = ImGui::SmallButton("Clear");
@@ -1694,12 +1692,13 @@ namespace
 
                 if (ImGui::BeginChild("##outstream", ImVec2(-FLT_MIN, -FLT_MIN)))
                 {
-                  if (data->Issues.Size == 0 && s_out_err && s_out_warn)
+                  ImGuiAppEditorState* ed = ImGui::AppGraphEditorState(&doc->Graph);
+                  if (data->Issues.Size == 0 && ed->OutputShowErr && ed->OutputShowWarn)
                     ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f), ICON_FA_CHECK "  No configuration problems.");
                   for (int i = 0; i < data->Issues.Size; i++)
                   {
                     const ImGui::ImGuiAppGraphIssue& it = data->Issues.Data[i];
-                    if ((it.Severity >= 2 && !s_out_err) || (it.Severity < 2 && !s_out_warn) || !s_out_filter.PassFilter(it.Text))
+                    if ((it.Severity >= 2 && !ed->OutputShowErr) || (it.Severity < 2 && !ed->OutputShowWarn) || !ed->OutputFilter.PassFilter(it.Text))
                       continue;
                     const ImVec4 col = (it.Severity >= 2) ? ImVec4(0.92f, 0.45f, 0.45f, 1.0f) : ImVec4(0.92f, 0.80f, 0.40f, 1.0f);
                     ImGui::PushID(i);
@@ -1720,8 +1719,8 @@ namespace
                   for (int i = doc->Log.Size - 1; i >= 0; i--)   // newest first
                   {
                     const GraphDocData::DocLogLine& ln = doc->Log.Data[i];
-                    if ((ln.Severity >= 2 && !s_out_err) || (ln.Severity == 1 && !s_out_warn) || (ln.Severity == 0 && !s_out_info)
-                        || !s_out_filter.PassFilter(ln.Text))
+                    if ((ln.Severity >= 2 && !ed->OutputShowErr) || (ln.Severity == 1 && !ed->OutputShowWarn) || (ln.Severity == 0 && !ed->OutputShowInfo)
+                        || !ed->OutputFilter.PassFilter(ln.Text))
                       continue;
                     const ImVec4 lcol = ln.Severity >= 2 ? ImVec4(0.92f, 0.45f, 0.45f, 1.0f)
                                       : ln.Severity == 1 ? ImVec4(0.92f, 0.80f, 0.40f, 1.0f)
@@ -2047,7 +2046,7 @@ namespace ImGui
           {
             // Soft-wired to the Random Time example: reads its roll when it is on, falls back
             // to the default otherwise (Random Time pushes first when both are enabled).
-            const ImGuiAppDepBinding binds[] = { { ImGuiType<RandomTimeData>::ID, 0, true } };
+            const ImGuiAppDataBinding binds[] = { { ImGuiType<RandomTimeData>::ID, 0, true } };
             PushWindowControl<BreathingControlDemo>(app, w, 0, binds, IM_ARRAYSIZE(binds));
           }
         }

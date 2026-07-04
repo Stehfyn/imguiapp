@@ -52,7 +52,7 @@ buried. Direction (VS Output/Error-List discipline):
 
 - One shared header row across tabs: context label left (what am I looking at), actions right
   (Copy, Clear, filter) — same slots every tab.
-- Output gains severity filter chips (err/warn/info) and a search filter — it is the console, make
+- Output gains severity toggles (err/warn/info) and a search filter — it is the console, make
   it operate like one.
 - Code keeps the source map; Diff becomes a Code-panel MODE (toggle in its header), not a clipboard
   dump.
@@ -60,10 +60,10 @@ buried. Direction (VS Output/Error-List discipline):
   altitude, which is why it feels lost among document-level tabs).
 
 ### 4. Tree sidebar completion
-Complaint: "incomplete/awkward." Known gaps: no drag-to-reparent affordance visible, filter chips
+Complaint: "incomplete/awkward." Known gaps: no drag-to-reparent affordance visible, filter buttons
 overflow at narrow widths, no per-row context parity with the canvas menu, live/design sections
 blend together. Plan: row context menu = canvas node menu (four-roads rule applied to the tree);
-kind chips collapse into an overflow popover at narrow widths; a subtle DESIGN / LIVE band
+kind filter buttons collapse into an overflow popover at narrow widths; a subtle DESIGN / LIVE band
 separator; hover reciprocity is already in.
 
 ### 5. Inspector ergonomics

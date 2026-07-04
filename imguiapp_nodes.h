@@ -247,7 +247,7 @@ enum ImGuiAppNodeKind_
   ImGuiAppNodeKind_COUNT,
 };
 
-// The four CORE layer classes are permanent, one each, immutable type -- codegen emits
+// The five CORE layer classes are permanent, one each, immutable type -- codegen emits
 // PushAppLayer<ImGuiAppXxxLayer>. Custom is a user-authored ImGuiAppLayer subclass: the NODE'S NAME is
 // its class name, any number may exist, codegen emits the subclass skeleton plus PushAppLayer<Name>.
 typedef int ImGuiAppLayerType;
@@ -256,6 +256,7 @@ enum ImGuiAppLayerType_
   ImGuiAppLayerType_Task = 0,
   ImGuiAppLayerType_Command,
   ImGuiAppLayerType_Status,
+  ImGuiAppLayerType_Layout,
   ImGuiAppLayerType_Display,
   ImGuiAppLayerType_Custom,
   ImGuiAppLayerType_COUNT,
@@ -416,7 +417,7 @@ struct ImGuiAppNode
   int                            FieldList                   = 0;                      // Field node: which list it belongs to on its owner (0 = Persist, 1 = Temp)
   int                            PersistStructId             = -1;                     // Control: Struct node its PersistData was exploded into (-1 = inline)
   int                            TempStructId                = -1;                     // Control: Struct node its TempData was exploded into (-1 = inline)
-  bool                           GroupCollapsed              = false;                  // descendants hidden behind a proxy chip (transient, not serialized)
+  bool                           GroupCollapsed              = false;                  // descendants hidden behind the group title bar (transient, not serialized)
   bool                           Hidden                      = false;                  // not submitted to the canvas (transient, not serialized)
 };
 
@@ -547,6 +548,7 @@ struct ImGuiAppEditorState
   mutable bool                         AddPaletteRequest = false;   // one-shot
   mutable bool                         FitAllRequest = false;       // one-shot
   int                                  AutoLayoutCountdown = 2;     // launch default is a TIDIED layout: fires once real sizes exist (frame 2)
+  float                                UniformCardW = 0.0f;         // one normalized width for every non-layer node (model units; grows to fit the widest need, deadbanded)
   bool                                 HelpOverlay = false;         // F1 shortcut cheat sheet
   bool                                 QuickInspector = false;      // N: floating quick inspector
   bool                                 PrevShowLive = true;
@@ -567,6 +569,10 @@ struct ImGuiAppEditorState
   bool                                 OutlinerRenameFocus = false;
   bool                                 OutlinerKindVis[ImGuiAppNodeKind_COUNT] = { true, true, true, true, true, true, true };
   ImGuiTextFilter                      OutlinerFilter;
+  bool                                 OutputShowErr = true;        // Output panel severity filters
+  bool                                 OutputShowWarn = true;
+  bool                                 OutputShowInfo = true;
+  ImGuiTextFilter                      OutputFilter;                // Output panel text filter
   ImVector<ImGuiAppStyleModDesc>       StyleClipMods;               // style-section clipboard (session-lived, value-typed)
   ImVector<ImGuiAppColorModDesc>       StyleClipCols;
   bool                                 StyleClipHas = false;
@@ -590,11 +596,11 @@ struct ImGuiAppGraph
   ImVector<ImGuiAppTrunkRoute>   _TrunkRoutes;                         // cached trunk routes, model units (transient, not serialized)
   ImVector<ImGuiAppDragStick>    _DragStick;                           // cluster originals for the active layer drag (transient)
   int                            _DragStickAnchor           = 0;       // layer node the sticks belong to (0 = no active capture)
-  ImVector<ImVec4>               _GroupDragOrig;                       // (id, x, y) member originals for the active group-chip drag (transient)
+  ImVector<ImVec4>               _GroupDragOrig;                       // (id, x, y) member originals for the active group drag (transient)
   ImVec2                         _GroupDragMouse0           = ImVec2(0.0f, 0.0f); // model-space mouse origin of that drag (transient)
   ImVec4                         _GroupDragFrame0           = ImVec4(0.0f, 0.0f, 0.0f, 0.0f); // the dragged group's frame at drag start, model (transient)
   ImVec2                         _GroupDragApplied          = ImVec2(0.0f, 0.0f); // displacement actually granted so far (greedy catch-up; transient)
-  bool                           _GroupDragMoved            = false;   // chip gesture latch: drag vs fold-click (transient)
+  bool                           _GroupDragMoved            = false;   // gesture latch: drag vs fold-click (transient)
   ImVector<ImGuiAppGroupFrame>   _GroupFrames;                         // THIS frame's published group frames, model units (transient)
   ImVector<ImGuiAppGroupFrame>   _GroupFramesPrev;                     // last frame's publication, what consumers read (transient)
   mutable ImGuiAppEditorState*   _Ed                        = nullptr; // editor session state; opaque to reflection/serialization (created on first editor use, freed with the process)
@@ -762,6 +768,7 @@ namespace ImGui
     ImU32 LayerTask;
     ImU32 LayerCommand;  // also marks hidden nodes
     ImU32 LayerStatus;
+    ImU32 LayerLayout;
     ImU32 LayerDisplay;
     ImU32 AccentNeutral; // fallback accent for typeless rows/ports
                          // Pins

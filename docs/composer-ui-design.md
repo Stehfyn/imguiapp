@@ -50,7 +50,7 @@ Coordination is only definable over named state. The Composer's cross-panel stat
 | App time | `ImGuiAppStateHistory` scrubber | isolated in the toolbar |
 | Edit time | undo history (`AppGraphHistory*`) | isolated in the toolbar |
 | Problems | `AppGraphValidate` output | listed in a tab; click reveals node |
-| Codegen freshness | `AppGraphSignature` | fresh/STALE chip on the code panel |
+| Codegen freshness | `AppGraphSignature` | fresh/STALE indicator on the code panel |
 | Filter/search | outliner `ImGuiTextFilter` | applies to the tree only |
 
 The lateral-ties program is: **make each row visible in every panel where it is relevant, and
@@ -79,13 +79,13 @@ over pin → `drag wire (release on canvas: filtered add)`; over wire → `drag 
 detach`; over canvas → `RMB add · MMB pan · Space palette`. Recognition over recall (Nielsen);
 teaches the whole gesture vocabulary passively. The F1 card stays as the full reference; the
 status bar replaces it as the *first* teacher. Also the natural home for the last validation error
-(replacing the floating link-error fade) and the fresh/STALE chip.
+(replacing the floating link-error fade) and the fresh/STALE indicator.
 
 ### T3. Filter co-application — one filter, all views
 The outliner search currently filters the tree only. Apply the same active filter to the canvas by
 dimming non-matching nodes to ~25% alpha (never hiding — spatial memory must survive; Shneiderman's
 *filter* without losing *overview*). Matching nodes keep full opacity + a subtle underline. The
-filter chip row (kind toggles) already exists in the tree; the same chips co-apply. One filter
+filter button row (kind toggles) already exists in the tree; the same buttons co-apply. One filter
 state, two projections — consistency dimension, and it makes search a spatial operation.
 
 ### T4. Code ↔ canvas source map — role-expressiveness, uniquely ours
@@ -122,7 +122,7 @@ comments / Unity sticky notes all exist because *the model's own containment is 
 Add a `Note` node kind: a resizable, colored, titled rectangle, z-ordered behind nodes, dragging
 it moves contained nodes (UE behavior), excluded from codegen and validation. Explicitly
 non-semantic — the outliner shows it dimmed, at the bottom, filterable off. Cost: one node kind +
-one palette entry; the group-chip drag machinery already exists.
+one palette entry; the group title-bar drag machinery already exists.
 
 **R2. Reroute pins (wire secondary notation).** Double-click a wire → elbow node (tiny circle,
 one in one out, same type). Purely visual; codegen treats it as pass-through. Long wires across
@@ -164,7 +164,7 @@ truth (a `docs/` table now, a style struct in code when it next churns):
 | Node accent (title strip + outliner row + code gutter) | kind (layer type / control / struct / field) | hue |
 | Pin | port kind | shape: circle = data, square = containment; fill = wired, hollow = open |
 | Wire | edge kind | color inherits pin; containment thinner, behind data wires |
-| Badge (sequence number) | execution order | monospace numeral chip, phase-band accent |
+| Badge (sequence number) | execution order | monospace numeral badge, phase-band accent |
 | Severity | validation | dot: amber = warn, red = error — same glyph in canvas, tree, problems |
 | Dim (25% alpha) | filtered-out / not-in-filter | never for "disabled" — dim means *filtered* |
 | Fade (Hidden) | hidden-on-canvas | outliner-only tint; canvas absence |
@@ -205,7 +205,7 @@ undifferentiated row, above a second row of read-only pills nothing could intera
 │ OUTLINER │  root ‣ MainWindow ‣ Mixer                                    ╭───╮     │
 │          │   (scope breadcrumb overlay)                                  │ + │     │  view gizmo
 │  filter  │                                                               │ ◎ │     │  column
-│  chips   │                    C A N V A S                                │ ⤢ │     │  (overlay)
+│  buttons │                    C A N V A S                                │ ⤢ │     │  (overlay)
 │  search  │                                                               │ ✨ │     │
 │  tree    │                                                               │ ⌁ │     │
 │          │                                                               │ ⚙ │     │
@@ -225,7 +225,7 @@ undifferentiated row, above a second row of read-only pills nothing could intera
 | **Generate** (primary) | green ✓ = header matches graph (signature == last written); amber ● = model changed since write; red ⚠ = validation errors (writing stays allowed) | UE's Compile button: the document's health lives ON the primary action, not in a separate lamp. Merges the old strip's "graph ok / cycle" pill into a control that can act on it. |
 | Save / Load / Diff | — | file verbs, grouped, after the primary action |
 | Undo / Redo / history rail | disabled when unavailable; rail = edit-time scrubber | edit verbs; the rail is T5's Edit rail until the unified timeline lands |
-| *(right)* Problems chip | count, colored by worst severity; click reveals the panel | UE compile-results pattern; the ambient marks (T6) point where, this counts how many |
+| *(right)* Problems count | count, colored by worst severity; click reveals the panel | UE compile-results pattern; the ambient marks (T6) point where, this counts how many |
 | *(right)* Code toggle | lit while open | Unity panel-toggle placement: right-aligned, latched |
 | *(right)* Live toggle | eye lit while the mirror shows | view-population toggle used rarely → right cluster, not prime left space |
 | *(right)* App time | lit while frozen + frame scrubber | run control (UE's Simulate cluster sits right of the doc verbs) |
@@ -273,7 +273,7 @@ viewport in prime toolbar position while affording nothing).
 
 | Slice | Contents | Serves |
 |---|---|---|
-| **S1 — Coherence core** | T1 hover reciprocity, T2 status-bar hints (+ error/state chips), T6 problem marks | brushing/linking, visibility |
+| **S1 — Coherence core** | T1 hover reciprocity, T2 status-bar hints (+ error/state readouts), T6 problem marks | brushing/linking, visibility |
 | **S2 — Canvas craft** | R1 notes, R3 alignment, R4 minimap | secondary notation, overview |
 | **S3 — The identity tie** | T4 code↔canvas source map (select→scroll, hover→halo, diff→node) | role-expressiveness |
 | **S4 — Time & filter** | T5 unified timeline, T3 filter co-application | visibility, filter |

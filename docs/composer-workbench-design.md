@@ -36,7 +36,7 @@ and **hidden dependencies** (the ties). Gen 2's spend:
 - **Premature commitment** — the palette and context menus must let the user act from wherever
   their attention already is; no "first go arm the right mode".
 - **Progressive evaluation** — every state change echoes somewhere glanceable (status zones,
-  health chips) without demanding focus.
+  health readouts) without demanding focus.
 - **Hard mental operations** — the inspector does unit/type/default bookkeeping so the user never
   computes it (mixed-value states, reset-to-default, live expression checking already dogfoods this).
 
@@ -60,7 +60,7 @@ Landed and assumed by everything below: document toolbar (health-carrying Genera
 verbs, right-aligned Code/Live toggles) · viewport gizmo column (add/frame/fit/tidy/snap/overlays
 popover) · transport overlay (App-time freeze + scrub) · viewport health strip (click → Output) ·
 status bar (keymap hints + facts) · bottom panel tabs Code (source-mapped) / Project (doc files) /
-Preview / Output (issues + log, brushing) · outliner with filter chips · per-node inspector column
+Preview / Output (issues + log, brushing) · outliner with filter buttons · per-node inspector column
 (fields, events, commands, style/color mod descs) · brushing hover sync · ambient problem marks ·
 drill-down scopes with breadcrumb · undo/redo rail · prefab registry · time travel.
 
@@ -145,7 +145,7 @@ Freeze the zone map; each zone has one topic and one click action:
 `[keymap hint | transient confirmation] ——— [selection breadcrumb] [counts] [mirror] [freshness]`
 
 - Every right-zone fact becomes *clickable where it can act*: breadcrumb segments select, counts
-  toggle the corresponding outliner filter chip, mirror fact toggles Live, freshness runs Generate.
+  toggle the corresponding outliner filter button, mirror fact toggles Live, freshness runs Generate.
   A status bar the user can click is a second command surface at zero pixel cost (VS's branch/
   encoding/line-col widgets). *CDoN: viscosity; pillar: ease of use.*
 
@@ -198,7 +198,7 @@ communicability (it teaches shortcuts); CDoN: premature commitment (act from any
 Selection empty → the inspector shows the DOCUMENT, not a void (Unity: nothing; UE: World
 Settings; VS: project properties — we take the strong version). Sections in the same §5.1 grammar:
 
-- **Document** — graph path, header path, composition signature, freshness chip (click = Generate),
+- **Document** — graph path, header path, composition signature, freshness indicator (click = Generate),
   node/link/binding counts.
 - **Validation** — issue summary by severity; click reveals Output.
 - **Composer theme** — the chrome's own desc tables (§6.1), editable: the composer styles itself

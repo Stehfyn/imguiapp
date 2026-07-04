@@ -332,7 +332,7 @@ struct ImGuiAppColorModDesc
 
 // Routes one of a control's data dependencies to a specific producer instance at push time.
 // TypeID names WHICH dependency of the pack is routed; Instance names the producer.
-struct ImGuiAppDepBinding
+struct ImGuiAppDataBinding
 {
   ImGuiID TypeID;           // ImGuiType<Dep>::ID of the dependency being routed
   ImGuiID Instance;         // producer's instance id (0 = the type singleton)
@@ -432,14 +432,14 @@ namespace ImGui
   // dependencies to specific producer instances; an unrouted dependency resolves to the pushing
   // control's own instance id, then to the singleton (producer must be pushed first either way).
   template <typename T>
-  IMGUI_API inline void PushAppControl(ImGuiApp* app, ImGuiID instance = 0, const ImGuiAppDepBinding* binds = nullptr, int binds_count = 0);
+  IMGUI_API inline void PushAppControl(ImGuiApp* app, ImGuiID instance = 0, const ImGuiAppDataBinding* binds = nullptr, int binds_count = 0);
   IMGUI_API inline void PopAppControl(ImGuiApp* app);
 
   template <typename T>
-  IMGUI_API inline void PushWindowControl(ImGuiApp* app, ImGuiAppWindowBase* window, ImGuiID instance = 0, const ImGuiAppDepBinding* binds = nullptr, int binds_count = 0);
+  IMGUI_API inline void PushWindowControl(ImGuiApp* app, ImGuiAppWindowBase* window, ImGuiID instance = 0, const ImGuiAppDataBinding* binds = nullptr, int binds_count = 0);
 
   template <typename T>
-  IMGUI_API inline void PushSidebarControl(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, ImGuiID instance = 0, const ImGuiAppDepBinding* binds = nullptr, int binds_count = 0);
+  IMGUI_API inline void PushSidebarControl(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, ImGuiID instance = 0, const ImGuiAppDataBinding* binds = nullptr, int binds_count = 0);
 
   // host: the PROCESS's real app, offered as the "Host app" live-mirror perspective
   // (strictly read-only there: time scrub is disabled for the host -- restoring its
@@ -558,7 +558,7 @@ struct ImGuiAppControlBase : ImGuiAppItemBase
   // Re-route one declared dependency at runtime (Composer edge rewiring, no pop/re-push): the
   // slot whose type matches bind->TypeID re-resolves to that producer instance and the app's
   // update order rebuilds. False when TypeID is not in this control's pack.
-  virtual bool    SetControlDependencyBinding(ImGuiApp* app, const ImGuiAppDepBinding* bind) { IM_UNUSED(app); IM_UNUSED(bind); return false; }
+  virtual bool    SetControlDependencyBinding(ImGuiApp* app, const ImGuiAppDataBinding* bind) { IM_UNUSED(app); IM_UNUSED(bind); return false; }
 };
 
 // Snapshot contract: aggregate + trivially copyable = byte-snapshottable. Owning containers
@@ -802,6 +802,14 @@ struct ImGuiAppStatusLayer : ImGuiAppLayer
   virtual void OnRender(const ImGuiApp*)  const override final;
 };
 
+struct ImGuiAppLayoutLayer : ImGuiAppLayer
+{
+  virtual void OnAttach(ImGuiApp*)        const override final;
+  virtual void OnDetach(ImGuiApp*)        const override final;
+  virtual void OnUpdate(ImGuiApp*, float) const override final;
+  virtual void OnRender(const ImGuiApp*)  const override final;
+};
+
 struct ImGuiAppDisplayLayer : ImGuiAppLayer
 {
   virtual void OnAttach(ImGuiApp*)        const override final;
@@ -884,6 +892,7 @@ struct ImGuiApp : ImGuiAppBase
   virtual void                Shutdown();
   static void                 DrawFrame(ImGuiApp* app);
   virtual bool                OnInitialize(int argc, char** argv) { return true; }
+  virtual void                OnLayout() {}
   // One frame = the four phases in order: draw (frame id, NewFrame, app layers/widgets),
   // render (draw data -> GPU, platform windows), encode (recorder pump reads the frame
   // just rendered), present. Backend run loops call Frame(); override a phase to extend it.
@@ -918,7 +927,7 @@ struct ImGuiInterfaceAdapter : Base, ImGuiInterfaceAdapterBase<PersistDataT, Tem
     // Asserts when the resolved producer was not pushed before this control, unless the binding
     // marks the dependency Optional (then null, rebound live as the producer comes and goes).
     template <typename Dep>
-    inline Dep* ResolveDependency(const ImGuiApp* app, const ImGuiAppDepBinding* binds, int binds_count, int slot)
+    inline Dep* ResolveDependency(const ImGuiApp* app, const ImGuiAppDataBinding* binds, int binds_count, int slot)
     {
       const ImGuiID type_id = ImGuiType<Dep>::ID;
       for (int i = 0; i < binds_count; i++)
@@ -946,7 +955,7 @@ struct ImGuiInterfaceAdapter : Base, ImGuiInterfaceAdapterBase<PersistDataT, Tem
       return data;
     }
 
-    inline void ResolveDependencies(const ImGuiApp* app, const ImGuiAppDepBinding* binds, int binds_count)
+    inline void ResolveDependencies(const ImGuiApp* app, const ImGuiAppDataBinding* binds, int binds_count)
     {
       int slot = 0;
       IM_UNUSED(slot);
@@ -1084,7 +1093,7 @@ struct ImGuiAppControl : ImGuiInterfaceAdapter<ImGuiAppControlBase, PersistDataT
     return n;
   }
 
-  virtual bool SetControlDependencyBinding(ImGuiApp* app, const ImGuiAppDepBinding* bind) override final
+  virtual bool SetControlDependencyBinding(ImGuiApp* app, const ImGuiAppDataBinding* bind) override final
   {
     if (app == nullptr || bind == nullptr)
       return false;
@@ -1311,7 +1320,7 @@ namespace ImGui
   }
 
   template <typename T>
-  inline void PushAppControl(ImGuiApp* app, ImGuiID instance, const ImGuiAppDepBinding* binds, int binds_count)
+  inline void PushAppControl(ImGuiApp* app, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count)
   {
       IM_ASSERT(app);
 
@@ -1377,7 +1386,7 @@ namespace ImGui
   // Host a control inside a window: instance data registers in app->Data as usual, but the control joins
   // window->Controls and renders between the host window's Begin/End (no Begin of its own).
   template <typename T>
-  IMGUI_API inline void PushWindowControl(ImGuiApp* app, ImGuiAppWindowBase* window, ImGuiID instance, const ImGuiAppDepBinding* binds, int binds_count)
+  IMGUI_API inline void PushWindowControl(ImGuiApp* app, ImGuiAppWindowBase* window, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count)
   {
       IM_ASSERT(app && window);
 
@@ -1419,7 +1428,7 @@ namespace ImGui
   }
 
   template <typename T>
-  IMGUI_API inline void PushSidebarControl(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, ImGuiID instance, const ImGuiAppDepBinding* binds, int binds_count)
+  IMGUI_API inline void PushSidebarControl(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count)
   {
       ImGuiID id;
       T* control;

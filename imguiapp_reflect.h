@@ -155,7 +155,7 @@ template<class T, std::size_t Bases = 0u, class... Ts> requires std::is_aggregat
 // large aggregates (each member type's count evaluates inside the enclosing walk's context).
 // "Positional arity exceeds 64" is exactly "T is constructible from 65 positional anys"
 // (arity is monotone in the argument count), so test it in one requires-expression instead
-// of climbing. Types the climb would have settled at <= 64 keep the identical upstream path.
+// of climbing. Types the climb would have resolved at <= 64 keep the identical upstream path.
 template<class T, std::size_t... Ns> requires std::is_aggregate_v<T>
 [[nodiscard]] constexpr auto positional_overflows(std::index_sequence<Ns...>) -> bool {
   return requires { T{((void)Ns, detail::any{})...}; };

@@ -27,6 +27,18 @@ struct ImGuiCanvasNodeRec
   ImVec2 Size;       // model units, measured same-frame at submission
   ImU32  TitleColor; // 0 = style default
   char   Title[64];
+  char   KindTag[24];  // muted right-aligned title-bar tag (the node's kind word); empty = none
+  char   Badge[16];    // small framed title-bar text after the name; empty = none
+  ImU32  OriginDot;    // leading title-bar dot color; 0 = none
+  bool   DotRing;      // origin dot drawn as a ring instead of filled
+  float  Rounding;     // corner rounding in MODEL units; < 0 = style default
+  float  FixedWidth;   // normalized plate width in MODEL units; <= 0 = content-sized
+  float  NeededW;      // content-derived width need (MODEL units), measured before FixedWidth applies
+  int    HeaderRule;   // rule under the title band: 0 none, 1 solid, 2 dashed
+  ImU32  HeaderRuleColor;
+  int    StripeSide;   // ImGuiCanvasPinSide_ of an edge stripe; -1 = none
+  ImU32  StripeColor;
+  float  StripeThick;  // stripe thickness, MODEL units
   bool   Draggable;
   bool   Solid;      // cannot be dragged into overlap with other Solid nodes (slide to contact)
   int    LastFrame;  // ImGui frame count of the last submission (cull/hit bookkeeping)
@@ -50,7 +62,8 @@ struct ImGuiCanvasWireRec  // per-frame submission, rebuilt every frame
   int   Id;
   int   PinA;
   int   PinB;
-  ImU32 Color; // 0 = style
+  ImU32 Color;  // 0 = style
+  bool  Dashed; // optional dependency: dashed body (form carrier; dimming is the color coat)
 };
 
 enum ImGuiCanvasInteraction_
@@ -105,11 +118,31 @@ struct ImGuiCanvasState
   ImDrawListSplitter Splitter; // ch0 = grid + wires, ch1 = node plates, ch2 = node content
   bool               InsideCanvas;
 
-  // Node submission scratch
+  // Submission intent -- this canvas's per-frame TempData: latched by the CanvasNext* calls,
+  // consumed by the next Begin*, reset there. Per instance, never file scope.
   int    CurNode;       // index into Nodes during Begin/EndNode, -1 otherwise
   ImVec2 CurNodeScreen; // this frame's screen pos of the node origin
+  int    CurPin;        // index into Pins during Begin/EndPin, -1 otherwise
+  float  CurPinY0;      // row top at CanvasBeginPin (row center resolves at EndPin)
   char   NextTitle[64];
   ImU32  NextTitleColor;
+  char   NextTitleTag[24];
+  char   NextBadge[16];
+  ImU32  NextOriginDot;
+  bool   NextDotRing;
+  float  NextRounding;      // model units; < 0 = style default
+  float  NextFixedWidth;    // model units; <= 0 = content-sized
+  int    NextHeaderRule;    // 0 none, 1 solid, 2 dashed
+  ImU32  NextHeaderRuleColor;
+  int    NextStripeSide;    // ImGuiCanvasPinSide_; -1 none
+  ImU32  NextStripeColor;
+  float  NextStripeThick;   // model units
+  ImU32  NextPinColor;
+  int    NextPinSide;       // -1 -> derive from Kind (In->Left, Out->Right)
+  char*  NextEditBuf;
+  int    NextEditBufSize;
+  bool*  NextEditFlag;
+  bool   NextWireDashed;
 
   // Interaction FSM
   int              Interaction;
@@ -184,8 +217,27 @@ struct ImGuiCanvasState
     InsideCanvas      = false;
     CurNode           = -1;
     CurNodeScreen     = ImVec2(0.0f, 0.0f);
+    CurPin            = -1;
+    CurPinY0          = 0.0f;
     NextTitle[0]      = 0;
     NextTitleColor    = 0;
+    NextTitleTag[0]   = 0;
+    NextBadge[0]      = 0;
+    NextOriginDot     = 0;
+    NextDotRing       = false;
+    NextRounding      = -1.0f;
+    NextFixedWidth    = -1.0f;
+    NextHeaderRule    = 0;
+    NextHeaderRuleColor = 0;
+    NextStripeSide    = -1;
+    NextStripeColor   = 0;
+    NextStripeThick   = 0.0f;
+    NextPinColor      = 0;
+    NextPinSide       = -1;
+    NextEditBuf       = nullptr;
+    NextEditBufSize   = 0;
+    NextEditFlag      = nullptr;
+    NextWireDashed    = false;
     Interaction       = ImGuiCanvasInteraction_None;
     GestureStartMouse = GestureStartPan = ImVec2(0.0f, 0.0f);
     DragWireFromPin   = -1;
@@ -311,6 +363,9 @@ static ImGuiCanvasNodeRec* CanvasFindOrCreateNode(ImGuiCanvasState* c, int node_
   rec.Id = node_id;
   rec.Draggable = true;
   rec.LastFrame = -1;
+  rec.Rounding = -1.0f;
+  rec.FixedWidth = -1.0f;
+  rec.StripeSide = -1;
   c->Nodes.push_back(rec);
   c->NodeIdx.SetInt((ImGuiID)node_id, c->Nodes.Size);   // index + 1
   return &c->Nodes.back();
@@ -948,33 +1003,71 @@ namespace ImGui
     return c->DrawList;
   }
 
-  // Next-node scratch (submission-scoped, like SetNextWindow*; consumed by CanvasBeginNode).
-  static char  s_next_title[64] = { 0 };
-  static ImU32 s_next_title_color = 0;
-  static char* s_next_edit_buf = nullptr;
-  static int   s_next_edit_size = 0;
-  static bool* s_next_edit_flag = nullptr;
-
-  void CanvasNextNodeTitle(const char* title, ImU32 title_color)
+  void CanvasNextNodeTitle(ImGuiCanvasState* c, const char* title, ImU32 title_color)
   {
     if (title != nullptr)
-      ImStrncpy(s_next_title, title, IM_ARRAYSIZE(s_next_title));
+      ImStrncpy(c->NextTitle, title, IM_ARRAYSIZE(c->NextTitle));
     else
-      s_next_title[0] = 0;
-    s_next_title_color = title_color;
-    s_next_edit_buf = nullptr;
-    s_next_edit_size = 0;
-    s_next_edit_flag = nullptr;
+      c->NextTitle[0] = 0;
+    c->NextTitleColor = title_color;
+    c->NextEditBuf = nullptr;
+    c->NextEditBufSize = 0;
+    c->NextEditFlag = nullptr;
   }
 
-  void CanvasNextNodeTitleEditable(char* buf, int buf_size, bool* editing, ImU32 title_color)
+  void CanvasNextNodeTitleTag(ImGuiCanvasState* c, const char* tag)
+  {
+    ImStrncpy(c->NextTitleTag, tag != nullptr ? tag : "", IM_ARRAYSIZE(c->NextTitleTag));
+  }
+
+  void CanvasNextNodeOriginDot(ImGuiCanvasState* c, ImU32 color, bool ring)
+  {
+    c->NextOriginDot = color;
+    c->NextDotRing = ring;
+  }
+
+  void CanvasNextNodeTitleBadge(ImGuiCanvasState* c, const char* badge)
+  {
+    ImStrncpy(c->NextBadge, badge != nullptr ? badge : "", IM_ARRAYSIZE(c->NextBadge));
+  }
+
+  void CanvasNextNodeRounding(ImGuiCanvasState* c, float model_rounding)
+  {
+    c->NextRounding = model_rounding;
+  }
+
+  void CanvasNextNodeWidth(ImGuiCanvasState* c, float model_width)
+  {
+    c->NextFixedWidth = model_width;
+  }
+
+  float CanvasNodeNeededWidth(const ImGuiCanvasState* c, int node_id)
+  {
+    const ImGuiCanvasNodeRec* n = CanvasFindNode(const_cast<ImGuiCanvasState*>(c), node_id);
+    return n != nullptr ? n->NeededW : 0.0f;
+  }
+
+  void CanvasNextNodeHeaderRule(ImGuiCanvasState* c, int rule, ImU32 color)
+  {
+    c->NextHeaderRule = rule;
+    c->NextHeaderRuleColor = color;
+  }
+
+  void CanvasNextNodeEdgeStripe(ImGuiCanvasState* c, int side, ImU32 color, float model_thickness)
+  {
+    c->NextStripeSide = side;
+    c->NextStripeColor = color;
+    c->NextStripeThick = model_thickness;
+  }
+
+  void CanvasNextNodeTitleEditable(ImGuiCanvasState* c, char* buf, int buf_size, bool* editing, ImU32 title_color)
   {
     // An editable title always occupies its band, even when blank.
-    ImStrncpy(s_next_title, buf != nullptr && buf[0] ? buf : " ", IM_ARRAYSIZE(s_next_title));
-    s_next_title_color = title_color;
-    s_next_edit_buf = buf;
-    s_next_edit_size = buf_size;
-    s_next_edit_flag = editing;
+    ImStrncpy(c->NextTitle, buf != nullptr && buf[0] ? buf : " ", IM_ARRAYSIZE(c->NextTitle));
+    c->NextTitleColor = title_color;
+    c->NextEditBuf = buf;
+    c->NextEditBufSize = buf_size;
+    c->NextEditFlag = editing;
   }
 
   bool CanvasBeginNode(ImGuiCanvasState* c, int node_id)
@@ -982,32 +1075,54 @@ namespace ImGui
     IM_ASSERT(c->InsideCanvas && c->CurNode == -1);
     ImGuiCanvasNodeRec* n = CanvasFindOrCreateNode(c, node_id);
     n->LastFrame = GetFrameCount();
-    ImStrncpy(n->Title, s_next_title, IM_ARRAYSIZE(n->Title));
-    n->TitleColor = s_next_title_color;
-    s_next_title[0] = 0;
-    s_next_title_color = 0;
+    ImStrncpy(n->Title, c->NextTitle, IM_ARRAYSIZE(n->Title));
+    n->TitleColor = c->NextTitleColor;
+    ImStrncpy(n->KindTag, c->NextTitleTag, IM_ARRAYSIZE(n->KindTag));
+    ImStrncpy(n->Badge, c->NextBadge, IM_ARRAYSIZE(n->Badge));
+    n->OriginDot = c->NextOriginDot;
+    n->DotRing = c->NextDotRing;
+    n->Rounding = c->NextRounding;
+    n->FixedWidth = c->NextFixedWidth;
+    n->HeaderRule = c->NextHeaderRule;
+    n->HeaderRuleColor = c->NextHeaderRuleColor;
+    n->StripeSide = c->NextStripeSide;
+    n->StripeColor = c->NextStripeColor;
+    n->StripeThick = c->NextStripeThick;
+    c->NextTitle[0] = 0;
+    c->NextTitleColor = 0;
+    c->NextTitleTag[0] = 0;
+    c->NextBadge[0] = 0;
+    c->NextOriginDot = 0;
+    c->NextDotRing = false;
+    c->NextRounding = -1.0f;
+    c->NextFixedWidth = -1.0f;
+    c->NextHeaderRule = 0;
+    c->NextHeaderRuleColor = 0;
+    c->NextStripeSide = -1;
+    c->NextStripeColor = 0;
+    c->NextStripeThick = 0.0f;
 
     // Rename hook: capture the host's edit binding for THIS node (pointers live for the frame only).
     c->EditNodeIdx = -1;
-    if (s_next_edit_flag != nullptr && s_next_edit_buf != nullptr)
+    if (c->NextEditFlag != nullptr && c->NextEditBuf != nullptr)
     {
-      c->EditBuf = s_next_edit_buf;
-      c->EditBufSize = s_next_edit_size;
-      c->EditFlag = s_next_edit_flag;
+      c->EditBuf = c->NextEditBuf;
+      c->EditBufSize = c->NextEditBufSize;
+      c->EditFlag = c->NextEditFlag;
       c->EditNodeIdx = c->NodeIdx.GetInt((ImGuiID)node_id, 0) - 1;
-      if (*s_next_edit_flag && c->LastEditingNodeId != node_id)
+      if (*c->NextEditFlag && c->LastEditingNodeId != node_id)
       {
         c->EditFocusPending = true;      // focus once, when the edit state ARRIVES on this node
         c->LastEditingNodeId = node_id;
       }
-      else if (!*s_next_edit_flag && c->LastEditingNodeId == node_id)
+      else if (!*c->NextEditFlag && c->LastEditingNodeId == node_id)
       {
         c->LastEditingNodeId = -1;
       }
     }
-    s_next_edit_buf = nullptr;
-    s_next_edit_size = 0;
-    s_next_edit_flag = nullptr;
+    c->NextEditBuf = nullptr;
+    c->NextEditBufSize = 0;
+    c->NextEditFlag = nullptr;
 
     c->CurNode = c->NodeIdx.GetInt((ImGuiID)node_id, 0) - 1;
     c->SubmitOrderNow.push_back(node_id);
@@ -1033,6 +1148,12 @@ namespace ImGui
     SetCursorScreenPos(content_origin);
     PushID(node_id);
     BeginGroup();
+    // An EMPTY group inherits the surrounding child's cursor extents as its item rect, and the
+    // same-frame measurement would adopt that as the node size. Anchor the group so a bodiless
+    // node measures title-only.
+    Dummy(ImVec2(0.0f, 0.0f));
+    SameLine(0.0f, 0.0f);
+    Dummy(ImVec2(0.0f, 0.0f));
     return true;
   }
 
@@ -1050,9 +1171,25 @@ namespace ImGui
     // Same-frame measurement at the same model->screen scale the content rendered with: the node
     // font is pushed at GetFontSize() * Zoom and GetFontSize already carries FontRatio, so content
     // screen size is model * (Zoom * FontRatio). Dividing by CanvasScale is exact, not c->Zoom.
-    const ImVec2 content_px(ImMax(content_mx.x - content_mn.x, GetFontSize() * 2.0f), ImMax(content_mx.y - content_mn.y, 0.0f));
-    const ImVec2 fresh((content_px.x + c->Style.NodePadding.x * z * 2.0f) / z,
-                       (content_px.y + c->Style.NodePadding.y * z * 2.0f + title_h) / z);
+    ImVec2 content_px(ImMax(content_mx.x - content_mn.x, GetFontSize() * 2.0f), ImMax(content_mx.y - content_mn.y, 0.0f));
+    // The title band participates in width: dot + name + badge + kind word must fit the plate,
+    // whatever the body measures.
+    if (n->Title[0])
+    {
+      float title_need = CalcTextSize(n->Title).x;
+      if (n->OriginDot != 0)
+        title_need += GetFontSize() * 0.6f;
+      if (n->Badge[0])
+        title_need += CalcTextSize(n->Badge).x + GetFontSize() * 0.9f;
+      if (n->KindTag[0])
+        title_need += CalcTextSize(n->KindTag).x + GetFontSize() * 1.2f;
+      content_px.x = ImMax(content_px.x, title_need);
+    }
+    ImVec2 fresh((content_px.x + c->Style.NodePadding.x * z * 2.0f) / z,
+                 (content_px.y + c->Style.NodePadding.y * z * 2.0f + title_h) / z);
+    n->NeededW = fresh.x;
+    if (n->FixedWidth > 0.0f)
+      fresh.x = n->FixedWidth;
     // Deadband (kNoiseM): zoom changes perturb glyph rasterization and pixel snapping, so the
     // px/scale round-trip re-measures a hair differently per wheel tick. The stored model size
     // moves only when the measurement exceeds the noise bound -- every consumer (layout, group
@@ -1083,7 +1220,7 @@ namespace ImGui
     const ImVec2 mx = mn + n->Size * z;
     const bool hovered = c->HoveredNode == n->Id;
     const bool selected = CanvasIsSelected(c, n->Id);
-    const float rounding = c->Style.NodeRounding * z;
+    const float rounding = (n->Rounding >= 0.0f ? n->Rounding : c->Style.NodeRounding) * z;
     c->Splitter.SetCurrentChannel(c->DrawList, 1);
     c->DrawList->AddRectFilled(mn, mx, selected ? c->Style.NodeBgSelected : hovered ? c->Style.NodeBgHovered : c->Style.NodeBg, rounding);
     const bool editing_title = c->EditNodeIdx == c->CurNode && c->EditFlag != nullptr && *c->EditFlag && title_h > 0.0f;
@@ -1093,8 +1230,62 @@ namespace ImGui
                      : selected ? c->Style.TitleBarSelected : hovered ? c->Style.TitleBarHovered : c->Style.TitleBar;
       c->DrawList->AddRectFilled(mn, ImVec2(mx.x, mn.y + title_h), tb, rounding, ImDrawFlags_RoundCornersTop);
       if (!editing_title)
-        c->DrawList->AddText(ImVec2(mn.x + c->Style.NodePadding.x * z, mn.y + (title_h - GetFontSize()) * 0.5f),
-                             c->Style.TitleText, n->Title);
+      {
+        float text_x = mn.x + c->Style.NodePadding.x * z;
+        if (n->OriginDot != 0)
+        {
+          const float r = GetFontSize() * 0.17f;
+          const ImVec2 dc(text_x + r, mn.y + title_h * 0.5f);
+          if (n->DotRing)
+            c->DrawList->AddCircle(dc, r, n->OriginDot, 0, ImMax(1.2f, r * 0.7f));
+          else
+            c->DrawList->AddCircleFilled(dc, r, n->OriginDot);
+          text_x += r * 2.0f + GetFontSize() * 0.25f;
+        }
+        c->DrawList->AddText(ImVec2(text_x, mn.y + (title_h - GetFontSize()) * 0.5f), c->Style.TitleText, n->Title);
+        float after_x = text_x + CalcTextSize(n->Title).x;
+        if (n->Badge[0])
+        {
+          const ImVec2 bs = CalcTextSize(n->Badge);
+          const float pad = GetFontSize() * 0.25f;
+          const ImVec2 bmn(after_x + GetFontSize() * 0.4f, mn.y + (title_h - (bs.y + pad)) * 0.5f);
+          const ImVec2 bmx(bmn.x + bs.x + pad * 2.0f, bmn.y + bs.y + pad);
+          c->DrawList->AddRectFilled(bmn, bmx, IM_COL32(0, 0, 0, 70), 3.0f * z);
+          c->DrawList->AddRect(bmn, bmx, IM_COL32(255, 255, 255, 40), 3.0f * z);
+          c->DrawList->AddText(ImVec2(bmn.x + pad, bmn.y + pad * 0.5f), (c->Style.TitleText & 0x00FFFFFF) | 0xCC000000, n->Badge);
+          after_x = bmx.x;
+        }
+        if (n->KindTag[0])
+        {
+          // The kind word, muted, right-aligned; dropped when the title leaves it no room.
+          const ImVec2 ts = CalcTextSize(n->KindTag);
+          const float tag_x = mx.x - c->Style.NodePadding.x * z - ts.x;
+          if (tag_x > after_x + GetFontSize())
+            c->DrawList->AddText(ImVec2(tag_x, mn.y + (title_h - GetFontSize()) * 0.5f),
+                                 (c->Style.TitleText & 0x00FFFFFF) | 0x66000000, n->KindTag);
+        }
+      }
+      if (n->HeaderRule != 0)
+      {
+        const float ry = mn.y + title_h;
+        const ImU32 rc = n->HeaderRuleColor != 0 ? n->HeaderRuleColor : c->Style.NodeOutline;
+        if (n->HeaderRule == 1)
+          c->DrawList->AddLine(ImVec2(mn.x, ry), ImVec2(mx.x, ry), rc, ImMax(1.0f, 2.0f * z));
+        else
+          for (float x = mn.x; x < mx.x; x += 8.0f * z)
+            c->DrawList->AddLine(ImVec2(x, ry), ImVec2(ImMin(x + 4.5f * z, mx.x), ry), rc, ImMax(1.0f, 1.5f * z));
+      }
+    }
+    if (n->StripeSide >= 0 && n->StripeThick > 0.0f)
+    {
+      const float t = n->StripeThick * z;
+      switch (n->StripeSide)
+      {
+      case ImGuiCanvasPinSide_Left:   c->DrawList->AddRectFilled(mn, ImVec2(mn.x + t, mx.y), n->StripeColor, rounding, ImDrawFlags_RoundCornersLeft); break;
+      case ImGuiCanvasPinSide_Right:  c->DrawList->AddRectFilled(ImVec2(mx.x - t, mn.y), mx, n->StripeColor, rounding, ImDrawFlags_RoundCornersRight); break;
+      case ImGuiCanvasPinSide_Top:    c->DrawList->AddRectFilled(mn, ImVec2(mx.x, mn.y + t), n->StripeColor, rounding, ImDrawFlags_RoundCornersTop); break;
+      case ImGuiCanvasPinSide_Bottom: c->DrawList->AddRectFilled(ImVec2(mn.x, mx.y - t), mx, n->StripeColor, rounding, ImDrawFlags_RoundCornersBottom); break;
+      }
     }
     c->DrawList->AddRect(mn, mx, selected ? c->Style.NodeOutlineSelected : c->Style.NodeOutline, rounding, 0,
                          ImMax(1.0f, c->Style.NodeBorder * z));
@@ -1127,45 +1318,45 @@ namespace ImGui
 
   // Pin submission (inside a node): Begin marks the row start, End records the row's vertical
   // center in MODEL units; the horizontal edge resolves in CanvasEndNode once the width is known.
-  static int   s_cur_pin = -1;
-  static float s_cur_pin_y0 = 0.0f;
-  static ImU32 s_next_pin_color = 0;
-  static int   s_next_pin_side = -1;   // -1 -> derive from Kind (In->Left, Out->Right)
 
-  void CanvasNextPinColor(ImU32 color)
+  void CanvasNextWireDashed(ImGuiCanvasState* c)
   {
-    s_next_pin_color = color;
+    c->NextWireDashed = true;
+  }
+
+  void CanvasNextPinColor(ImGuiCanvasState* c, ImU32 color)
+  {
+    c->NextPinColor = color;
   }
 
   void CanvasNextPinSide(ImGuiCanvasState* c, int side)
   {
-    IM_UNUSED(c);
-    s_next_pin_side = side;
+    c->NextPinSide = side;
   }
 
   // Side default: In->Left, Out->Right unless CanvasNextPinSide overrode it. Back-compat: every existing
   // In/Out caller stays on its Left/Right edge with no change.
-  static int CanvasResolvePinSide(int kind)
+  static int CanvasResolvePinSide(ImGuiCanvasState* c, int kind)
   {
-    const int side = s_next_pin_side >= 0 ? s_next_pin_side
+    const int side = c->NextPinSide >= 0 ? c->NextPinSide
                    : (kind == ImGuiCanvasPin_In ? ImGuiCanvasPinSide_Left : ImGuiCanvasPinSide_Right);
-    s_next_pin_side = -1;
+    c->NextPinSide = -1;
     return side;
   }
 
   void CanvasBeginPin(ImGuiCanvasState* c, int pin_id, int kind, int shape)
   {
-    IM_ASSERT(c->InsideCanvas && c->CurNode >= 0 && s_cur_pin == -1);
+    IM_ASSERT(c->InsideCanvas && c->CurNode >= 0 && c->CurPin == -1);
     ImGuiCanvasPinRec* p = CanvasFindOrCreatePin(c, pin_id);
     p->NodeId = c->Nodes.Data[c->CurNode].Id;
     p->Kind = kind;
-    p->Side = CanvasResolvePinSide(kind);
+    p->Side = CanvasResolvePinSide(c, kind);
     p->Shape = shape;
-    p->Color = s_next_pin_color;
-    s_next_pin_color = 0;
+    p->Color = c->NextPinColor;
+    c->NextPinColor = 0;
     p->LastFrame = GetFrameCount();
-    s_cur_pin = c->PinIdx.GetInt((ImGuiID)pin_id, 0) - 1;
-    s_cur_pin_y0 = GetCursorScreenPos().y;
+    c->CurPin = c->PinIdx.GetInt((ImGuiID)pin_id, 0) - 1;
+    c->CurPinY0 = GetCursorScreenPos().y;
   }
 
   // Row-less edge pin: no widget, no cursor use. Anchor.y for Top/Bottom is filled in CanvasEndNode once
@@ -1178,24 +1369,24 @@ namespace ImGui
     p->Kind = kind;
     p->Side = side;
     p->Shape = shape;
-    p->Color = s_next_pin_color;
-    s_next_pin_color = 0;
-    s_next_pin_side = -1;
+    p->Color = c->NextPinColor;
+    c->NextPinColor = 0;
+    c->NextPinSide = -1;
     p->LastFrame = GetFrameCount();
     c->CurNodePins.push_back(c->PinIdx.GetInt((ImGuiID)pin_id, 0) - 1);
   }
 
   void CanvasEndPin(ImGuiCanvasState* c)
   {
-    IM_ASSERT(c->InsideCanvas && s_cur_pin >= 0);
-    ImGuiCanvasPinRec* p = &c->Pins.Data[s_cur_pin];
+    IM_ASSERT(c->InsideCanvas && c->CurPin >= 0);
+    ImGuiCanvasPinRec* p = &c->Pins.Data[c->CurPin];
     float y1 = GetCursorScreenPos().y;
-    if (y1 <= s_cur_pin_y0)
-      y1 = s_cur_pin_y0 + GetTextLineHeight();
-    const float yc = (s_cur_pin_y0 + y1 - GetStyle().ItemSpacing.y) * 0.5f;   // row center, minus the trailing spacing
+    if (y1 <= c->CurPinY0)
+      y1 = c->CurPinY0 + GetTextLineHeight();
+    const float yc = (c->CurPinY0 + y1 - GetStyle().ItemSpacing.y) * 0.5f;    // row center, minus the trailing spacing
     p->Anchor.y = (yc - c->Origin.y - c->Pan.y) / CanvasScale(c);             // screen -> model, this frame's camera
-    c->CurNodePins.push_back(s_cur_pin);
-    s_cur_pin = -1;
+    c->CurNodePins.push_back(c->CurPin);
+    c->CurPin = -1;
   }
 
   void CanvasWire(ImGuiCanvasState* c, int wire_id, int pin_a, int pin_b, ImU32 color)
@@ -1206,6 +1397,8 @@ namespace ImGui
     rec.PinA = pin_a;
     rec.PinB = pin_b;
     rec.Color = color;
+    rec.Dashed = c->NextWireDashed;
+    c->NextWireDashed = false;
     c->Wires.push_back(rec);
     if (ImGuiCanvasPinRec* pa = CanvasFindPin(c, pin_a)) pa->WiredCount++;
     if (ImGuiCanvasPinRec* pb = CanvasFindPin(c, pin_b)) pb->WiredCount++;
@@ -1231,7 +1424,7 @@ namespace ImGui
 
   void CanvasEnd(ImGuiCanvasState* c)
   {
-    IM_ASSERT(c->InsideCanvas && c->CurNode == -1 && s_cur_pin == -1);
+    IM_ASSERT(c->InsideCanvas && c->CurNode == -1 && c->CurPin == -1);
     const float  z = CanvasScale(c);
     const ImVec2 mouse = GetIO().MousePos;
     const int    frame = GetFrameCount();
@@ -1285,7 +1478,8 @@ namespace ImGui
       }
     }
 
-    // Wires draw in channel 0: under the node plates, above the grid.
+    // Wires draw in channel 0: under the node plates, above the grid. A dashed body is the
+    // form carrier of an optional dependency.
     c->Splitter.SetCurrentChannel(c->DrawList, 0);
     for (int i = 0; i < c->Wires.Size; i++)
     {
@@ -1301,10 +1495,70 @@ namespace ImGui
       const bool hov = w->Id == c->HoveredWire;
       const bool sel = w->Id == c->SelectedWire;
       const ImU32 col = sel ? c->Style.WireSelected : hov ? c->Style.WireHovered : (w->Color != 0 ? w->Color : c->Style.Wire);
-      c->DrawList->AddBezierCubic(a, c0, c1, b, col, ImMax(1.0f, c->Style.WireThickness * z * (hov || sel ? 1.4f : 1.0f)));
+      const float th = ImMax(1.0f, c->Style.WireThickness * z * (hov || sel ? 1.4f : 1.0f));
+      if (!w->Dashed)
+      {
+        c->DrawList->AddBezierCubic(a, c0, c1, b, col, th);
+      }
+      else
+      {
+        const int segs = 26;
+        ImVec2 prev = a;
+        for (int s = 1; s <= segs; s++)
+        {
+          const float t = (float)s / (float)segs;
+          const float u = 1.0f - t;
+          const ImVec2 pt(u * u * u * a.x + 3.0f * u * u * t * c0.x + 3.0f * u * t * t * c1.x + t * t * t * b.x,
+                          u * u * u * a.y + 3.0f * u * u * t * c0.y + 3.0f * u * t * t * c1.y + t * t * t * b.y);
+          if (s & 1)
+            c->DrawList->AddLine(prev, pt, col, th);
+          prev = pt;
+        }
+      }
     }
 
     c->Splitter.Merge(c->DrawList);
+
+    // Terminal segments re-draw ABOVE the merged plates: every wire visibly leaves and lands in
+    // its pin hole; only the wire's body is occluded by nodes it crosses.
+    for (int i = 0; i < c->Wires.Size; i++)
+    {
+      const ImGuiCanvasWireRec* w = &c->Wires.Data[i];
+      const ImGuiCanvasPinRec* pa = CanvasFindPin(c, w->PinA);
+      const ImGuiCanvasPinRec* pb = CanvasFindPin(c, w->PinB);
+      if (pa == nullptr || pb == nullptr)
+        continue;
+      const ImVec2 a = CanvasToScreen(c, pa->Anchor);
+      const ImVec2 b = CanvasToScreen(c, pb->Anchor);
+      ImVec2 c0, c1;
+      CanvasWireControls(c, a, pa->Side, b, pb->Side, &c0, &c1);
+      const bool hov = w->Id == c->HoveredWire;
+      const bool sel = w->Id == c->SelectedWire;
+      const ImU32 col = sel ? c->Style.WireSelected : hov ? c->Style.WireHovered : (w->Color != 0 ? w->Color : c->Style.Wire);
+      const float th = ImMax(1.0f, c->Style.WireThickness * z * (hov || sel ? 1.4f : 1.0f));
+      const int steps = 6;
+      const float span = 0.12f;
+      ImVec2 prev = a;
+      for (int s = 1; s <= steps; s++)
+      {
+        const float t = span * (float)s / (float)steps;
+        const float u = 1.0f - t;
+        const ImVec2 pt(u * u * u * a.x + 3.0f * u * u * t * c0.x + 3.0f * u * t * t * c1.x + t * t * t * b.x,
+                        u * u * u * a.y + 3.0f * u * u * t * c0.y + 3.0f * u * t * t * c1.y + t * t * t * b.y);
+        c->DrawList->AddLine(prev, pt, col, th);
+        prev = pt;
+      }
+      prev = b;
+      for (int s = 1; s <= steps; s++)
+      {
+        const float t = 1.0f - span * (float)s / (float)steps;
+        const float u = 1.0f - t;
+        const ImVec2 pt(u * u * u * a.x + 3.0f * u * u * t * c0.x + 3.0f * u * t * t * c1.x + t * t * t * b.x,
+                        u * u * u * a.y + 3.0f * u * u * t * c0.y + 3.0f * u * t * t * c1.y + t * t * t * b.y);
+        c->DrawList->AddLine(prev, pt, col, th);
+        prev = pt;
+      }
+    }
     c->SubmitOrder = c->SubmitOrderNow;   // this frame's z-order becomes the hit-test order
     c->WiresPrev = c->Wires;              // press decisions at the next CanvasBegin walk these
     c->SolidRectsPrev = c->SolidRects;    // next frame's solid-drag clamp walks these

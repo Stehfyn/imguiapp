@@ -660,6 +660,30 @@ void ImGuiAppItemBase::OnStylePop(const ImGuiApp* app) const
 // [SECTION] Display layer (windows, sidebars, hosted controls, .ini handler)
 //-----------------------------------------------------------------------------
 
+void ImGuiAppLayoutLayer::OnAttach(ImGuiApp* app) const
+{
+    IM_UNUSED(app);
+}
+
+void ImGuiAppLayoutLayer::OnDetach(ImGuiApp* app) const
+{
+    IM_UNUSED(app);
+}
+
+void ImGuiAppLayoutLayer::OnUpdate(ImGuiApp* app, float dt) const
+{
+    IM_UNUSED(dt);
+    IM_ASSERT(app != nullptr);
+    if (app == nullptr)
+        return;
+    app->OnLayout();
+}
+
+void ImGuiAppLayoutLayer::OnRender(const ImGuiApp* app) const
+{
+    IM_UNUSED(app);
+}
+
 void ImGuiAppDisplayLayer::OnAttach(ImGuiApp* app) const
 {
     IM_UNUSED(app);
@@ -1412,6 +1436,7 @@ namespace ImGui
       PushAppLayer<ImGuiAppTaskLayer>(app);
       PushAppLayer<ImGuiAppCommandLayer>(app);
       PushAppLayer<ImGuiAppStatusLayer>(app);
+      PushAppLayer<ImGuiAppLayoutLayer>(app);
       PushAppLayer<ImGuiAppDisplayLayer>(app);
   }
 

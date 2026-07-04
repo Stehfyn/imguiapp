@@ -71,10 +71,10 @@ of the USER'S composed app:
 
 - **Viewport chrome** (composer-ui-design.md §7) — chrome sorted by what it acts on: document
   toolbar (Generate carries graph health as its state, UE-Compile-style; file/edit verbs; problems
-  chip + panel/live/App-time toggles right-aligned), view gizmo column overlaid top-right on the
+  count + panel/live/App-time toggles right-aligned), view gizmo column overlaid top-right on the
   canvas (add/frame/fit/tidy/snap + overlays popover: grid/bands/frames/minimap), and a real status
   bar at the window bottom (live keymap hints via `AppGraphStatusHint` + breadcrumb/counts/mirror
-  facts). The old dead strip died; the grid no longer cuts through group caption chips.
+  facts). The old dead strip died; the grid no longer cuts through group title bars.
 - **S1 coherence core** (from composer-ui-design.md) — brushing hover sync (`AppGraphHoverNode/Link`
   + `AppGraphHovered*`, one-frame latency): outliner row hover halos the canvas node, canvas hover
   tints the outliner row, wire hover halos both endpoints, inspector binding rows light their wire,
@@ -96,7 +96,7 @@ of the USER'S composed app:
   a renamable, deletable layer node whose name IS its generated `ImGuiAppLayer` subclass -- codegen emits the
   skeleton + `ImGui::PushAppLayer<Name>` at its stack position; palettes offer only "Custom Layer".
 - **Canvas de-noise**: grid dropped to a whisper (it cut through the pipeline box, bands and caption plates),
-  the "App Layers" chip went opaque, and phase bands hug the nodes instead of running through the margin.
+  the "App Layers" title bar went opaque, and phase bands hug the nodes instead of running through the margin.
 
 - **Time travel (flagship)** — `ImGuiAppStateHistory` in core: byte-snapshot ring over snapshottable
   storage (push helpers auto-register sizes for trivially-copyable instance data), keyed to

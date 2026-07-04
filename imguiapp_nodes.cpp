@@ -6,7 +6,7 @@
 // [SECTION] Blender-style field widgets (node body)
 // [SECTION] Typed node graph: allocation, factory, lookup
 // [SECTION] Layer column packing + default node placement
-// [SECTION] Phase-coherent geometry cache                          <- read docs/phase-coherence.md first
+// [SECTION] Phase-coherent geometry cache
 // [SECTION] Typed links: resolve / validate / capture
 // [SECTION] Per-edge field bindings editor
 // [SECTION] Hover sync (brushing across coordinated views) + cached validation
@@ -57,7 +57,7 @@ namespace ImGui
   {
     IM_ASSERT(c != nullptr && title != nullptr);
 
-    ImGui::CanvasNextNodeTitle(title, 0);
+    ImGui::CanvasNextNodeTitle(c, title, 0);
     ImGui::CanvasBeginNode(c, id);
   }
 
@@ -95,7 +95,7 @@ namespace ImGui
     *editing = *editing_node_id == id;
     st->SetVoidPtr(kAppKeyWrapOwner, editing_node_id);
     st->SetInt(kAppKeyWrapId, id);
-    ImGui::CanvasNextNodeTitleEditable(name, name_size, editing, 0);
+    ImGui::CanvasNextNodeTitleEditable(c, name, name_size, editing, 0);
     ImGui::CanvasBeginNode(c, id);
   }
 
@@ -221,6 +221,7 @@ namespace ImGui
   static const ImVec4 kAppHueTask       = ImVec4(0.43f, 0.59f, 0.80f, 1.0f);   // blue: logic
   static const ImVec4 kAppHueCommand    = ImVec4(0.82f, 0.59f, 0.35f, 1.0f);   // amber: commands + hidden markers
   static const ImVec4 kAppHueStatus     = ImVec4(0.55f, 0.73f, 0.47f, 1.0f);   // green: status
+  static const ImVec4 kAppHueLayout     = ImVec4(0.42f, 0.72f, 0.72f, 1.0f);   // teal: workspace layout
   static const ImVec4 kAppHueDisplayLayer= ImVec4(0.65f, 0.53f, 0.82f, 1.0f);   // violet: windows
   static const ImVec4 kAppHueWindow     = ImVec4(0.47f, 0.67f, 0.90f, 1.0f);   // window kind + data pins
   static const ImVec4 kAppHueSidebar    = ImVec4(0.47f, 0.78f, 0.78f, 1.0f);
@@ -273,7 +274,8 @@ namespace ImGui
     style->LayerTask      = AppThemeAccent(kAppHueTask);
     style->LayerCommand   = AppThemeAccent(kAppHueCommand);
     style->LayerStatus    = AppThemeAccent(kAppHueStatus);
-    style->LayerDisplay    = AppThemeAccent(kAppHueDisplayLayer);
+    style->LayerLayout    = AppThemeAccent(kAppHueLayout);
+    style->LayerDisplay   = AppThemeAccent(kAppHueDisplayLayer);
     style->AccentNeutral  = AppThemeNeutral(0.63f);
     style->PinData        = AppThemeAccent(kAppHueWindow);
     style->PinChild       = AppThemeAccent(kAppHuePinChild);
@@ -517,8 +519,8 @@ namespace ImGui
     return clicked;
   }
 
-  // True if the mouse is over [mn,mx] within the current window. Manual hit-test so the flat chips
-  // cannot be blocked by an overlapping ImGui item.
+  // True if the mouse is over [mn,mx] within the current window. Manual hit-test so the flat
+  // buttons cannot be blocked by an overlapping ImGui item.
   static bool AppPtInRectHovered(ImVec2 mn, ImVec2 mx)
   {
     // AllowWhenBlockedByActiveItem: a press makes the item under the cursor active before this runs, and
@@ -528,7 +530,7 @@ namespace ImGui
     return ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && m.x >= mn.x && m.x < mx.x && m.y >= mn.y && m.y < mx.y;
   }
 
-  static bool AppBlToggleChip(const char* str_id, const char* label, bool on, ImU32 accent)
+  static bool AppBlToggleButton(const char* str_id, const char* label, bool on, ImU32 accent)
   {
     IM_UNUSED(str_id);
     const float sz = ImGui::GetFrameHeight();
@@ -552,7 +554,7 @@ namespace ImGui
     return hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
   }
 
-  static bool AppBlFilterChip(const char* str_id, const char* icon, int count, bool on, ImU32 accent)
+  static bool AppBlFilterButton(const char* str_id, const char* icon, int count, bool on, ImU32 accent)
   {
     IM_UNUSED(str_id);
     const float em = ImGui::GetFontSize();
@@ -917,8 +919,12 @@ namespace ImGui
     IM_ASSERT(c != nullptr && links != nullptr);
 
     for (int i = 0; i < links->Size; i++)
+    {
+      if (links->Data[i].Soft)
+        ImGui::CanvasNextWireDashed(c);
       ImGui::CanvasWire(c, links->Data[i].Id, links->Data[i].StartAttr, links->Data[i].EndAttr,
                         links->Data[i].Soft ? AppSoftWireColor(c) : 0);
+    }
   }
 
   bool CaptureAppNodeLinks(ImGuiCanvasState* c, ImVector<ImGuiAppNodeLink>* links, int* next_link_id)
@@ -1320,14 +1326,14 @@ namespace ImGui
   }
 
   // Origin of the layer master column: must leave room LEFT of the first node for the numbered rail
-  // gutter + padding and ABOVE it for the header chip, or the pipeline group box goes negative and clips.
+  // gutter + padding and ABOVE it for the group title bar, or the pipeline group box goes negative and clips.
   static const float kAppGraphX0 = 110.0f;
   static const float kAppGraphY0 = 96.0f;
   static const float kAppGraphLayerNodeWidth = 520.0f;
   static const float kAppGraphLayerRowH = 145.0f;
 
   // Uniform layer-column CONTENT width, model units: the widest layer's measured content raises it
-  // for everyone; per-graph fact (floor = kAppGraphLayerNodeWidth).
+  // for everyone; per-graph value (floor = kAppGraphLayerNodeWidth).
   static float AppLayerUniformW(const ImGuiAppGraph* g)
   {
     return g->_LayerUniformW > 0.0f ? g->_LayerUniformW : kAppGraphLayerNodeWidth;
@@ -1345,10 +1351,10 @@ namespace ImGui
   }
 
   //-----------------------------------------------------------------------------
-  // [SECTION] Phase-coherent geometry (docs/phase-coherence.md) -- served by the canvas engine
+  // [SECTION] Phase-coherent geometry cache
   //-----------------------------------------------------------------------------
 
-  static bool AppEditorNodeWasSubmitted(const ImGuiAppGraph* g, int node_id);   // fwd (defined with the editor)
+  static bool AppEditorNodeWasSubmitted(const ImGuiAppGraph* g, int node_id);
 
   // The Composer's single canvas instance, created on first use. The engine stores node geometry in
   // MODEL units and measures it the same frame it renders (imguiapp_canvas.h).
@@ -1912,6 +1918,7 @@ namespace ImGui
     {
       if (strstr(name, "Command") != nullptr) n->LayerType = ImGuiAppLayerType_Command;
       else if (strstr(name, "Status") != nullptr) n->LayerType = ImGuiAppLayerType_Status;
+      else if (strstr(name, "Layout") != nullptr) n->LayerType = ImGuiAppLayerType_Layout;
       else if (strstr(name, "Display") != nullptr) n->LayerType = ImGuiAppLayerType_Display;
       else n->LayerType = ImGuiAppLayerType_Task;
     }
@@ -1951,21 +1958,19 @@ namespace ImGui
   static int AppNodePortByName(const ImGuiAppNode* n, const char* name);   // fwd
   static bool AppLayerIsCore(ImGuiAppLayerType t);                         // fwd (defined by the editor section)
 
-  // Replace the AUTHORED graph with a starter template (live mirror nodes re-reconcile next frame). 0 = empty app
-  // (Task+Display layers + a window), 1 = single-window + control, 2 = struct producer + a control consuming it.
-  // The four app layers (Window, Task, Command, Status) are the guaranteed framework foundation every app builds
-  // on. Add any that are missing; never duplicates (one per type). Permanent -- AppGraphRemoveNode refuses them.
+  // The five core layers are the guaranteed framework foundation every app builds on. Add any
+  // that are missing; never duplicates (one per type). Permanent -- AppGraphRemoveNode refuses them.
   void AppGraphEnsureFoundation(ImGuiAppGraph* g)
   {
     IM_ASSERT(g != nullptr);
-    // Canonical order matches the live mirror (and the type enum): Task -> Command -> Status -> Window, top to
-    // bottom. Insertion order seeds the column packing, so keep it here.
+    // Insertion order matches the live mirror (and the type enum) and seeds the column packing.
     const struct { ImGuiAppLayerType T; const char* Name; } base[] =
     {
       { ImGuiAppLayerType_Task,    "TaskLayer"    },
       { ImGuiAppLayerType_Command, "CommandLayer" },
       { ImGuiAppLayerType_Status,  "StatusLayer"  },
-      { ImGuiAppLayerType_Display,  "DisplayLayer"  },
+      { ImGuiAppLayerType_Layout,  "LayoutLayer"  },
+      { ImGuiAppLayerType_Display, "DisplayLayer" },
     };
     for (int i = 0; i < IM_ARRAYSIZE(base); i++)
       if (!AppGraphHasLayerType(g, base[i].T))
@@ -3218,7 +3223,8 @@ namespace ImGui
     case ImGuiAppLayerType_Task:    return "ImGuiAppTaskLayer";
     case ImGuiAppLayerType_Command: return "ImGuiAppCommandLayer";
     case ImGuiAppLayerType_Status:  return "ImGuiAppStatusLayer";
-    case ImGuiAppLayerType_Display:  return "ImGuiAppDisplayLayer";
+    case ImGuiAppLayerType_Layout:  return "ImGuiAppLayoutLayer";
+    case ImGuiAppLayerType_Display: return "ImGuiAppDisplayLayer";
     default:                        return "ImGuiAppLayer";
     }
   }
@@ -3230,7 +3236,8 @@ namespace ImGui
     case ImGuiAppLayerType_Task:    return "TaskLayer";
     case ImGuiAppLayerType_Command: return "CommandLayer";
     case ImGuiAppLayerType_Status:  return "StatusLayer";
-    case ImGuiAppLayerType_Display:  return "DisplayLayer";
+    case ImGuiAppLayerType_Layout:  return "LayoutLayer";
+    case ImGuiAppLayerType_Display: return "DisplayLayer";
     case ImGuiAppLayerType_Custom:  return "CustomLayer";
     default:                        return "Layer";
     }
@@ -3241,7 +3248,8 @@ namespace ImGui
   static bool AppLayerIsCore(ImGuiAppLayerType t)
   {
     return t == ImGuiAppLayerType_Task || t == ImGuiAppLayerType_Command
-        || t == ImGuiAppLayerType_Status || t == ImGuiAppLayerType_Display;
+        || t == ImGuiAppLayerType_Status || t == ImGuiAppLayerType_Layout
+        || t == ImGuiAppLayerType_Display;
   }
 
   // One identity per layer kind (icon, role line, accent), shared by the canvas node header, body, and
@@ -3253,7 +3261,8 @@ namespace ImGui
     case ImGuiAppLayerType_Task:    return ICON_FA_GEARS;
     case ImGuiAppLayerType_Command: return ICON_FA_TERMINAL;
     case ImGuiAppLayerType_Status:  return ICON_FA_CIRCLE_INFO;
-    case ImGuiAppLayerType_Display:  return ICON_FA_TABLE_COLUMNS;
+    case ImGuiAppLayerType_Layout:  return ICON_FA_BORDER_ALL;
+    case ImGuiAppLayerType_Display: return ICON_FA_TABLE_COLUMNS;
     default:                        return ICON_FA_LAYER_GROUP;
     }
   }
@@ -3268,7 +3277,8 @@ namespace ImGui
     case ImGuiAppLayerType_Task:    return "ingests module status & updates app state";
     case ImGuiAppLayerType_Command: return "receives & dispatches commands";
     case ImGuiAppLayerType_Status:  return "publishes the app's own status";
-    case ImGuiAppLayerType_Display:  return "renders the world -- presentation only";
+    case ImGuiAppLayerType_Layout:  return "lays out the workspace -- dockspaces before windows";
+    case ImGuiAppLayerType_Display: return "renders the world -- presentation only";
     case ImGuiAppLayerType_Custom:  return "your ImGuiAppLayer subclass, at its stack position";
     default:                        return "orchestration layer";
     }
@@ -3281,7 +3291,8 @@ namespace ImGui
     case ImGuiAppLayerType_Task:    return AppComposerGetStyle()->LayerTask;
     case ImGuiAppLayerType_Command: return AppComposerGetStyle()->LayerCommand;
     case ImGuiAppLayerType_Status:  return AppComposerGetStyle()->LayerStatus;
-    case ImGuiAppLayerType_Display:  return AppComposerGetStyle()->LayerDisplay;
+    case ImGuiAppLayerType_Layout:  return AppComposerGetStyle()->LayerLayout;
+    case ImGuiAppLayerType_Display: return AppComposerGetStyle()->LayerDisplay;
     default:                        return AppComposerGetStyle()->AccentNeutral;
     }
   }
@@ -3357,17 +3368,28 @@ namespace ImGui
     return IM_COL32(ImMin(r, 255), ImMin(g, 255), ImMin(b, 255), 255);
   }
 
-  // Title-bar tint (rides the engine's CanvasNextNodeTitle). Live/promoted nodes use their origin color;
-  // other design nodes get a muted kind-colored header. Selection legibility stays engine-side (outline).
+  // Title-bar tint (rides the engine's CanvasNextNodeTitle). One meaning per channel: the header
+  // hue is the node's KIND, for every node -- origin (live/promoted) rides the title dot instead.
+  // Selection legibility stays engine-side (outline).
   static ImU32 AppNodeTitleColor(const ImGuiAppNode* n)
   {
-    ImU32 base = AppGraphOriginColor(n);
-    if (base == 0)
+    const ImU32 raw = (n->Kind == ImGuiAppNodeKind_Layer) ? AppLayerAccent(n->LayerType) : AppKindColor(n->Kind);
+    return AppScaleRGB(raw, 0.52f);
+  }
+
+  // The kind word shown muted in the title bar.
+  static const char* AppNodeKindTag(ImGuiAppNodeKind k)
+  {
+    switch (k)
     {
-      const ImU32 raw = (n->Kind == ImGuiAppNodeKind_Layer) ? AppLayerAccent(n->LayerType) : AppKindColor(n->Kind);
-      base = AppScaleRGB(raw, 0.52f);
+    case ImGuiAppNodeKind_Layer:   return "layer";
+    case ImGuiAppNodeKind_Window:  return "window";
+    case ImGuiAppNodeKind_Sidebar: return "sidebar";
+    case ImGuiAppNodeKind_Control: return "control";
+    case ImGuiAppNodeKind_Struct:  return "struct";
+    case ImGuiAppNodeKind_Field:   return "field";
+    default:                       return "";
     }
-    return base;
   }
 
   // Node ids the editor submitted on the last completed frame -- the set whose geometry queries are
@@ -3463,7 +3485,7 @@ namespace ImGui
 
   // This frame's layer-column geometry, published by AppDrawLayerGroupBox for consumers in the
   // same pass (trunk routing): the LAYER NODE rects ARE the obstacle set -- one producer per
-  // fact, never re-derived (docs/phase-coherence.md rule 3). Screen space, this frame's camera.
+  // value, never re-derived (docs/phase-coherence.md rule 3). Screen space, this frame's camera.
   struct AppLayerColumnGeom
   {
     bool   Valid = false;
@@ -3483,10 +3505,7 @@ namespace ImGui
   // Always publishes `out_geom`; `draw` false computes geometry only (overlay hidden).
   static void AppDrawLayerGroupBox(const ImGuiAppGraph* g, bool show_live, bool draw, float em_base, float fh_base, AppLayerColumnGeom* out_geom)
   {
-    // Per visible layer: screen y-span + accent, for the Unity-execution-order-style flow rail and phase bands.
-    // [Phase-coherent geometry] positions come from the MODEL (GridPos) and sizes from the engine's model
-    // measurement, both transformed with THIS frame's camera -- never from last frame's pixel rects, which lag
-    // one frame behind any zoom change (docs/phase-coherence.md rule 1).
+    // Per visible layer: screen y-span + accent for the flow rail and phase bands.
     ImGuiCanvasState* cv = AppEditorCanvas(g);
     const float  z = AppCanvasScale(g);
 
@@ -4548,6 +4567,8 @@ namespace ImGui
         return n->Kind == ImGuiAppNodeKind_Control && n->Commands.Size > 0;
       if (tn->LayerType == ImGuiAppLayerType_Status)
         return false;   // nothing composes into the status layer (it renders the app's status bar itself)
+      if (tn->LayerType == ImGuiAppLayerType_Layout)
+        return false;
       int cur = id;
       for (int guard = 0; guard < 64; guard++)
       {
@@ -4624,12 +4645,7 @@ namespace ImGui
 
   // Accumulate the screen-space bounding box of a containment group: the owner node + all its descendants
   // (window/sidebar -> hosted controls -> their data structs -> fields; control -> its structs -> fields;
-  // struct -> fields). Skips hidden live nodes. Recursive.
-  // [Phase-coherent geometry] group frames draw BEFORE this frame's submission -- model position and the
-  // engine's model measurement, transformed with THIS frame's camera: coherent every frame
-  // (docs/phase-coherence.md).
-  // Containment subtree bounds, MODEL units: current position + settled size, no camera term.
-  // Drawing consumers apply this frame's camera (docs/phase-coherence.md rules 1, 5).
+  // struct -> fields). Skips hidden live nodes. Recursive. Bounds in MODEL units, no camera term.
   static void AppGroupAccumulate(const ImGuiAppGraph* g, int owner_id, bool show_live, ImVec2* mn, ImVec2* mx)
   {
     const ImGuiAppNode* n = AppGraphFindNodeConst(g, owner_id);
@@ -4986,7 +5002,8 @@ namespace ImGui
       case ImGuiAppLayerType_Task:    return "state collection: module status ingest + control updates in dependency order --  OnUpdate(dt, temp, last_temp)";
       case ImGuiAppLayerType_Command: return "controls that emit commands:  OnGetCommand collects ->  app dispatches OnExecuteCommand";
       case ImGuiAppLayerType_Status:  return "publishes the app's own status for other modules (today: the status bar) -- nothing composes here yet";
-      case ImGuiAppLayerType_Display:  return "presentation only -- windows & sidebars render the collected state, in push order, mutating nothing";
+      case ImGuiAppLayerType_Layout:  return "workspace layout: the app's OnLayout() submits dockspaces & dock bindings before any window Begins";
+      case ImGuiAppLayerType_Display: return "presentation only -- windows & sidebars render the collected state, in push order, mutating nothing";
       case ImGuiAppLayerType_Custom:  return "your ImGuiAppLayer subclass:  OnAttach/OnDetach at push/pop, OnUpdate -> OnRender at its stack position";
       default: break;
       }
@@ -5009,8 +5026,6 @@ namespace ImGui
     if (seq.Size == 0)
       return;
 
-    // [Phase-coherent geometry] model positions + the engine's model sizes, transformed with THIS frame's
-    // camera (this runs after CanvasEnd: last frame's pixel rects would lag a zoom change by a frame).
     IM_UNUSED(editor_min);
     ImGuiCanvasState* cv = AppEditorCanvas(g);
     const float  z = AppCanvasScale(g);
@@ -5084,12 +5099,10 @@ namespace ImGui
   }
   static ImU32 AppPinTieColor() { return AppComposerGetStyle()->PinTie; }
 
-  // Editor path chips at the canvas top-left: "App > DisplayLayer > Mixer". Always shown -- at the
-  // root a single App tail chip anchors WHERE you are; drilled in, clicking a segment jumps back to
-  // that depth (selecting the scope just exited). A caption underneath states the scope's per-frame
-  // contract. A CHILD window overlaying the canvas, not draw-list chips in the canvas window (the
-  // canvas item is submitted first and owns the mouse, so in-window buttons never receive the
-  // click) and not a top-level window (any click on the host window raises the host above it).
+  // Breadcrumb at the canvas top-left: "App > DisplayLayer > Mixer". Always shown; drilled in,
+  // clicking a segment jumps back to that depth. A CHILD window overlaying the canvas, not
+  // draw-list buttons in the canvas window (the canvas item is submitted first and owns the
+  // mouse) and not a top-level window (any click on the host window raises the host above it).
   static void AppDrawScopeBreadcrumb(ImGuiAppGraph* g, int* selected_node_id, ImVec2 editor_min)
   {
     const float em = ImGui::GetFontSize();
@@ -5268,16 +5281,16 @@ namespace ImGui
     // Snap-to-grid: toggled by the G key (latched in the shared view state, applied to the canvas style).
     // When on, the engine snaps node origins to the grid as they're dragged. View state lives behind
     // AppGraphViewState(g) so the host can persist it across sessions.
-    bool& s_snap_grid = AppGraphViewState(g)->SnapGrid;
-    ImGui::CanvasGetStyle(cv)->GridSnap = s_snap_grid;
+    bool& snap_grid = AppGraphViewState(g)->SnapGrid;
+    ImGui::CanvasGetStyle(cv)->GridSnap = snap_grid;
 
     // Canvas overlay toggles, driven from the gizmo cluster's popover: each is presentation-only and
     // never touches the model. Same persistable view state as snap.
-    bool& s_ov_grid = AppGraphViewState(g)->OvGrid;
-    bool& s_ov_bands = AppGraphViewState(g)->OvBands;
-    bool& s_ov_frames = AppGraphViewState(g)->OvFrames;
-    bool& s_ov_minimap = AppGraphViewState(g)->OvMinimap;
-    ImGui::CanvasGetStyle(cv)->GridLines = s_ov_grid;
+    bool& ov_grid = AppGraphViewState(g)->OvGrid;
+    bool& ov_bands = AppGraphViewState(g)->OvBands;
+    bool& ov_frames = AppGraphViewState(g)->OvFrames;
+    bool& ov_minimap = AppGraphViewState(g)->OvMinimap;
+    ImGui::CanvasGetStyle(cv)->GridLines = ov_grid;
 
     // Zoom persistence: the engine owns the live camera; the view state is the SAVED value. An external
     // write (sidecar load) pushes into the engine here; the engine value is mirrored back after CanvasEnd.
@@ -5308,10 +5321,29 @@ namespace ImGui
     if (AppGraphEditorState(g)->AutoLayoutCountdown > 0 && --AppGraphEditorState(g)->AutoLayoutCountdown == 0)
       AppGraphAutoLayout(g, show_live);
 
+    // One normalized card width: grows to the widest measured need, deadbanded against
+    // zoom-tick re-measures.
+    {
+      float& uw = AppGraphEditorState(g)->UniformCardW;
+      for (int i = 0; i < g->Nodes.Size; i++)
+      {
+        const ImGuiAppNode* n = &g->Nodes.Data[i];
+        if (n->Kind == ImGuiAppNodeKind_Layer)
+          continue;
+        const float need = ImGui::CanvasNodeNeededWidth(cv, n->Id);
+        if (need > uw + 2.0f)
+          uw = need;
+      }
+    }
+
     // Drill-down scope upkeep: repair dangling entries; on any scope change re-seat every now-visible node at its
     // stored GridPos (it left the canvas while out of scope) and arm a deferred fit-all (dims valid post-submit).
     AppScopeValidate(g);
     const bool at_root = g->ViewScope.Size == 0;
+    // Altitude law: with a composed foundation, the root shows relationships and flow only --
+    // struct and field nodes (and binding detail) exist below the breadcrumb. Graphs without a
+    // Display layer (raw canvases, unit scaffolds) keep every node at every level.
+    const bool altitude_root = at_root && AppGraphLayerOfType(g, ImGuiAppLayerType_Display) != nullptr;
     const int scope_sig = g->ViewScope.Size * 100000 + (AppScopeCurrent(g) + 1);
     if (scope_sig != g->_ScopeSig)
     {
@@ -5374,7 +5406,7 @@ namespace ImGui
     // trunk router's obstacle set (geometry computed even when the overlay is hidden).
     AppLayerColumnGeom col_geom;
     if (at_root)
-      AppDrawLayerGroupBox(g, show_live, s_ov_bands, em_base, fh_base, &col_geom);
+      AppDrawLayerGroupBox(g, show_live, ov_bands, em_base, fh_base, &col_geom);
 
     // The layer column is solid ground: window-group nodes can never be dragged into it
     // (engine solid-drag clamp; consumed by the next frame's FSM in model units).
@@ -5386,13 +5418,12 @@ namespace ImGui
     ImVector<int> trunked_owners;
 
     // Semantic group frames: a translucent labeled box around each containment group, same background
-    // channel as the pipeline box -- the grid can never cut through a frame or its caption chip, and
-    // nodes render on top of their frame.
+    // channel as the pipeline box.
     // Passes are depth-ordered: windows/sidebars behind, control data clusters, then structs in front.
     // Sole producer of _GroupFrames (model units); consumers read _GroupFramesPrev.
     g->_GroupFramesPrev.swap(g->_GroupFrames);
     g->_GroupFrames.resize(0);
-    if (s_ov_frames)
+    if (ov_frames)
     {
       auto group_box = [&](int owner_id, ImU32 kind_col, int depth, bool include_owner)
       {
@@ -5415,24 +5446,21 @@ namespace ImGui
           return;
         const ImGuiAppNode* owner = AppGraphFindNodeConst(g, owner_id);
         const float em = ImGui::GetFontSize();
-        // Chrome in MODEL units from camera-free constants; the pushed font rounds + clamps per
-        // zoom and must not size bounds (docs/phase-coherence.md rule 1). FontSizeBase is the
-        // model-unit em (scale = zoom x FontRatio = zoom x host_em / FontSizeBase).
-        const float em_m = ImGui::GetStyle().FontSizeBase;
+        const float sc = AppCanvasScale(g);
+        // Chrome in MODEL units: the zoom-free em (this scope runs under the zoomed canvas
+        // font, so FontSizeBase here carries the zoom and cannot be used directly).
+        const float em_m = em_base * ImGui::CanvasGetZoom(cv) / sc;
         const float pad_m = em_m * (0.5f + 0.22f * (float)depth);   // outer groups get more breathing room
         const float title_h_m = fh_base * em_m / em_base;
         ImVec2 fr_mn_m(mn.x - pad_m, mn.y - (title_h_m + pad_m * 0.4f));
         ImVec2 fr_mx_m(mx.x + pad_m, mx.y + pad_m);
-        const float sc = AppCanvasScale(g);
-        mn = ImGui::CanvasToScreen(cv, fr_mn_m);   // drawing reads the fact through THIS frame's camera (rule 5)
+        mn = ImGui::CanvasToScreen(cv, fr_mn_m);   // drawing reads the published rect through THIS frame's camera (rule 5)
         mx = ImGui::CanvasToScreen(cv, fr_mx_m);
         const float pad = pad_m * sc;
         const float title_h = title_h_m * sc;
         ImDrawList* dl = ImGui::CanvasBackgroundDrawList(cv);
         const ImU32 fill = (kind_col & 0x00FFFFFF) | (IM_COL32(0, 0, 0, 18) & 0xFF000000);
         const ImU32 line = (kind_col & 0x00FFFFFF) | (IM_COL32(0, 0, 0, 130) & 0xFF000000);
-        // Owner frames + chips draw AFTER the chip gesture, from the post-drag rect
-        // (docs/phase-coherence.md rule 5).
         if (owner == nullptr)
         {
           dl->AddRectFilled(mn, mx, fill, em * 0.3125f);
@@ -5445,7 +5473,6 @@ namespace ImGui
           AppGraphCollectSubtree(g, owner_id, &members);
           const int member_count = members.Size - 1;   // exclude the owner itself
 
-          // Chip text: name, plus a "+N" hidden-count badge when the group is folded.
           char label[160];
           if (owner->GroupCollapsed)
             ImFormatString(label, IM_ARRAYSIZE(label), "%s  +%d", title, member_count);
@@ -5454,21 +5481,20 @@ namespace ImGui
 
           const float tri_w = em * 0.9f;
           const ImVec2 ts = ImGui::CalcTextSize(label);
-          ImVec2 chip_mn(mn.x + pad, mn.y);
-          ImVec2 chip_mx(chip_mn.x + tri_w + ts.x + em * 0.5f, mn.y + title_h);
+          // Title bar spans the full group width.
+          ImVec2 bar_mn(mn.x + pad, mn.y);
+          ImVec2 bar_mx(mx.x - pad, mn.y + title_h * 1.15f);
 
-          // The chip is both a fold toggle and a move handle: a click (no drag) collapses/expands the group; a
-          // drag moves the group together. One gesture at a time, tracked across frames.
-          // A section-seated owner's position is OWNED by the window-section packer (one producer per
-          // fact, docs/phase-coherence.md rule 3): the chip never moves it -- expanded, the drag moves
-          // only the cluster; collapsed (the chip rides the pinned owner), the drag is inert, since
-          // moving the hidden members would teleport them on expand.
+          // Click (no drag) folds/unfolds; drag moves the group. A section-seated owner's
+          // position is owned by the window-section packer (one producer per value,
+          // docs/phase-coherence.md rule 3): expanded, the drag moves only the cluster;
+          // collapsed, the drag is inert.
           const bool owner_seated = at_root
               && (owner->Kind == ImGuiAppNodeKind_Window || owner->Kind == ImGuiAppNodeKind_Sidebar)
               && AppGraphLayerOfType(g, ImGuiAppLayerType_Display) != nullptr;
-          ImGui::SetCursorScreenPos(chip_mn);
+          ImGui::SetCursorScreenPos(bar_mn);
           ImGui::PushID(owner_id);
-          ImGui::InvisibleButton("##grouphandle", chip_mx - chip_mn);
+          ImGui::InvisibleButton("##grouphandle", bar_mx - bar_mn);
           const bool hov = ImGui::IsItemHovered();
           const bool act = ImGui::IsItemActive();
           if (ImGui::IsItemActivated())
@@ -5594,14 +5620,12 @@ namespace ImGui
               }
             }
 
-            // [Phase-coherent geometry] the members' THIS-frame submission moved: frame, chip, and
-            // published rect shift rigidly (drag-start frame + the granted displacement).
             fr_mn_m = ImVec2(g->_GroupDragFrame0.x + g->_GroupDragApplied.x, g->_GroupDragFrame0.y + g->_GroupDragApplied.y);
             fr_mx_m = ImVec2(g->_GroupDragFrame0.z + g->_GroupDragApplied.x, g->_GroupDragFrame0.w + g->_GroupDragApplied.y);
             mn = ImGui::CanvasToScreen(cv, fr_mn_m);
             mx = ImGui::CanvasToScreen(cv, fr_mx_m);
-            chip_mn = ImVec2(mn.x + pad, mn.y);
-            chip_mx = ImVec2(chip_mn.x + tri_w + ts.x + em * 0.5f, mn.y + title_h);
+            bar_mn = ImVec2(mn.x + pad, mn.y);
+            bar_mx = ImVec2(mx.x - pad, mn.y + title_h * 1.15f);
           }
           if (ImGui::IsItemDeactivated() && !g->_GroupDragMoved)
           {
@@ -5630,23 +5654,21 @@ namespace ImGui
           dl->AddRectFilled(mn, mx, fill, em * 0.3125f);
           dl->AddRect(mn, mx, line, em * 0.3125f, 0, ImMax(1.0f, em * 0.09375f));
 
-          const ImU32 chip_bg = (hov || act) ? ((line & 0x00FFFFFF) | 0xFF000000) : line;
-          dl->AddRectFilled(chip_mn, chip_mx, AppThemeNeutral(0.05f), em * 0.1875f);   // opaque plate under the tint
-          dl->AddRectFilled(chip_mn, chip_mx, chip_bg, em * 0.1875f);
+          const ImU32 bar_bg = (hov || act) ? ((line & 0x00FFFFFF) | 0xFF000000) : line;
+          dl->AddRectFilled(bar_mn, bar_mx, AppThemeNeutral(0.05f), em * 0.1875f);   // opaque plate under the tint
+          dl->AddRectFilled(bar_mn, bar_mx, bar_bg, em * 0.1875f);
           // Disclosure triangle: right-pointing when folded, down-pointing when open.
           const ImU32 glyph = AppThemeNeutral(0.92f);
-          const ImVec2 tc(chip_mn.x + tri_w * 0.5f, (chip_mn.y + chip_mx.y) * 0.5f);
+          const ImVec2 tc(bar_mn.x + tri_w * 0.5f, (bar_mn.y + bar_mx.y) * 0.5f);
           const float a = em * 0.22f;
           if (owner->GroupCollapsed)
             dl->AddTriangleFilled(ImVec2(tc.x - a * 0.55f, tc.y - a), ImVec2(tc.x - a * 0.55f, tc.y + a), ImVec2(tc.x + a * 0.8f, tc.y), glyph);
           else
             dl->AddTriangleFilled(ImVec2(tc.x - a, tc.y - a * 0.55f), ImVec2(tc.x + a, tc.y - a * 0.55f), ImVec2(tc.x, tc.y + a * 0.8f), glyph);
-          dl->AddText(ImVec2(chip_mn.x + tri_w, mn.y + (title_h - ts.y) * 0.5f), glyph, label);
+          dl->AddText(ImVec2(bar_mn.x + tri_w, mn.y + (title_h - ts.y) * 0.5f), glyph, label);
 
           // Trunk connector: an owner excluded from its own frame gets ONE wire, owner right edge
-          // -> this chip, standing in for the whole per-control containment fan (those wires are
-          // not submitted -- see the link loop). [Phase-coherent geometry] model position + model
-          // size x this frame's camera, same law as the frame itself.
+          // -> this title bar, standing in for the per-control containment fan.
           if (!include_owner && (owner->HasGridPos || AppEditorNodeWasSubmitted(g, owner_id)))
           {
             const float z = AppCanvasScale(g);
@@ -5655,42 +5677,35 @@ namespace ImGui
             if (!AppNodeModelSize(g, owner_id, &om))
               om = AppLayoutNodeSize(g, owner);
             const ImVec2 start(opos.x + om.x * z, opos.y + om.y * z * 0.5f);
-            const ImVec2 end(chip_mn.x, (chip_mn.y + chip_mx.y) * 0.5f);
+            const ImVec2 end(bar_mn.x, (bar_mn.y + bar_mx.y) * 0.5f);
             const ImU32 wire_col = AppPinColor(ImGuiAppPortKind_ChildIn);
             const float th = ImMax(1.0f, em * 0.14f);
-            // [Trunk router] SPEC (2026-07-03, approved drawing "the-model"):
-            //   * flow runs chip -> window pin; horizontal tangents at both endpoints
-            //   * layer SECTIONS contain layer NODES; the wire's own section is home ground, its
-            //     own layer NODE is still never crossed; other layers are forbidden at section
-            //     extent ("not ... behind other layer nodes or other layer sections")
-            //   * "the curves must be designed to hug the layer node corners" -- the lead leaves
-            //     the pin already curving through home ground and meets the hug line tight past
-            //     the first corner (own node's bottom going up, the next section's top going
-            //     down); verticals run straight along the node group's edge
-            //   * past the group's far edge: wrap the far corner, HUG the group's far boundary,
-            //     then TWO SYMMETRIC LOOSE ARCS finish into the pin at pin level, entering
-            //     through the side the pin faces -- never over or under the destination group's
-            //     boundaries, nothing to overshoot
+            // Trunk route constraints:
+            //   * flow runs title bar -> window pin; horizontal tangents at both endpoints
+            //   * inside the layer group the wire is DEAD FLAT at pin level -- the crossing of
+            //     the group's right edge is exactly horizontal, no bend inside home ground
+            //   * past the right edge the wire is CUBIC BEZIERS ONLY -- loose free curves, no
+            //     straight verticals, no tight corner arcs
+            //   * the column stays uncrossed by convex hull: while a curve's y-span overlaps the
+            //     column, every control point sits at or right of the hug line; travel to the
+            //     wire's far side happens beyond the group's far boundary
+            //   * entry is always horizontal, through the side the pin faces
             //   * constant stroke width: one path, deduped joints, one stroke
             // Inputs in MODEL units. The route is computed ONCE from these and cached on the
-            // graph; the camera only transforms the cached primitives -- zooming in or out can
-            // never re-route a settled link (phase-coherence rule 1). A route is re-derived only
-            // when its model inputs move (endpoints, column geometry, destination frame).
+            // graph; the camera only transforms the cached primitives -- zoom can never
+            // re-route a link (phase-coherence rule 1). A route is re-derived only when its
+            // model inputs move (endpoints, column geometry, destination frame).
             const float zc = AppCanvasScale(g);
             // Margins are MODEL quantities derived from the UNZOOMED font: exact at every zoom,
             // no clamp drift, no invisible geometry (scale = zoom * font-ratio).
             const float em_m = em_base * ImGui::CanvasGetZoom(cv) / zc;
             const float m_hug = em_m * 0.6f;
-            const float r_hug = em_m * 1.1f;
             const ImVec2 start_m = ImGui::CanvasFromScreen(cv, start);
             const ImVec2 end_m = ImGui::CanvasFromScreen(cv, end);
             const float mn_left_m = ImGui::CanvasFromScreen(cv, mn).x;
-            const float dxm = end_m.x - start_m.x;
             const float dym = end_m.y - start_m.y;
             const float sgn = dym > 0.0f ? 1.0f : -1.0f;
 
-            bool has_q = false;
-            float q_y = 0.0f;
             float box_l = start_m.x;
             float box_r = start_m.x;
             float far_y = start_m.y;
@@ -5703,23 +5718,13 @@ namespace ImGui
               // far wrap -- the 2nd corner -- keys off the group box's boundary.
               x_h = ImGui::CanvasFromScreen(cv, ImVec2(col_geom.SilRight, 0.0f)).x + m_hug;
               far_y = ImGui::CanvasFromScreen(cv, sgn > 0.0f ? col_geom.BoxMax : col_geom.BoxMin).y;
-              for (int ri = 0; ri < col_geom.RowCount; ri++)
-              {
-                const float lead = ImGui::CanvasFromScreen(cv, ImVec2(0.0f, sgn > 0.0f ? col_geom.RowTop[ri] : col_geom.RowBot[ri])).y;
-                if (sgn * (lead - start_m.y) > 0.25f && (!has_q || sgn * (q_y - lead) > 0.0f))
-                {
-                  q_y = lead;
-                  has_q = true;
-                }
-              }
             }
             const float m_far = m_hug;
-            const bool dest_past_q = has_q && sgn * (end_m.y - q_y) > 0.0f;
             const bool dest_past_far = col_geom.Valid && sgn * (end_m.y - far_y) > 0.0f;
             const bool dest_left = end_m.x < start_m.x;
-            // A right-side chip close to the column pulls the hug line inward (never inside the
-            // base margin): the wire must reach the chip from ITS left, and a hug line past the
-            // chip would fold the route into a hairpin.
+            // A right-side destination close to the column pulls the hug line inward (never
+            // inside the base margin): the wire must enter from the destination's left, and a
+            // hug line past it would fold the route into a hairpin.
             if (!dest_left && col_geom.Valid && end_m.x - em_m < x_h)
               x_h = ImMax(ImGui::CanvasFromScreen(cv, ImVec2(col_geom.SilRight, 0.0f)).x + m_hug, end_m.x - em_m);
 
@@ -5759,8 +5764,8 @@ namespace ImGui
               rt->OwnerId = owner_id;
               rt->KeyA = ImVec4(FLT_MAX, 0.0f, 0.0f, 0.0f);
             }
-            const ImVec4 keyA(x_h, has_q ? q_y : -FLT_MAX * 0.5f, far_y, box_l);
-            const ImVec4 keyB(mn_left_m, sgn, sec_bot_m, em_m);   // em_m: the box pads scale with the zoomed font -- zoom must re-derive against current bounds
+            const ImVec4 keyA(x_h, 0.0f, far_y, box_l);
+            const ImVec4 keyB(mn_left_m, sgn, sec_bot_m, em_m);
             const float eps = 0.5f;
             const bool stale = ImAbs(rt->StartM.x - start_m.x) > eps || ImAbs(rt->StartM.y - start_m.y) > eps
                             || ImAbs(rt->EndM.x - end_m.x) > eps || ImAbs(rt->EndM.y - end_m.y) > eps
@@ -5788,114 +5793,67 @@ namespace ImGui
               {
                 ImGuiAppTrunkSeg sg; sg.Kind = 2; sg.P0 = c1; sg.P1 = c2; sg.P2 = pnt; rt->Segs.push_back(sg);
               };
-              const float k = 0.5523f;   // circular-arc cubic constant
-
               bool routed = false;
-              // EVERY trunk takes the hug route: out at pin level, onto the hug line, ride, and
-              // end per the destination. There is no free-sweep shortcut -- a sweep from an
-              // in-section pin inevitably pierces the section's side wall mid-descent, the bug
-              // this router exists to kill. The lead is emitted only when one of the endings
-              // below can actually complete the route -- an orphaned lead would force the
-              // fallback to restart from the pin, folding the wire into a hairpin.
+              // EVERY trunk leaves the section flat at pin level; the free-curve section starts
+              // only at the hug line, past the group's right edge. There is no free-sweep
+              // shortcut from the pin itself -- a sweep from an in-section pin inevitably
+              // pierces the section's side wall mid-descent, the bug this router exists to
+              // kill. The lead is emitted only when one of the endings below can actually
+              // complete the route -- an orphaned lead would force the fallback to restart
+              // from the pin, folding the wire into a hairpin.
               const bool can_beside = !dest_left && end_m.x >= x_h + em_m * 0.25f;
               if (x_h > start_m.x + em_m * 0.5f && (can_beside || dest_past_far || dest_left))
               {
-                // The lead is a PIN-LEVEL exit and nothing more: DEAD FLAT to the wall -- the
-                // crossing is exactly horizontal, at pin level -- then a tight corner wrapping
-                // the section boundary's corner from OUTSIDE. Every bend lives outside the
-                // section; all vertical travel rides the hug line.
-                float c1_y = start_m.y + sgn * em_m * 1.2f;
-                if (has_q && sgn * (c1_y - (q_y - sgn * m_hug)) > 0.0f)
-                  c1_y = q_y - sgn * m_hug;
-                if (sgn * (c1_y - (end_m.y - sgn * em_m)) > 0.0f)
-                  c1_y = end_m.y - sgn * em_m;
-                const float r_b = ImMax(0.5f, ImMin(r_hug, sgn * (c1_y - start_m.y)));
-                c1_y = start_m.y + sgn * r_b;
+                // The lead is a PIN-LEVEL exit and nothing more: DEAD FLAT to the hug line --
+                // the crossing of the group's right edge is exactly horizontal, at pin level.
+                // Everything after the exit point is cubics.
                 seg_line(start_m);
-                seg_line(ImVec2(x_h - r_b, start_m.y));
-                seg_arc(ImVec2(x_h - r_b, start_m.y + sgn * r_b), r_b, sgn > 0.0f ? -IM_PI * 0.5f : IM_PI * 0.5f, 0.0f);
+                seg_line(ImVec2(x_h, start_m.y));
                 if (can_beside)
                 {
-                  // Beside the column: ride the group's edge to chip level, one loose corner,
-                  // enter the pin through its facing side at pin level.
-                  const float r_in = ImMax(0.5f, ImMin(ImMin(end_m.x - x_h, em_m * 4.0f), ImAbs(end_m.y - c1_y) * 0.8f));
-                  seg_line(ImVec2(x_h, end_m.y - sgn * r_in));
-                  seg_arc(ImVec2(x_h + r_in, end_m.y - sgn * r_in), r_in, IM_PI, IM_PI - sgn * IM_PI * 0.5f);
-                  seg_line(end_m);
+                  // Destination clear of the hug line on the right: one S-curve, horizontal tangents
+                  // at both ends. The inbound control point is clamped to the hug line, so the
+                  // hull -- and with it the curve -- never crosses back over the column.
+                  const float t_s = ImMax(em_m, ImMin(ImMin(end_m.x - x_h, em_m * 4.0f), ImAbs(end_m.y - start_m.y) * 0.8f + em_m));
+                  seg_cubic(ImVec2(x_h + t_s, start_m.y), ImVec2(ImMax(end_m.x - t_s, x_h), end_m.y), end_m);
                   routed = true;
                 }
-                else if (dest_past_far)
+                else if (dest_past_far || dest_left)
                 {
+                  // Destination on the column's far side or its left: one curve down the OUTSIDE of
+                  // the hug line -- bulge right, descend, land on the far-boundary line at the
+                  // far corner heading left. Hull x stays in [x_h, x_h + b]: the column is
+                  // never re-entered while crossing its y-span.
                   const float y_b = far_y + sgn * m_far;
-                  if (end_m.x < x_h - r_hug - 0.5f)
+                  const float b = ImMax(em_m, ImMin(em_m * 2.5f, ImAbs(y_b - start_m.y) * 0.5f));
+                  seg_cubic(ImVec2(x_h + b, start_m.y), ImVec2(x_h + b, y_b), ImVec2(x_h, y_b));
+                  if (dest_past_far)
                   {
-                    // 180 degrees: wrap the group's far corner, hug its far boundary (and past
-                    // its far-left corner for far-left chips), then two symmetric loose arcs
-                    // into the pin. A chip sitting ON the hug leg's line (no drop left) is
-                    // entered straight -- folding the S into zero height loops at the pin.
-                    seg_line(ImVec2(x_h, y_b - sgn * r_hug));
-                    seg_arc(ImVec2(x_h - r_hug, y_b - sgn * r_hug), r_hug, 0.0f, sgn * IM_PI * 0.5f);
-                    const float drop = ImAbs(end_m.y - y_b);
-                    if (drop < em_m * 1.5f)
-                    {
-                      seg_line(end_m);
-                    }
-                    else
-                    {
-                      const float ry = ImMax(em_m, drop * 0.5f);
-                      const float lateral = (x_h - r_hug) - end_m.x;
-                      const float rx = ImMax(ImMin(ry, ImMax(em_m * 1.5f, lateral * 0.8f)), end_m.x - mn_left_m + m_hug);
-                      seg_line(ImVec2(end_m.x, y_b));
-                      const float my = (y_b + end_m.y) * 0.5f;
-                      seg_cubic(ImVec2(end_m.x - rx * k, y_b), ImVec2(end_m.x - rx, my - sgn * ry * k), ImVec2(end_m.x - rx, my));
-                      seg_cubic(ImVec2(end_m.x - rx, my + sgn * ry * k), ImVec2(end_m.x - rx * k, end_m.y), end_m);
-                    }
+                    // Past the far boundary: one curve out of the corner leftward, swinging
+                    // beyond the far-boundary line, entering the pin horizontally through the
+                    // side it faces.
+                    const float t_in = ImMax(em_m, ImMin(em_m * 3.0f, ImAbs(end_m.y - y_b) * 0.8f + em_m));
+                    seg_cubic(ImVec2(x_h - b, y_b), ImVec2(end_m.x - t_in, end_m.y), end_m);
                   }
                   else
                   {
-                    // Chip hangs just past the group at (or right of) the hug line: pass the
-                    // boundary ON the line, gentle S beyond it, horizontal entry.
-                    const float avail = ImAbs(end_m.y - y_b);
-                    const float r_f = ImMax(0.5f, ImMin(em_m * 2.0f, avail * 0.5f));
-                    const float x_e = end_m.x - r_f;
-                    const float shift = x_e - x_h;
-                    const float ry_s = ImMax(0.5f, ImMin(em_m * 1.2f, avail * 0.25f));
-                    if (ImAbs(shift) > 0.5f)
-                    {
-                      const float y0 = end_m.y - sgn * (r_f + 2.0f * ry_s);
-                      seg_line(ImVec2(x_h, y0));
-                      seg_cubic(ImVec2(x_h, y0 + sgn * ry_s * 1.1f), ImVec2(x_e, y0 + sgn * ry_s * 0.9f), ImVec2(x_e, y0 + sgn * 2.0f * ry_s));
-                    }
-                    else
-                    {
-                      seg_line(ImVec2(x_e, end_m.y - sgn * r_f));
-                    }
-                    seg_arc(ImVec2(end_m.x, end_m.y - sgn * r_f), r_f, IM_PI, IM_PI - sgn * IM_PI * 0.5f);
-                    seg_line(end_m);
+                    // Level with the group on its LEFT: along the far boundary and around the
+                    // far-left corner (the joint tangent is the 45-degree diagonal, so both
+                    // curves meet it smoothly with their hulls outside the box), then up the
+                    // left edge and horizontally in.
+                    const float x_l = box_l - m_hug;
+                    const float d = 0.7071f;
+                    const float w = ImMax(em_m, ImMin(em_m * 2.0f, (x_h - x_l) * 0.25f));
+                    seg_cubic(ImVec2(x_h - b, y_b), ImVec2(x_l + w * d, y_b + sgn * w * d), ImVec2(x_l, y_b));
+                    const float h = ImMax(em_m, ImMin(em_m * 3.0f, ImAbs(y_b - end_m.y) * 0.5f));
+                    seg_cubic(ImVec2(x_l - h * d, y_b - sgn * h * d), ImVec2(end_m.x - h, end_m.y), end_m);
                   }
                   routed = true;
                 }
-                else if (dest_left)
-                {
-                  // Destination level with the group on its LEFT: around the far side. Wrap the
-                  // far corner (2nd), hug the far boundary west, wrap the far-LEFT corner (3rd,
-                  // same behavior as the 2nd), ride the LEFT edge to chip level, and turn in.
-                  const float y_b = far_y + sgn * m_far;
-                  const float x_l = box_l - m_hug;
-                  seg_line(ImVec2(x_h, y_b - sgn * r_hug));
-                  seg_arc(ImVec2(x_h - r_hug, y_b - sgn * r_hug), r_hug, 0.0f, sgn * IM_PI * 0.5f);
-                  seg_line(ImVec2(x_l + r_hug, y_b));
-                  seg_arc(ImVec2(x_l + r_hug, y_b - sgn * r_hug), r_hug, sgn * IM_PI * 0.5f, sgn * IM_PI);   // sign-matched end angle: the wrap takes the SHORT quarter, never the 270-degree pigtail
-                  const float r_f = ImMax(0.5f, ImMin(em_m * 2.0f, ImAbs((y_b - sgn * r_hug) - end_m.y) * 0.5f));
-                  seg_line(ImVec2(x_l, end_m.y + sgn * r_f));
-                  seg_arc(ImVec2(x_l - r_f, end_m.y + sgn * r_f), r_f, 0.0f, -sgn * IM_PI * 0.5f);
-                  seg_line(end_m);
-                  routed = true;
-                }
               }
-              // Last resort stays LEGAL: flat exit, down the hug line to chip level, and in --
-              // from the left when there is room, from the right when the chip overlaps the hug
-              // line. NEVER a diagonal through the column.
+              // Last resort stays LEGAL: flat exit, down the hug line to destination level, and
+              // in -- from the left when there is room, from the right when the destination
+              // overlaps the hug line. NEVER a diagonal through the column.
               if (!routed)
               {
                 const float r_f = ImMax(0.5f, ImMin(em_m * 1.5f, ImAbs(end_m.y - start_m.y) * 0.4f));
@@ -5947,27 +5905,30 @@ namespace ImGui
 
       // Pass 1: windows/sidebars hosting controls (outermost). At root these owners are seated in
       // the Display layer's section, so their frames cover only the control cluster (the collapsed
-      // state keeps the owner: the chip must survive as the re-expand handle).
+      // state keeps the owner: the title bar must survive as the re-expand handle).
       for (int i = 0; i < g->Nodes.Size; i++)
       {
         const ImGuiAppNode* n = &g->Nodes.Data[i];
         if ((n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar) && !(!show_live && n->IsLive) && AppGraphHostsControl(g, n->Id))
           group_box(n->Id, AppKindColor(n->Kind), 2, !at_root || n->GroupCollapsed);
       }
-      // Pass 2: control data clusters (a control with an exploded Persist/Temp struct).
-      for (int i = 0; i < g->Nodes.Size; i++)
-      {
-        const ImGuiAppNode* n = &g->Nodes.Data[i];
-        if (n->Kind == ImGuiAppNodeKind_Control && (n->PersistStructId >= 0 || n->TempStructId >= 0))
-          group_box(n->Id, AppKindColor(ImGuiAppNodeKind_Control), 1, true);
-      }
+      // Pass 2: control data clusters (a control with an exploded Persist/Temp struct). Their
+      // struct members exist below the breadcrumb, so these frames draw only there.
+      if (!altitude_root)
+        for (int i = 0; i < g->Nodes.Size; i++)
+        {
+          const ImGuiAppNode* n = &g->Nodes.Data[i];
+          if (n->Kind == ImGuiAppNodeKind_Control && (n->PersistStructId >= 0 || n->TempStructId >= 0))
+            group_box(n->Id, AppKindColor(ImGuiAppNodeKind_Control), 1, true);
+        }
       // Pass 3: structs with exploded fields (innermost).
-      for (int i = 0; i < g->Nodes.Size; i++)
-      {
-        const ImGuiAppNode* n = &g->Nodes.Data[i];
-        if (n->Kind == ImGuiAppNodeKind_Struct && !(!show_live && n->IsLive) && AppGraphFieldNodeCount(g, n->Id, 0) > 0)
-          group_box(n->Id, AppKindColor(ImGuiAppNodeKind_Struct), 0, true);
-      }
+      if (!altitude_root)
+        for (int i = 0; i < g->Nodes.Size; i++)
+        {
+          const ImGuiAppNode* n = &g->Nodes.Data[i];
+          if (n->Kind == ImGuiAppNodeKind_Struct && !(!show_live && n->IsLive) && AppGraphFieldNodeCount(g, n->Id, 0) > 0)
+            group_box(n->Id, AppKindColor(ImGuiAppNodeKind_Struct), 0, true);
+        }
     }
     ImGui::PopFont();   // decoration font (node content gets its own from the engine)
 
@@ -5985,6 +5946,9 @@ namespace ImGui
         continue;
       // Folded behind a collapsed ancestor group: same deal -- never submit, so the read-back skips it too.
       if (AppNodeHiddenByCollapse(g, n->Id))
+        continue;
+      // Below-the-breadcrumb kinds never submit at the composition root (altitude law).
+      if (altitude_root && (n->Kind == ImGuiAppNodeKind_Struct || n->Kind == ImGuiAppNodeKind_Field))
         continue;
       AppGraphEditorState(g)->PoolIds.push_back(n->Id);
 
@@ -6012,6 +5976,62 @@ namespace ImGui
       }
 
       const ImU32 title_col = AppNodeTitleColor(n);
+      ImGui::CanvasNextNodeTitleTag(cv, AppNodeKindTag(n->Kind));
+      ImGui::CanvasNextNodeOriginDot(cv, AppGraphOriginColor(n), n->IsPromoted && !n->IsLive);
+
+      // Kind silhouette (design page: rounded acts, squared hosts, rail is a phase, pill is an
+      // atom). Model-unit constants; the engine scales. Every non-layer plate takes the ONE
+      // normalized width.
+      if (n->Kind != ImGuiAppNodeKind_Layer && AppGraphEditorState(g)->UniformCardW > 0.0f)
+        ImGui::CanvasNextNodeWidth(cv, AppGraphEditorState(g)->UniformCardW);
+      switch (n->Kind)
+      {
+      case ImGuiAppNodeKind_Control:
+        ImGui::CanvasNextNodeRounding(cv, 7.0f);
+        break;
+      case ImGuiAppNodeKind_Window:
+        ImGui::CanvasNextNodeRounding(cv, 2.0f);
+        ImGui::CanvasNextNodeHeaderRule(cv, 1, AppKindColor(ImGuiAppNodeKind_Window));
+        break;
+      case ImGuiAppNodeKind_Sidebar:
+      {
+        ImGui::CanvasNextNodeRounding(cv, 2.0f);
+        ImGui::CanvasNextNodeHeaderRule(cv, 1, AppKindColor(ImGuiAppNodeKind_Sidebar));
+        int stripe_side = ImGui::ImGuiCanvasPinSide_Top;
+        if (n->DockDir == ImGuiDir_Left)  stripe_side = ImGui::ImGuiCanvasPinSide_Left;
+        if (n->DockDir == ImGuiDir_Right) stripe_side = ImGui::ImGuiCanvasPinSide_Right;
+        if (n->DockDir == ImGuiDir_Down)  stripe_side = ImGui::ImGuiCanvasPinSide_Bottom;
+        ImGui::CanvasNextNodeEdgeStripe(cv, stripe_side, AppKindColor(ImGuiAppNodeKind_Sidebar), 3.0f);
+        break;
+      }
+      case ImGuiAppNodeKind_Layer:
+      {
+        ImGui::CanvasNextNodeRounding(cv, 0.0f);
+        ImGui::CanvasNextNodeEdgeStripe(cv, ImGui::ImGuiCanvasPinSide_Left, AppLayerAccent(n->LayerType), 4.0f);
+        int order = 0;
+        int total = 0;
+        for (int li = 0; li < g->Nodes.Size; li++)
+          if (g->Nodes.Data[li].Kind == ImGuiAppNodeKind_Layer)
+          {
+            total++;
+            if (g->Nodes.Data[li].Id == n->Id)
+              order = total;
+          }
+        char badge[16];
+        ImFormatString(badge, IM_ARRAYSIZE(badge), "%d/%d", order, total);
+        ImGui::CanvasNextNodeTitleBadge(cv, badge);
+        break;
+      }
+      case ImGuiAppNodeKind_Struct:
+        ImGui::CanvasNextNodeRounding(cv, 0.0f);
+        ImGui::CanvasNextNodeHeaderRule(cv, 2, AppKindColor(ImGuiAppNodeKind_Struct));
+        break;
+      case ImGuiAppNodeKind_Field:
+        ImGui::CanvasNextNodeRounding(cv, 999.0f);
+        break;
+      default:
+        break;
+      }
 
       // Live nodes mirror the running app and are read-only: static (non-renamable) title. Core layers are the
       // frame's phases -- fixed titles; a CUSTOM layer's name IS its generated class name, so it renames.
@@ -6020,13 +6040,13 @@ namespace ImGui
       // deactivation.
       const bool was_editing = g->EditingNodeId == n->Id;
       if (n->IsLive)
-        ImGui::CanvasNextNodeTitle(n->Draft.Name[0] ? n->Draft.Name : "(live)", title_col);
+        ImGui::CanvasNextNodeTitle(cv, n->Draft.Name[0] ? n->Draft.Name : "(live)", title_col);
       else if (n->Kind == ImGuiAppNodeKind_Layer && AppLayerIsCore(n->LayerType))
-        ImGui::CanvasNextNodeTitle(AppLayerNodeName(n->LayerType), title_col);
+        ImGui::CanvasNextNodeTitle(cv, AppLayerNodeName(n->LayerType), title_col);
       else
       {
         AppGraphEditorState(g)->TitleEditing = was_editing;
-        ImGui::CanvasNextNodeTitleEditable(n->Draft.Name, IM_ARRAYSIZE(n->Draft.Name), &AppGraphEditorState(g)->TitleEditing, title_col);
+        ImGui::CanvasNextNodeTitleEditable(cv, n->Draft.Name, IM_ARRAYSIZE(n->Draft.Name), &AppGraphEditorState(g)->TitleEditing, title_col);
       }
       ImGui::CanvasBeginNode(cv, n->Id);
 
@@ -6038,12 +6058,12 @@ namespace ImGui
         ImGuiAppNodePort* port = &n->Ports.Data[p];
         if (port->Kind == ImGuiAppPortKind_ChildOut)
         {
-          ImGui::CanvasNextPinColor(AppPinColor(port->Kind));
+          ImGui::CanvasNextPinColor(cv, AppPinColor(port->Kind));
           ImGui::CanvasEdgePin(cv, port->Id, ImGui::ImGuiCanvasPin_In, ImGui::ImGuiCanvasPinShape_Square, ImGui::ImGuiCanvasPinSide_Top);
         }
         else if (port->Kind == ImGuiAppPortKind_ChildIn)
         {
-          ImGui::CanvasNextPinColor(AppPinColor(port->Kind));
+          ImGui::CanvasNextPinColor(cv, AppPinColor(port->Kind));
           ImGui::CanvasEdgePin(cv, port->Id, ImGui::ImGuiCanvasPin_Out, ImGui::ImGuiCanvasPinShape_Square, ImGui::ImGuiCanvasPinSide_Bottom);
         }
       }
@@ -6058,11 +6078,32 @@ namespace ImGui
           continue;
         if (port->Kind != ImGuiAppPortKind_DataIn)
           continue;
-        // Data pins circular -- the engine draws pins. The "deps" identity stays stable for
-        // saved graphs and port lookups; only the on-canvas label speaks the full vocabulary.
-        ImGui::CanvasNextPinColor(AppPinColor(port->Kind));
+        // Data pins circular -- the engine draws pins. The "deps" identity stays stable for saved
+        // graphs and port lookups; the ROW reads the wired producers' names (the relationship
+        // itself), falling back to "dependencies" only as the unwired drop-target affordance.
+        ImGui::CanvasNextPinColor(cv, AppPinColor(port->Kind));
         ImGui::CanvasBeginPin(cv, port->Id, ImGui::ImGuiCanvasPin_In, ImGui::ImGuiCanvasPinShape_Circle);
-        ImGui::TextUnformatted(strcmp(port->Name, "deps") == 0 ? "dependencies" : port->Name);
+        if (strcmp(port->Name, "deps") == 0)
+        {
+          int named = 0;
+          for (int li = 0; li < g->Links.Size; li++)
+          {
+            if (g->Links.Data[li].Kind != ImGuiAppEdgeKind_Data || g->Links.Data[li].EndAttr != port->Id)
+              continue;
+            const int pid = AppGraphPortOwnerId(g, g->Links.Data[li].StartAttr);
+            const ImGuiAppNode* pn = pid >= 0 ? AppGraphFindNodeConst(g, pid) : nullptr;
+            if (pn == nullptr)
+              continue;
+            ImGui::TextUnformatted(pn->Draft.Name[0] ? pn->Draft.Name : "(unnamed)");
+            named++;
+          }
+          if (named == 0)
+            ImGui::TextDisabled("dependencies");
+        }
+        else
+        {
+          ImGui::TextUnformatted(port->Name);
+        }
         ImGui::CanvasEndPin(cv);
       }
 
@@ -6076,7 +6117,7 @@ namespace ImGui
           if (sid < 0)
             continue;
           const int pin = AppNodePortByName(n, temp ? "temp" : "persist");
-          ImGui::CanvasNextPinColor(AppPinTieColor());
+          ImGui::CanvasNextPinColor(cv, AppPinTieColor());
           ImGui::CanvasBeginPin(cv, pin, ImGui::ImGuiCanvasPin_In, ImGui::ImGuiCanvasPinShape_Circle);
           ImGui::PushID(100 + list);
           if (AppBlDisclosure("##tie", true))
@@ -6094,15 +6135,8 @@ namespace ImGui
       }
 
       // Body: plain widgets between CanvasBeginNode/EndNode (no attribute scaffolding needed).
+      // Origin (live/promoted) is the title dot's job; the body never restates it.
       ImGui::PushID(n->Id);
-      if (n->IsLive)
-        ImGui::TextDisabled("live - read-only (mirrors running app)");
-      else if (n->IsPromoted)
-      {
-        char dt[IM_LABEL_SIZE];
-        AppNodeDataTypeName(n, dt, IM_ARRAYSIZE(dt));
-        ImGui::TextDisabled("promoted -> matches live %s", dt);
-      }
       if (n->Kind == ImGuiAppNodeKind_Control)
       {
         if (n->IsBuiltin)
@@ -6141,19 +6175,21 @@ namespace ImGui
           }
         }
 
-        // Every incoming data edge (struct/control/field producer) gets its own binding editor, labelled by the
-        // producer -- so multiple wired fields can each pick a destination field.
-        for (int li = 0; li < g->Links.Size; li++)
-        {
-          if (g->Links.Data[li].Kind != ImGuiAppEdgeKind_Data) continue;
-          if (AppGraphPortOwnerId(g, g->Links.Data[li].EndAttr) != n->Id) continue;
-          const int pid = AppGraphPortOwnerId(g, g->Links.Data[li].StartAttr);
-          if (pid == n->PersistStructId || pid == n->TempStructId) continue;   // own persist/temp tie -> no binding
-          const ImGuiAppNode* pn = pid >= 0 ? AppGraphFindNodeConst(g, pid) : nullptr;
-          if (pn != nullptr)
-            ImGui::TextDisabled("from %s", pn->Draft.Name[0] ? pn->Draft.Name : "(unnamed)");
-          EditAppDataEdgeBindings(g, g->Links.Data[li].Id);
-        }
+        // Every incoming data edge (struct/control/field producer) gets its own binding editor,
+        // labelled by the producer. Binding detail lives BELOW the breadcrumb: the composition
+        // root shows relationships only (the pin row already names each producer).
+        if (!altitude_root)
+          for (int li = 0; li < g->Links.Size; li++)
+          {
+            if (g->Links.Data[li].Kind != ImGuiAppEdgeKind_Data) continue;
+            if (AppGraphPortOwnerId(g, g->Links.Data[li].EndAttr) != n->Id) continue;
+            const int pid = AppGraphPortOwnerId(g, g->Links.Data[li].StartAttr);
+            if (pid == n->PersistStructId || pid == n->TempStructId) continue;   // own persist/temp tie -> no binding
+            const ImGuiAppNode* pn = pid >= 0 ? AppGraphFindNodeConst(g, pid) : nullptr;
+            if (pn != nullptr)
+              ImGui::TextDisabled("from %s", pn->Draft.Name[0] ? pn->Draft.Name : "(unnamed)");
+            EditAppDataEdgeBindings(g, g->Links.Data[li].Id);
+          }
       }
       else if (n->Kind == ImGuiAppNodeKind_Layer)
       {
@@ -6203,6 +6239,43 @@ namespace ImGui
         {
           ImGui::TextDisabled(ICON_FA_CIRCLE_INFO "  publishes the app's status");
         }
+        else if (lt == ImGuiAppLayerType_Layout)
+        {
+          ImGui::TextDisabled(ICON_FA_BORDER_ALL "  OnLayout(): dockspaces before windows");
+          if (show_live)
+          {
+            // The running context's active root dockspaces: id + docked window count.
+            ImGuiContext* ictx = ImGui::GetCurrentContext();
+            int live_dockspaces = 0;
+            for (int di = 0; di < ictx->DockContext.Nodes.Data.Size; di++)
+            {
+              ImGuiDockNode* dock = (ImGuiDockNode*)ictx->DockContext.Nodes.Data[di].val_p;
+              if (dock == nullptr || !dock->IsDockSpace() || !dock->IsRootNode())
+                continue;
+              if (dock->LastFrameAlive < ImGui::GetFrameCount() - 1)
+                continue;
+              int docked = 0;
+              ImGuiDockNode* walk[64];
+              int depth = 0;
+              walk[depth++] = dock;
+              while (depth > 0)
+              {
+                ImGuiDockNode* nd = walk[--depth];
+                docked += nd->Windows.Size;
+                if (nd->ChildNodes[0] != nullptr && depth < 63)
+                  walk[depth++] = nd->ChildNodes[0];
+                if (nd->ChildNodes[1] != nullptr && depth < 63)
+                  walk[depth++] = nd->ChildNodes[1];
+              }
+              ImGui::Bullet();
+              ImGui::SameLine();
+              ImGui::TextDisabled("dockspace %08X -- %d docked window%s", dock->ID, docked, docked == 1 ? "" : "s");
+              live_dockspaces++;
+            }
+            if (live_dockspaces == 0)
+              ImGui::TextDisabled("(no dockspaces this frame)");
+          }
+        }
 
         // Core phases have no type picker; a custom layer states the subclass it will generate.
         if (!n->IsLive && lt == ImGuiAppLayerType_Custom)
@@ -6219,16 +6292,16 @@ namespace ImGui
       }
       else if (n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar)
       {
-        // Design nodes show their kind so Window vs Sidebar is legible on the canvas; live nodes carry that in
-        // the origin badge already. Builtin type only when it differs from the title.
-        if (!n->IsLive)
-          ImGui::TextDisabled("%s", AppNodeKindName(n->Kind));
-        if (n->IsBuiltin && n->TypeName[0] && strcmp(n->TypeName, n->Draft.Name) != 0)
-          ImGui::TextDisabled("type: %s", n->TypeName);
-        if (n->IsLive)
-          DrawAppWindowNodeProps(n);     // read-only echo of mirrored dock props
-        else
-          EditAppWindowNodeProps(n);     // sidebar dock direction / size editor
+        // No body rows at the composition root; props show only when drilled in.
+        if (AppScopeCurrent(g) >= 0)
+        {
+          if (n->IsBuiltin && n->TypeName[0] && strcmp(n->TypeName, n->Draft.Name) != 0)
+            ImGui::TextDisabled("type: %s", n->TypeName);
+          if (n->IsLive)
+            DrawAppWindowNodeProps(n);
+          else
+            EditAppWindowNodeProps(n);
+        }
       }
       else if (n->Kind == ImGuiAppNodeKind_Struct)
       {
@@ -6272,7 +6345,7 @@ namespace ImGui
         ImGuiAppNodePort* port = &n->Ports.Data[p];
         if (port->Kind != ImGuiAppPortKind_DataOut)
           continue;
-        ImGui::CanvasNextPinColor(AppPinColor(port->Kind));
+        ImGui::CanvasNextPinColor(cv, AppPinColor(port->Kind));
         ImGui::CanvasBeginPin(cv, port->Id, ImGui::ImGuiCanvasPin_Out, ImGui::ImGuiCanvasPinShape_Circle);
         ImGui::TextUnformatted(port->Name);
         ImGui::CanvasEndPin(cv);
@@ -6316,12 +6389,14 @@ namespace ImGui
         wire_col = AppThemeNeutral(0.98f, 0.86f);
       else if (g->Links.Data[li].Soft)
         wire_col = AppSoftWireColor(cv);
+      if (g->Links.Data[li].Soft)
+        ImGui::CanvasNextWireDashed(cv);
       ImGui::CanvasWire(cv, g->Links.Data[li].Id, g->Links.Data[li].StartAttr, g->Links.Data[li].EndAttr, wire_col);
     }
 
     // Overview minimap (engine inset, bottom-right; click/drag to jump). Lets the user see and reach
     // nodes past the visible canvas edge.
-    if (s_ov_minimap)
+    if (ov_minimap)
       ImGui::CanvasMiniMap(cv, 0.2f);
     ImGui::CanvasEnd(cv);
     const ImVec2 editor_size = ImGui::GetItemRectSize();   // captured before later items, for fit-all centering
@@ -6642,7 +6717,7 @@ namespace ImGui
         fit_all();
       }
       if (ImGui::IsKeyPressed(ImGuiKey_G, false))
-        s_snap_grid = !s_snap_grid;   // toggle snap-to-grid
+        snap_grid = !snap_grid;   // toggle snap-to-grid
       if (ImGui::IsKeyPressed(ImGuiKey_F1, false))
         AppGraphEditorState(g)->HelpOverlay = !AppGraphEditorState(g)->HelpOverlay;             // toggle shortcut cheat-sheet
       if (ImGui::IsKeyPressed(ImGuiKey_N, false))
@@ -7132,7 +7207,7 @@ namespace ImGui
         case 10: AppGraphAutoLayout(g, show_live); fit_all(); break;
         case 11: fit_all(); break;
         case 12: fit_ids(g->Selection); break;
-        case 13: s_snap_grid = !s_snap_grid; break;
+        case 13: snap_grid = !snap_grid; break;
         case 14: if (AppGraphCanUndo(g)) { AppGraphUndo(g); ImGui::CanvasClearSelection(cv); } break;
         case 15: if (AppGraphCanRedo(g)) { AppGraphRedo(g); ImGui::CanvasClearSelection(cv); } break;
         case 16: AppGraphCopySelection(g, g->Selection); break;
@@ -7391,18 +7466,18 @@ namespace ImGui
         fit_all();
       if (gizmo(ICON_FA_WAND_MAGIC_SPARKLES, "Tidy layout (L)", false))
         AppGraphAutoLayout(g, show_live);
-      if (gizmo(ICON_FA_MAGNET, "Snap to grid (G)", s_snap_grid))
-        s_snap_grid = !s_snap_grid;
-      if (gizmo(ICON_FA_SLIDERS, "Overlays", !(s_ov_grid && s_ov_bands && s_ov_frames && s_ov_minimap)))
+      if (gizmo(ICON_FA_MAGNET, "Snap to grid (G)", snap_grid))
+        snap_grid = !snap_grid;
+      if (gizmo(ICON_FA_SLIDERS, "Overlays", !(ov_grid && ov_bands && ov_frames && ov_minimap)))
         ImGui::OpenPopup("##CanvasOverlays");
       if (ImGui::BeginPopup("##CanvasOverlays"))
       {
         ImGui::TextDisabled("Overlays");
         ImGui::Separator();
-        ImGui::MenuItem("Grid", nullptr, &s_ov_grid);
-        ImGui::MenuItem("Phase bands", nullptr, &s_ov_bands);
-        ImGui::MenuItem("Group frames", nullptr, &s_ov_frames);
-        ImGui::MenuItem("Minimap", nullptr, &s_ov_minimap);
+        ImGui::MenuItem("Grid", nullptr, &ov_grid);
+        ImGui::MenuItem("Phase bands", nullptr, &ov_bands);
+        ImGui::MenuItem("Group frames", nullptr, &ov_frames);
+        ImGui::MenuItem("Minimap", nullptr, &ov_minimap);
         ImGui::EndPopup();
       }
       // View scope as an explicit mode: whole app, or drilled into one composition. Same state
@@ -7471,7 +7546,7 @@ namespace ImGui
         "Ctrl+D   duplicate selection   Ctrl+S save graph",
         "drag pin -> empty   new node       drag link end   rewire",
         "wheel over field    scrub value",
-        "click group chip     collapse      drag chip           move group",
+        "click group title    collapse      drag group title    move group",
         "drag empty canvas    pan (also right-drag)",
         "wheel over canvas    zoom (Ctrl+wheel anywhere)",
         "right-click          context menu",
@@ -11030,11 +11105,8 @@ namespace ImGui
             node->Ports.Data[p].DataTypeId = want.Data[w].DataId;
 
         // New live nodes share the same composition-first placement as authored nodes:
-        // layers/app | windows/sidebars | controls. Existing live nodes keep user-dragged positions.
-        // A hosted control clusters BESIDE its host window/sidebar node (right of it, siblings
-        // stacked) instead of the global stagger, so a window's group is born spatially together --
-        // frame, chip, and containment wiring all land in one place instead of a 480-unit column
-        // scattered far from the window.
+        // layers/app | windows/sidebars | controls. Existing live nodes keep user-dragged
+        // positions. A hosted control clusters beside its host window/sidebar node.
         const ImGuiAppNode* host = nullptr;
         if (want.Data[w].Kind == ImGuiAppNodeKind_Control && want.Data[w].ParentKey != 0)
           for (int i = 0; i < g->Nodes.Size && host == nullptr; i++)
@@ -11486,8 +11558,8 @@ namespace ImGui
     if (n->Hidden)
       row_col = (row_col & 0x00FFFFFF) | (IM_COL32(0, 0, 0, 110) & 0xFF000000);   // faded when hidden on canvas
     ImGui::PushStyleColor(ImGuiCol_Text, row_col);
-    const char* tag = n->IsLive ? " [live]" : n->IsPromoted ? " [promoted]" : "";
-    const bool open = ImGui::TreeNodeEx("##row", f, "%s  %s%s", AppNodeIcon(n), n->Draft.Name[0] ? n->Draft.Name : "(unnamed)", tag);
+    // Origin rides the row tint (and the canvas title dot); no text suffix.
+    const bool open = ImGui::TreeNodeEx("##row", f, "%s  %s", AppNodeIcon(n), n->Draft.Name[0] ? n->Draft.Name : "(unnamed)");
     ImGui::PopStyleColor();
 
     // Capture row interaction now, before the overlay icon buttons below change the "current item".
@@ -11663,8 +11735,8 @@ namespace ImGui
 
     ctx.ShowLive = show_live;
 
-    // Per-kind node counts (drive the filter chips' badges); also tally hidden nodes for a "show all"
-    // affordance. Hidden live rows are not listed, so they are not counted either.
+    // Per-kind node counts (drive the filter buttons' badges); also tally hidden nodes for a
+    // "show all" affordance. Hidden live rows are not listed, so they are not counted either.
     int kind_count[ImGuiAppNodeKind_COUNT] = { 0 };
     int total_nodes = 0;
     int hidden_count = 0;
@@ -11687,7 +11759,7 @@ namespace ImGui
     if (hidden_count > 0)
     {
       ImGui::SameLine();
-      if (AppBlFilterChip("##showhidden", ICON_FA_EYE_SLASH, hidden_count, true, AppComposerGetStyle()->LayerCommand))
+      if (AppBlFilterButton("##showhidden", ICON_FA_EYE_SLASH, hidden_count, true, AppComposerGetStyle()->LayerCommand))
         for (int i = 0; i < g->Nodes.Size; i++)
           g->Nodes.Data[i].Hidden = false;
       ImGui::SetItemTooltip("%d hidden -- click to show all", hidden_count);
@@ -11698,33 +11770,33 @@ namespace ImGui
       const float bw = ImGui::GetFrameHeight() * 2.0f + em * 0.3f;
       const float avail = ImGui::GetContentRegionAvail().x;
       ImGui::SameLine(0.0f, avail > bw + em * 0.5f ? avail - bw : em * 0.5f);
-      if (AppBlToggleChip("##expall", ICON_FA_ANGLE_DOWN, false, AppKindColor(ImGuiAppNodeKind_Control)))
+      if (AppBlToggleButton("##expall", ICON_FA_ANGLE_DOWN, false, AppKindColor(ImGuiAppNodeKind_Control)))
         ctx.SetOpen = 1;
       ImGui::SetItemTooltip("Expand all");
       ImGui::SameLine(0.0f, em * 0.3f);
-      if (AppBlToggleChip("##colall", ICON_FA_ANGLE_RIGHT, false, AppKindColor(ImGuiAppNodeKind_Control)))
+      if (AppBlToggleButton("##colall", ICON_FA_ANGLE_RIGHT, false, AppKindColor(ImGuiAppNodeKind_Control)))
         ctx.SetOpen = 0;
       ImGui::SetItemTooltip("Collapse all");
     }
 
-    // Kind filter chips: icon + count; click toggles visibility of that kind.
-    static const ImGuiAppNodeKind chip_kinds[] =
+    // Kind filter buttons: icon + count; click toggles visibility of that kind.
+    static const ImGuiAppNodeKind filter_kinds[] =
     {
       ImGuiAppNodeKind_Layer, ImGuiAppNodeKind_Window, ImGuiAppNodeKind_Sidebar,
       ImGuiAppNodeKind_Control, ImGuiAppNodeKind_Struct, ImGuiAppNodeKind_Field,
     };
-    for (int i = 0; i < IM_ARRAYSIZE(chip_kinds); i++)
+    for (int i = 0; i < IM_ARRAYSIZE(filter_kinds); i++)
     {
-      const ImGuiAppNodeKind k = chip_kinds[i];
+      const ImGuiAppNodeKind k = filter_kinds[i];
       if (i > 0)
       {
-        // Flow-wrap: at narrow panel widths the chips wrap to a second row instead of clipping dead.
+        // Flow-wrap: at narrow panel widths the buttons wrap to a second row instead of clipping dead.
         ImGui::SameLine(0.0f, 3.0f);
         if (ImGui::GetContentRegionAvail().x < em * 3.2f)
           ImGui::NewLine();
       }
       ImGui::PushID(i);
-      if (AppBlFilterChip("##chip", AppKindIcon(k), kind_count[k], AppGraphEditorState(g)->OutlinerKindVis[k], AppKindColor(k)))
+      if (AppBlFilterButton("##kindfilter", AppKindIcon(k), kind_count[k], AppGraphEditorState(g)->OutlinerKindVis[k], AppKindColor(k)))
         AppGraphEditorState(g)->OutlinerKindVis[k] = !AppGraphEditorState(g)->OutlinerKindVis[k];
       ImGui::PopID();
       ImGui::SetItemTooltip("%s (%d)", AppNodeKindName(k), kind_count[k]);

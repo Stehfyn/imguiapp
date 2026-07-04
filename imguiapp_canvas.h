@@ -110,11 +110,23 @@ namespace ImGui
   // ---- nodes (geometry in MODEL units, always) --------------------------------------------------
   // Between CanvasBeginNode/CanvasEndNode submit ordinary ImGui widgets; the engine renders them
   // under the zoomed font + scaled layout metrics and measures the node the SAME frame.
-  IMGUI_API void   CanvasNextNodeTitle(const char* title, ImU32 title_color /*= 0 -> style*/);
+  IMGUI_API void   CanvasNextNodeTitle(ImGuiCanvasState* c, const char* title, ImU32 title_color /*= 0 -> style*/);
+  // Per-node presentation intent, all consumed by the next CanvasBeginNode: kind word (muted,
+  // right-aligned), origin dot (leading; ring form for promoted), framed badge after the name,
+  // corner rounding in model units (< 0 = style), rule under the title band (0 none / 1 solid /
+  // 2 dashed), and an edge stripe on one ImGuiCanvasPinSide_.
+  IMGUI_API void   CanvasNextNodeTitleTag(ImGuiCanvasState* c, const char* tag);
+  IMGUI_API void   CanvasNextNodeOriginDot(ImGuiCanvasState* c, ImU32 color, bool ring);
+  IMGUI_API void   CanvasNextNodeTitleBadge(ImGuiCanvasState* c, const char* badge);
+  IMGUI_API void   CanvasNextNodeRounding(ImGuiCanvasState* c, float model_rounding);
+  IMGUI_API void   CanvasNextNodeWidth(ImGuiCanvasState* c, float model_width);          // normalized plate width; <= 0 = content-sized
+  IMGUI_API float  CanvasNodeNeededWidth(const ImGuiCanvasState* c, int node_id);        // content-derived width need (0 until measured)
+  IMGUI_API void   CanvasNextNodeHeaderRule(ImGuiCanvasState* c, int rule, ImU32 color);
+  IMGUI_API void   CanvasNextNodeEdgeStripe(ImGuiCanvasState* c, int side, ImU32 color, float model_thickness);
   // Editable variant (host-driven rename): while *editing, the engine renders an InputText in the
   // title bar bound to buf and clears *editing when it deactivates. Pair with CanvasNodeDoubleClicked
   // to enter the state (the host decides whether a double-click renames or drills).
-  IMGUI_API void   CanvasNextNodeTitleEditable(char* buf, int buf_size, bool* editing, ImU32 title_color);
+  IMGUI_API void   CanvasNextNodeTitleEditable(ImGuiCanvasState* c, char* buf, int buf_size, bool* editing, ImU32 title_color);
   IMGUI_API bool   CanvasBeginNode(ImGuiCanvasState* c, int node_id);   // false if culled (off-screen): body may be skipped, geometry persists
   IMGUI_API void   CanvasEndNode(ImGuiCanvasState* c);
   IMGUI_API ImVec2 CanvasNodePos(const ImGuiCanvasState* c, int node_id);        // model
@@ -133,13 +145,14 @@ namespace ImGui
   enum ImGuiCanvasPinKind_ { ImGuiCanvasPin_In = 0, ImGuiCanvasPin_Out = 1 };
   enum ImGuiCanvasPinShape_ { ImGuiCanvasPinShape_Circle = 0, ImGuiCanvasPinShape_Square = 1 };
   enum ImGuiCanvasPinSide_ { ImGuiCanvasPinSide_Left = 0, ImGuiCanvasPinSide_Right = 1, ImGuiCanvasPinSide_Top = 2, ImGuiCanvasPinSide_Bottom = 3 };
-  IMGUI_API void   CanvasNextPinColor(ImU32 color);   // 0 -> style (by shape); consumed by the next CanvasBeginPin
+  IMGUI_API void   CanvasNextPinColor(ImGuiCanvasState* c, ImU32 color);   // 0 -> style (by shape); consumed by the next CanvasBeginPin
   IMGUI_API void   CanvasNextPinSide(ImGuiCanvasState* c, int side);   // override the next pin's edge; default derives from Kind (In->Left, Out->Right)
   IMGUI_API void   CanvasBeginPin(ImGuiCanvasState* c, int pin_id, int kind /*In|Out*/, int shape);
   IMGUI_API void   CanvasEndPin(ImGuiCanvasState* c);
   // Row-less edge pin: an at-most-one-per-edge singleton (e.g. containment parent/children) placed at
   // the center of its Side edge. Submits no widget and consumes no cursor -- call between BeginNode/EndNode.
   IMGUI_API void   CanvasEdgePin(ImGuiCanvasState* c, int pin_id, int kind /*In|Out*/, int shape, int side);
+  IMGUI_API void   CanvasNextWireDashed(ImGuiCanvasState* c);   // the next CanvasWire draws dashed (optional dependency)
   IMGUI_API void   CanvasWire(ImGuiCanvasState* c, int wire_id, int pin_a, int pin_b, ImU32 color /*= 0 -> style*/);
   IMGUI_API bool   CanvasWireExists(const ImGuiCanvasState* c, int wire_id);      // wire submitted this frame (query after CanvasEnd)
   IMGUI_API ImVec2 CanvasPinPos(const ImGuiCanvasState* c, int pin_id);           // model

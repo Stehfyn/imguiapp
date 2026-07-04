@@ -146,7 +146,7 @@ em spacing via the existing `ToolSep()`, `char[]`+`ImFormatString`, no reference
 ### Theme B — Hidden-Diagnostics Surfacing
 
 **Merges:** all link-reject-toast variants, topo-cycle-banner, all codegen-staleness variants,
-codegen-warnings-chip. **Targets:** #1, #2, #3, #11, #20, #21, #22.
+codegen-warnings-count. **Targets:** #1, #2, #3, #11, #20, #21, #22.
 
 #### B1 — Link-rejection reason (the #1 missing diagnostic)
 
@@ -240,7 +240,7 @@ Drives, coherently, every freshness surface: a strip `StatusPill` `"code: fresh"
 "wrote" line can never coexist with staleness). Fixes the Generate tooltip count (#22) in the same pass:
 tally `!IsLive` nodes, keep "node(s)".
 
-#### B4 — Dropped-binding & hosted-control warnings (codegen honesty + chip)
+#### B4 — Dropped-binding & hosted-control warnings (codegen honesty + warnings count)
 
 Two silent codegen drops get a voice. **(a)** In the `types_ok==false` path of `AppEmitControlWithDeps`
 (nodes.cpp:1289-1293; in-scope vars are `dst_id`/`src_id`) add an explicit `else`:
@@ -250,7 +250,7 @@ the trailing hosted-control TODO (nodes.cpp:1373-1374) onto its own line as
 
 **Demo surfacing:** after Generate, scan `code` for **line-leading** `// WARNING` plus `// codegen aborted`
 (never the per-control boilerplate `// TODO: render widgets` at nodes.cpp:1301), count matches, and render
-a clickable amber `(!) N` chip after the Generate button (demo.cpp:395); click opens a popup listing the
+a clickable amber `(!) N` count after the Generate button (demo.cpp:395); click opens a popup listing the
 matched lines via `TextUnformatted`. Hidden when `N==0`, persistent until next Generate. Scope: #20/#21
 only (load-time drops #23 never touch `code`).
 
@@ -392,7 +392,7 @@ shippable.
   main-header lines and the overlap guard; fix the Generate tooltip count. No model/API change. *This is
   the spine every later phase reuses.*
 - **Phase 1 — discarded diagnostics (S→M, low).** B1 link-reject (`LastLinkErr`/`Seq` field + the
-  `CaptureAppGraphLinks` write + the canvas toast); B4 codegen-honesty emits + the warnings chip. Additive
+  `CaptureAppGraphLinks` write + the canvas toast); B4 codegen-honesty emits + the warnings count. Additive
   field + demo render only.
 - **Phase 2 — codegen freshness (M, low).** B3: `AppGraphSignature`, the `&& !n->IsLive` codegen guards
   (so domain==domain), and the fresh|STALE wiring across header/Copy/Write/write_msg/strip. One pure
