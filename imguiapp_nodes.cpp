@@ -3248,9 +3248,91 @@ namespace ImGui
   }
 
   // Draw INSIDE the canvas, between CanvasBegin and the first node, on the engine's background channel:
+  // Stroke the current path with consecutive duplicate points removed first. PathArcTo samples
+  // its start point, which duplicates the path's previous point at every line->arc and arc->arc
+  // joint; AddPolyline's join normals degenerate on zero-length segments and render a width
+  // BULGE there. Dedup keeps the stroke width constant along the whole wire.
+  static void AppWirePathStroke(ImDrawList* dl, ImU32 col, float th)
+  {
+    ImVector<ImVec2>& p = dl->_Path;
+    int w = 1;
+    for (int i = 1; i < p.Size; i++)
+      if (ImLengthSqr(p.Data[i] - p.Data[w - 1]) > 0.25f)
+        p.Data[w++] = p.Data[i];
+    if (p.Size > 0)
+      p.Size = w;
+    dl->PathStroke(col, ImDrawFlags_None, th);
+  }
+
+  // Stroke an axis-aligned waypoint path as SEQUENTIAL TANGENT ARCS: every 90-degree corner
+  // becomes a quarter arc sized to the room its two segments allow (a terminal segment gives its
+  // corner the full length, a shared segment half). `r_caps` (optional, one per corner) bounds a
+  // corner's radius from ABOVE: a fillet is inscribed, so it always cuts INSIDE its corner --
+  // when the corner rounds an obstacle, the cap is what keeps the arc out of the obstacle.
+  static void AppDrawWireArcPath(ImDrawList* dl, const ImVec2* pts, int count, const float* r_caps, ImU32 col, float th)
+  {
+    if (count < 2)
+      return;
+    dl->PathClear();
+    dl->PathLineTo(pts[0]);
+    for (int i = 1; i + 1 < count; i++)
+    {
+      const ImVec2 a = pts[i - 1];
+      const ImVec2 b = pts[i];
+      const ImVec2 c = pts[i + 1];
+      ImVec2 din = b - a;
+      ImVec2 dout = c - b;
+      const float lin = ImSqrt(din.x * din.x + din.y * din.y);
+      const float lout = ImSqrt(dout.x * dout.x + dout.y * dout.y);
+      if (lin < 1.0f || lout < 1.0f)
+        continue;
+      din = din * (1.0f / lin);
+      dout = dout * (1.0f / lout);
+      const float avail_in = (i == 1) ? lin : lin * 0.5f;
+      const float avail_out = (i + 2 == count) ? lout : lout * 0.5f;
+      float r = ImMin(avail_in, avail_out);
+      if (r_caps != nullptr && r_caps[i - 1] < r)
+        r = r_caps[i - 1];
+      if (r < 2.0f)
+      {
+        dl->PathLineTo(b);
+        continue;
+      }
+      // Quarter arc inscribed at the corner: tangent to both segments, center perpendicular-in.
+      const ImVec2 arc_in = b - din * r;
+      const ImVec2 arc_out = b + dout * r;
+      const ImVec2 center = arc_in + dout * r;
+      float a0 = ImAtan2(arc_in.y - center.y, arc_in.x - center.x);
+      float a1 = ImAtan2(arc_out.y - center.y, arc_out.x - center.x);
+      if (a1 - a0 > IM_PI)
+        a1 -= 2.0f * IM_PI;
+      if (a0 - a1 > IM_PI)
+        a1 += 2.0f * IM_PI;
+      dl->PathArcTo(center, r, a0, a1, 0);
+    }
+    dl->PathLineTo(pts[count - 1]);
+    AppWirePathStroke(dl, col, th);
+  }
+
+  // This frame's layer-column geometry, published by AppDrawLayerGroupBox for consumers in the
+  // same pass (trunk routing): the LAYER NODE rects ARE the obstacle set -- one producer per
+  // fact, never re-derived (docs/phase-coherence.md rule 3). Screen space, this frame's camera.
+  struct AppLayerColumnGeom
+  {
+    bool   Valid = false;
+    float  NodeRight = 0.0f;    // right edge shared by the layer nodes
+    ImVec2 BoxMin = ImVec2(0.0f, 0.0f);   // the layer GROUP's boundary (the App Layers box)
+    ImVec2 BoxMax = ImVec2(0.0f, 0.0f);
+    int    RowCount = 0;
+    float  RowTop[16] = {};     // per layer NODE, sorted top to bottom
+    float  RowBot[16] = {};     // the NODE's bottom edge
+    float  RowSecBot[16] = {};  // the row's SECTION bottom (band incl. seated members)
+  };
+
   // grid -> this box -> nodes, so the grid can never show through the box/bands and the bands sit under
   // the nodes. Caller wraps this in the zoomed font (decorations size against em like node content).
-  static void AppDrawLayerGroupBox(const ImGuiAppGraph* g, bool show_live)
+  // Always publishes `out_geom`; `draw` false computes geometry only (overlay hidden).
+  static void AppDrawLayerGroupBox(const ImGuiAppGraph* g, bool show_live, bool draw, AppLayerColumnGeom* out_geom)
   {
     // Per visible layer: screen y-span + accent, for the Unity-execution-order-style flow rail and phase bands.
     // [Phase-coherent geometry] positions come from the MODEL (GridPos) and sizes from the engine's model
@@ -3267,6 +3349,7 @@ namespace ImGui
     ImVec2 bb_min(FLT_MAX, FLT_MAX);
     ImVec2 bb_max(-FLT_MAX, -FLT_MAX);
     float node_left = FLT_MAX;
+    float node_right = -FLT_MAX;
     bool have_wl = false;
     ImVec2 wl_min(0.0f, 0.0f);
     ImVec2 wl_max(0.0f, 0.0f);
@@ -3289,6 +3372,7 @@ namespace ImGui
       bb_max.x = ImMax(bb_max.x, pos.x + size.x);
       bb_max.y = ImMax(bb_max.y, pos.y + size.y);
       node_left = ImMin(node_left, pos.x);
+      node_right = ImMax(node_right, pos.x + size.x);
       if (n == wl_canonical)
       {
         have_wl = true;
@@ -3351,6 +3435,23 @@ namespace ImGui
     bb_min.y -= title_h + pad;
     bb_max.x += pad;
     bb_max.y += pad;
+
+    if (out_geom != nullptr)
+    {
+      out_geom->Valid = true;
+      out_geom->NodeRight = node_right;
+      out_geom->BoxMin = bb_min;
+      out_geom->BoxMax = bb_max;
+      out_geom->RowCount = ImMin(rows.Size, (int)IM_ARRAYSIZE(out_geom->RowTop));
+      for (int i = 0; i < out_geom->RowCount; i++)
+      {
+        out_geom->RowTop[i] = rows.Data[i].Top;
+        out_geom->RowBot[i] = rows.Data[i].Bot;
+        out_geom->RowSecBot[i] = rows.Data[i].BandBot;
+      }
+    }
+    if (!draw)
+      return;
 
     ImDrawList* dl = ImGui::CanvasBackgroundDrawList(cv);
     const ImU32 fill = AppComposerGetStyle()->GroupFill;
@@ -5085,8 +5186,15 @@ namespace ImGui
     // Pipeline box, drawn on the engine's background channel between the grid and the nodes: grid under
     // box, box under nodes. Model geometry with this frame's camera -- valid from the very first frame
     // (unmeasured nodes fall back to per-kind estimates).
-    if (at_root && s_ov_bands)
-      AppDrawLayerGroupBox(g, show_live);
+    // The column's box + rows, published once for this frame: the pipeline box overlay AND the
+    // trunk router's obstacle set (geometry computed even when the overlay is hidden).
+    AppLayerColumnGeom col_geom;
+    if (at_root)
+      AppDrawLayerGroupBox(g, show_live, s_ov_bands, &col_geom);
+
+    // Owners whose group frame swallowed their containment fan this frame: one trunk connector
+    // per owner replaces the per-control wires (rebuilt every frame; consumed by the link loop).
+    ImVector<int> trunked_owners;
 
     // Semantic group frames: a translucent labeled box around each containment group, same background
     // channel as the pipeline box -- the grid can never cut through a frame or its caption chip, and
@@ -5144,7 +5252,14 @@ namespace ImGui
           const ImVec2 chip_mx(chip_mn.x + tri_w + ts.x + em * 0.5f, mn.y + title_h);
 
           // The chip is both a fold toggle and a move handle: a click (no drag) collapses/expands the group; a
-          // drag moves the owner + every descendant together. One gesture at a time, tracked across frames.
+          // drag moves the group together. One gesture at a time, tracked across frames.
+          // A section-seated owner's position is OWNED by the window-section packer (one producer per
+          // fact, docs/phase-coherence.md rule 3): the chip never moves it -- expanded, the drag moves
+          // only the cluster; collapsed (the chip rides the pinned owner), the drag is inert, since
+          // moving the hidden members would teleport them on expand.
+          const bool owner_seated = at_root
+              && (owner->Kind == ImGuiAppNodeKind_Window || owner->Kind == ImGuiAppNodeKind_Sidebar)
+              && AppGraphLayerOfType(g, ImGuiAppLayerType_Window) != nullptr;
           static bool s_group_moved = false;
           ImGui::SetCursorScreenPos(chip_mn);
           ImGui::PushID(owner_id);
@@ -5153,7 +5268,7 @@ namespace ImGui
           const bool act = ImGui::IsItemActive();
           if (ImGui::IsItemActivated())
             s_group_moved = false;
-          if (act && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+          if (act && ImGui::IsMouseDragging(ImGuiMouseButton_Left) && !(owner_seated && owner->GroupCollapsed))
           {
             const ImVec2 d = ImGui::GetIO().MouseDelta;
             if (d.x != 0.0f || d.y != 0.0f)
@@ -5161,6 +5276,8 @@ namespace ImGui
               s_group_moved = true;
               for (int m = 0; m < members.Size; m++)
               {
+                if (owner_seated && members.Data[m] == owner_id)
+                  continue;
                 ImGuiAppNode* mm = AppGraphFindNode(g, members.Data[m]);
                 if (mm == nullptr || (!show_live && mm->IsLive))
                   continue;
@@ -5207,6 +5324,176 @@ namespace ImGui
           else
             dl->AddTriangleFilled(ImVec2(tc.x - a, tc.y - a * 0.55f), ImVec2(tc.x + a, tc.y - a * 0.55f), ImVec2(tc.x, tc.y + a * 0.8f), glyph);
           dl->AddText(ImVec2(chip_mn.x + tri_w, mn.y + (title_h - ts.y) * 0.5f), glyph, label);
+
+          // Trunk connector: an owner excluded from its own frame gets ONE wire, owner right edge
+          // -> this chip, standing in for the whole per-control containment fan (those wires are
+          // not submitted -- see the link loop). [Phase-coherent geometry] model position + model
+          // size x this frame's camera, same law as the frame itself.
+          if (!include_owner && (owner->HasGridPos || AppEditorNodeWasSubmitted(owner_id)))
+          {
+            const float z = AppCanvasScale();
+            const ImVec2 opos = ImGui::CanvasToScreen(cv, owner->GridPos);
+            ImVec2 om;
+            if (!AppNodeModelSize(owner_id, &om))
+              om = AppLayoutNodeSize(g, owner);
+            const ImVec2 start(opos.x + om.x * z, opos.y + om.y * z * 0.5f);
+            const ImVec2 end(chip_mn.x, (chip_mn.y + chip_mx.y) * 0.5f);
+            const ImU32 wire_col = AppPinColor(ImGuiAppPortKind_ChildIn);
+            const float th = ImMax(1.0f, em * 0.14f);
+            // [Trunk router] SPEC (2026-07-03, approved drawing "the-model"):
+            //   * flow runs chip -> window pin; horizontal tangents at both endpoints
+            //   * layer SECTIONS contain layer NODES; the wire's own section is home ground, its
+            //     own layer NODE is still never crossed; other layers are forbidden at section
+            //     extent ("not ... behind other layer nodes or other layer sections")
+            //   * "the curves must be designed to hug the layer node corners" -- the lead leaves
+            //     the pin already curving through home ground and meets the hug line tight past
+            //     the first corner (own node's bottom going up, the next section's top going
+            //     down); verticals run straight along the node group's edge
+            //   * past the group's far edge: wrap the far corner, HUG the group's far boundary,
+            //     then TWO SYMMETRIC LOOSE ARCS finish into the pin at pin level, entering
+            //     through the side the pin faces -- never over or under the destination group's
+            //     boundaries, nothing to overshoot
+            //   * constant stroke width: one path, deduped joints, one stroke
+            const float m_hug = em * 0.6f;
+            const float r_hug = em * 1.1f;
+            const float dx = end.x - start.x;
+            const float dy = end.y - start.y;
+            const float sgn = dy > 0.0f ? 1.0f : -1.0f;
+
+            // Facing edges in the travel direction, from the published geometry: section tops
+            // going down, node bottoms going up (the wire's own node blocks its own ascent);
+            // far_y = the node group's far boundary, sections included.
+            bool has_q = false;
+            float q_y = 0.0f;
+            float far_y = start.y;
+            float x_h = start.x + em;
+            if (col_geom.Valid)
+            {
+              // The vertical hugs the layer GROUP's boundary; the far wrap rounds the GROUP's
+              // corner ("hug the layer group boundary, not the node, on the 2nd corner").
+              x_h = col_geom.BoxMax.x + m_hug;
+              far_y = sgn > 0.0f ? col_geom.BoxMax.y : col_geom.BoxMin.y;
+              for (int ri = 0; ri < col_geom.RowCount; ri++)
+              {
+                const float lead = sgn > 0.0f ? col_geom.RowTop[ri] : col_geom.RowBot[ri];
+                if (sgn * (lead - start.y) > 1.0f && (!has_q || sgn * (q_y - lead) > 0.0f))
+                {
+                  q_y = lead;
+                  has_q = true;
+                }
+              }
+            }
+            const bool dest_past_q = has_q && sgn * (end.y - q_y) > 0.0f;
+            const bool dest_past_far = col_geom.Valid && sgn * (end.y - far_y) > 0.0f;
+
+            bool drawn = false;
+            // Free sweep: nothing of the column stands between pin and chip.
+            if (!dest_past_q && dx > em * 2.0f && ImAbs(dy) > 2.0f)
+            {
+              const float theta = 2.0f * ImAtan2(ImAbs(dy), dx);
+              const float r_sum = dx / ImSin(theta);   // (r1 + r2) sin(theta) == dx, by construction
+              const float r1 = r_sum * 0.5f;
+              const float r2 = r_sum - r1;
+              dl->PathClear();
+              if (sgn > 0.0f)
+              {
+                dl->PathArcTo(ImVec2(start.x, start.y + r1), r1, -IM_PI * 0.5f, -IM_PI * 0.5f + theta, 0);
+                dl->PathArcTo(ImVec2(end.x, end.y - r2), r2, IM_PI * 0.5f + theta, IM_PI * 0.5f, 0);
+              }
+              else
+              {
+                dl->PathArcTo(ImVec2(start.x, start.y - r1), r1, IM_PI * 0.5f, IM_PI * 0.5f - theta, 0);
+                dl->PathArcTo(ImVec2(end.x, end.y + r2), r2, -IM_PI * 0.5f - theta, -IM_PI * 0.5f, 0);
+              }
+              AppWirePathStroke(dl, wire_col, th);
+              drawn = true;
+            }
+            // Hug route.
+            if (!drawn && dest_past_q && x_h > start.x + em * 0.5f)
+            {
+              // Lead: one curve from the pin through home ground, arriving on the hug line
+              // already vertical, tight past the first layer node corner.
+              const float c1_y = q_y + sgn * m_hug;
+              dl->PathClear();
+              dl->PathLineTo(start);
+              dl->PathBezierCubicCurveTo(ImVec2(start.x + (x_h - start.x) * 0.55f, start.y),
+                                         ImVec2(x_h, c1_y - sgn * ImMin(em * 1.6f, ImAbs(c1_y - start.y) * 0.5f)),
+                                         ImVec2(x_h, c1_y), 0);
+              if (end.x >= x_h + em * 1.5f)
+              {
+                // Beside the column: ride the node group's edge to chip level, one loose
+                // corner, enter the pin through its facing side at pin level.
+                const float r_in = ImMax(2.0f, ImMin(ImMin(end.x - x_h, em * 4.0f), ImAbs(end.y - c1_y) * 0.8f));
+                dl->PathLineTo(ImVec2(x_h, end.y - sgn * r_in));
+                dl->PathArcTo(ImVec2(x_h + r_in, end.y - sgn * r_in), r_in, IM_PI, IM_PI - sgn * IM_PI * 0.5f, 0);
+                dl->PathLineTo(end);
+                AppWirePathStroke(dl, wire_col, th);
+                drawn = true;
+              }
+              else if (dest_past_far)
+              {
+                const float y_b = far_y + sgn * m_hug;
+                const float k = 0.5523f;                            // circular-arc cubic constant
+                if (end.x < x_h - r_hug - 1.0f)
+                {
+                  // 180 degrees: straight along the group's edge, wrap the group's far corner,
+                  // hug its far boundary, then two symmetric loose arcs into the pin.
+                  dl->PathLineTo(ImVec2(x_h, y_b - sgn * r_hug));
+                  dl->PathArcTo(ImVec2(x_h - r_hug, y_b - sgn * r_hug), r_hug, 0.0f, sgn * IM_PI * 0.5f, 0);
+                  const float drop = ImAbs(end.y - y_b);
+                  const float ry = ImMax(em, drop * 0.5f);
+                  // Lateral radius scales with how far the chip sits from the boundary line --
+                  // near-boundary chips get a calm shallow slide, deep 180s keep the wide arcs
+                  // -- while never cutting into the destination group.
+                  const float lateral = (x_h - r_hug) - end.x;
+                  const float rx = ImMax(ImMin(ry, ImMax(em * 1.5f, lateral * 0.8f)), end.x - mn.x + m_hug);
+                  dl->PathLineTo(ImVec2(end.x, y_b));               // hug the far boundary to the S
+                  const float my = (y_b + end.y) * 0.5f;
+                  dl->PathBezierCubicCurveTo(ImVec2(end.x - rx * k, y_b), ImVec2(end.x - rx, my - sgn * ry * k), ImVec2(end.x - rx, my), 0);
+                  dl->PathBezierCubicCurveTo(ImVec2(end.x - rx, my + sgn * ry * k), ImVec2(end.x - rx * k, end.y), end, 0);
+                }
+                else
+                {
+                  // Edge case: the chip hangs just past the group at (or right of) the hug line
+                  // -- no room to wrap toward it. Pass the boundary ON the line, then a gentle
+                  // S in the open ground beyond it, and enter the pin horizontally.
+                  const float avail = ImAbs(end.y - y_b);
+                  const float r_f = ImMax(2.0f, ImMin(em * 2.0f, avail * 0.5f));
+                  const float x_e = end.x - r_f;
+                  const float shift = x_e - x_h;
+                  const float ry_s = ImMax(2.0f, ImMin(em * 1.2f, avail * 0.25f));
+                  if (ImAbs(shift) > 1.0f)
+                  {
+                    const float y0 = end.y - sgn * (r_f + 2.0f * ry_s);
+                    dl->PathLineTo(ImVec2(x_h, y0));
+                    dl->PathBezierCubicCurveTo(ImVec2(x_h, y0 + sgn * ry_s * 1.1f),
+                                               ImVec2(x_e, y0 + sgn * ry_s * 0.9f),
+                                               ImVec2(x_e, y0 + sgn * 2.0f * ry_s), 0);
+                  }
+                  else
+                  {
+                    dl->PathLineTo(ImVec2(x_e, end.y - sgn * r_f));
+                  }
+                  dl->PathArcTo(ImVec2(end.x, end.y - sgn * r_f), r_f, IM_PI, IM_PI - sgn * IM_PI * 0.5f, 0);
+                  dl->PathLineTo(end);
+                }
+                AppWirePathStroke(dl, wire_col, th);
+                drawn = true;
+              }
+            }
+            // Degenerate span: a small S through passable ground.
+            if (!drawn)
+            {
+              const float mid_x = ImMax((start.x + end.x) * 0.5f, start.x + em);
+              const ImVec2 pts[4] = { start, ImVec2(mid_x, start.y), ImVec2(mid_x, end.y), end };
+              AppDrawWireArcPath(dl, pts, 4, nullptr, wire_col, th);
+            }
+            // Square endpoints: the containment-pin idiom, so the trunk reads as a child wire.
+            const float ps = em * 0.28f;
+            dl->AddRectFilled(ImVec2(start.x - ps, start.y - ps), ImVec2(start.x + ps, start.y + ps), wire_col, ps * 0.4f);
+            dl->AddRectFilled(ImVec2(end.x - ps, end.y - ps), ImVec2(end.x + ps, end.y + ps), wire_col, ps * 0.4f);
+            trunked_owners.push_back(owner_id);
+          }
         }
       };
 
@@ -5261,9 +5548,11 @@ namespace ImGui
       if (n->HasGridPos && !n->_NeedsPlace && !AppIdInSet(s_editor_prev_pool_ids, n->Id))
         n->_NeedsPlace = true;
 
-      // Layer nodes (column packer) and window nodes (section packer) are position-owned: not draggable.
+      // Layer nodes (column packer) and window/sidebar nodes (section packer) are position-owned:
+      // not draggable.
       const bool at_root_scope = g->ViewScope.Size == 0;
-      const bool owned = n->Kind == ImGuiAppNodeKind_Layer || (n->Kind == ImGuiAppNodeKind_Window && at_root_scope);
+      const bool owned = n->Kind == ImGuiAppNodeKind_Layer
+                      || ((n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar) && at_root_scope);
       ImGui::CanvasSetNodeDraggable(cv, n->Id, !owned);
 
       if (n->_NeedsPlace)
@@ -5559,6 +5848,16 @@ namespace ImGui
       // Skip links into a node folded behind a collapsed group: its attribute was not submitted this frame.
       if ((oa && AppNodeHiddenByCollapse(g, oa->Id)) || (ob && AppNodeHiddenByCollapse(g, ob->Id)))
         continue;
+      // A trunked owner's containment fan is replaced by its group-frame trunk connector.
+      if (g->Links.Data[li].Kind == ImGuiAppEdgeKind_Containment && trunked_owners.Size > 0)
+      {
+        const int fan_owner = AppGraphPortOwnerId(g, g->Links.Data[li].EndAttr);   // EndAttr = the owner's ChildIn
+        bool trunked = false;
+        for (int ti = 0; ti < trunked_owners.Size && !trunked; ti++)
+          trunked = trunked_owners.Data[ti] == fan_owner;
+        if (trunked)
+          continue;
+      }
       // Brushing echo on wires: the link another view (inspector binding rows) points at renders bright.
       ImGuiAppHoverSource lsrc = ImGuiAppHoverSource_None;
       const bool brushed = g->Links.Data[li].Id == AppGraphHoveredLink(&lsrc) && lsrc != ImGuiAppHoverSource_Canvas && lsrc != ImGuiAppHoverSource_None;

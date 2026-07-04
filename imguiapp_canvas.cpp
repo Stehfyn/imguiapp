@@ -1038,6 +1038,14 @@ namespace ImGui
     if (ImGuiCanvasPinRec* pb = CanvasFindPin(c, pin_b)) pb->WiredCount++;
   }
 
+  bool CanvasWireExists(const ImGuiCanvasState* c, int wire_id)
+  {
+    for (int i = 0; i < c->Wires.Size; i++)
+      if (c->Wires.Data[i].Id == wire_id)
+        return true;
+    return false;
+  }
+
   ImVec2 CanvasPinPos(const ImGuiCanvasState* c, int pin_id)
   {
     const ImGuiCanvasPinRec* p = CanvasFindPin(const_cast<ImGuiCanvasState*>(c), pin_id);

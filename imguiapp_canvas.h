@@ -137,6 +137,7 @@ namespace ImGui
   // the center of its Side edge. Submits no widget and consumes no cursor -- call between BeginNode/EndNode.
   IMGUI_API void   CanvasEdgePin(ImGuiCanvasState* c, int pin_id, int kind /*In|Out*/, int shape, int side);
   IMGUI_API void   CanvasWire(ImGuiCanvasState* c, int wire_id, int pin_a, int pin_b, ImU32 color /*= 0 -> style*/);
+  IMGUI_API bool   CanvasWireExists(const ImGuiCanvasState* c, int wire_id);      // wire submitted this frame (query after CanvasEnd)
   IMGUI_API ImVec2 CanvasPinPos(const ImGuiCanvasState* c, int pin_id);           // model
 
   // ---- selection + hover ------------------------------------------------------------------------
