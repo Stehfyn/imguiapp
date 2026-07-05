@@ -573,6 +573,8 @@ struct ImGuiAppEditorState
   float                                UniformCardW = 0.0f;         // one normalized width for every non-layer node (model units; grows to fit the widest need, deadbanded)
   bool                                 HelpOverlay = false;         // F1 shortcut cheat sheet
   bool                                 QuickInspector = false;      // N: floating quick inspector
+  bool                                 QuickInspectorPin = false;   // F41: pinned -> stays on QuickInspectorNode instead of following the selection
+  int                                  QuickInspectorNode = -1;     // F41: the pinned node (valid only while QuickInspectorPin)
   bool                                 PrevShowLive = true;
   bool                                 TitleEditing = false;        // one node renames at a time
   ImVec2                               AddPopupGrid = ImVec2(0.0f, 0.0f);
@@ -933,6 +935,11 @@ namespace ImGui
   // 5 Overlays, 6 View-scope). Draw-list buttons carry no id, so the click-path test targets these.
   IMGUI_API int    AppGraphEditorGizmoCount(const ImGuiAppGraph* g);
   IMGUI_API ImVec2 AppGraphEditorGizmoCenter(const ImGuiAppGraph* g, int index);
+
+  // F41: open the quick inspector pinned to a node ("Inspect here"); read back the pinned node (-1 when
+  // unpinned or the quick inspector is closed).
+  IMGUI_API void AppGraphInspectHere(const ImGuiAppGraph* g, int node_id);
+  IMGUI_API int  AppGraphEditorQuickInspectNode(const ImGuiAppGraph* g);
 
   // The composer chrome's push-stack palette, exposed read-write (stable pointer): the project
   // inspector's Theme section edits it live. Col slots are semantic and fixed; Value/Active are the

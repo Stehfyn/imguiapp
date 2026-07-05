@@ -368,9 +368,13 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
     under empty ids -- not ItemExists-addressable -- so single X/Y DragFloats are used.)
   - Identity section: an always-visible Identity group -- editable Name (where authorable) + a kind/id
     readout. `step76_inspector_identity` edits Name and asserts it writes through to the node.
-  Remaining: Identity section, per-kind section-collapse persistence, section kebab (reset/copy/paste),
-  unified row grammar + row context actions, multi-select mixed-value beyond Style, project logging
-  section, quick-inspector pin/dismiss/"Inspect here".
+  - quick-inspector pin/dismiss/"Inspect here": the N-panel gained a pin (thumbtack) that freezes it on
+    the current node as the selection moves on; the node context menu gained "Inspect here"
+    (`AppGraphInspectHere`); the X still dismisses. `step77_quick_inspector_pin` inspects-here on A,
+    moves the selection to B, asserts the pin holds A, then clicks the pin to release it.
+  Remaining: per-kind section-collapse persistence, section kebab (reset/copy/paste) on every section
+  (Style already has it), unified row grammar + row context actions, multi-select mixed-value beyond
+  Style, project inspector logging section.
 
 ## P7 — scopes + canvas completion
 

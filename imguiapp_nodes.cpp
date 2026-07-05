@@ -3560,6 +3560,22 @@ namespace ImGui
     return ed->GizmoCenters[index];
   }
 
+  // F41: open the quick inspector pinned to a specific node ("Inspect here"). The pin holds it on that
+  // node as the selection moves on.
+  void AppGraphInspectHere(const ImGuiAppGraph* g, int node_id)
+  {
+    ImGuiAppEditorState* ed = AppGraphEditorState(g);
+    ed->QuickInspector = true;
+    ed->QuickInspectorPin = true;
+    ed->QuickInspectorNode = node_id;
+  }
+  // The node the quick inspector is pinned to (-1 when unpinned / closed).
+  int AppGraphEditorQuickInspectNode(const ImGuiAppGraph* g)
+  {
+    const ImGuiAppEditorState* ed = AppGraphEditorState(g);
+    return ed->QuickInspectorPin ? ed->QuickInspectorNode : -1;
+  }
+
   // Draw INSIDE the canvas, between CanvasBegin and the first node, on the engine's background channel:
   // Stroke the current path with consecutive duplicate points removed first. PathArcTo samples
   // its start point, which duplicates the path's previous point at every line->arc and arc->arc
@@ -7915,6 +7931,13 @@ namespace ImGui
           AppGraphEditorState(g)->CtxNodeId = -1;
         }
       }
+      // Inspect here (F41): open the quick inspector pinned to this node, whatever the selection is.
+      if (cn != nullptr)
+      {
+        ImGui::Separator();
+        if (ImGui::MenuItem("Inspect here"))
+          AppGraphInspectHere(g, cn->Id);
+      }
       ImGui::EndPopup();
     }
     if (ImGui::BeginPopup("##AppGraphLinkCtx"))
@@ -8532,26 +8555,48 @@ namespace ImGui
       dl->PopClipRect();
     }
 
-    // Quick inspector (N): a floating, self-sized inspector beside the primary selection. Follows the
-    // selection; N (or its X) closes it.
-    if (AppGraphEditorState(g)->QuickInspector && selected_node_id != nullptr && *selected_node_id >= 0 && AppEditorNodeWasSubmitted(g, *selected_node_id))
+    // Quick inspector (N): a floating, self-sized inspector beside the primary selection. Pin (thumbtack)
+    // freezes it on the current node so it holds still as the selection moves on; its X (or N) dismisses.
     {
-      const float em_qi = ImGui::GetFontSize();
-      const ImVec2 np = ImGui::CanvasToScreen(cv, AppCanvasNodePos(g, *selected_node_id));
-      const ImVec2 nd = ImGui::CanvasNodeSize(cv, *selected_node_id) * AppCanvasScale(g);
-      ImVec2 pos(np.x + nd.x + em_qi, np.y);
-      pos.x = ImClamp(pos.x, editor_min.x, editor_min.x + editor_size.x - em_qi * 18.0f);
-      pos.y = ImClamp(pos.y, editor_min.y, editor_min.y + editor_size.y - em_qi * 8.0f);
-      ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
-      ImGui::SetNextWindowSizeConstraints(ImVec2(em_qi * 17.0f, 0.0f), ImVec2(em_qi * 22.0f, em_qi * 26.0f));
-      ImGui::SetNextWindowBgAlpha(0.97f);
-      if (ImGui::Begin("Quick inspect###quick_insp", &AppGraphEditorState(g)->QuickInspector,
-                       ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
-                       ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoCollapse))
+      ImGuiAppEditorState* ed = AppGraphEditorState(g);
+      const int qi_sel = selected_node_id != nullptr ? *selected_node_id : -1;
+      // Pinned to a still-live node -> hold there; otherwise (or once the pin's node leaves the pool) follow
+      // the selection.
+      int qi_node = (ed->QuickInspectorPin && ed->QuickInspectorNode >= 0 && AppEditorNodeWasSubmitted(g, ed->QuickInspectorNode))
+                    ? ed->QuickInspectorNode : qi_sel;
+      if (ed->QuickInspector && qi_node >= 0 && AppEditorNodeWasSubmitted(g, qi_node))
       {
-        EditAppNodeInspector(g, *selected_node_id);
+        const float em_qi = ImGui::GetFontSize();
+        const ImVec2 np = ImGui::CanvasToScreen(cv, AppCanvasNodePos(g, qi_node));
+        const ImVec2 nd = ImGui::CanvasNodeSize(cv, qi_node) * AppCanvasScale(g);
+        ImVec2 pos(np.x + nd.x + em_qi, np.y);
+        pos.x = ImClamp(pos.x, editor_min.x, editor_min.x + editor_size.x - em_qi * 18.0f);
+        pos.y = ImClamp(pos.y, editor_min.y, editor_min.y + editor_size.y - em_qi * 8.0f);
+        ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
+        ImGui::SetNextWindowSizeConstraints(ImVec2(em_qi * 17.0f, 0.0f), ImVec2(em_qi * 22.0f, em_qi * 26.0f));
+        ImGui::SetNextWindowBgAlpha(0.97f);
+        if (ImGui::Begin("Quick inspect###quick_insp", &ed->QuickInspector,
+                         ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                         ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoCollapse))
+        {
+          const bool pinned = ed->QuickInspectorPin;
+          if (pinned)
+            ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+          if (ImGui::Button(ICON_FA_THUMBTACK "###qi_pin"))
+          {
+            ed->QuickInspectorPin = !ed->QuickInspectorPin;
+            ed->QuickInspectorNode = ed->QuickInspectorPin ? qi_node : -1;
+          }
+          if (pinned)
+            ImGui::PopStyleColor();
+          ImGui::SetItemTooltip(pinned ? "Unpin (follow the selection)" : "Pin to this node");
+          ImGui::SameLine();
+          ImGui::TextDisabled(pinned ? "pinned" : "follows selection");
+          ImGui::Separator();
+          EditAppNodeInspector(g, qi_node);
+        }
+        ImGui::End();
       }
-      ImGui::End();
     }
 
     if (AppGraphEditorState(g)->HelpOverlay)
