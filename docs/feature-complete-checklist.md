@@ -561,10 +561,13 @@ extends those rails rather than inventing parallel ones.
   MANDATED grammar extension landed: `AppExprTernary` (?: at C precedence, right-assoc, cond must be bool) as
   the new grammar top (pass-through when no `?`, so step21 stays green) + `ImMin/ImMax` as call primaries -- so
   F55's select/min-max folds re-import. step95_op_node_kind + step21 grammar cases. No standalone emit (F55).
-- [ ] **F55 op codegen fold** — op chains fold into the consumer's emitted expression (no
+- [x] **F55 op codegen fold** — op chains fold into the consumer's emitted expression (no
   runtime object); byte-locked, compiled, RUN: an op chain gating a command dispatches it.
+  `AppOpFoldExpr` inverts the AppEventExprCheck parser (nested-Op operands recurse parenthesized,
+  leaf operands are inline tokens); `AppGraphConsumerDeps` drops Op producers (no template dep); an
+  Op-fed event (empty TempField + wired Op) folds into OnGetCommand's level gate / OnUpdate's SetField.
   Import note recorded: folded output re-imports as an expression, not as op nodes — the graph
-  file, not the C++, is the op structure's home.
+  file, not the C++, is the op structure's home. Corpus: tests/data/imguix_opfold_generated.h.
   *Accept: codegen-proof corpus extended with an op-chain fixture.*
 - [ ] **F56 animation builtin library** — Tween, Timer, Spring, Pulse as builtin Controls
   (AppGraphAddBuiltin; RandomTime precedent): dt-driven Task-phase update, temp^last edge
