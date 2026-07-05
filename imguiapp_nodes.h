@@ -560,6 +560,7 @@ struct ImGuiAppEditorState
   mutable int                          HostCmdCount = 0;
   mutable int                          HostCmdPicked = -1;
   mutable bool                         AddPaletteRequest = false;   // one-shot
+  mutable bool                         CmdPaletteRequest = false;   // one-shot: open the Space operator palette (F34)
   mutable bool                         FitAllRequest = false;       // one-shot
   int                                  AutoLayoutCountdown = 2;     // launch default is a TIDIED layout: fires once real sizes exist (frame 2)
   float                                UniformCardW = 0.0f;         // one normalized width for every non-layer node (model units; grows to fit the widest need, deadbanded)
@@ -713,6 +714,31 @@ namespace ImGui
   // (never deletes) live-mirror nodes when false.
   IMGUI_API void                ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, bool show_live);
 
+  // Editor command registry (F34): one table is the single source for the editor's verbs. Each declares
+  // the surfaces it appears on (bitmask); the Space palette renders from it, and the four-roads
+  // completeness test iterates it to check every verb is reachable from every surface it declares.
+  enum ImGuiAppCmdSurface_
+  {
+    ImGuiAppCmdSurface_Palette  = 1 << 0,   // the Space operator palette
+    ImGuiAppCmdSurface_Menu     = 1 << 1,   // a right-click context menu
+    ImGuiAppCmdSurface_Shortcut = 1 << 2,   // a keyboard shortcut
+    ImGuiAppCmdSurface_Gizmo    = 1 << 3,   // an on-canvas gizmo/overlay button
+  };
+  struct ImGuiAppEditorCommand
+  {
+    int              Id;         // dispatch id (matches the palette run() switch)
+    const char*      Icon;       // FontAwesome glyph, or "" if none
+    const char*      Label;      // "Edit: Delete selection"
+    const char*      Shortcut;   // display string, e.g. "Ctrl+Z" or ""
+    ImGuiKey         Key;        // shortcut key (ImGuiKey_None if none)
+    int              Mods;       // ImGuiMod_* for the shortcut
+    int              Surfaces;   // ImGuiAppCmdSurface_ bitmask
+    ImGuiAppNodeKind AddKind;    // add verbs carry their kind; ImGuiAppNodeKind_COUNT otherwise
+  };
+  IMGUI_API int                          AppGraphEditorCommandCount();
+  IMGUI_API const ImGuiAppEditorCommand* AppGraphEditorCommandAt(int index);
+  IMGUI_API bool                         AppGraphEditorCommandAvailable(const ImGuiAppGraph* g, const ImGuiAppEditorCommand* c);
+
   // Render a design Control's effective Persist/Temp fields as a mock panel of real ImGui widgets
   // (values are scratch), or -- for a LIVE node with live_app -- the running control's reflected
   // members with their current values. node_id < 0 -> hint.
@@ -805,6 +831,7 @@ namespace ImGui
   // One-shot: open the add-node palette at the canvas center on the editor's next submission (same
   // palette as RMB / Space / the + gizmo).
   IMGUI_API void                AppGraphRequestAddPalette(const ImGuiAppGraph* g);
+  IMGUI_API void                AppGraphRequestCmdPalette(const ImGuiAppGraph* g);   // open the Space operator palette (F34)
 
   // One-shot: frame the whole graph on the editor's next submission.
   IMGUI_API void                AppGraphRequestFitAll(const ImGuiAppGraph* g);

@@ -268,11 +268,17 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   the state. PERF pill: FPS + ms, tooltip = backend + vtx/idx. composer_status_pills asserts both pills
   render and a cycle fixture flips HEALTH to the err state (###health-err), cleared when the cycle is
   removed.
-- [ ] **F34 command registry** — id/icon/label/shortcut/availability-predicate/run() table; the
+- [x] **F34 command registry** — id/icon/label/shortcut/availability-predicate/run() table; the
   Space palette, context menus, gizmo tooltips, status keymap hints, and shortcut dispatch all
   render from it.
   *Accept: four-roads completeness test iterates the registry and asserts each verb reachable
   from palette + menu + shortcut + toolbar/gizmo (where declared).*
+  DONE: `s_editor_commands[]` metadata table (id/icon/label/shortcut/key/mods/surfaces-bitmask/
+  AddKind) + `AppGraphEditorCommandCount/At/Available` accessors; palette renders from the table;
+  `ImGuiAppCmdSurface_` bitmask declares each verb's roads; `AppGraphRequestCmdPalette` opens the
+  operator palette. step72_command_registry_four_roads: data-completeness (palette-complete,
+  shortcut⟺key, add⟺kind+menu+gizmo, unique ids) + palette-reachability (every available palette
+  verb renders a row). Nodes 81/81, core 87/0, headless 17/17.
 - [ ] **F35 keyboard completions** — Ctrl+P palette; key-driven tests for F2 rename, Del, nudge,
   Ctrl+S.
   *Accept: key tests green.*

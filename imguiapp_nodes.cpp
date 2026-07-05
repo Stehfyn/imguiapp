@@ -3247,6 +3247,7 @@ namespace ImGui
   }
 
   void AppGraphRequestAddPalette(const ImGuiAppGraph* g) { AppGraphEditorState(g)->AddPaletteRequest = true; }
+  void AppGraphRequestCmdPalette(const ImGuiAppGraph* g) { AppGraphEditorState(g)->CmdPaletteRequest = true; }
 
   void AppGraphRequestFitAll(const ImGuiAppGraph* g) { AppGraphEditorState(g)->FitAllRequest = true; }
 
@@ -5991,6 +5992,77 @@ namespace ImGui
     }
   }
 
+  // Command registry (F34): one table is the single source for the editor's verbs -- id, icon, label,
+  // shortcut, key, and which surfaces (palette / context menu / shortcut / gizmo) each declares. The Space
+  // palette renders directly from it; the completeness test iterates it and checks each verb is reachable
+  // from every surface it declares. run() stays the Id-keyed dispatch in the palette (below).
+  static const ImGuiAppEditorCommand s_editor_commands[] =
+  {
+    // Id  Icon  Label                          Shortcut  Key                     Mods            Surfaces                                                            AddKind
+    {  0, "",   "Add: Control",                "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_Control },
+    {  1, "",   "Add: Struct",                 "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_Struct  },
+    {  2, "",   "Add: Window",                 "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_Window  },
+    {  3, "",   "Add: Sidebar",                "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_Sidebar },
+    {  4, "",   "Add: Custom Layer",           "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_Layer   },
+    {  5, "",   "Add: Field",                  "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_Field   },
+    { 10, "",   "Layout: Tidy",                "L",      ImGuiKey_L,             0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_COUNT },
+    { 11, "",   "View: Fit all",               "Home",   ImGuiKey_Home,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_COUNT },
+    { 12, "",   "View: Frame selection",       "F",      ImGuiKey_F,             0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_COUNT },
+    { 13, "",   "Toggle: Snap to grid",        "G",      ImGuiKey_G,             0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_COUNT },
+    { 25, "",   "View: Hide selection",        "H",      ImGuiKey_H,             0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut, ImGuiAppNodeKind_COUNT },
+    { 26, "",   "View: Show all hidden",       "Alt+H",  ImGuiKey_H,             ImGuiMod_Alt,   ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut, ImGuiAppNodeKind_COUNT },
+    { 27, "",   "Overlays: Grid",              "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_COUNT },
+    { 28, "",   "Overlays: Phase bands",       "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_COUNT },
+    { 29, "",   "Overlays: Group frames",      "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_COUNT },
+    { 30, "",   "Overlays: Minimap",           "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_COUNT },
+    { 14, "",   "Edit: Undo",                  "Ctrl+Z", ImGuiKey_Z,             ImGuiMod_Ctrl,  ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut, ImGuiAppNodeKind_COUNT },
+    { 15, "",   "Edit: Redo",                  "Ctrl+Y", ImGuiKey_Y,             ImGuiMod_Ctrl,  ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut, ImGuiAppNodeKind_COUNT },
+    { 16, "",   "Edit: Copy",                  "Ctrl+C", ImGuiKey_C,             ImGuiMod_Ctrl,  ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut, ImGuiAppNodeKind_COUNT },
+    { 17, "",   "Edit: Paste",                 "Ctrl+V", ImGuiKey_V,             ImGuiMod_Ctrl,  ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut, ImGuiAppNodeKind_COUNT },
+    { 18, "",   "Edit: Duplicate",             "Ctrl+D", ImGuiKey_D,             ImGuiMod_Ctrl,  ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut | ImGuiAppCmdSurface_Menu, ImGuiAppNodeKind_COUNT },
+    { 19, "",   "Edit: Delete selection",      "Del",    ImGuiKey_Delete,        0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut | ImGuiAppCmdSurface_Menu, ImGuiAppNodeKind_COUNT },
+    { 31, "",   "Edit: Rename selection",      "F2",     ImGuiKey_F2,            0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut, ImGuiAppNodeKind_COUNT },
+    { 32, "",   "Order: Send to back",         "[",      ImGuiKey_LeftBracket,   0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut, ImGuiAppNodeKind_COUNT },
+    { 33, "",   "Order: Bring to front",       "]",      ImGuiKey_RightBracket,  0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut, ImGuiAppNodeKind_COUNT },
+    { 20, "",   "Groups: Collapse all",        "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT },
+    { 21, "",   "Groups: Expand all",          "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT },
+    { 22, "",   "Import: Paste C++ struct(s)", "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_Struct },
+    { 23, "",   "Scope: Enter selection",      "Tab",    ImGuiKey_Tab,           0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_COUNT },
+    { 24, "",   "Scope: Up one level",         "Esc",    ImGuiKey_Escape,        0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut, ImGuiAppNodeKind_COUNT },
+    { 35, "",   "Scope: Whole app",            "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_COUNT },
+    { 36, "",   "View: Quick inspector",       "N",      ImGuiKey_N,             0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut, ImGuiAppNodeKind_COUNT },
+    { 37, "",   "View: Outliner sidebar",      "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT },
+    { 38, "",   "View: Inspector sidebar",     "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT },
+    { 34, "",   "Help: Shortcut card",         "F1",     ImGuiKey_F1,            0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut, ImGuiAppNodeKind_COUNT },
+  };
+
+  int AppGraphEditorCommandCount()
+  {
+    return IM_ARRAYSIZE(s_editor_commands);
+  }
+
+  const ImGuiAppEditorCommand* AppGraphEditorCommandAt(int index)
+  {
+    return (index >= 0 && index < IM_ARRAYSIZE(s_editor_commands)) ? &s_editor_commands[index] : nullptr;
+  }
+
+  // Availability predicate: add verbs gate on the drilled scope's composability; undo/redo gate on history;
+  // everything else is always available.
+  bool AppGraphEditorCommandAvailable(const ImGuiAppGraph* g, const ImGuiAppEditorCommand* c)
+  {
+    IM_ASSERT(g != nullptr && c != nullptr);
+    if (c->AddKind != ImGuiAppNodeKind_COUNT)
+    {
+      const int scope = AppScopeCurrent(g);
+      if (c->AddKind == ImGuiAppNodeKind_Field)
+        return scope >= 0 && AppScopeKindComposable(g, scope, c->AddKind);
+      return scope < 0 || AppScopeKindComposable(g, scope, c->AddKind);
+    }
+    if (c->Id == 14) return AppGraphCanUndo(g);   // Undo
+    if (c->Id == 15) return AppGraphCanRedo(g);   // Redo
+    return true;
+  }
+
   void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, bool show_live)
   {
     IM_ASSERT(g != nullptr);
@@ -7339,6 +7411,11 @@ namespace ImGui
       AppGraphEditorState(g)->AddPopupGrid = ImGui::CanvasFromScreen(cv, editor_min + editor_size * 0.5f);
       ImGui::OpenPopup("##AppGraphAdd");
     }
+    if (AppGraphEditorState(g)->CmdPaletteRequest)   // same operator palette the Space key opens (F34: test/host road)
+    {
+      AppGraphEditorState(g)->CmdPaletteRequest = false;
+      ImGui::OpenPopup("##cmdpalette");
+    }
 
     // Context menus: the engine's RMB short-click events (a travelled RMB is a pan and never menus).
     {
@@ -7953,57 +8030,25 @@ namespace ImGui
         return clicked;
       };
 
-      struct Cmd { const char* Label; const char* Shortcut; int Id; };
-      static const Cmd cmds[] =
-      {
-        { "Add: Control", "", 0 }, { "Add: Struct", "", 1 }, { "Add: Window", "", 2 }, { "Add: Sidebar", "", 3 },
-        { "Add: Custom Layer", "", 4 }, { "Add: Field", "", 5 },
-        { "Layout: Tidy", "L", 10 }, { "View: Fit all", "Home", 11 }, { "View: Frame selection", "F", 12 },
-        { "Toggle: Snap to grid", "G", 13 },
-        { "View: Hide selection", "H", 25 }, { "View: Show all hidden", "Alt+H", 26 },
-        { "Overlays: Grid", "", 27 }, { "Overlays: Phase bands", "", 28 },
-        { "Overlays: Group frames", "", 29 }, { "Overlays: Minimap", "", 30 },
-        { "Edit: Undo", "Ctrl+Z", 14 }, { "Edit: Redo", "Ctrl+Y", 15 },
-        { "Edit: Copy", "Ctrl+C", 16 }, { "Edit: Paste", "Ctrl+V", 17 },
-        { "Edit: Duplicate", "Ctrl+D", 18 }, { "Edit: Delete selection", "Del", 19 },
-        { "Edit: Rename selection", "F2", 31 },
-        { "Order: Send to back", "[", 32 }, { "Order: Bring to front", "]", 33 },
-        { "Groups: Collapse all", "", 20 }, { "Groups: Expand all", "", 21 }, { "Import: Paste C++ struct(s)", "", 22 },
-        { "Scope: Enter selection", "Tab", 23 }, { "Scope: Up one level", "Esc", 24 },
-        { "Scope: Whole app", "", 35 },
-        { "View: Quick inspector", "N", 36 },
-        { "View: Outliner sidebar", "", 37 }, { "View: Inspector sidebar", "", 38 },
-        { "Help: Shortcut card", "F1", 34 },
-      };
-      // The add verbs obey the same composability filter as the add palette (a drilled palette
-      // offers only what the scope takes; Field only inside a struct).
+      // Palette rows render straight from the command registry (F34): only verbs that declare the palette
+      // surface AND pass their availability predicate (a drilled scope offers only what it takes).
       const int pal_scope = AppScopeCurrent(g);
-      auto pal_add_kind = [](int id) -> ImGuiAppNodeKind
-      {
-        switch (id)
-        {
-        case 0: return ImGuiAppNodeKind_Control;
-        case 1: case 22: return ImGuiAppNodeKind_Struct;
-        case 2: return ImGuiAppNodeKind_Window;
-        case 3: return ImGuiAppNodeKind_Sidebar;
-        case 4: return ImGuiAppNodeKind_Layer;
-        case 5: return ImGuiAppNodeKind_Field;
-        default: return ImGuiAppNodeKind_COUNT;
-        }
-      };
-      auto pal_addable = [&](int id)
-      {
-        const ImGuiAppNodeKind k = pal_add_kind(id);
-        if (k == ImGuiAppNodeKind_COUNT)
-          return true;
-        if (k == ImGuiAppNodeKind_Field)
-          return pal_scope >= 0 && AppScopeKindComposable(g, pal_scope, k);
-        return pal_scope < 0 || AppScopeKindComposable(g, pal_scope, k);
-      };
       int run = -1;
-      for (int i = 0; i < IM_ARRAYSIZE(cmds); i++)
-        if (pal_addable(cmds[i].Id) && AppGraphEditorState(g)->CmdFilter.PassFilter(cmds[i].Label) && cmd_row(cmds[i].Label, cmds[i].Shortcut))
-          run = cmds[i].Id;
+      for (int i = 0; i < AppGraphEditorCommandCount(); i++)
+      {
+        const ImGuiAppEditorCommand* c = AppGraphEditorCommandAt(i);
+        if (!(c->Surfaces & ImGuiAppCmdSurface_Palette) || !AppGraphEditorCommandAvailable(g, c))
+          continue;
+        if (!AppGraphEditorState(g)->CmdFilter.PassFilter(c->Label))
+          continue;
+        char lbl[IM_LABEL_SIZE + 32];
+        if (c->Icon[0])
+          ImFormatString(lbl, IM_ARRAYSIZE(lbl), "%s  %s", c->Icon, c->Label);
+        else
+          ImStrncpy(lbl, c->Label, IM_ARRAYSIZE(lbl));
+        if (cmd_row(lbl, c->Shortcut))
+          run = c->Id;
+      }
 
       // Host document verbs (save/generate/panels...), same rows, host-owned meaning. Picking one is recorded
       // for AppGraphConsumeHostCommand -- the editor never acts on the host's behalf.
