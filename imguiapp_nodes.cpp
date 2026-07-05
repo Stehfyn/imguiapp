@@ -6412,6 +6412,217 @@ namespace ImGui
     return true;
   }
 
+  //-----------------------------------------------------------------------------
+  // Remappable input->command binding (F74/F75). The registry Key/Mods are the factory DEFAULT chord; the
+  // graph's Keymap is a SPARSE list of user overrides. The effective chord of a verb is its override, else its
+  // default. Dispatch (in ShowAppGraphEditor) resolves a pressed chord to a command Id and runs it through the
+  // same run_command the palette uses -- one indirection, remappable.
+  //-----------------------------------------------------------------------------
+
+  static const ImGuiAppEditorCommand* AppFindEditorCommand(int cmd_id)
+  {
+    for (int i = 0; i < IM_ARRAYSIZE(s_editor_commands); i++)
+      if (s_editor_commands[i].Id == cmd_id)
+        return &s_editor_commands[i];
+    return nullptr;
+  }
+
+  void AppKeymapDefaultChord(int cmd_id, ImGuiKey* out_key, int* out_mods)
+  {
+    const ImGuiAppEditorCommand* c = AppFindEditorCommand(cmd_id);
+    if (out_key)  *out_key  = c ? c->Key  : ImGuiKey_None;
+    if (out_mods) *out_mods = c ? c->Mods : 0;
+  }
+
+  bool AppKeymapCommandRebindable(int cmd_id)
+  {
+    const ImGuiAppEditorCommand* c = AppFindEditorCommand(cmd_id);
+    if (c == nullptr || !(c->Surfaces & ImGuiAppCmdSurface_Shortcut))
+      return false;
+    // Delete (wire-aware), Tab/Esc (scope navigation) keep dedicated handlers this phase, so they are not
+    // dispatched through the keymap and not offered for rebinding.
+    return cmd_id != 19 && cmd_id != 23 && cmd_id != 24;
+  }
+
+  bool AppKeymapChordReserved(ImGuiKey key, int mods)
+  {
+    // Space / Ctrl+P always open the command palette -- the escape hatch to every verb -- so they can never
+    // be rebound onto another verb.
+    return (key == ImGuiKey_Space && mods == 0) || (key == ImGuiKey_P && mods == ImGuiMod_Ctrl);
+  }
+
+  static ImGuiAppKeyBinding* AppKeymapFindOverride(ImGuiAppGraph* g, int cmd_id)
+  {
+    for (int i = 0; i < g->Keymap.Size; i++)
+      if (g->Keymap.Data[i].CmdId == cmd_id)
+        return &g->Keymap.Data[i];
+    return nullptr;
+  }
+
+  void AppKeymapEffectiveChord(const ImGuiAppGraph* g, int cmd_id, ImGuiKey* out_key, int* out_mods)
+  {
+    for (int i = 0; i < g->Keymap.Size; i++)
+      if (g->Keymap.Data[i].CmdId == cmd_id)
+      {
+        if (out_key)  *out_key  = g->Keymap.Data[i].Key;
+        if (out_mods) *out_mods = g->Keymap.Data[i].Mods;
+        return;
+      }
+    AppKeymapDefaultChord(cmd_id, out_key, out_mods);
+  }
+
+  int AppKeymapConflict(const ImGuiAppGraph* g, ImGuiKey key, int mods, int except_cmd_id)
+  {
+    if (key == ImGuiKey_None)
+      return -1;
+    for (int i = 0; i < IM_ARRAYSIZE(s_editor_commands); i++)
+    {
+      const int id = s_editor_commands[i].Id;
+      if (id == except_cmd_id || !AppKeymapCommandRebindable(id))
+        continue;
+      ImGuiKey k = ImGuiKey_None; int m = 0;
+      AppKeymapEffectiveChord(g, id, &k, &m);
+      if (k == key && m == mods)
+        return id;
+    }
+    return -1;
+  }
+
+  bool AppKeymapRebind(ImGuiAppGraph* g, int cmd_id, ImGuiKey key, int mods)
+  {
+    if (!AppKeymapCommandRebindable(cmd_id))
+      return false;
+    if (key != ImGuiKey_None && AppKeymapChordReserved(key, mods))
+      return false;
+    // A rebind back to the factory chord clears the override, keeping the keymap a sparse diff.
+    ImGuiKey dk = ImGuiKey_None; int dm = 0;
+    AppKeymapDefaultChord(cmd_id, &dk, &dm);
+    ImGuiAppKeyBinding* ov = AppKeymapFindOverride(g, cmd_id);
+    if (key == dk && mods == dm)
+    {
+      if (ov) g->Keymap.erase(ov);
+      return true;
+    }
+    if (ov) { ov->Key = key; ov->Mods = mods; }
+    else    { ImGuiAppKeyBinding kb; kb.CmdId = cmd_id; kb.Key = key; kb.Mods = mods; g->Keymap.push_back(kb); }
+    return true;
+  }
+
+  void AppKeymapReset(ImGuiAppGraph* g, int cmd_id)
+  {
+    if (ImGuiAppKeyBinding* ov = AppKeymapFindOverride(g, cmd_id))
+      g->Keymap.erase(ov);
+  }
+
+  void AppKeymapResetAll(ImGuiAppGraph* g)
+  {
+    g->Keymap.clear();
+  }
+
+  int AppKeymapResolveChord(const ImGuiAppGraph* g, ImGuiKey key, int mods)
+  {
+    if (key == ImGuiKey_None)
+      return -1;
+    for (int i = 0; i < IM_ARRAYSIZE(s_editor_commands); i++)   // registry order == precedence on a chord conflict
+    {
+      const int id = s_editor_commands[i].Id;
+      if (!AppKeymapCommandRebindable(id))
+        continue;
+      ImGuiKey k = ImGuiKey_None; int m = 0;
+      AppKeymapEffectiveChord(g, id, &k, &m);
+      if (k == key && m == mods)
+        return id;
+    }
+    return -1;
+  }
+
+  static bool AppIsModifierKey(ImGuiKey k)
+  {
+    return (k >= ImGuiKey_LeftCtrl && k <= ImGuiKey_RightSuper)
+        || k == ImGuiMod_Ctrl || k == ImGuiMod_Shift || k == ImGuiMod_Alt || k == ImGuiMod_Super;
+  }
+
+  static void AppChordToString(ImGuiKey key, int mods, char* buf, int buf_size)
+  {
+    if (key == ImGuiKey_None) { ImStrncpy(buf, "(unbound)", (size_t)buf_size); return; }
+    ImFormatString(buf, (size_t)buf_size, "%s%s%s%s",
+                   (mods & ImGuiMod_Ctrl)  ? "Ctrl+"  : "",
+                   (mods & ImGuiMod_Shift) ? "Shift+" : "",
+                   (mods & ImGuiMod_Alt)   ? "Alt+"   : "",
+                   ImGui::GetKeyName(key));
+  }
+
+  // Keymap editor (F75): one row per rebindable verb -- label, effective-chord button (click to capture a new
+  // chord), reset. Conflicts (two verbs, one chord) are flagged; the resolver's first-in-registry-order rule
+  // still decides which fires. Chrome: em spacing, theme colors, single ###ids per control for headless drives.
+  void AppGraphShowKeymapEditor(ImGuiAppGraph* g)
+  {
+    IM_ASSERT(g != nullptr);
+    ImGuiAppEditorState* ed = AppGraphEditorState(g);
+    const float em = ImGui::GetFontSize();
+
+    // Capture: while a row listens, the next non-modifier key becomes the binding (with the held mods);
+    // Escape cancels; a reserved/illegal chord is refused and the row keeps listening.
+    if (ed->KeymapCapture >= 0)
+    {
+      const int mods = ImGui::GetIO().KeyMods & (ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiMod_Alt);
+      for (ImGuiKey k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; k = (ImGuiKey)(k + 1))
+      {
+        if (AppIsModifierKey(k) || !ImGui::IsKeyPressed(k, false))
+          continue;
+        if (k == ImGuiKey_Escape)
+          ed->KeymapCapture = -1;
+        else if (AppKeymapRebind(g, ed->KeymapCapture, k, mods))
+          ed->KeymapCapture = -1;
+        break;
+      }
+    }
+
+    ImGui::TextDisabled("Click a chord, then press a new key. Reserved: Space / Ctrl+P open the palette.");
+    ImGui::Spacing();
+
+    for (int i = 0; i < AppGraphEditorCommandCount(); i++)
+    {
+      const ImGuiAppEditorCommand* c = AppGraphEditorCommandAt(i);
+      if (!AppKeymapCommandRebindable(c->Id))
+        continue;
+
+      ImGui::AlignTextToFramePadding();
+      ImGui::TextUnformatted(c->Label);
+      ImGui::SameLine(em * 15.0f);
+
+      ImGuiKey key = ImGuiKey_None; int mods = 0;
+      AppKeymapEffectiveChord(g, c->Id, &key, &mods);
+      const int conflict = AppKeymapConflict(g, key, mods, c->Id);
+
+      char chord[64];
+      if (ed->KeymapCapture == c->Id)
+        ImStrncpy(chord, "(press a key)", IM_ARRAYSIZE(chord));
+      else
+        AppChordToString(key, mods, chord, IM_ARRAYSIZE(chord));
+
+      char btn[96];
+      ImFormatString(btn, IM_ARRAYSIZE(btn), "%s###keychip_%d", chord, c->Id);
+      if (ImGui::Button(btn, ImVec2(em * 8.0f, 0.0f)))
+        ed->KeymapCapture = (ed->KeymapCapture == c->Id) ? -1 : c->Id;
+
+      ImGui::SameLine();
+      char rst[32];
+      ImFormatString(rst, IM_ARRAYSIZE(rst), "Reset###keyreset_%d", c->Id);
+      if (ImGui::Button(rst))
+        AppKeymapReset(g, c->Id);
+
+      if (conflict >= 0)
+      {
+        const ImGuiAppEditorCommand* cc = AppFindEditorCommand(conflict);
+        ImGui::SameLine();
+        ImGui::TextColored(ImGui::GetStyleColorVec4(ImGuiCol_PlotHistogram), "conflict");
+        if (ImGui::IsItemHovered() && cc != nullptr)
+          ImGui::SetTooltip("same chord as \"%s\"", cc->Label);
+      }
+    }
+  }
+
   void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, bool show_live)
   {
     IM_ASSERT(g != nullptr);
@@ -7886,6 +8097,190 @@ namespace ImGui
       return any;
     };
 
+    // F74 remappable input->command binding: the ONE dispatcher for every editor verb -- the reified
+    // command->execute(). The Space palette and a resolved key chord both run through this, so a rebind takes
+    // effect on every surface. `at` is the model-space seat for add/paste verbs (the view center on the keyboard).
+    auto run_command = [&](int cmd_id, const ImVec2& at)
+    {
+      const int pal_scope = AppScopeCurrent(g);
+      ImGuiAppNode* added = nullptr;
+      switch (cmd_id)
+      {
+      case 0: added = AppGraphAddNode(g, ImGuiAppNodeKind_Control, "NewControl"); break;
+      case 1: added = AppGraphAddNode(g, ImGuiAppNodeKind_Struct,  "NewStruct");  break;
+      case 2: added = AppGraphAddNode(g, ImGuiAppNodeKind_Window,  "Window");     break;
+      case 3: added = AppGraphAddNode(g, ImGuiAppNodeKind_Sidebar, "Sidebar");    break;
+      case 4:
+        added = AppGraphAddNode(g, ImGuiAppNodeKind_Layer, "CustomLayer");
+        added->LayerType = ImGuiAppLayerType_Custom;
+        break;
+      case 5:
+      {
+        const int fid = AppScopeAddFieldToStruct(g, pal_scope);
+        added = fid >= 0 ? AppGraphFindNode(g, fid) : nullptr;
+        break;
+      }
+      case 10: AppScopeSequenceTidy(g, show_live); fit_all(); break;
+      case 11: fit_all(); break;
+      case 12:
+        if (!fit_ids(g->Selection) && ImGui::CanvasNumSelectedNodes(cv) > 0)
+        {
+          int picked = 0;
+          ImGui::CanvasGetSelectedNodes(cv, &picked, 1);
+          ImGui::CanvasCenterOn(cv, AppCanvasNodePos(g, picked) + ImGui::CanvasNodeSize(cv, picked) * 0.5f);
+        }
+        break;
+      case 13: snap_grid = !snap_grid; break;
+      case 40: AppGraphAlignSelection(g, AppAlign_Left,    show_live); break;
+      case 41: AppGraphAlignSelection(g, AppAlign_Right,   show_live); break;
+      case 42: AppGraphAlignSelection(g, AppAlign_Top,     show_live); break;
+      case 43: AppGraphAlignSelection(g, AppAlign_Bottom,  show_live); break;
+      case 44: AppGraphAlignSelection(g, AppAlign_DistribH, show_live); break;
+      case 45: AppGraphAlignSelection(g, AppAlign_DistribV, show_live); break;
+      case 14: if (AppGraphCanUndo(g)) { AppGraphUndo(g); ImGui::CanvasClearSelection(cv); } break;
+      case 15: if (AppGraphCanRedo(g)) { AppGraphRedo(g); ImGui::CanvasClearSelection(cv); } break;
+      case 16:
+        // Copy the multi-selection; fall back to the primary selected node when the canvas set is empty.
+        if (g->Selection.Size > 0)
+          AppGraphCopySelection(g, g->Selection);
+        else if (selected_node_id != nullptr && *selected_node_id >= 0)
+        {
+          ImVector<int> one;
+          one.push_back(*selected_node_id);
+          AppGraphCopySelection(g, one);
+        }
+        break;
+      case 17:
+      {
+        const int first = g->Nodes.Size;
+        AppGraphPasteClipboard(g);
+        if (pal_scope >= 0)
+          AppScopeComposeImported(g, first, &at);
+        break;
+      }
+      case 18:
+      {
+        ImVector<int> sel = g->Selection;
+        for (int i = 0; i < sel.Size; i++)
+          if (const ImGuiAppNode* sn = AppGraphFindNode(g, sel.Data[i]))
+            AppGraphDuplicateNode(g, sn);
+        break;
+      }
+      case 19:
+      {
+        ImVector<int> sel = g->Selection;
+        for (int i = 0; i < sel.Size; i++)
+        {
+          const ImGuiAppNode* sn = AppGraphFindNode(g, sel.Data[i]);
+          if (sn != nullptr && !sn->IsLive)
+            AppGraphRemoveNode(g, sel.Data[i]);
+          else if (sn != nullptr && sn->IsLive)
+            AppNotifyLiveReadOnly(g, sn);   // Delete command on a live pick: refuse with the notice
+        }
+        break;
+      }
+      case 20:
+        for (int i = 0; i < g->Nodes.Size; i++)
+        {
+          ImGuiAppNode* n = &g->Nodes.Data[i];
+          const bool owner = (n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar) ? AppGraphHostsControl(g, n->Id)
+                           : n->Kind == ImGuiAppNodeKind_Control ? (n->PersistStructId >= 0 || n->TempStructId >= 0)
+                           : n->Kind == ImGuiAppNodeKind_Struct ? (AppGraphFieldNodeCount(g, n->Id, 0) > 0) : false;
+          if (owner)
+            n->GroupCollapsed = true;
+        }
+        break;
+      case 21:
+        for (int i = 0; i < g->Nodes.Size; i++)
+        {
+          g->Nodes.Data[i].GroupCollapsed = false;
+          g->Nodes.Data[i]._NeedsPlace = true;
+        }
+        break;
+      case 22:
+        if (const char* clip = ImGui::GetClipboardText())
+        {
+          const int first = g->Nodes.Size;
+          AppGraphImportStructsFromCode(g, clip, pal_scope >= 0 ? ImVec2(0.0f, 0.0f) : at);
+          if (pal_scope >= 0)
+            AppScopeComposeImported(g, first, &at);
+        }
+        break;
+      case 23:
+      {
+        ImGuiAppNode* sel = (selected_node_id != nullptr && *selected_node_id >= 0) ? AppGraphFindNode(g, *selected_node_id) : nullptr;
+        if (sel != nullptr && AppScopeCanEnter(sel) && !AppNodeHiddenByCollapse(g, sel->Id) && !(!show_live && sel->IsLive))
+          g->ViewScope.push_back(sel->Id);
+        break;
+      }
+      case 24:
+        if (g->ViewScope.Size > 0)
+        {
+          const int exited = g->ViewScope.back();
+          g->ViewScope.pop_back();
+          if (selected_node_id != nullptr)
+            *selected_node_id = exited;
+        }
+        break;
+      case 25:
+        for (int i = 0; i < g->Selection.Size; i++)
+        {
+          ImGuiAppNode* sn = AppGraphFindNode(g, g->Selection.Data[i]);
+          if (sn != nullptr && !sn->IsLive && sn->Kind != ImGuiAppNodeKind_Layer)
+            sn->Hidden = true;
+        }
+        ImGui::CanvasClearSelection(cv);
+        g->Selection.clear();
+        break;
+      case 26:
+        for (int i = 0; i < g->Nodes.Size; i++)
+          g->Nodes.Data[i].Hidden = false;
+        break;
+      case 27: AppGraphViewState(g)->OvGrid = !AppGraphViewState(g)->OvGrid; break;
+      case 28: AppGraphViewState(g)->OvBands = !AppGraphViewState(g)->OvBands; break;
+      case 29: AppGraphViewState(g)->OvFrames = !AppGraphViewState(g)->OvFrames; break;
+      case 30: AppGraphViewState(g)->OvMinimap = !AppGraphViewState(g)->OvMinimap; break;
+      case 31:
+        if (selected_node_id != nullptr && *selected_node_id >= 0)
+        {
+          const ImGuiAppNode* sel = AppGraphFindNodeConst(g, *selected_node_id);
+          if (sel != nullptr && !sel->IsLive && (sel->Kind != ImGuiAppNodeKind_Layer || sel->LayerType == ImGuiAppLayerType_Custom))
+            g->EditingNodeId = sel->Id;
+          else if (sel != nullptr && sel->IsLive)
+            AppNotifyLiveReadOnly(g, sel);   // Rename command on a live mirror: refuse with the notice
+        }
+        break;
+      case 32: case 33:
+      {
+        const bool to_front = cmd_id == 33;
+        if (g->Selection.Size > 0)
+        {
+          ImVector<ImGuiAppNode> reordered;
+          reordered.reserve(g->Nodes.Size);
+          for (int pass = 0; pass < 2; pass++)
+            for (int i = 0; i < g->Nodes.Size; i++)
+            {
+              const bool in_sel = AppIdInSet(g->Selection, g->Nodes.Data[i].Id);
+              if ((pass == 0) == (to_front ? !in_sel : in_sel))
+                reordered.push_back(g->Nodes.Data[i]);
+            }
+          g->Nodes.Size = 0;
+          g->Nodes.swap(reordered);
+        }
+        break;
+      }
+      case 34: AppGraphEditorState(g)->HelpOverlay = !AppGraphEditorState(g)->HelpOverlay; break;
+      case 35: g->ViewScope.clear(); break;
+      case 36: AppGraphEditorState(g)->QuickInspector = !AppGraphEditorState(g)->QuickInspector; break;
+      case 37: AppGraphViewState(g)->TreeOpen = !AppGraphViewState(g)->TreeOpen; break;
+      case 38: AppGraphViewState(g)->InspOpen = !AppGraphViewState(g)->InspOpen; break;
+      default: break;
+      }
+      // Compose a newly added node into the current scope, seated at `at`; at root the default open placement stands.
+      if (added != nullptr && pal_scope >= 0)
+        AppScopeComposeNewNode(g, added->Id, &at);
+    };
+
     // Deferred scope fit: frame the freshly revealed composition once its nodes have been submitted (scope
     // changes from Tab/breadcrumb/tree happen post-submission, so the fit lands on the following frame).
     if (g->_PendingFit > 0 && --g->_PendingFit == 0)
@@ -7906,28 +8301,8 @@ namespace ImGui
 
     if (!ImGui::GetIO().WantTextInput && ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows))
     {
-      if (ImGui::IsKeyPressed(ImGuiKey_F, false))
-      {
-        if (!fit_ids(g->Selection) && ImGui::CanvasNumSelectedNodes(cv) > 0)
-        {
-          int picked = 0;
-          ImGui::CanvasGetSelectedNodes(cv, &picked, 1);
-          ImGui::CanvasCenterOn(cv, AppCanvasNodePos(g, picked) + ImGui::CanvasNodeSize(cv, picked) * 0.5f);
-        }
-      }
-      if (ImGui::IsKeyPressed(ImGuiKey_Home, false))
-        fit_all();
-      if (ImGui::IsKeyPressed(ImGuiKey_L, false) && !ImGui::GetIO().KeyCtrl)
-      {
-        AppScopeSequenceTidy(g, show_live);
-        fit_all();
-      }
-      if (ImGui::IsKeyPressed(ImGuiKey_G, false))
-        snap_grid = !snap_grid;   // toggle snap-to-grid
-      if (ImGui::IsKeyPressed(ImGuiKey_F1, false))
-        AppGraphEditorState(g)->HelpOverlay = !AppGraphEditorState(g)->HelpOverlay;             // toggle shortcut cheat-sheet
-      if (ImGui::IsKeyPressed(ImGuiKey_N, false))
-        AppGraphEditorState(g)->QuickInspector = !AppGraphEditorState(g)->QuickInspector; // Blender N-panel: floating inspector beside the selection
+      // F/Home/L/G/F1/N and the edit/clipboard/order/hide/rename verbs now dispatch through the keymap (F74,
+      // below), so a rebind reaches them. Space / Ctrl+P stay hard-wired here: the reserved palette openers.
       if (ImGui::IsKeyPressed(ImGuiKey_Space, false) || ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_P))
         ImGui::OpenPopup("##cmdpalette");   // Blender Space / VS Code Ctrl+P: same operator search
 
@@ -7938,17 +8313,6 @@ namespace ImGui
         const ImGuiAppGraphHostCmd* hc = &AppGraphEditorState(g)->HostCmds[i];
         if (hc->Key != ImGuiKey_None && ImGui::IsKeyChordPressed((ImGuiKeyChord)(hc->Key | hc->Mods)))
           AppGraphEditorState(g)->HostCmdPicked = hc->Id;
-      }
-
-      // F2 renames the primary SELECTION inline (the same editor the title double-click opens). Acts on
-      // selection, never hover -- hover is for brushing. Live mirrors and core layers keep their names.
-      if (ImGui::IsKeyPressed(ImGuiKey_F2, false) && selected_node_id != nullptr && *selected_node_id >= 0)
-      {
-        const ImGuiAppNode* sel = AppGraphFindNodeConst(g, *selected_node_id);
-        if (sel != nullptr && !sel->IsLive && (sel->Kind != ImGuiAppNodeKind_Layer || sel->LayerType == ImGuiAppLayerType_Custom))
-          g->EditingNodeId = sel->Id;
-        else if (sel != nullptr && sel->IsLive)
-          AppNotifyLiveReadOnly(g, sel);   // F2 on a live mirror: refuse with the notice
       }
 
       // Drill-down (Blender node-group semantics): Tab enters the selected node's composition scope; Tab with
@@ -7995,27 +8359,6 @@ namespace ImGui
         }
       }
 
-      // Blender hide: H hides the selected design nodes (outliner eye); Alt+H shows everything again.
-      if (ImGui::IsKeyPressed(ImGuiKey_H, false))
-      {
-        if (ImGui::GetIO().KeyAlt)
-        {
-          for (int i = 0; i < g->Nodes.Size; i++)
-            g->Nodes.Data[i].Hidden = false;
-        }
-        else if (g->Selection.Size > 0)
-        {
-          for (int i = 0; i < g->Selection.Size; i++)
-          {
-            ImGuiAppNode* sn = AppGraphFindNode(g, g->Selection.Data[i]);
-            if (sn != nullptr && !sn->IsLive && sn->Kind != ImGuiAppNodeKind_Layer)
-              sn->Hidden = true;
-          }
-          ImGui::CanvasClearSelection(cv);
-          g->Selection.clear();
-        }
-      }
-
       // Nudge: arrow keys move the selected nodes by 1 grid unit (Shift = 10). Held = repeat.
       {
         const float step = ImGui::GetIO().KeyShift ? 10.0f : 1.0f;
@@ -8046,27 +8389,6 @@ namespace ImGui
       if (ImGui::IsKeyPressed(ImGuiKey_A, false) && ImGui::GetIO().KeyShift && !ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyAlt && g->Selection.Size >= 2)
         AppGraphEditorState(g)->AlignMenuRequest = true;
 
-      // Z-order: '[' sends the selection to the back, ']' brings it to the front. The canvas draws in submission =
-      // g->Nodes order, so we restack by rebuilding the vector with the selected nodes moved to one end. Element
-      // moves are byte-copies (ImVector never frees element-owned memory), so inner buffers transfer cleanly.
-      if ((ImGui::IsKeyPressed(ImGuiKey_LeftBracket, false) || ImGui::IsKeyPressed(ImGuiKey_RightBracket, false)) && g->Selection.Size > 0)
-      {
-        const bool to_front = ImGui::IsKeyPressed(ImGuiKey_RightBracket, false);
-        ImVector<ImGuiAppNode> reordered;
-        reordered.reserve(g->Nodes.Size);
-        if (to_front)
-        {
-          for (int i = 0; i < g->Nodes.Size; i++) if (!AppIdInSet(g->Selection, g->Nodes.Data[i].Id)) reordered.push_back(g->Nodes.Data[i]);
-          for (int i = 0; i < g->Nodes.Size; i++) if (AppIdInSet(g->Selection, g->Nodes.Data[i].Id))  reordered.push_back(g->Nodes.Data[i]);
-        }
-        else
-        {
-          for (int i = 0; i < g->Nodes.Size; i++) if (AppIdInSet(g->Selection, g->Nodes.Data[i].Id))  reordered.push_back(g->Nodes.Data[i]);
-          for (int i = 0; i < g->Nodes.Size; i++) if (!AppIdInSet(g->Selection, g->Nodes.Data[i].Id)) reordered.push_back(g->Nodes.Data[i]);
-        }
-        g->Nodes.Size = 0;            // abandon the old elements (their inner buffers now live in `reordered`)
-        g->Nodes.swap(reordered);     // take the reordered buffer; `reordered` frees only the old outer array
-      }
     }
 
     // Apply a deferred node-body button request (explode/collapse). Here -- after the canvas read-back -- it is
@@ -8488,172 +8810,9 @@ namespace ImGui
 
       if (run >= 0)
       {
-        // Palette verbs act at the view center (there is no pointer position to honor).
-        const ImVec2 pal_center = ImGui::CanvasFromScreen(cv, editor_min + editor_size * 0.5f);
-        ImGuiAppNode* added = nullptr;
-        switch (run)
-        {
-        case 0: added = AppGraphAddNode(g, ImGuiAppNodeKind_Control, "NewControl"); break;
-        case 1: added = AppGraphAddNode(g, ImGuiAppNodeKind_Struct,  "NewStruct");  break;
-        case 2: added = AppGraphAddNode(g, ImGuiAppNodeKind_Window,  "Window");     break;
-        case 3: added = AppGraphAddNode(g, ImGuiAppNodeKind_Sidebar, "Sidebar");    break;
-        case 4:
-          added = AppGraphAddNode(g, ImGuiAppNodeKind_Layer, "CustomLayer");
-          added->LayerType = ImGuiAppLayerType_Custom;
-          break;
-        case 5:
-        {
-          const int fid = AppScopeAddFieldToStruct(g, pal_scope);
-          added = fid >= 0 ? AppGraphFindNode(g, fid) : nullptr;
-          break;
-        }
-        case 10: AppScopeSequenceTidy(g, show_live); fit_all(); break;
-        case 11: fit_all(); break;
-        case 12: fit_ids(g->Selection); break;
-        case 13: snap_grid = !snap_grid; break;
-        case 40: AppGraphAlignSelection(g, AppAlign_Left,    show_live); break;
-        case 41: AppGraphAlignSelection(g, AppAlign_Right,   show_live); break;
-        case 42: AppGraphAlignSelection(g, AppAlign_Top,     show_live); break;
-        case 43: AppGraphAlignSelection(g, AppAlign_Bottom,  show_live); break;
-        case 44: AppGraphAlignSelection(g, AppAlign_DistribH, show_live); break;
-        case 45: AppGraphAlignSelection(g, AppAlign_DistribV, show_live); break;
-        case 14: if (AppGraphCanUndo(g)) { AppGraphUndo(g); ImGui::CanvasClearSelection(cv); } break;
-        case 15: if (AppGraphCanRedo(g)) { AppGraphRedo(g); ImGui::CanvasClearSelection(cv); } break;
-        case 16: AppGraphCopySelection(g, g->Selection); break;
-        case 17:
-        {
-          const int first = g->Nodes.Size;
-          AppGraphPasteClipboard(g);
-          if (pal_scope >= 0)
-            AppScopeComposeImported(g, first, &pal_center);
-          break;
-        }
-        case 18:
-        {
-          ImVector<int> sel = g->Selection;
-          for (int i = 0; i < sel.Size; i++)
-            if (const ImGuiAppNode* sn = AppGraphFindNode(g, sel.Data[i]))
-              AppGraphDuplicateNode(g, sn);
-          break;
-        }
-        case 19:
-        {
-          ImVector<int> sel = g->Selection;
-          for (int i = 0; i < sel.Size; i++)
-          {
-            const ImGuiAppNode* sn = AppGraphFindNode(g, sel.Data[i]);
-            if (sn != nullptr && !sn->IsLive)
-              AppGraphRemoveNode(g, sel.Data[i]);
-            else if (sn != nullptr && sn->IsLive)
-              AppNotifyLiveReadOnly(g, sn);   // Delete command on a live pick: refuse with the notice
-          }
-          break;
-        }
-        case 20:
-          for (int i = 0; i < g->Nodes.Size; i++)
-          {
-            ImGuiAppNode* n = &g->Nodes.Data[i];
-            const bool owner = (n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar) ? AppGraphHostsControl(g, n->Id)
-                             : n->Kind == ImGuiAppNodeKind_Control ? (n->PersistStructId >= 0 || n->TempStructId >= 0)
-                             : n->Kind == ImGuiAppNodeKind_Struct ? (AppGraphFieldNodeCount(g, n->Id, 0) > 0) : false;
-            if (owner)
-              n->GroupCollapsed = true;
-          }
-          break;
-        case 21:
-          for (int i = 0; i < g->Nodes.Size; i++)
-          {
-            g->Nodes.Data[i].GroupCollapsed = false;
-            g->Nodes.Data[i]._NeedsPlace = true;
-          }
-          break;
-        case 22:
-          if (const char* clip = ImGui::GetClipboardText())
-          {
-            const int first = g->Nodes.Size;
-            AppGraphImportStructsFromCode(g, clip, pal_scope >= 0 ? ImVec2(0.0f, 0.0f) : pal_center);
-            if (pal_scope >= 0)
-              AppScopeComposeImported(g, first, &pal_center);
-          }
-          break;
-        case 23:
-        {
-          ImGuiAppNode* sel = (selected_node_id != nullptr && *selected_node_id >= 0) ? AppGraphFindNode(g, *selected_node_id) : nullptr;
-          if (sel != nullptr && AppScopeCanEnter(sel) && !AppNodeHiddenByCollapse(g, sel->Id) && !(!show_live && sel->IsLive))
-            g->ViewScope.push_back(sel->Id);
-          break;
-        }
-        case 24:
-          if (g->ViewScope.Size > 0)
-          {
-            const int exited = g->ViewScope.back();
-            g->ViewScope.pop_back();
-            if (selected_node_id != nullptr)
-              *selected_node_id = exited;
-          }
-          break;
-        case 25:
-          for (int i = 0; i < g->Selection.Size; i++)
-          {
-            ImGuiAppNode* sn = AppGraphFindNode(g, g->Selection.Data[i]);
-            if (sn != nullptr && !sn->IsLive && sn->Kind != ImGuiAppNodeKind_Layer)
-              sn->Hidden = true;
-          }
-          ImGui::CanvasClearSelection(cv);
-          g->Selection.clear();
-          break;
-        case 26:
-          for (int i = 0; i < g->Nodes.Size; i++)
-            g->Nodes.Data[i].Hidden = false;
-          break;
-        case 27: AppGraphViewState(g)->OvGrid = !AppGraphViewState(g)->OvGrid; break;
-        case 28: AppGraphViewState(g)->OvBands = !AppGraphViewState(g)->OvBands; break;
-        case 29: AppGraphViewState(g)->OvFrames = !AppGraphViewState(g)->OvFrames; break;
-        case 30: AppGraphViewState(g)->OvMinimap = !AppGraphViewState(g)->OvMinimap; break;
-        case 31:
-          if (selected_node_id != nullptr && *selected_node_id >= 0)
-          {
-            const ImGuiAppNode* sel = AppGraphFindNodeConst(g, *selected_node_id);
-            if (sel != nullptr && !sel->IsLive && (sel->Kind != ImGuiAppNodeKind_Layer || sel->LayerType == ImGuiAppLayerType_Custom))
-              g->EditingNodeId = sel->Id;
-            else if (sel != nullptr && sel->IsLive)
-              AppNotifyLiveReadOnly(g, sel);   // Rename command on a live mirror: refuse with the notice
-          }
-          break;
-        case 32: case 33:
-        {
-          // Same restack the [ / ] keys perform (see the z-order shortcut block).
-          const bool to_front = run == 33;
-          if (g->Selection.Size > 0)
-          {
-            ImVector<ImGuiAppNode> reordered;
-            reordered.reserve(g->Nodes.Size);
-            for (int pass = 0; pass < 2; pass++)
-              for (int i = 0; i < g->Nodes.Size; i++)
-              {
-                const bool in_sel = AppIdInSet(g->Selection, g->Nodes.Data[i].Id);
-                if ((pass == 0) == (to_front ? !in_sel : in_sel))
-                  reordered.push_back(g->Nodes.Data[i]);
-              }
-            g->Nodes.Size = 0;            // abandon the old elements (inner buffers now live in `reordered`)
-            g->Nodes.swap(reordered);
-          }
-          break;
-        }
-        case 34: AppGraphEditorState(g)->HelpOverlay = !AppGraphEditorState(g)->HelpOverlay; break;
-        case 35: g->ViewScope.clear(); break;
-        case 36: AppGraphEditorState(g)->QuickInspector = !AppGraphEditorState(g)->QuickInspector; break;
-        case 37: AppGraphViewState(g)->TreeOpen = !AppGraphViewState(g)->TreeOpen; break;
-        case 38: AppGraphViewState(g)->InspOpen = !AppGraphViewState(g)->InspOpen; break;
-        default: break;
-        }
-        if (added != nullptr)
-        {
-          // Compose the new node into the current scope, seated at the view center; at root the
-          // default open placement from AppGraphAddNode stands.
-          if (pal_scope >= 0)
-            AppScopeComposeNewNode(g, added->Id, &pal_center);
-        }
+        // Palette verbs act at the view center (there is no pointer position to honor); run through the shared
+        // dispatcher (F74) -- the same path a key chord takes.
+        run_command(run, ImGui::CanvasFromScreen(cv, editor_min + editor_size * 0.5f));
         ImGui::CloseCurrentPopup();
       }
       ImGui::EndPopup();
@@ -9142,61 +9301,33 @@ namespace ImGui
       }
     }
 
-    // Clipboard + undo/redo keys (canvas focused, not typing). Ctrl+C copies the selected nodes' subtrees,
-    // Ctrl+V pastes them with fresh ids and a cascading offset. Ctrl+Z / Ctrl+(Shift+)Z / Ctrl+Y restore
-    // snapshots -- and clear the canvas selection so it can't reference an id the snapshot dropped.
-    if (!ImGui::GetIO().WantTextInput && ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && ImGui::GetIO().KeyCtrl)
+    // F74 keymap dispatch: a pressed chord resolves to a command Id through the graph's keymap, then runs
+    // through the same run_command the palette uses -- one indirection, remappable. Placed after the selection
+    // mirror (so Copy/Duplicate/Hide see a fresh g->Selection) and before the undo checkpoint (like the palette
+    // path, which runs verbs before the checkpoint). Delete/Tab/Esc keep their dedicated handlers above;
+    // Space / Ctrl+P (palette) and host chords are reserved, matched separately.
+    if (!ImGui::GetIO().WantTextInput && ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows))
     {
-      if (ImGui::IsKeyPressed(ImGuiKey_C, false))
+      const ImVec2 view_center = ImGui::CanvasFromScreen(cv, editor_min + editor_size * 0.5f);
+      for (int i = 0; i < AppGraphEditorCommandCount(); i++)
       {
-        ImVector<int> roots;
-        const int sel_count = ImGui::CanvasNumSelectedNodes(cv);
-        if (sel_count > 0)
-        {
-          roots.resize(sel_count);
-          ImGui::CanvasGetSelectedNodes(cv, roots.Data, sel_count);
-        }
-        else if (selected_node_id != nullptr && *selected_node_id >= 0)
-        {
-          roots.push_back(*selected_node_id);
-        }
-        if (roots.Size > 0)
-          AppGraphCopySelection(g, roots);
-      }
-      if (ImGui::IsKeyPressed(ImGuiKey_V, false) && AppGraphClipboardHasData(g))
-      {
-        const int first = g->Nodes.Size;
-        AppGraphPasteClipboard(g);
-        if (!at_root)
-          AppScopeComposeImported(g, first, nullptr);   // a paste while drilled composes into the scope
-      }
-      // Ctrl+D duplicates the selection in place (the palette's Edit: Duplicate, on the keyboard).
-      if (ImGui::IsKeyPressed(ImGuiKey_D, false) && g->Selection.Size > 0)
-      {
-        ImVector<int> sel = g->Selection;   // copy: duplication mutates g->Nodes (and may grow Selection)
-        for (int i = 0; i < sel.Size; i++)
-          if (const ImGuiAppNode* sn = AppGraphFindNode(g, sel.Data[i]))
-            AppGraphDuplicateNode(g, sn);
+        const ImGuiAppEditorCommand* c = AppGraphEditorCommandAt(i);
+        if (!AppKeymapCommandRebindable(c->Id))
+          continue;
+        ImGuiKey key = ImGuiKey_None; int mods = 0;
+        AppKeymapEffectiveChord(g, c->Id, &key, &mods);
+        if (key == ImGuiKey_None || !ImGui::IsKeyChordPressed((ImGuiKeyChord)(key | mods)))
+          continue;
+        if (!AppGraphEditorCommandAvailable(g, c))
+          continue;
+        run_command(c->Id, view_center);
+        break;   // one verb per frame; registry order is precedence on a chord collision
       }
     }
 
-    // Undo/redo: capture this frame's settled mutations, then honor Ctrl+Z / Ctrl+(Shift+)Z / Ctrl+Y.
+    // Undo history checkpoint: capture this frame's settled mutations (keymap Undo/Redo already ran above,
+    // like the palette path).
     AppGraphCheckpoint(g);
-    if (!ImGui::GetIO().WantTextInput && ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && ImGui::GetIO().KeyCtrl)
-    {
-      const bool redo = ImGui::IsKeyPressed(ImGuiKey_Y, false) || (ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z, false));
-      const bool undo = !ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z, false);
-      if (redo && AppGraphCanRedo(g))
-      {
-        AppGraphRedo(g);
-        ImGui::CanvasClearSelection(cv);
-      }
-      else if (undo && AppGraphCanUndo(g))
-      {
-        AppGraphUndo(g);
-        ImGui::CanvasClearSelection(cv);
-      }
-    }
   }
 
   void AppGraphSelectionBreadcrumb(const ImGuiAppGraph* g, int node_id, char* buf, int buf_size)
@@ -11487,6 +11618,10 @@ namespace ImGui
     for (int i = 0; i < g->ScopePlacements.Size; i++)
       buf->appendf("Place=%d,%d,%g,%g\n", g->ScopePlacements.Data[i].ScopeId, g->ScopePlacements.Data[i].NodeId,
                    g->ScopePlacements.Data[i].Pos.x, g->ScopePlacements.Data[i].Pos.y);
+    // F74 keymap: sparse user overrides only (a default graph writes none, so it stays byte-identical to
+    // the pre-feature serialization). Key==0 (ImGuiKey_None) encodes an explicit unbind.
+    for (int i = 0; i < g->Keymap.Size; i++)
+      buf->appendf("Keybind=%d,%d,%d\n", g->Keymap.Data[i].CmdId, (int)g->Keymap.Data[i].Key, g->Keymap.Data[i].Mods);
   }
 
   // The prefab registry (F04) rides in a sidecar file beside the graph ("<graph>.prefabs"). Each entry
@@ -11656,6 +11791,7 @@ namespace ImGui
     g->Links.clear();
     g->Bindings.clear();
     g->ScopePlacements.clear();
+    g->Keymap.clear();
     g->Selection.clear();
     g->NextId = 1;
     g->EditingNodeId = -1;
@@ -11754,6 +11890,11 @@ namespace ImGui
         ImGuiAppFieldBinding b;
         if (sscanf(p + 5, "%d,%255[^,],%255[^\n]", &b.LinkId, b.DstField, b.SrcField) >= 1)
           g->Bindings.push_back(b);
+      }
+      else if (strncmp(p, "Keybind=", 8) == 0)
+      {
+        ImGuiAppKeyBinding kb; int key = 0;
+        if (sscanf(p + 8, "%d,%d,%d", &kb.CmdId, &key, &kb.Mods) == 3) { kb.Key = (ImGuiKey)key; g->Keymap.push_back(kb); }
       }
 
       if (saved == 0) break;

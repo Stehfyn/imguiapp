@@ -609,7 +609,33 @@ interpreter's vocabulary IS F53-F57's semantics.
   with a doc note; matrix published into feature-audit doc v2.
   *Accept: the re-audit IS 100%.*
 - [ ] **F73 roadmap reset** — up-next.md + roadmap rewritten to the post-100 horizon (command
-  payloads, status-layer model, module interop, edit-intent bus, Lifecycle view).
+  payloads, status-layer model, module interop, edit-intent bus, remappable input binding (F74/F75),
+  Lifecycle view).
+
+## P11 — post-100 horizon (started early; NOT required for 100%)
+
+F34/F35 already ship a complete, discoverable keyboard system, so remappable bindings sit PAST the 100%
+line (they are a power-user / accessibility layer, not a gate on author → generate → run). They land here
+rather than being deferred only because the retrofit is cheap and self-contained. Design doc:
+[input-command-binding-design.md](input-command-binding-design.md).
+
+- [x] **F74 remappable input→command binding** — the registry `Key`/`Mods` become the factory DEFAULT
+  chord; a per-graph `Keymap` holds SPARSE user overrides (serialized as `Keybind=`; F01 extends). A
+  pressed chord resolves to a command Id through the effective (override-or-default) map and runs through
+  the ONE `run_command` dispatcher the palette uses — replacing the hardcoded per-key checks, so a rebind
+  reaches every surface. Reserved: Space / Ctrl+P (palette openers). Delete (wire-aware), Tab/Esc (scope
+  nav) keep dedicated handlers this phase. Extends F34 (registry) and F35 (keyboard); sibling to the parked
+  edit-intent bus (both are indirection over editor ops — this one is input→verb only).
+  *Accept: rebind Copy → the new chord fires Copy and the old one does not (resolve + driven chord); the
+  keymap round-trips (save/load model-equal, reserialize byte-identical, a default graph writes zero
+  `Keybind=` lines); step72's shortcut⟺key invariant evolves to shortcut-surface ⟺ a default binding
+  exists (step89_keymap_rebind; AppGraphModelEqual extends to `Keymap`).*
+- [x] **F75 keymap editor UI** — a rebind panel (`AppGraphShowKeymapEditor`): one row per rebindable verb,
+  effective-chord button (click → capture the next chord), conflict flag, reset-to-default. Chrome idioms:
+  em spacing, theme colors, single `###keychip_<id>` / `###keyreset_<id>` ids, flat text buttons (no glyph
+  buttons).
+  *Accept: the editor renders an addressable row per rebindable verb; capture rebinds; reset restores the
+  default (step89_keymap_rebind UI-render assertions).*
 
 ## Dependency spine + parallel lanes
 
@@ -625,6 +651,7 @@ F53 → F54 → F55 ;  F53 → F56 ;  F53 → F57  (design verdict gates the voc
 F58 → F59 ;  F58 → F60                     (order record gates its emission + drag)
 F29 → F30 ;  F29 → F56-scrub-accept        (transport gates tint + Tween scrub gate)
 F34 → F35 ;  F34 ↔ F48 (align verb row)    (registry gates key dispatch)
+F34/F35 → F74 → F75                        (registry + keys → remappable map → rebind UI) [post-100 horizon]
 F38 → F39 ;  F33 → F21-pill-restyle        (style constants before their audits/surfaces)
 F61 → F62 → F63 → F64 → F65                (playback: container → loader → transport → state → divergence)
 F66 → F67 → F68 → F69/F70 ;  F53 → F66     (previewer: doc → interpreter → surface → parity/tie;
@@ -668,4 +695,5 @@ Null headless backend mode (enum-only today; headless-verify works via the real 
 per-node LOD manual override (unless F49 resolves it as implement), reroute pins, wire
 animation, diff-hunk node tagging, timeline slice T5 (superseded in part by F56's builtin set;
 keyframe timelines stay parked), constraint layout edges unless F53's verdict builds them,
-module interop, command payloads, status-layer model, Lifecycle north-star view.
+module interop, command payloads, status-layer model, Lifecycle north-star view. Remappable input
+binding is horizon too, but delivered early as F74/F75 (P11).
