@@ -3548,6 +3548,17 @@ namespace ImGui
     if (out_min != nullptr) *out_min = AppGraphEditorState(g)->EditorRectMin;
     if (out_max != nullptr) *out_max = AppGraphEditorState(g)->EditorRectMax;
   }
+  int AppGraphEditorGizmoCount(const ImGuiAppGraph* g)
+  {
+    return AppGraphEditorState(g)->GizmoCount;
+  }
+  ImVec2 AppGraphEditorGizmoCenter(const ImGuiAppGraph* g, int index)
+  {
+    const ImGuiAppEditorState* ed = AppGraphEditorState(g);
+    if (index < 0 || index >= ed->GizmoCount || index >= IM_ARRAYSIZE(ed->GizmoCenters))
+      return ImVec2(0.0f, 0.0f);
+    return ed->GizmoCenters[index];
+  }
 
   // Draw INSIDE the canvas, between CanvasBegin and the first node, on the engine's background channel:
   // Stroke the current path with consecutive duplicate points removed first. PathArcTo samples
@@ -8425,10 +8436,13 @@ namespace ImGui
       float gy = col_c.y;
       const ImU32 dim = ImGui::GetColorU32(ImGuiCol_Text, 0.55f * ov_a);
       const ImU32 lit = AppColWithAlpha(AppComposerGetStyle()->Gold, ov_a);
+      AppGraphEditorState(g)->GizmoCount = 0;   // F40: republish gizmo centres in draw order for the click-path test
       auto gizmo = [&](const char* icon, const char* tip, bool on) -> bool
       {
         const ImVec2 c(col_c.x, gy);
         gy += step;
+        if (AppGraphEditorState(g)->GizmoCount < IM_ARRAYSIZE(AppGraphEditorState(g)->GizmoCenters))
+          AppGraphEditorState(g)->GizmoCenters[AppGraphEditorState(g)->GizmoCount++] = c;
         if (on)
           dl->AddCircleFilled(c, r, (lit & 0x00FFFFFF) | ((ImU32)(0x38 * ov_a) << 24));
         const bool clicked = AppTreeRowIcon(icon, c, r, on ? lit : dim, dl);

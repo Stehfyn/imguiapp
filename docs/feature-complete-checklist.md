@@ -333,6 +333,12 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
 - [ ] **F40 chrome test-debt burn** — the audit's 33 `[t]` chrome items (gizmo clicks, overlays
   popover, F1 card, Output severity toggles, quick inspector, panel toggles, host verbs...).
   *Accept: each item has one test; chrome majority shipped-tested in re-audit.*
+  PROGRESS (multi-turn burn): gizmo click-path + overlays popover DONE. The draw-list gizmos carry no
+  id, so editor state now publishes their screen centres (`AppGraphEditorGizmoCount/Center`); headless
+  `composer_gizmo_clickpath` clicks Snap (flips SnapGrid), Overlays (opens the popover + toggles Grid →
+  OvGrid), View-scope (opens the scope popover) and Add (opens the add palette). Covers audit rows
+  "Viewport gizmo column" (x2) + "Overlays popover". Remaining: F1 card, quick inspector, Output
+  severity toggles, panel toggles, host verbs, status-strip click-to-Output, canvas de-noise, ...
 - [ ] **F41 inspector completion** — Identity/Placement sections; per-kind section-collapse
   persistence; section kebab (reset-to-defaults/copy/paste) on every section; unified row
   grammar with row context actions; multi-select mixed-value editing beyond Style; project

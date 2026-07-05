@@ -561,6 +561,8 @@ struct ImGuiAppEditorState
   ImVec2                               GizmoRectMax = ImVec2(0.0f, 0.0f);
   ImVec2                               EditorRectMin = ImVec2(0.0f, 0.0f);  // F38: last editor canvas rect (screen), for gesture detection + test
   ImVec2                               EditorRectMax = ImVec2(0.0f, 0.0f);
+  ImVec2                               GizmoCenters[8] = {};                // F40: viewport gizmo centres (screen), in draw order, for the click-path test
+  int                                  GizmoCount = 0;
   mutable const ImGui::ImGuiAppGraphHostCmd* HostCmds = nullptr;  // registered per frame; host-owned
   mutable int                          HostCmdCount = 0;
   mutable int                          HostCmdPicked = -1;
@@ -926,6 +928,11 @@ namespace ImGui
   IMGUI_API float AppGraphEditorOverlayAlpha(const ImGuiAppGraph* g);
   IMGUI_API void  AppGraphEditorGizmoRect(const ImGuiAppGraph* g, ImVec2* out_min, ImVec2* out_max);
   IMGUI_API void  AppGraphEditorCanvasRect(const ImGuiAppGraph* g, ImVec2* out_min, ImVec2* out_max);
+
+  // F40: viewport gizmo centres (screen), in draw order (0 Add, 1 Frame, 2 Fit, 3 Tidy, 4 Snap,
+  // 5 Overlays, 6 View-scope). Draw-list buttons carry no id, so the click-path test targets these.
+  IMGUI_API int    AppGraphEditorGizmoCount(const ImGuiAppGraph* g);
+  IMGUI_API ImVec2 AppGraphEditorGizmoCenter(const ImGuiAppGraph* g, int index);
 
   // The composer chrome's push-stack palette, exposed read-write (stable pointer): the project
   // inspector's Theme section edits it live. Col slots are semantic and fixed; Value/Active are the
