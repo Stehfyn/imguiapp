@@ -742,7 +742,7 @@ interpreter's vocabulary IS F53-F57's semantics.
   Per-instance state on ImGuiAppEditorState (no TU globals). `interpreter_reconcile_preserves` (core) +
   step102_f68_preview_surface (nodes, drives a widget + asserts the model moved). core 256/0, nodes 111/111,
   headless 31/31. Submodule 95f389c / outer 7e520c3.
-- [ ] **F69 contract parity** — the executable contract suite (UCR order, edge-once, same-frame
+- [x] **F69 contract parity** — the executable contract suite (UCR order, edge-once, same-frame
   latch, dedup dispatch, pop symmetry, render purity, time travel) runs against the
   INTERPRETER as a second backend beside generated code.
   *Accept: contracts 1-9 green on the interpreter; one suite, two implementations.*
