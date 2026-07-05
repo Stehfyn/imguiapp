@@ -229,6 +229,7 @@ namespace ImGui
   static const ImVec4 kAppHueControl    = ImVec4(0.84f, 0.65f, 0.37f, 1.0f);
   static const ImVec4 kAppHueStruct     = ImVec4(0.67f, 0.57f, 0.86f, 1.0f);
   static const ImVec4 kAppHueField      = ImVec4(0.55f, 0.80f, 0.55f, 1.0f);
+  static const ImVec4 kAppHueOp         = ImVec4(0.80f, 0.52f, 0.70f, 1.0f);   // rose: combinational logic ops
   static const ImVec4 kAppHuePinChild   = ImVec4(0.90f, 0.67f, 0.43f, 1.0f);   // containment pins
   static const ImVec4 kAppHuePinTie     = ImVec4(0.55f, 0.78f, 0.55f, 1.0f);   // tie pins
   static const ImVec4 kAppHueSevError   = ImVec4(0.88f, 0.36f, 0.32f, 1.0f);
@@ -271,6 +272,7 @@ namespace ImGui
     style->KindControl    = AppThemeAccent(kAppHueControl);
     style->KindStruct     = AppThemeAccent(kAppHueStruct);
     style->KindField      = AppThemeAccent(kAppHueField);
+    style->KindOp         = AppThemeAccent(kAppHueOp);
     style->KindDefault    = AppThemeNeutral(0.79f);
     style->LayerTask      = AppThemeAccent(kAppHueTask);
     style->LayerCommand   = AppThemeAccent(kAppHueCommand);
@@ -1279,6 +1281,103 @@ namespace ImGui
     n->Ports.push_back(p);
   }
 
+  //-----------------------------------------------------------------------------
+  // [SECTION] Op operator vocabulary (F54)
+  //-----------------------------------------------------------------------------
+  // A logic Op node carries its operator token in TypeName. Arity fixes the operand-pin count; the per-operand
+  // type class gates wiring against the AppEventExprCheck scalar lattice -- the SOLE type authority (the shared
+  // AppExprIsBool/IsNumeric/IsInt predicates below). F55 folds each operator into the consumer's expression.
+  enum { AppExprType_Unknown = -2 };   // an unresolved/builtin operand: lives in compiled C++, compatible with everything
+  static bool AppExprIsBool(int t);      // fwd (defined with AppEventExprCheck -- the one type authority)
+  static bool AppExprIsNumeric(int t);   // fwd
+  static bool AppExprIsInt(int t);       // fwd
+
+  enum AppOpClass_ { AppOpClass_Bool = 0, AppOpClass_Num, AppOpClass_BoolOrInt, AppOpClass_Scalar };
+
+  struct AppOpDesc
+  {
+    const char* Token;
+    int         Arity;
+  };
+  static const AppOpDesc s_app_ops[] =
+  {
+    { "AND", 2 }, { "OR", 2 }, { "XOR", 2 }, { "NOT", 1 },
+    { "==", 2 }, { "!=", 2 }, { "<", 2 }, { "<=", 2 }, { ">", 2 }, { ">=", 2 },
+    { "select", 3 }, { "min", 2 }, { "max", 2 },
+  };
+  static const AppOpDesc* AppOpFind(const char* op)
+  {
+    if (op != nullptr)
+      for (int i = 0; i < IM_ARRAYSIZE(s_app_ops); i++)
+        if (strcmp(s_app_ops[i].Token, op) == 0)
+          return &s_app_ops[i];
+    return nullptr;
+  }
+  static const char* AppOpDefaultToken() { return s_app_ops[0].Token; }              // "AND"
+  static const char* AppOpTokenName(int i) { return (i >= 0 && i < IM_ARRAYSIZE(s_app_ops)) ? s_app_ops[i].Token : "?"; }
+  static int  AppOpIndexOf(const char* op) { const AppOpDesc* d = AppOpFind(op); return d != nullptr ? (int)(d - s_app_ops) : 0; }
+  static int  AppOpArity(const char* op)   { const AppOpDesc* d = AppOpFind(op); return d != nullptr ? d->Arity : 2; }
+
+  // The scalar class an operator requires at operand `idx` (0-based). '==' / '!=' pair two-of-a-kind (numbers OR
+  // bools); per-pin they accept any scalar and the folded-expression pass (F55) enforces arm agreement.
+  static int AppOpOperandClass(const char* op, int idx)
+  {
+    if (op == nullptr || op[0] == 0)
+      return AppOpClass_Scalar;
+    if (strcmp(op, "NOT") == 0 || strcmp(op, "AND") == 0 || strcmp(op, "OR") == 0)
+      return AppOpClass_Bool;
+    if (strcmp(op, "XOR") == 0)
+      return AppOpClass_BoolOrInt;
+    if (strcmp(op, "<") == 0 || strcmp(op, "<=") == 0 || strcmp(op, ">") == 0 || strcmp(op, ">=") == 0
+     || strcmp(op, "min") == 0 || strcmp(op, "max") == 0)
+      return AppOpClass_Num;
+    if (strcmp(op, "select") == 0)
+      return idx == 0 ? AppOpClass_Bool : AppOpClass_Scalar;   // condition, then two arms
+    return AppOpClass_Scalar;                                   // == / !=
+  }
+
+  // Result scalar type an operator yields (for a nested Op wired into another Op operand). XOR (bool|int) and
+  // select (arm-typed) stay Unknown -- resolved by the folded-expression check, not per-pin.
+  static int AppOpResultType(const char* op)
+  {
+    if (op == nullptr)
+      return AppExprType_Unknown;
+    if (strcmp(op, "AND") == 0 || strcmp(op, "OR") == 0 || strcmp(op, "NOT") == 0
+     || strcmp(op, "==") == 0 || strcmp(op, "!=") == 0 || strcmp(op, "<") == 0 || strcmp(op, "<=") == 0
+     || strcmp(op, ">") == 0 || strcmp(op, ">=") == 0)
+      return ImGuiAppFieldType_Bool;
+    if (strcmp(op, "min") == 0 || strcmp(op, "max") == 0)
+      return ImGuiAppFieldType_Float;   // numeric
+    return AppExprType_Unknown;
+  }
+
+  // Scalar type an output port yields for Op operand type-checking. A Field value -> its field type; a nested Op
+  // result -> the operator's result type; every other producer (struct/control/builtin) -> Unknown (permissive;
+  // the folded-expression check owns it).
+  static int AppOpSourceType(const ImGuiAppNode* src_owner, const ImGuiAppNodePort* src)
+  {
+    IM_UNUSED(src);
+    if (src_owner == nullptr)
+      return AppExprType_Unknown;
+    if (src_owner->Kind == ImGuiAppNodeKind_Field && src_owner->Draft.PersistFields.Size > 0)
+      return (int)src_owner->Draft.PersistFields.Data[0].Type;
+    if (src_owner->Kind == ImGuiAppNodeKind_Op)
+      return AppOpResultType(src_owner->TypeName);
+    return AppExprType_Unknown;
+  }
+
+  // Does a source scalar type fit an operand class? Reuses the AppEventExprCheck predicates (Unknown fits all).
+  static bool AppOpTypeFits(int cls, int t)
+  {
+    switch (cls)
+    {
+    case AppOpClass_Bool:      return AppExprIsBool(t);
+    case AppOpClass_Num:       return AppExprIsNumeric(t);
+    case AppOpClass_BoolOrInt: return AppExprIsBool(t) || AppExprIsInt(t);
+    default:                   return AppExprIsBool(t) || AppExprIsNumeric(t);   // Scalar: any bool/number, never a struct/vec/string
+    }
+  }
+
   // Stamp the mandatory ports for a node kind. For a Control, DataOut/DataIn carry the node's own data type id
   // (DataIn is a wildcard multi-link intake -> 0). Layers are fixed root composition slots, so they deliberately
   // have no containment ports.
@@ -1308,6 +1407,22 @@ namespace ImGui
       break;
     case ImGuiAppNodeKind_Note:
       break;   // annotation frame: no pins, wires into nothing
+    case ImGuiAppNodeKind_Op:
+    {
+      // N typed operand DataIn pins fixed by operator arity, plus one result DataOut stamped DataTypeId=0
+      // (id 0 opts the result out of one-producer-per-type -- an Op produces no PersistData type, so it fans out).
+      const int arity = AppOpArity(n->TypeName);
+      const bool is_select = strcmp(n->TypeName, "select") == 0;
+      static const char* kSelectNames[3] = { "cond", "then", "else" };
+      static const char* kBinaryNames[2] = { "a", "b" };
+      for (int i = 0; i < arity; i++)
+      {
+        const char* pin = is_select ? kSelectNames[i] : (arity == 1 ? "in" : kBinaryNames[i]);
+        AppGraphPushPort(g, n, ImGuiAppPortKind_DataIn, pin, 0);
+      }
+      AppGraphPushPort(g, n, ImGuiAppPortKind_DataOut, "result", 0);
+      break;
+    }
     case ImGuiAppNodeKind_Control:
     default:
       AppGraphPushPort(g, n, ImGuiAppPortKind_DataIn, "deps", 0);       // external dependencies
@@ -1413,6 +1528,7 @@ namespace ImGui
     case ImGuiAppNodeKind_Struct:  return ImVec2(300.0f, 150.0f);
     case ImGuiAppNodeKind_Field:   return ImVec2(250.0f, 85.0f);
     case ImGuiAppNodeKind_Note:    return n->NoteSize;
+    case ImGuiAppNodeKind_Op:      return ImVec2(190.0f, 100.0f);
     default:                       return ImVec2(300.0f, 140.0f);
     }
   }
@@ -1963,6 +2079,25 @@ namespace ImGui
     ImStrncpy(n->Draft.Name, type_name, IM_ARRAYSIZE(n->Draft.Name));
     if (data_type_name && data_type_name[0])
       ImStrncpy(n->DataTypeName, data_type_name, IM_ARRAYSIZE(n->DataTypeName));
+    n->BodyAttrId = AppGraphAllocId(g);
+    AppGraphPlaceNode(g, n, nullptr);
+    AppGraphStampPorts(g, n);
+    return n;
+  }
+
+  ImGuiAppNode* AppGraphAddOp(ImGuiAppGraph* g, const char* op_token)
+  {
+    IM_ASSERT(g != nullptr);
+    const char* tok = (op_token != nullptr && AppOpFind(op_token) != nullptr) ? op_token : AppOpDefaultToken();
+
+    // Set the operator token BEFORE stamping (like AppGraphAddBuiltin) so the operand-pin count matches its arity.
+    g->Nodes.push_back(ImGuiAppNode());
+    ImGuiAppNode* n = &g->Nodes.back();
+    n->Id = AppGraphAllocId(g);
+    n->Kind = ImGuiAppNodeKind_Op;
+    n->IsBuiltin = false;
+    ImStrncpy(n->TypeName, tok, IM_ARRAYSIZE(n->TypeName));
+    ImStrncpy(n->Draft.Name, "Op", IM_ARRAYSIZE(n->Draft.Name));
     n->BodyAttrId = AppGraphAllocId(g);
     AppGraphPlaceNode(g, n, nullptr);
     AppGraphStampPorts(g, n);
@@ -3047,6 +3182,22 @@ namespace ImGui
       if (AppGraphDataReaches(g, dst_owner->Id, src_owner->Id))
       { AppSetErr(err, err_size, "would create a dependency cycle"); return false; }
 
+      // Op operand pins are typed (F54): the source's scalar type must fit the operator's operand class -- the
+      // AppEventExprCheck lattice is the authority. A control's wildcard "deps" DataIn stays untyped.
+      if (dst_owner->Kind == ImGuiAppNodeKind_Op)
+      {
+        int idx = 0;
+        for (int pp = 0; pp < dst_owner->Ports.Size; pp++)
+        {
+          if (dst_owner->Ports.Data[pp].Id == dst->Id)
+            break;
+          if (dst_owner->Ports.Data[pp].Kind == ImGuiAppPortKind_DataIn)
+            idx++;
+        }
+        if (!AppOpTypeFits(AppOpOperandClass(dst_owner->TypeName, idx), AppOpSourceType(src_owner, src)))
+        { AppSetErr(err, err_size, "operand type does not fit this operator"); return false; }
+      }
+
       *out_src = src->Id; *out_dst = dst->Id; *out_kind = ImGuiAppEdgeKind_Data;
       return true;
     }
@@ -3070,6 +3221,25 @@ namespace ImGui
     IM_ASSERT(g != nullptr);
     int s = 0, d = 0; ImGuiAppEdgeKind k = ImGuiAppEdgeKind_Data;
     return AppGraphResolveLink(g, start_port, end_port, &s, &d, &k, err, err_size);
+  }
+
+  // Change an Op node's operator. A same-arity swap keeps the operand pins (and their wires); a different arity
+  // re-stamps the pins (new ids) and drops this Op's now-mismatched wires. Applied off the canvas submission.
+  static void AppGraphSetOpOperator(ImGuiAppGraph* g, ImGuiAppNode* n, const char* token)
+  {
+    if (n == nullptr || token == nullptr || n->Kind != ImGuiAppNodeKind_Op || strcmp(n->TypeName, token) == 0)
+      return;
+    const int old_arity = AppOpArity(n->TypeName);
+    const int new_arity = AppOpArity(token);
+    ImStrncpy(n->TypeName, token, IM_ARRAYSIZE(n->TypeName));
+    if (old_arity == new_arity)
+      return;   // pin shape unchanged: an operator-only swap keeps the existing operand wires
+    for (int li = g->Links.Size - 1; li >= 0; li--)
+      if (AppGraphPortOwnerId(g, g->Links.Data[li].StartAttr) == n->Id
+       || AppGraphPortOwnerId(g, g->Links.Data[li].EndAttr) == n->Id)
+        g->Links.erase(g->Links.Data + li);
+    n->Ports.clear();
+    AppGraphStampPorts(g, n);
   }
 
   // Programmatic connect via the same resolver as interactive linking; returns true if a link was added.
@@ -3461,6 +3631,7 @@ namespace ImGui
     case ImGuiAppNodeKind_Control: return ICON_FA_SLIDERS;
     case ImGuiAppNodeKind_Struct:  return ICON_FA_CUBE;
     case ImGuiAppNodeKind_Field:   return ICON_FA_TAG;
+    case ImGuiAppNodeKind_Op:      return ICON_FA_CODE_MERGE;
     default:                       return ICON_FA_CIRCLE_NODES;
     }
   }
@@ -3485,6 +3656,7 @@ namespace ImGui
     case ImGuiAppNodeKind_Struct:  return "Struct";
     case ImGuiAppNodeKind_Field:   return "Field";
     case ImGuiAppNodeKind_Note:    return "Note";
+    case ImGuiAppNodeKind_Op:      return "Op";
     default:                       return "Node";
     }
   }
@@ -3543,6 +3715,7 @@ namespace ImGui
     case ImGuiAppNodeKind_Struct:  return "struct";
     case ImGuiAppNodeKind_Field:   return "field";
     case ImGuiAppNodeKind_Note:    return "note";
+    case ImGuiAppNodeKind_Op:      return "op";
     default:                       return "";
     }
   }
@@ -4698,6 +4871,11 @@ namespace ImGui
     case ImGuiAppNodeKind_Layer:
       ImGui::TextDisabled("Layer: %s", AppLayerTypeName(n->LayerType));
       break;
+    case ImGuiAppNodeKind_Op:
+      ImGui::TextDisabled("Op: %s  (%d operand%s -> result)", n->TypeName[0] ? n->TypeName : "?",
+                          AppOpArity(n->TypeName), AppOpArity(n->TypeName) == 1 ? "" : "s");
+      ImGui::TextDisabled("pick the operator on the node body");
+      break;
     default:
       break;
     }
@@ -4717,6 +4895,7 @@ namespace ImGui
     case ImGuiAppNodeKind_Control: return AppComposerGetStyle()->KindControl;
     case ImGuiAppNodeKind_Struct:  return AppComposerGetStyle()->KindStruct;
     case ImGuiAppNodeKind_Field:   return AppComposerGetStyle()->KindField;
+    case ImGuiAppNodeKind_Op:      return AppComposerGetStyle()->KindOp;
     default:                       return AppComposerGetStyle()->KindDefault;
     }
   }
@@ -4789,6 +4968,12 @@ namespace ImGui
     {
       const ImGuiAppNode* wl = AppGraphFindLayerOfType(g, ImGuiAppLayerType_Display);
       return wl != nullptr ? wl->Id : -1;
+    }
+    case ImGuiAppNodeKind_Op:
+    {
+      // An Op is app-level combinational logic: it lives in the Task layer's domain (like a standalone Struct).
+      const ImGuiAppNode* task = AppGraphFindLayerOfType(g, ImGuiAppLayerType_Task);
+      return task != nullptr ? task->Id : -1;
     }
     default:
       return -1;   // layers are root composition slots
@@ -4962,7 +5147,7 @@ namespace ImGui
       // land in the Task/Display domains. Command members need commands a new control lacks;
       // Status/Layout/Custom compose nothing.
       if (s->LayerType == ImGuiAppLayerType_Task)
-        return kind == ImGuiAppNodeKind_Control || kind == ImGuiAppNodeKind_Struct;
+        return kind == ImGuiAppNodeKind_Control || kind == ImGuiAppNodeKind_Struct || kind == ImGuiAppNodeKind_Op;
       if (s->LayerType == ImGuiAppLayerType_Display)
         return kind == ImGuiAppNodeKind_Window || kind == ImGuiAppNodeKind_Sidebar;
       return false;
@@ -6404,6 +6589,7 @@ namespace ImGui
     {  4, "",   "Add: Custom Layer",           "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_Layer   },
     {  5, "",   "Add: Field",                  "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_Field   },
     { 46, "",   "Add: Note",                   "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_Note    },
+    { 47, "",   "Add: Op",                     "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_Op      },
     { 10, "",   "Layout: Tidy",                "L",      ImGuiKey_L,             0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_COUNT },
     { 11, "",   "View: Fit all",               "Home",   ImGuiKey_Home,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_COUNT },
     { 12, "",   "View: Frame selection",       "F",      ImGuiKey_F,             0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_COUNT },
@@ -6788,6 +6974,11 @@ namespace ImGui
     int pending_act = AppAct_None;
     int pending_node = -1;
     int pending_list = 0;
+
+    // Op operator change from a node-body combo: re-stamping pins mid-submission is unsafe, so record here and
+    // apply after the canvas pass. -1 = none.
+    int  pending_op_node = -1;
+    char pending_op[IM_LABEL_SIZE] = "";
 
     // "Build onto a layer" requests from layer-node pills (e.g. DisplayLayer -> + Window). Deferred for the same
     // reason: adding a node mid-submission reallocs g->Nodes. pending_build_owner is the layer requesting it.
@@ -7370,6 +7561,9 @@ namespace ImGui
         ImGui::CanvasNextNodeRounding(cv, 3.0f);
         ImGui::CanvasNextNodeAlpha(cv, 0.5f);   // translucent frame -- nodes read through it (F48/R1)
         break;
+      case ImGuiAppNodeKind_Op:
+        ImGui::CanvasNextNodeRounding(cv, 12.0f);   // rounded operator plate
+        break;
       default:
         break;
       }
@@ -7693,6 +7887,19 @@ namespace ImGui
         if (n->Draft.PersistFields.Size == 0)
           n->Draft.PersistFields.push_back(ImGuiAppFieldDesc());   // keep body non-empty + give the editor a field
         EditAppFieldTypeControls(&n->Draft.PersistFields.Data[0], ImGui::GetFontSize() * 5.0f, g);
+      }
+      else if (n->Kind == ImGuiAppNodeKind_Op)
+      {
+        // Operator lives in TypeName; picking a different-arity operator re-stamps the operand pins (deferred).
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("op");
+        ImGui::SameLine();
+        int opi = AppOpIndexOf(n->TypeName);
+        if (AppBlEnum("##op", ImGui::GetFontSize() * 6.0f, &opi, AppOpTokenName, IM_ARRAYSIZE(s_app_ops)))
+        {
+          pending_op_node = n->Id;
+          ImStrncpy(pending_op, AppOpTokenName(opi), IM_ARRAYSIZE(pending_op));
+        }
       }
       else
       {
@@ -8243,6 +8450,7 @@ namespace ImGui
         break;
       }
       case 46: added = AppGraphAddNode(g, ImGuiAppNodeKind_Note, "Note"); break;
+      case 47: added = AppGraphAddOp(g, nullptr); break;
       case 10: AppScopeSequenceTidy(g, show_live); fit_all(); break;
       case 11: fit_all(); break;
       case 12:
@@ -8535,6 +8743,10 @@ namespace ImGui
         }
       }
     }
+
+    // Apply a deferred Op operator change (re-stamps pins when the arity changes) -- safe after the read-back.
+    if (pending_op_node >= 0 && pending_op[0])
+      AppGraphSetOpOperator(g, AppGraphFindNode(g, pending_op_node), pending_op);
 
     // Apply a deferred "build onto layer" request: add the window/sidebar to the right of the layer column.
     if (pending_build_kind != ImGuiAppNodeKind_COUNT && pending_build_owner >= 0)
@@ -10189,8 +10401,7 @@ namespace ImGui
   // Expr is emitted verbatim into the generated OnUpdate, so anything rejected here might still be legal
   // C++ -- but then the event is no longer analyzable data. The grammar is deliberately tiny; growing it
   // is fine as long as every construct stays type-checkable against the authored field lists.
-
-  enum { AppExprType_Unknown = -2 };   // a builtin dep's field: lives in compiled C++, compatible with everything
+  // (AppExprType_Unknown is declared with the Op operator vocabulary above -- one authority, shared.)
 
   struct AppExprCtx
   {
@@ -10299,7 +10510,7 @@ namespace ImGui
     return nullptr;
   }
 
-  static int AppExprOr(AppExprCtx* c);   // fwd (parens recurse to the top)
+  static int AppExprTernary(AppExprCtx* c);   // fwd (the grammar top; parens + call args recurse to it)
 
   static int AppExprPrimary(AppExprCtx* c)
   {
@@ -10308,7 +10519,7 @@ namespace ImGui
 
     if (AppExprAccept(c, "("))
     {
-      const int t = AppExprOr(c);
+      const int t = AppExprTernary(c);
       if (c->Failed) return t;
       if (!AppExprAccept(c, ")")) return AppExprFail(c, "missing ')'");
       c->StructType[0] = 0;
@@ -10330,6 +10541,22 @@ namespace ImGui
       return AppExprFail(c, "expected a value at '%.12s'", c->Cur[0] ? c->Cur : "<end>");
     if (strcmp(ident, "true") == 0 || strcmp(ident, "false") == 0)
       return ImGuiAppFieldType_Bool;
+
+    // ImMin/ImMax(a, b): two numbers, promoted. The min/max Op folds to these (F55); recognizing them keeps
+    // the folded C++ re-importable through this same checker (the grammar-growth clause above).
+    if ((strcmp(ident, "ImMin") == 0 || strcmp(ident, "ImMax") == 0) && AppExprAccept(c, "("))
+    {
+      const int a = AppExprTernary(c);
+      if (c->Failed) return a;
+      if (!AppExprAccept(c, ",")) return AppExprFail(c, "'%s' needs two arguments", ident);
+      const int b = AppExprTernary(c);
+      if (c->Failed) return b;
+      if (!AppExprAccept(c, ")")) return AppExprFail(c, "'%s' missing ')'", ident);
+      c->StructType[0] = 0;
+      if (!AppExprIsNumeric(a) || !AppExprIsNumeric(b))
+        return AppExprFail(c, "'%s' needs two numbers (got %s and %s)", ident, AppExprTypeName(a), AppExprTypeName(b));
+      return AppExprPromote(a, b);
+    }
 
     // Root -> field. Roots are the exact parameter names the generated OnUpdate receives.
     const ImGuiAppNode* owner = nullptr;
@@ -10543,6 +10770,29 @@ namespace ImGui
     return t;
   }
 
+  // Ternary select `c ? a : b` (C precedence: below ||, right-associative). The condition is a bool; the two
+  // arms pair like '==' -- numbers (promoted) or bools. The select/mux Op folds to this (F55).
+  static int AppExprTernary(AppExprCtx* c)
+  {
+    int t = AppExprOr(c);
+    if (c->Failed || !AppExprAccept(c, "?"))
+      return t;
+    if (!AppExprIsBool(t))
+      return AppExprFail(c, "'?:' condition needs a bool (got %s)", AppExprTypeName(t));
+    const int a = AppExprTernary(c);
+    if (c->Failed) return a;
+    if (!AppExprAccept(c, ":"))
+      return AppExprFail(c, "'?' needs a ':'");
+    const int b = AppExprTernary(c);
+    if (c->Failed) return b;
+    c->StructType[0] = 0;
+    if (AppExprIsNumeric(a) && AppExprIsNumeric(b))
+      return AppExprPromote(a, b);
+    if (AppExprIsBool(a) && AppExprIsBool(b))
+      return ImGuiAppFieldType_Bool;
+    return AppExprFail(c, "'?:' arms must be two numbers or two bools (got %s and %s)", AppExprTypeName(a), AppExprTypeName(b));
+  }
+
   bool AppEventExprCheck(const ImGuiAppGraph* g, const ImGuiAppNode* n, const ImGuiAppEventDesc* ev, char* err, int err_size)
   {
     IM_ASSERT(g != nullptr && n != nullptr && ev != nullptr);
@@ -10559,7 +10809,7 @@ namespace ImGui
     c.Err[0] = 0;
     c.StructType[0] = 0;
 
-    const int t = AppExprOr(&c);
+    const int t = AppExprTernary(&c);
     if (!c.Failed)
     {
       AppExprSkipBlanks(&c);
@@ -11663,6 +11913,8 @@ namespace ImGui
     case ImGuiAppNodeKind_Struct:
       AppEmitStructCode(g, n, out);                  // standalone data struct
       break;
+    case ImGuiAppNodeKind_Op:
+      break;   // an Op folds into its consumer's expression (F55); no standalone type is emitted
     case ImGuiAppNodeKind_App:
     default:
       GenerateAppGraphCode(g, out);                 // App node == the whole composition
@@ -14532,7 +14784,7 @@ namespace ImGui
     {
       ImGuiAppNodeKind_Layer, ImGuiAppNodeKind_Window, ImGuiAppNodeKind_Sidebar,
       ImGuiAppNodeKind_Control, ImGuiAppNodeKind_Struct, ImGuiAppNodeKind_Field,
-      ImGuiAppNodeKind_Note,
+      ImGuiAppNodeKind_Note, ImGuiAppNodeKind_Op,
     };
     for (int i = 0; i < IM_ARRAYSIZE(filter_kinds); i++)
     {
