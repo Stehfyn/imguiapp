@@ -604,9 +604,15 @@ extends those rails rather than inventing parallel ones.
   not the brief's imprecise "four (Task/Command/Status/Window)"; a core-subsequence out of that order is a
   severity-2 error, non-core reorders free. Root (ScopeId -1) is validated but not yet consumed by the reader
   (root uses GridPos; F59/F60 land the emit + drag). step93_order_roundtrip + step94_order_core_layer_invariant.
-- [ ] **F59 codegen emits authored order** — push order from the order record where topo allows;
+- [x] **F59 codegen emits authored order** — push order from the order record where topo allows;
   conflict = validation error, not silent reorder.
   *Accept: codegen-proof corpus extended.*
+  DONE: emitter (`AppScopeApplyAuthoredOrder`) drains controls in the authored per-scope push order where
+  topology allows; `AppGraphValidate` flags a consumer-before-producer authored order (severity-2), never a
+  silent reorder. Byte-locked `imguix_authored_order_generated.h` fixture + `ProofAuthoredOrderDrift` /
+  `ProofAuthoredOrderConflict` in codegen-proof. Merge reconciled the duplicated F58 `Order=` loader
+  fill-in-place fix (kept pointer form; equivalent). core 244/0, nodes 107/107, headless 29/29.
+  Submodule 6351eaf / outer 324d3d6.
 - [x] **F60 chip-drag reorder + click-nudge** — drag on ScopeStripRects (published already) +
   nudge fallback; title ordinals update same frame.
   *Accept: drag test + nudge test + save/load + undo + emission.*
