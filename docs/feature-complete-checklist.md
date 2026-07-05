@@ -573,9 +573,18 @@ extends those rails rather than inventing parallel ones.
 
 ## P9 — sequence-order write path (deferred until here by decision)
 
-- [ ] **F58 order as model state** — per-scope member order record; serialized (F01 extends),
+- [x] **F58 order as model state** — per-scope member order record; serialized (F01 extends),
   undoable (F05 extends), validated: the four core layers never reorder.
   *Accept: model + validation tests.*
+  DONE: `struct ImGuiAppScopeOrder { int ScopeId; ImVector<int> NodeIds; }` + `ImGuiAppGraph::ScopeOrders`
+  (per-scope ordered list -- an order IS a sequence). Read side: `AppScopeApplyAuthoredOrder` at the tail of
+  `AppScopeSequenceIds` returns members in the authored order (unlisted members kept in derived order after),
+  else the existing derivation. `Order=` serialize + load; undo rides the snapshot; `AppGraphRemoveNode`
+  sweeps dead ids; `AppGraphModelEqual` extended. Validation grounds the "core layers never reorder"
+  invariant in `AppLayerIsCore` -- NOTE the codebase has FIVE core layers (Task<Command<Status<Layout<Display),
+  not the brief's imprecise "four (Task/Command/Status/Window)"; a core-subsequence out of that order is a
+  severity-2 error, non-core reorders free. Root (ScopeId -1) is validated but not yet consumed by the reader
+  (root uses GridPos; F59/F60 land the emit + drag). step93_order_roundtrip + step94_order_core_layer_invariant.
 - [ ] **F59 codegen emits authored order** — push order from the order record where topo allows;
   conflict = validation error, not silent reorder.
   *Accept: codegen-proof corpus extended.*
