@@ -12484,9 +12484,13 @@ namespace ImGui
       }
       else if (strncmp(p, "Order=", 6) == 0)
       {
-        ImGuiAppScopeOrder ord;
+        // Fill IN PLACE: pushing a populated local ScopeOrder would memcpy its NodeIds ImVector (pointer and
+        // all), then the local's destructor frees that buffer -- the stored record would read freed memory.
         char* s = p + 6;
-        ord.ScopeId = (int)strtol(s, &s, 10);
+        const int scope_id = (int)strtol(s, &s, 10);
+        g->ScopeOrders.push_back(ImGuiAppScopeOrder());
+        ImGuiAppScopeOrder& ord = g->ScopeOrders.back();
+        ord.ScopeId = scope_id;
         while (*s == ',')
         {
           char* e = s + 1;
@@ -12495,8 +12499,8 @@ namespace ImGui
           ord.NodeIds.push_back(id);
           s = e;
         }
-        if (ord.NodeIds.Size > 0)
-          g->ScopeOrders.push_back(ord);
+        if (ord.NodeIds.Size == 0)
+          g->ScopeOrders.pop_back();
       }
       else if (strncmp(p, "Bind=", 5) == 0)
       {
