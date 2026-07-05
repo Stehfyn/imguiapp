@@ -234,3 +234,26 @@ IMGUI_API bool ImGuiApp_ImplQoi_ExtractEmbeddedMeta(const char* dir, int embed_r
   }
   return out_meta->Size > 0;
 }
+
+IMGUI_API bool ImGuiApp_ImplQoi_DecodeFrame(const char* dir, int frame_ordinal, ImVector<char>* out_rgba, int* out_w, int* out_h)
+{
+  if (dir == nullptr || out_rgba == nullptr || frame_ordinal < 0)
+    return false;
+  char path[560];
+  ImFormatString(path, IM_ARRAYSIZE(path), "%s/%06d.qoi", dir, frame_ordinal);
+  size_t size = 0;
+  void* bytes = ImFileLoadToMemory(path, "rb", &size);
+  if (bytes == nullptr)
+    return false;
+  int w = 0;
+  int h = 0;
+  const bool decoded = ImQoiDecode(bytes, (int)size, out_rgba, &w, &h);
+  IM_FREE(bytes);
+  if (!decoded)
+    return false;
+  if (out_w != nullptr)
+    *out_w = w;
+  if (out_h != nullptr)
+    *out_h = h;
+  return true;
+}

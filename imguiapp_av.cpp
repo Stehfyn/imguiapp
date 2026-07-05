@@ -1717,4 +1717,32 @@ IMGUI_API const ImGuiAppRunTick* AppRunTickAt(const ImGuiAppRunIndex* run, int i
   return &run->Ticks.Data[i];
 }
 
+IMGUI_API int AppRunTransportCount(const ImGuiAppRunTransport* view)
+{
+  return view != nullptr ? AppRunTickCount(view->Run) : 0;
+}
+
+IMGUI_API bool AppRunTransportShow(ImGuiAppRunTransport* view, int i)
+{
+  if (view == nullptr)
+    return false;
+  const ImGuiAppRunTick* t = AppRunTickAt(view->Run, i);
+  if (t == nullptr)
+    return false;
+  // The slider index addresses Ticks[i].Tick directly: step ALWAYS lands on an exact tick.
+  view->Scrub = i;
+  view->ShownTick = t->Tick;
+  view->ShownImage = -1;
+  if (t->FrameImage < 0 || view->Decode == nullptr)
+    return true;   // ring-dump gap or tick-only scrub: the tick landed, there is nothing to blit
+  int w = 0;
+  int h = 0;
+  if (!view->Decode(view->DecodeUser, t->FrameImage, &view->Pixels, &w, &h))
+    return false;   // hard decode failure: ShownImage stays -1
+  view->Width = w;
+  view->Height = h;
+  view->ShownImage = t->FrameImage;
+  return true;
+}
+
 } // namespace ImGui

@@ -229,6 +229,44 @@ struct ImGuiAppRunIndex
   ImGuiAppAVStreamStats     Stats;         // == AppAVMetaVerify output over the same bytes
 };
 
+//-----------------------------------------------------------------------------
+// [SECTION] Transport source (F63): the App-time transport's two frame sources
+//-----------------------------------------------------------------------------
+// The F29 transport (a live state ring) gains a SOURCE switch behind the design's
+// Count()/Show(int) view (docs/playback-debugger-design.md section 4). LiveRing restores
+// snapshotted bytes into the running app; FileRun decodes the recorded frame image at a
+// tick and blits its pixels -- no app is driven.
+typedef int ImGuiAppTransportSource;
+enum ImGuiAppTransportSource_
+{
+  ImGuiAppTransportSource_LiveRing = 0,   // the ComposerTransport state ring + the live mirror
+  ImGuiAppTransportSource_FileRun,        // a recorded run opened by AppRunOpen (this file's index)
+};
+
+// Per-backend single-frame decode (the seam: this core header never names a provider). Fills
+// out_rgba with tightly packed RGBA8 for frame_ordinal (mp4 sample / QOI NNNNNN). The QOI
+// provider is ImGuiApp_ImplQoi_DecodeFrame; the caller adapts it to this signature.
+typedef bool (*ImGuiAppRunFrameDecodeFn)(void* user, int frame_ordinal, ImVector<char>* out_rgba, int* out_w, int* out_h);
+
+// FILE-mode transport source (F63): a borrowed run index plus a frame decoder, behind
+// Count()/Show(int). Show(i) lands on tick index i -- it records ShownTick = Ticks[i].Tick
+// (so a scrub/step ALWAYS lands on an exact tick, no interpolation) and decodes that tick's
+// frame image into Pixels. State rides the caller's transport object; nothing here is a global.
+struct ImGuiAppRunTransport
+{
+  ImGuiAppRunIndex*        Run;        // borrowed (AppRunOpen'd + AppRunClose'd by the owner), not owned here
+  ImGuiAppRunFrameDecodeFn Decode;     // per-backend frame decode; null = tick-only scrub (no blit)
+  void*                    DecodeUser; // provider context (e.g. the recording directory)
+  int                      Scrub;      // current scrub index (0..Count-1)
+  ImVector<char>           Pixels;     // RGBA8 of the frame at ShownImage (Width*Height*4 bytes)
+  int                      Width;
+  int                      Height;
+  ImU64                    ShownTick;  // tick of the frame currently in Pixels (== Ticks[Scrub].Tick)
+  int                      ShownImage; // frame ordinal decoded into Pixels (-1 = none decoded)
+
+  ImGuiAppRunTransport() { Run = nullptr; Decode = nullptr; DecodeUser = nullptr; Scrub = 0; Width = 0; Height = 0; ShownTick = 0; ShownImage = -1; }
+};
+
 namespace ImGui
 {
   // Close (if open) then Destroy any provider's encoder via its vtable. Null-safe.
@@ -260,6 +298,14 @@ namespace ImGui
   IMGUI_API void                   AppRunClose(ImGuiAppRunIndex* run);
   IMGUI_API int                    AppRunTickCount(const ImGuiAppRunIndex* run);          // == Ticks.Size; 0 on null
   IMGUI_API const ImGuiAppRunTick* AppRunTickAt(const ImGuiAppRunIndex* run, int i);      // null when out of range
+
+  // F63 FILE-mode transport view over a run index (docs/playback-debugger-design.md section 4).
+  // Count == AppRunTickCount(view->Run). Show(view, i) lands on tick index i: it sets
+  // ShownTick = Ticks[i].Tick and decodes Ticks[i].FrameImage into view->Pixels via view->Decode.
+  // Returns false only on an invalid index or a hard decode failure; a tick with no frame image
+  // (a ring-dump gap) or a null Decode still lands the tick (ShownImage stays -1).
+  IMGUI_API int  AppRunTransportCount(const ImGuiAppRunTransport* view);
+  IMGUI_API bool AppRunTransportShow(ImGuiAppRunTransport* view, int i);
 
   // encoder is REQUIRED (providers live in backends/imguiapp_impl_*.h; the core seam
   // cannot pick one). Fails (null) when the platform backend has no CaptureFrame.
