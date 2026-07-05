@@ -222,6 +222,21 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   driving ImGuiAppStateHistory on the mirrored app; gated on ShowLive; visible in the
   right-aligned toolbar cluster (docs already claim it — make them true).
   *Accept: headless scrub test asserts restored PersistData at frame N; docs claim matches code.*
+  DESIGN (investigated, not yet built): AppStateSnapshot/AppStateRestore already give a chronological
+  snapshot ring over app->Data (imguiapp.cpp:1088/1256; index 0=oldest..Count-1=newest). Plan:
+  (1) transport state -- ImGuiAppStateHistory + bool Frozen + int ScrubFrame. Place OFF the reflected
+      GraphDocData (its own struct / heap ptr) so ImVector members don't perturb the reflection floor
+      that composer_live_codegen pins.
+  (2) GraphDocControl::OnUpdate, when ShowLive && Mirror: !Frozen -> AppStateSnapshot + ScrubFrame=Count-1;
+      Frozen -> AppStateRestore(Mirror, ScrubFrame). Restore-timing caveat: the composer self-mirrors
+      (imguiapp_demo.cpp:474), so a true "pause the running app" is a self-reference edge case -- the
+      scrubber RESTORES past frames (big-idea.md:51 "watch the timer run backwards"); a separate mirror
+      would hold. No app freeze flag today (Task layer drives all control OnUpdate, imguiapp.cpp:469).
+  (3) toolbar right cluster, ShowLive-gated: freeze toggle + frame slider (0..Count-1) + step back/fwd;
+      writes intent -> applied in OnUpdate.
+  (4) headless test: yield frames while recording, freeze, restore an earlier frame, assert the restored
+      PersistData equals that frame's captured value (use a control with a changing field, or diff the
+      ring bytes). Update the docs' claim to match what's built.
 - [ ] **F30 run-state viewport tint** — frozen/rewound tint while transport is engaged.
   *Accept: on-camera frame capture differs frozen vs live.*
 - [ ] **F31 problems-count toolbar badge** — worst-severity colored count; click opens Output
