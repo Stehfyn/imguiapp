@@ -10931,6 +10931,8 @@ namespace ImGui
         // A Field producer contributes its PARENT owner (Struct/Control) as the dependency (many fields -> one dep).
         int dep_id = producer_id;
         const ImGuiAppNode* pn = AppGraphFindNodeConst(g, producer_id);
+        if (pn != nullptr && pn->Kind == ImGuiAppNodeKind_Op)
+          continue;   // F55: an Op folds into the consumer's expression -- it is not a template dependency
         if (pn != nullptr && pn->Kind == ImGuiAppNodeKind_Field)
         {
           const int sid = AppGraphParentOf(g, producer_id);
@@ -11394,6 +11396,72 @@ namespace ImGui
   }
 
   // Emit a control struct (and its data structs) with derived dependencies + binding assignment lines.
+  // F55: fold an Op subtree into a C++ expression string -- the inverse of the recursive-descent
+  // AppEventExprCheck parser, so the folded output re-parses (and re-imports as an ImGuiAppEventDesc::Expr,
+  // not as Op nodes: the .graph file, not the C++, is the Op structure's home). Each operand renders from
+  // its wire (a nested Op result recurses, parenthesized) or, unwired, from its inline token. Returns false
+  // if malformed (missing operand or unknown operator). depth caps a corrupt graph; real cycles are refused
+  // at wire time by AppGraphDataReaches.
+  static bool AppOpFoldExprRec(const ImGuiAppGraph* g, const ImGuiAppNode* op, char* out, int out_size, int depth)
+  {
+    if (g == nullptr || op == nullptr || op->Kind != ImGuiAppNodeKind_Op || out_size <= 0 || depth > 64)
+      return false;
+    const AppOpDesc* desc = AppOpFind(op->TypeName);
+    if (desc == nullptr)
+      return false;
+    const int arity = desc->Arity;
+
+    char operand[3][IM_LABEL_SIZE * 2];
+    int seen = 0;
+    for (int p = 0; p < op->Ports.Size && seen < arity; p++)
+    {
+      const ImGuiAppNodePort* port = &op->Ports.Data[p];
+      if (port->Kind != ImGuiAppPortKind_DataIn)
+        continue;
+      const int idx = seen++;
+      const ImGuiAppNode* wired = nullptr;
+      for (int li = 0; li < g->Links.Size; li++)
+      {
+        if (g->Links.Data[li].Kind != ImGuiAppEdgeKind_Data || g->Links.Data[li].EndAttr != port->Id) continue;
+        const int pid = AppGraphPortOwnerId(g, g->Links.Data[li].StartAttr);
+        wired = pid >= 0 ? AppGraphFindNodeConst(g, pid) : nullptr;
+        break;
+      }
+      if (wired != nullptr && wired->Kind == ImGuiAppNodeKind_Op)
+      {
+        char inner[IM_LABEL_SIZE * 2];
+        if (!AppOpFoldExprRec(g, wired, inner, IM_ARRAYSIZE(inner), depth + 1))
+          return false;
+        ImFormatString(operand[idx], IM_ARRAYSIZE(operand[idx]), "(%s)", inner);   // a composed operand is parenthesized
+      }
+      else
+      {
+        const char* tok = idx < op->OpOperands.Size ? op->OpOperands.Data[idx].Text : "";
+        if (tok[0] == 0)
+          return false;   // arity hole: operand neither wired to an Op nor given an inline token
+        ImStrncpy(operand[idx], tok, IM_ARRAYSIZE(operand[idx]));
+      }
+    }
+    if (seen < arity)
+      return false;
+
+    const char* t = op->TypeName;
+    if (strcmp(t, "NOT") == 0)         ImFormatString(out, out_size, "!%s", operand[0]);
+    else if (strcmp(t, "AND") == 0)    ImFormatString(out, out_size, "%s && %s", operand[0], operand[1]);
+    else if (strcmp(t, "OR") == 0)     ImFormatString(out, out_size, "%s || %s", operand[0], operand[1]);
+    else if (strcmp(t, "XOR") == 0)    ImFormatString(out, out_size, "%s ^ %s", operand[0], operand[1]);
+    else if (strcmp(t, "select") == 0) ImFormatString(out, out_size, "%s ? %s : %s", operand[0], operand[1], operand[2]);
+    else if (strcmp(t, "min") == 0)    ImFormatString(out, out_size, "ImMin(%s, %s)", operand[0], operand[1]);
+    else if (strcmp(t, "max") == 0)    ImFormatString(out, out_size, "ImMax(%s, %s)", operand[0], operand[1]);
+    else                               ImFormatString(out, out_size, "%s %s %s", operand[0], t, operand[1]);   // == != < <= > >=
+    return true;
+  }
+
+  static bool AppOpFoldExpr(const ImGuiAppGraph* g, const ImGuiAppNode* op, char* out, int out_size)
+  {
+    return AppOpFoldExprRec(g, op, out, out_size, 0);
+  }
+
   static void AppEmitControlWithDeps(const ImGuiAppGraph* g, const ImGuiAppNode* n, ImGuiTextBuffer* out)
   {
     char base[IM_LABEL_SIZE];
@@ -11491,6 +11559,23 @@ namespace ImGui
     ImVector<int> deps;
     AppGraphConsumerDeps(g, n->Id, &deps);
 
+    // F55: Ops wired into this consumer fold into an event's guard/value. An Op-fed event carries an empty
+    // TempField -- the folded expression stands in for the temp field it would otherwise watch. Assign wired
+    // Ops to empty-TempField events in graph order; event_op[e] is the feeding Op node id, or -1.
+    ImVector<int> op_wires;
+    for (int li = 0; li < g->Links.Size; li++)
+    {
+      if (g->Links.Data[li].Kind != ImGuiAppEdgeKind_Data) continue;
+      if (AppGraphPortOwnerId(g, g->Links.Data[li].EndAttr) != n->Id) continue;
+      const int pid = AppGraphPortOwnerId(g, g->Links.Data[li].StartAttr);
+      const ImGuiAppNode* pn = pid >= 0 ? AppGraphFindNodeConst(g, pid) : nullptr;
+      if (pn != nullptr && pn->Kind == ImGuiAppNodeKind_Op) op_wires.push_back(pid);
+    }
+    ImVector<int> event_op;
+    event_op.resize(n->Events.Size);
+    for (int e = 0, next = 0; e < n->Events.Size; e++)
+      event_op[e] = (n->Events.Data[e].TempField[0] == 0 && next < op_wires.Size) ? op_wires[next++] : -1;
+
     // Control struct header with template dependency args.
     out->appendf("struct %s : ImGuiAppControl<%s, %s", base, persist_type, temp_type);
     for (int d = 0; d < deps.Size; d++)
@@ -11539,9 +11624,16 @@ namespace ImGui
       }
       if (ev->Edge == ImGuiAppEventEdge_Active)
       {
-        char fld[IM_LABEL_SIZE];
-        AppSanitizeIdentifier(fld, IM_ARRAYSIZE(fld), ev->TempField);
-        out->appendf("    if (temp_data->%s)\n      *cmd = (ImGuiAppCommand)%s;\n", fld, enum_value);
+        char guard[512];
+        if (ev->TempField[0] == 0 && event_op[e] >= 0
+         && AppOpFoldExpr(g, AppGraphFindNodeConst(g, event_op[e]), guard, IM_ARRAYSIZE(guard)))
+          out->appendf("    if (%s)\n      *cmd = (ImGuiAppCommand)%s;\n", guard, enum_value);   // F55: the op chain folds into the level-form gate
+        else
+        {
+          char fld[IM_LABEL_SIZE];
+          AppSanitizeIdentifier(fld, IM_ARRAYSIZE(fld), ev->TempField);
+          out->appendf("    if (temp_data->%s)\n      *cmd = (ImGuiAppCommand)%s;\n", fld, enum_value);
+        }
       }
       else
       {
@@ -11676,6 +11768,20 @@ namespace ImGui
       for (int e = 0; e < n->Events.Size; e++)
       {
         const ImGuiAppEventDesc* ev = &n->Events.Data[e];
+        // F55: an Op-fed event (empty TempField, an Op wired in). SetField folds to an unconditional
+        // assignment; EmitCommand(Active) was already emitted in OnGetCommand (it reads data/temp directly).
+        if (ev->TempField[0] == 0 && event_op[e] >= 0)
+        {
+          char guard[512];
+          if (ev->Action == ImGuiAppEventAction_SetField && ev->DstField[0]
+           && AppOpFoldExpr(g, AppGraphFindNodeConst(g, event_op[e]), guard, IM_ARRAYSIZE(guard)))
+          {
+            char dst_id[IM_LABEL_SIZE];
+            AppSanitizeIdentifier(dst_id, IM_ARRAYSIZE(dst_id), ev->DstField);
+            out->appendf("    data->%s = %s;\n", dst_id, guard);
+          }
+          continue;
+        }
         if (ev->TempField[0] == 0)
         {
           out->appendf("    // TODO: event %d has no TempData field to watch\n", e);
@@ -12555,6 +12661,8 @@ namespace ImGui
       buf->appendf("Temp=%s,%d,%d,%s\n", n->Draft.TempFields.Data[f].Name, (int)n->Draft.TempFields.Data[f].Type, n->Draft.TempFields.Data[f].ArraySize, n->Draft.TempFields.Data[f].StructType);
     for (int c = 0; c < n->Commands.Size; c++)
       buf->appendf("Command=%s\n", n->Commands.Data[c].Name);
+    for (int o = 0; o < n->OpOperands.Size; o++)   // Op inline operand tokens (F55): "index,text" (text takes the remainder)
+      buf->appendf("Operand=%d,%s\n", o, n->OpOperands.Data[o].Text);
     for (int s = 0; s < n->StyleMods.Size; s++)
       buf->appendf("Style=%d,%g,%g,%d\n", (int)n->StyleMods.Data[s].Var, n->StyleMods.Data[s].Value.x, n->StyleMods.Data[s].Value.y, n->StyleMods.Data[s].Active ? 1 : 0);
     for (int s = 0; s < n->ColorMods.Size; s++)
@@ -12563,6 +12671,21 @@ namespace ImGui
     for (int e = 0; e < n->Events.Size; e++)
       buf->appendf("Event=%d,%d,%s,%s,%s,%s\n", (int)n->Events.Data[e].Edge, (int)n->Events.Data[e].Action,
                    n->Events.Data[e].TempField, n->Events.Data[e].DstField, n->Events.Data[e].Command, n->Events.Data[e].Expr);
+  }
+
+  // Parse an Op inline operand row "index,text" (F55). Text takes the remainder of the line; the vector is
+  // grown to the index so operand slots stay position-addressable even if an earlier one was empty.
+  static void AppNodeParseOperand(ImGuiAppNode* n, const char* line)
+  {
+    const char* comma = strchr(line, ',');
+    if (comma == nullptr)
+      return;
+    const int idx = atoi(line);
+    if (idx < 0 || idx > 64)
+      return;
+    while (n->OpOperands.Size <= idx)
+      n->OpOperands.push_back(ImGuiAppOpOperand());
+    ImStrncpy(n->OpOperands.Data[idx].Text, comma + 1, IM_ARRAYSIZE(n->OpOperands.Data[idx].Text));
   }
 
   // Parse "edge,action,temp,dst,cmd,expr" (text fields may be empty -- sscanf's %[^,] cannot match an empty
@@ -12865,6 +12988,7 @@ namespace ImGui
       else if (strncmp(p, "Persist=", 8) == 0)   { if (cur) AppNodeParseField(&cur->Draft.PersistFields, p + 8); }
       else if (strncmp(p, "Temp=", 5) == 0)      { if (cur) AppNodeParseField(&cur->Draft.TempFields, p + 5); }
       else if (strncmp(p, "Command=", 8) == 0)   { if (cur) AppNodeAddCommand(cur, p + 8); }
+      else if (strncmp(p, "Operand=", 8) == 0)   { if (cur) AppNodeParseOperand(cur, p + 8); }
       else if (strncmp(p, "Event=", 6) == 0)     { if (cur) AppNodeParseEvent(cur, p + 6); }
       else if (strncmp(p, "Style=", 6) == 0)
       {

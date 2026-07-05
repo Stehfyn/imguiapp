@@ -353,6 +353,15 @@ struct ImGuiAppCommandDesc
   char Name[IM_LABEL_SIZE] = "NewCommand";
 };
 
+// Op node inline operand (F55): the token an operand pin folds to when it is NOT wired to a producer --
+// an expression primary the AppEventExprCheck grammar accepts (a field ref "data->armed", a literal "0"
+// "true", a dep ref "random_time->max_timer_secs"). Parallel to the operator's DataIn pins by index; a
+// wired pin (a nested Op result) overrides its token. A missing entry is empty.
+struct ImGuiAppOpOperand
+{
+  char Text[IM_LABEL_SIZE] = "";
+};
+
 // OnRender records raw input into TempData (zeroed every frame); OnUpdate receives BOTH this frame's
 // TempData and last frame's, deriving events by comparing them. An edge names which comparison the
 // generated OnUpdate guards with.
@@ -418,6 +427,7 @@ struct ImGuiAppNode
   ImVector<ImGuiAppStyleModDesc> StyleMods;                                            // Window/Sidebar/Control: authored style-var overrides (emitted into SetupApp)
   ImVector<ImGuiAppColorModDesc> ColorMods;                                            // Window/Sidebar/Control: authored style-color overrides (same lifecycle)
   ImVector<ImGuiAppNodePort>     Ports;
+  ImVector<ImGuiAppOpOperand>    OpOperands;                                           // Op node: inline operand token per operand pin (by index); a wired pin overrides it (F55)
   int                            FieldList                   = 0;                      // Field node: which list it belongs to on its owner (0 = Persist, 1 = Temp)
   int                            PersistStructId             = -1;                     // Control: Struct node its PersistData was exploded into (-1 = inline)
   int                            TempStructId                = -1;                     // Control: Struct node its TempData was exploded into (-1 = inline)
