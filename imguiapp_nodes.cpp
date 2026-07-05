@@ -5163,6 +5163,7 @@ namespace ImGui
   // fixed point: the rect is stable while every edge is within the deadband of its target).
   static void AppDrawScopeWalls(ImGuiAppGraph* g, ImGuiCanvasState* cv, bool show_live, float em_base, float fh_base)
   {
+    IM_UNUSED(fh_base);
     ImGuiAppEditorState* ed = AppGraphEditorState(g);
     const bool was_valid = ed->ScopeWallValid;
     ed->ScopeWallValid = false;
@@ -5197,15 +5198,56 @@ namespace ImGui
     const float em = ImGui::GetFontSize();   // zoomed content font: screen-space text metrics
     const float sc = AppCanvasScale(g);
     const float em_m = em_base * ImGui::CanvasGetZoom(cv) / sc;
-    const float fh_m = fh_base * em_m / em_base;
     const float pad_m = em_m * 0.9f;
-    const float row1_m = fh_m * 0.95f;              // the Begin line
-    const float row2_m = fh_m * 0.95f;              // the runs strip row
-    const float band_m = row1_m + row2_m;           // face band = both rows, one plate
-    const float end_m = fh_m * 0.70f;               // the End() band
+    // Every band metric is an em multiple: em scales with zoom, so the band's proportions are
+    // identical at every zoom (FrameHeight carries additive style padding and is NOT proportional).
+    const float tpad_m = em_m * 0.35f;              // clear air above the Begin line
+    const float row1_m = em_m * 1.3f;               // the Begin line
+    const float rgap_m = em_m * 0.4f;               // clear air between the Begin line and the strip
+    const float row2_m = em_m * 1.3f;               // the runs strip row
+    const float bpad_m = em_m * 0.35f;              // clear air between the strip and the band rule
+    const float band_m = tpad_m + row1_m + rgap_m + row2_m + bpad_m;   // face band = both rows + their spacing, one plate
+    const float end_m = em_m * 1.1f;                // the End() band
     const float rail_m = em_m * 1.0f;               // portal rails
     ImVec4 tgt(mn.x - (pad_m + rail_m), mn.y - (band_m + pad_m * 0.6f),
                mx.x + pad_m + rail_m, mx.y + pad_m + end_m);
+
+    // The walls CONTAIN their face band: measure the Begin line and the full runs strip (label +
+    // chips + separators, at the strip's own type scale) and widen the room to fit whichever is
+    // longer -- the band never overflows its wall.
+    {
+      const char* mname = tn->Draft.Name[0] ? tn->Draft.Name : AppNodeKindName(tn->Kind);
+      char mcfg[96];
+      AppNodeConfigSummary(tn, mcfg, IM_ARRAYSIZE(mcfg));
+      ImGui::PushFont(ed->CodeFont, em * 0.8f);
+      float row1_need = ImGui::CalcTextSize("Begin(\"").x + ImGui::CalcTextSize(mname).x + ImGui::CalcTextSize("\")").x;
+      ImGui::PopFont();
+      ImGui::PushFont(nullptr, em * 0.75f);
+      row1_need += em * 0.5f + ImGui::CalcTextSize(AppNodeKindTag(tn->Kind)).x + (mcfg[0] ? em * 1.0f + ImGui::CalcTextSize(mcfg).x : 0.0f);
+      ImGui::PopFont();
+
+      ImVector<int> mseq;
+      AppScopeSequenceIds(g, &mseq);
+      float row2_need = 0.0f;
+      ImGui::PushFont(nullptr, em * 0.8f);
+      row2_need += ImGui::CalcTextSize("runs").x + em * 0.6f;
+      const float arrow_w = em * 0.45f;   // draw-list chevron (the arrow glyph is not in the atlas)
+      for (int i = 0; i < mseq.Size; i++)
+      {
+        const ImGuiAppNode* n = AppGraphFindNodeConst(g, mseq.Data[i]);
+        if (n == nullptr)
+          continue;
+        char mnum[8];
+        ImFormatString(mnum, IM_ARRAYSIZE(mnum), "%d", i + 1);
+        row2_need += ImGui::CalcTextSize(mnum).x + ImGui::CalcTextSize(n->Draft.Name[0] ? n->Draft.Name : "(unnamed)").x + em * 1.1f;
+        if (i < mseq.Size - 1)
+          row2_need += arrow_w + em * 1.0f;
+      }
+      ImGui::PopFont();
+      const float need_m = (ImMax(row1_need, row2_need) + em * 1.5f) / sc + rail_m * 2.0f;
+      if (tgt.z - tgt.x < need_m)
+        tgt.z = tgt.x + need_m;
+    }
 
     // Grow-fast / shrink-slow: expansion applies immediately, contraction only past the deadband.
     ImVec4 wall = ed->ScopeWallRect;
@@ -5220,7 +5262,7 @@ namespace ImGui
       wall.w = (tgt.w > wall.w || tgt.w < wall.w - dead) ? tgt.w : wall.w;
     }
     ed->ScopeWallRect = wall;
-    ed->ScopeStripRow = ImVec4(wall.x, wall.y + row1_m, wall.z, wall.y + band_m);
+    ed->ScopeStripRow = ImVec4(wall.x, wall.y + tpad_m + row1_m + rgap_m, wall.z, wall.y + tpad_m + row1_m + rgap_m + row2_m);
     ed->ScopeWallScope = top;
     ed->ScopeWallValid = true;
 
@@ -5259,11 +5301,12 @@ namespace ImGui
     // post-CanvasEnd order-strip pass (its chips are interactive). Chrome text is quieter than
     // node content: node-title scale, clamped so it can never fill its band.
     const char* name = tn->Draft.Name[0] ? tn->Draft.Name : AppNodeKindName(tn->Kind);
-    const float call_sz = ImMin(em * 0.8f, row1_h * 0.6f);
+    const float row1_top = smn.y + tpad_m * sc;
+    const float call_sz = em * 0.8f;   // fixed em multiple: same ratio to its row at every zoom
     ImGui::PushFont(ed->CodeFont, call_sz);
     char idb[IM_LABEL_SIZE + 2];
     ImFormatString(idb, IM_ARRAYSIZE(idb), "\"%s\"", name);
-    const float ty = smn.y + (row1_h - ImGui::GetTextLineHeight()) * 0.5f;
+    const float ty = row1_top + (row1_h - ImGui::GetTextLineHeight()) * 0.5f;
     float tx = smn.x + em * 0.75f;
     dl->AddText(ImVec2(tx, ty), muted, "Begin(");
     tx += ImGui::CalcTextSize("Begin(").x;
@@ -5274,9 +5317,9 @@ namespace ImGui
     const float ey = smx.y - end_h + (end_h - ImGui::GetTextLineHeight()) * 0.5f;
     dl->AddText(ImVec2(smn.x + em * 0.75f, ey), muted, "End()");
     ImGui::PopFont();
-    ImGui::PushFont(nullptr, ImMin(em * 0.75f, row1_h * 0.55f));
+    ImGui::PushFont(nullptr, em * 0.7f);
     const char* kind_word = AppNodeKindTag(tn->Kind);
-    const float ky = smn.y + (row1_h - ImGui::GetTextLineHeight()) * 0.5f;
+    const float ky = row1_top + (row1_h - ImGui::GetTextLineHeight()) * 0.5f;
     dl->AddText(ImVec2(tx, ky), muted, kind_word);
     tx += ImGui::CalcTextSize(kind_word).x;
     char cfg[96];
@@ -5318,16 +5361,17 @@ namespace ImGui
     const ImVec2 row_mn = ImGui::CanvasToScreen(cv, ImVec2(ed->ScopeStripRow.x, ed->ScopeStripRow.y));
     const ImVec2 row_mx = ImGui::CanvasToScreen(cv, ImVec2(ed->ScopeStripRow.z, ed->ScopeStripRow.w));
     const float cy = (row_mn.y + row_mx.y) * 0.5f;
+    const float right_limit = row_mx.x - em * 0.75f;   // row content never touches the wall edge
     float x = row_mn.x + em * 0.75f;
 
-    ImGui::PushFont(nullptr, em * 0.8f);
-    dl->AddText(ImVec2(x, cy - ImGui::GetTextLineHeight() * 0.5f), AppThemeNeutral(0.45f), "runs");
-    x += ImGui::CalcTextSize("runs").x + em * 0.6f;
-    ImGui::PopFont();
-
+    // One type scale for the whole row (em multiple: zoom-proportional); chips keep air inside the row.
     int clicked = -1;
-    ImGui::PushFont(nullptr, em * 0.9f);
-    const float ch = (row_mx.y - row_mn.y) * 0.78f;
+    ImGui::PushFont(nullptr, em * 0.8f);
+    const float th = ImGui::GetTextLineHeight();
+    dl->AddText(ImVec2(x, cy - th * 0.5f), AppThemeNeutral(0.45f), "runs");
+    x += ImGui::CalcTextSize("runs").x + em * 0.7f;
+    const float ch = (row_mx.y - row_mn.y) * 0.92f;
+    const float arrow_w = em * 0.45f;   // draw-list chevron (the arrow glyph is not in the atlas)
     for (int i = 0; i < seq.Size; i++)
     {
       const ImGuiAppNode* n = AppGraphFindNodeConst(g, seq.Data[i]);
@@ -5338,15 +5382,23 @@ namespace ImGui
       ImFormatString(num, IM_ARRAYSIZE(num), "%d", i + 1);
       const float num_w = ImGui::CalcTextSize(num).x;
       const float nm_w = ImGui::CalcTextSize(nm).x;
-      const float cw = em * 0.9f + num_w + nm_w;
+      const float cw = em * 0.4f + num_w + em * 0.35f + nm_w + em * 0.4f;   // pad . num . gap . name . pad
+      const float sep_w = i > 0 ? em * 0.5f + arrow_w + em * 0.5f : 0.0f;
 
-      // Overflow states what it folded rather than clipping silently.
-      if (x + cw > row_mx.x - em * 2.5f && i < seq.Size - 1)
+      // Fold the tail the moment the next chip (plus its separator) cannot fit -- stated, never clipped.
+      if (x + sep_w + cw > right_limit)
       {
         char more[16];
         ImFormatString(more, IM_ARRAYSIZE(more), "+%d", seq.Size - i);
-        dl->AddText(ImVec2(x, cy - ImGui::GetTextLineHeight() * 0.5f), AppComposerGetStyle()->TextMuted, more);
+        dl->AddText(ImVec2(x + em * 0.2f, cy - th * 0.5f), AppComposerGetStyle()->TextMuted, more);
         break;
+      }
+      if (i > 0)
+      {
+        const float ax = x + em * 0.5f;
+        dl->AddTriangleFilled(ImVec2(ax, cy - arrow_w * 0.45f), ImVec2(ax + arrow_w * 0.7f, cy),
+                              ImVec2(ax, cy + arrow_w * 0.45f), AppThemeNeutral(0.42f));
+        x += sep_w;
       }
 
       const ImVec2 cmn(x, cy - ch * 0.5f);
@@ -5354,9 +5406,8 @@ namespace ImGui
       const bool hov = win_hovered && ImGui::IsMouseHoveringRect(cmn, cmx);
       dl->AddRectFilled(cmn, cmx, AppThemeNeutral(hov ? 0.20f : 0.13f, 0.95f), 3.0f * z);
       dl->AddRect(cmn, cmx, hov ? AppColWithAlpha(accent, 0.65f) : AppThemeNeutral(0.32f, 0.8f), 3.0f * z, 0, 1.0f);
-      const float tyc = cy - ImGui::GetTextLineHeight() * 0.5f;
-      dl->AddText(ImVec2(x + em * 0.3f, tyc), accent, num);
-      dl->AddText(ImVec2(x + em * 0.6f + num_w, tyc), ImGui::GetColorU32(ImGuiCol_Text, AppNodeHiddenByCollapse(g, n->Id) ? 0.5f : 0.9f), nm);
+      dl->AddText(ImVec2(x + em * 0.4f, cy - th * 0.5f), accent, num);
+      dl->AddText(ImVec2(x + em * 0.4f + num_w + em * 0.35f, cy - th * 0.5f), ImGui::GetColorU32(ImGuiCol_Text, AppNodeHiddenByCollapse(g, n->Id) ? 0.5f : 0.9f), nm);
       ed->ScopeStripRects.push_back(ImVec4(cmn.x, cmn.y, cmx.x, cmx.y));
       ed->ScopeStripNodes.push_back(n->Id);
       if (hov)
@@ -5366,12 +5417,7 @@ namespace ImGui
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
           clicked = n->Id;
       }
-      x = cmx.x + em * 0.45f;
-      if (i < seq.Size - 1)
-      {
-        dl->AddText(ImVec2(x, cy - ImGui::GetTextLineHeight() * 0.5f), AppThemeNeutral(0.42f), "\xe2\x86\x92");
-        x += ImGui::CalcTextSize("\xe2\x86\x92").x + em * 0.45f;
-      }
+      x = cmx.x;
     }
     ImGui::PopFont();
     dl->PopClipRect();
