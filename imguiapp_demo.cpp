@@ -329,7 +329,6 @@ namespace
     float         CodeH;        // bottom panel height (code/preview/problems/project; 0 == collapsed)
     float         InspW;        // right-side Inspector column width (0 -> default on first use)
     char          WriteMsg[64]; // transient "wrote header" confirmation
-    ImGuiID       WrittenSig;   // AppGraphSignature at the last header write (0 = never) -> Generate state
 
     // Frame-published values: derived once per frame in GraphDocControl::OnUpdate, read
     // everywhere; never re-derived in a render path.
@@ -461,7 +460,6 @@ namespace
       data->CodeH       = 0.0f;          // collapsed
       data->InspW       = 0.0f;          // 0 -> EditorBody picks a default on first layout
       data->WriteMsg[0] = 0;
-      data->WrittenSig  = 0;
       data->FrameSig    = 0;
       data->NumErrors   = 0;
       data->NumWarnings = 0;
@@ -493,7 +491,8 @@ namespace
       }
 
       // Publish the frame's derived values once; GraphDoc updates first (push order), so all consumers see the same values.
-      data->FrameSig = ImGui::AppGraphSignature(&data->Graph);
+      ImGui::AppGraphSyncRevision(&data->Graph);   // one signature fold per frame -> Revision pulse + _SigCache
+      data->FrameSig = data->Graph._SigCache;
       {
         const ImVector<ImGui::ImGuiAppGraphIssue>* issues = ImGui::AppGraphIssuesCached(&data->Graph);
         data->NumErrors = 0;
@@ -611,7 +610,7 @@ namespace
           ImFileWrite(full.c_str(), sizeof(char), (ImU64)full.size(), fh);
           ImFileClose(fh);
           ImFormatString(doc->WriteMsg, IM_ARRAYSIZE(doc->WriteMsg), "wrote %s", doc->HeaderPath);
-          doc->WrittenSig = doc->FrameSig;   // Generate button reads fresh vs stale off this
+          ImGui::AppGraphMarkGenerated(&doc->Graph);   // stamp the fresh/stale baseline (single source: the graph's GenSignature)
           DocLog(doc, 0, "generated C++ -> %s", doc->HeaderPath);
         }
         else
@@ -764,7 +763,7 @@ namespace
         // -- produce: green = header matches graph; amber = graph changed; red = errors (writing stays allowed).
         cap_x[3] = ImGui::GetCursorPosX();
         const int   nerr  = doc->NumErrors;
-        const bool  fresh = doc->WrittenSig != 0 && doc->WrittenSig == doc->FrameSig;
+        const bool  fresh = ImGui::AppGraphCodeFresh(&doc->Graph);
         const char* gen_label = nerr > 0 ? ICON_FA_TRIANGLE_EXCLAMATION "  Generate" : fresh ? ICON_FA_CHECK "  Generated" : ICON_FA_FILE_EXPORT "  Generate";
         ImGui::PushStyleColor(ImGuiCol_Button, nerr > 0 ? ImVec4(0.55f, 0.21f, 0.18f, 1.0f)
                                              : fresh    ? ImVec4(0.16f, 0.38f, 0.22f, 1.0f)
@@ -792,7 +791,7 @@ namespace
 
         // -- observe (right-aligned): bootstrap-state readout + panel toggles. The Live eye
         // always reflects THE running app -- there is exactly one.
-        const bool  unwritten = doc->WrittenSig != 0 && doc->FrameSig != doc->WrittenSig;
+        const bool  unwritten = doc->Graph.GenSignature != 0 && ImGui::AppGraphCodeStale(&doc->Graph);
         const bool  stale     = doc->NumUnbuilt > 0 || unwritten;
         char        sync_lbl[64];
         if (stale)
@@ -1160,7 +1159,7 @@ namespace
 
     if (ImGui::AppInspectorSection("##psec_doc", ICON_FA_FILE_LINES, "Document", nullptr, nullptr))
     {
-      const bool fresh = doc->WrittenSig != 0 && doc->WrittenSig == doc->FrameSig;
+      const bool fresh = ImGui::AppGraphCodeFresh(&doc->Graph);
       ImGui::TextDisabled("graph");
       ImGui::SameLine(label_w);
       ImGui::TextUnformatted(doc->GraphPath);
@@ -1662,7 +1661,7 @@ namespace
                   ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthStretch, 0.15f);
                   ImGui::TableSetupColumn("##act", ImGuiTableColumnFlags_WidthStretch, 0.25f);
                   ImGui::TableHeadersRow();
-                  const bool fresh = doc->WrittenSig != 0 && doc->WrittenSig == doc->FrameSig;
+                  const bool fresh = ImGui::AppGraphCodeFresh(&doc->Graph);
                   for (int i = 0; i < data->ProjFiles.Size; i++)
                   {
                     const EditorBodyData::ProjFile& f = data->ProjFiles.Data[i];

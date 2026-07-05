@@ -10239,6 +10239,39 @@ namespace ImGui
     return h;
   }
 
+  // F17. The signature is content-derived (recomputed, never stored in the model), so it survives a
+  // save/load round-trip by construction. Revision is the cheap monotonic pulse the editor reads to
+  // know "did the authored graph change since last frame" without diffing hashes itself.
+  int AppGraphSyncRevision(ImGuiAppGraph* g)
+  {
+    IM_ASSERT(g != nullptr);
+    const ImGuiID sig = AppGraphSignature(g);
+    if (sig != g->_SigCache)
+    {
+      g->_SigCache = sig;
+      g->Revision++;
+    }
+    return g->Revision;
+  }
+
+  void AppGraphMarkGenerated(ImGuiAppGraph* g)
+  {
+    IM_ASSERT(g != nullptr);
+    g->GenSignature = AppGraphSignature(g);
+  }
+
+  bool AppGraphCodeStale(const ImGuiAppGraph* g)
+  {
+    IM_ASSERT(g != nullptr);
+    return AppGraphSignature(g) != g->GenSignature;
+  }
+
+  bool AppGraphCodeFresh(const ImGuiAppGraph* g)
+  {
+    IM_ASSERT(g != nullptr);
+    return g->GenSignature != 0 && AppGraphSignature(g) == g->GenSignature;
+  }
+
   // Emit the ImGuiAppLayer subclass a Custom layer node names: the phase hooks, stubbed at their positions in
   // the loop. Core layers ship with the framework and emit nothing but their bring-up line.
   static void AppEmitCustomLayerCode(const ImGuiAppNode* n, ImGuiTextBuffer* out)

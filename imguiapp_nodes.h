@@ -642,6 +642,9 @@ struct ImGuiAppGraph
   int                            _ScopeSig                  = -1;      // editor scope-change detector (transient; -1 = first frame)
   int                            _ScopeCamId                = -1;      // scope id the camera currently shows (-1 = root; transient)
   int                            _PendingFit                = 0;       // deferred fit-all countdown after a scope change (transient)
+  int                            Revision                   = 0;       // monotonic authored-content version; AppGraphSyncRevision bumps it when the signature changes (transient, session-local)
+  ImGuiID                        _SigCache                  = 0;       // last signature seen by AppGraphSyncRevision (revision bookkeeping; transient)
+  ImGuiID                        GenSignature               = 0;       // AppGraphSignature captured at the last codegen; 0 = never generated this session. Code is STALE when the live signature differs (transient, NOT serialized)
 };
 
 namespace ImGui
@@ -667,6 +670,16 @@ namespace ImGui
   // change. Excludes positions/ids/live-mirror churn. char[] hashed as NUL-terminated string (ctors
   // zero only byte 0, so ImHashData over the fixed buffer would be unstable).
   IMGUI_API ImGuiID             AppGraphSignature(const ImGuiAppGraph* g);
+
+  // Codegen freshness (F17). The signature is the single source of truth: AppGraphSyncRevision folds
+  // it once per frame and bumps Revision on any content change; AppGraphMarkGenerated stamps the
+  // signature at codegen time; the graph is STALE while the live signature differs from that stamp
+  // (FRESH == generated this session AND unchanged since). GenSignature/Revision are session-local
+  // (reset on load), so a freshly loaded graph reads as never-generated.
+  IMGUI_API int                 AppGraphSyncRevision(ImGuiAppGraph* g);
+  IMGUI_API void                AppGraphMarkGenerated(ImGuiAppGraph* g);
+  IMGUI_API bool                AppGraphCodeStale(const ImGuiAppGraph* g);
+  IMGUI_API bool                AppGraphCodeFresh(const ImGuiAppGraph* g);
 
   // CanLink validates an attempted edge (kind pairing, no self/dup, no duplicate dep type, no cycle),
   // writing a reason to err on rejection. CaptureAppGraphLinks folds the canvas wire events, refusing

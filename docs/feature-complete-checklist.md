@@ -105,9 +105,14 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   (gains OnGetCommand + field-aware render hints). Whole-graph corpus byte-locked by ProofDrift
   (imguix_contract_generated.h); single-control corpus byte-locked by the new ProofControlDrift
   (imguix_control_generated.h). step6/step7 substring asserts survive.
-- [ ] **F17 whole-graph signature + dirty bit** — AppGraphSignature (ImHashData over fixed
+- [x] **F17 whole-graph signature + dirty bit** — AppGraphSignature (ImHashData over fixed
   buffers) + Revision; edit flips STALE, generate clears.
   *Accept: signature-stability test (reload same file = same signature) + dirty-bit test.*
+  DONE: the signature is the single source. AppGraphSyncRevision folds it once/frame and bumps the
+  session-local Revision on any content change; AppGraphMarkGenerated stamps GenSignature at codegen;
+  AppGraphCodeStale/AppGraphCodeFresh compare live vs stamp. Migrated the demo's per-doc WrittenSig
+  onto the graph so there is no parallel dirty bit. step60 pins signature-stability across save/load,
+  position-only edits as no-ops, and the STALE->generate->FRESH cycle + Revision pulse.
 - [ ] **F18 fresh/STALE surfaced** — Generate button health state, code-panel stale tint,
   Copy/Write warning tint, WriteMsg cleared on first stale frame.
   *Accept: UI test drives edit→stale→generate→fresh.*
