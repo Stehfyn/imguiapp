@@ -230,8 +230,14 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   while engaged) + step back/fwd + a frame slider. composer_apptime_scrub asserts the wired transport
   records (AppComposerAppTimeFrames > 0), then diffs the ring: restoring frame 0 / newest writes exactly
   that frame's bytes into the live storage. Docs already claimed the scrubber; now true.
-- [ ] **F30 run-state viewport tint** — frozen/rewound tint while transport is engaged.
+- [x] **F30 run-state viewport tint** — frozen/rewound tint while transport is engaged.
   *Accept: on-camera frame capture differs frozen vs live.*
+  DONE: while App-time is frozen, EditorBodyControl washes the viewport amber + draws an engaged border
+  (matches the freeze button). composer_apptime_tint proves the rendered frame differs frozen vs live by
+  scanning every window's retained draw list for the tint's distinctive amber RGB -- absent live, present
+  frozen, gone on resume -- which isolates it from node animation. Also moved the transport cluster into
+  the toolbar flow (the right-aligned placement clipped it off-screen) and fixed a freeze-button crash:
+  the click flipped Frozen between the style Push and Pop, so the state is now captured first.
 - [ ] **F31 problems-count toolbar badge** — worst-severity colored count; click opens Output
   filtered to problems.
   *Accept: badge test with engineered error graph.*

@@ -867,6 +867,40 @@ namespace
           }
         }
 
+        // App-time transport (F29): freeze the running app + scrub its state history. Flow-placed (left of
+        // the right-aligned observe cluster) so it stays on the toolbar; only offered with the live mirror.
+        if (show_live && doc->Transport != nullptr)
+        {
+          ComposerTransport* tr = doc->Transport;
+          const int frames = tr->History.Count;
+          const bool was_frozen = tr->Frozen;   // capture: the button click below flips Frozen mid-Push/Pop
+          EditorToolSep(em);
+          if (was_frozen)
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.52f, 0.39f, 0.14f, 1.0f));   // amber: app time engaged
+          if (ImGui::Button(was_frozen ? ICON_FA_PLAY "###apptime" : ICON_FA_PAUSE "###apptime"))
+            tr->Frozen = !tr->Frozen;
+          if (was_frozen)
+            ImGui::PopStyleColor();
+          ImGui::SetItemTooltip(tr->Frozen ? "Resume the running app (App time)" : "Freeze the app to scrub its state history (App time)");
+          if (tr->Frozen)
+          {
+            ImGui::SameLine();
+            if (ImGui::Button(ICON_FA_BACKWARD_STEP "###apptimeback"))
+              tr->Frame = ImMax(0, tr->Frame - 1);
+            ImGui::SetItemTooltip("Step back one frame");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(em * 8.0f);
+            int f = frames > 0 ? tr->Frame : 0;
+            if (ImGui::SliderInt("###apptimescrub", &f, 0, frames > 0 ? frames - 1 : 0, "f %d"))
+              tr->Frame = f;
+            ImGui::SetItemTooltip("Scrub App-time frame (0 = oldest, %d = newest)", frames > 0 ? frames - 1 : 0);
+            ImGui::SameLine();
+            if (ImGui::Button(ICON_FA_FORWARD_STEP "###apptimefwd"))
+              tr->Frame = frames > 0 ? ImMin(frames - 1, tr->Frame + 1) : 0;
+            ImGui::SetItemTooltip("Step forward one frame");
+          }
+        }
+
         // -- observe (right-aligned): bootstrap-state readout + panel toggles. The Live eye
         // always reflects THE running app -- there is exactly one.
         const bool  unwritten = doc->Graph.GenSignature != 0 && ImGui::AppGraphCodeStale(&doc->Graph);
@@ -934,39 +968,6 @@ namespace
         if (show_live)
           ImGui::PopStyleColor();
         ImGui::SetItemTooltip("Show / hide read-only nodes mirrored from the running app");
-
-        // App-time transport (F29): freeze the running app and scrub its state history. Only offered with
-        // the live mirror shown; lit while frozen. Writes transient scrub state (never snapshotted).
-        if (show_live && doc->Transport != nullptr)
-        {
-          ComposerTransport* tr = doc->Transport;
-          const int frames = tr->History.Count;
-          ImGui::SameLine();
-          if (tr->Frozen)
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.52f, 0.39f, 0.14f, 1.0f));   // amber: app time engaged
-          if (ImGui::Button(tr->Frozen ? ICON_FA_PLAY "###apptime" : ICON_FA_PAUSE "###apptime"))
-            tr->Frozen = !tr->Frozen;
-          if (tr->Frozen)
-            ImGui::PopStyleColor();
-          ImGui::SetItemTooltip(tr->Frozen ? "Resume the running app (App time)" : "Freeze the app to scrub its state history (App time)");
-          if (tr->Frozen)
-          {
-            ImGui::SameLine();
-            if (ImGui::Button(ICON_FA_BACKWARD_STEP "###apptimeback"))
-              tr->Frame = ImMax(0, tr->Frame - 1);
-            ImGui::SetItemTooltip("Step back one frame");
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(em * 8.0f);
-            int f = frames > 0 ? tr->Frame : 0;
-            if (ImGui::SliderInt("###apptimescrub", &f, 0, frames > 0 ? frames - 1 : 0, "f %d"))
-              tr->Frame = f;
-            ImGui::SetItemTooltip("Scrub App-time frame (0 = oldest, %d = newest)", frames > 0 ? frames - 1 : 0);
-            ImGui::SameLine();
-            if (ImGui::Button(ICON_FA_FORWARD_STEP "###apptimefwd"))
-              tr->Frame = frames > 0 ? ImMin(frames - 1, tr->Frame + 1) : 0;
-            ImGui::SetItemTooltip("Step forward one frame");
-          }
-        }
 
         // Palette pick from last frame's canvas folds into the same temp flags the buttons set.
         switch (ImGui::AppGraphConsumeHostCommand(&doc->Graph))
@@ -1689,6 +1690,19 @@ namespace
           ImGui::AppGraphSetHostCommands(graph, host_cmds, IM_ARRAYSIZE(host_cmds));
 
           ImGui::ShowAppGraphEditor(app, graph, &selection, doc->ShowLive);
+
+          // F30: while App-time is frozen/rewound, wash the viewport amber so the canvas reads as paused
+          // (not live) -- matches the engaged freeze button. A thin inner border makes the state obvious
+          // at a glance. Low alpha so nodes stay readable.
+          if (doc->Transport != nullptr && doc->Transport->Frozen)
+          {
+            ImDrawList*  dl   = ImGui::GetWindowDrawList();
+            const ImVec2 vmin = ImGui::GetWindowPos();
+            const ImVec2 vmax = ImVec2(vmin.x + ImGui::GetWindowSize().x, vmin.y + ImGui::GetWindowSize().y);
+            dl->AddRectFilled(vmin, vmax, IM_COL32(210, 150, 40, 30));                       // amber wash
+            dl->AddRect(ImVec2(vmin.x + 1.0f, vmin.y + 1.0f), ImVec2(vmax.x - 1.0f, vmax.y - 1.0f),
+                        IM_COL32(210, 150, 40, 150), 0.0f, 0, ImMax(2.0f, em * 0.15f));      // engaged border
+          }
 
           // Viewport overlays (health readout bottom-left, transport bottom-center): real ImGui
           // items submitted after the editor, so they win hover over the canvas.
