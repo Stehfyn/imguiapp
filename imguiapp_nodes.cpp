@@ -12016,6 +12016,31 @@ namespace ImGui
     }
   }
 
+  // Import authored Custom layers: each `struct <Name> : ImGuiAppLayer` becomes a Custom Layer node.
+  // Added after the foundation so the layer push order (foundation, then customs in source order) matches.
+  static void AppImportCustomLayers(ImGuiAppGraph* g, const char* code)
+  {
+    const char* p = code;
+    while ((p = strstr(p, "struct")) != nullptr)
+    {
+      if (p != code && AppCImportIsIdent(p[-1]))     { p += 6; continue; }
+      const char* q = p + 6;
+      if (!AppCImportIsSpace(*q))                    { p = q; continue; }
+      while (AppCImportIsSpace(*q)) q++;
+      char name[IM_LABEL_SIZE];
+      int  ni = 0;
+      while (AppCImportIsIdent(*q) && ni < IM_LABEL_SIZE - 1) name[ni++] = *q++;
+      name[ni] = 0;
+      while (AppCImportIsSpace(*q)) q++;
+      if (ni == 0 || *q != ':')                      { p = q; continue; }
+      q++;
+      while (AppCImportIsSpace(*q)) q++;
+      if (strncmp(q, "ImGuiAppLayer", 13) != 0 || AppCImportIsIdent(q[13])) { p = q; continue; }   // not exactly ImGuiAppLayer
+      AppGraphAddNode(g, ImGuiAppNodeKind_Layer, name)->LayerType = ImGuiAppLayerType_Custom;
+      p = q + 13;
+    }
+  }
+
   int AppGraphImportProgram(ImGuiAppGraph* g, const char* code)
   {
     IM_ASSERT(g != nullptr);
@@ -12025,6 +12050,7 @@ namespace ImGui
     // Every emitted program brings up the foundation layers, so seed them first (idempotent). Their
     // node order matches EnsureFoundation, which matches the emitter's layer push order.
     AppGraphEnsureFoundation(g);
+    AppImportCustomLayers(g, code);
 
     // CommandLayer definitions (the AppCommand enum), then controls (with their inline Data/TempData
     // fields, deps, commands and events).
