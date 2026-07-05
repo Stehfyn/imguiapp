@@ -117,6 +117,18 @@ enum ImGuiAppAVMetaRecordType_
   ImGuiAppAVMetaRecordType_AudioPcm,       // RESERVED: frame_index + sample format header + PCM chunk (no producer yet)
 };
 
+// Reconstructed meta-stream header (magic "IMAVMETA", version, fps, start TSC + QPC Hz).
+// Field-exact contract with the recorder + parsers; a version bump follows any change.
+struct ImGuiAppAVMetaHeader
+{
+  char  Magic[8]; // "IMAVMETA"
+  ImU32 Version;  // 1
+  float Fps;
+  ImU64 StartTsc;
+  ImU64 QpcHz;
+  ImU64 StartQpc;
+};
+
 //-----------------------------------------------------------------------------
 // [SECTION] Recorder
 //-----------------------------------------------------------------------------
@@ -165,6 +177,58 @@ struct ImGuiAppAVStreamStats
   ImGuiAppAVStreamStats() { Frames = 0; IoFrames = 0; InputHdrs = 0; InputFrames = 0; Snapshots = 0; Identities = 0; FirstTick = 0; LastTick = 0; TickGaps = 0; ChainOk = false; ChainDivergesAt = -1; DigestState = 1; CorruptFrames = 0; }
 };
 
+//-----------------------------------------------------------------------------
+// [SECTION] Run index (F62): tick-keyed landing over a reconstructed meta stream
+//-----------------------------------------------------------------------------
+// One walk of the reconstructed meta buffer (structurally the traversal AppAVMetaVerify
+// performs) records each record's tick and payload offset instead of only counting them.
+// The result is the playback debugger's index (docs/playback-debugger-design.md section 3):
+// no new byte format, same records, a richer landing. All offsets index the buffer the
+// index owns; the shipped single-record readers (AppAVMetaRead*) consume from there.
+
+// Decoded Identity record: the trust gate for state reconstruction (F64). A reconstruction
+// app is legal only when its composition id and schema hash equal these.
+struct ImGuiAppRunMeta
+{
+  ImU32   ApplayerVersion;
+  ImU32   ImguiVersion;
+  ImGuiID CompositionID;
+  ImU32   SchemaHash;
+  ImU32   EmbedRows;
+  ImU16   BlockSize;
+
+  ImGuiAppRunMeta() { ApplayerVersion = 0; ImguiVersion = 0; CompositionID = 0; SchemaHash = 0; EmbedRows = 0; BlockSize = 0; }
+};
+
+// One tick (FirstTick..LastTick). The Frame spine plus byte offsets to THIS tick's
+// IoFrame / InputFrame / StateSnapshot record payloads (-1 when the tick has none).
+struct ImGuiAppRunTick
+{
+  ImU64  Tick;           // == Frame/IoFrame frame_index (the single correlation key)
+  ImU64  Tsc;            // Frame.tsc
+  double TimeSec;        // Frame.time_sec (PTS; also QOI index.tsv)
+  int    FrameImage;     // frame ordinal for decode (mp4 sample / QOI NNNNNN); -1 = none
+  int    IoOffset;       // payload offset of this tick's IoFrame record (-1 if none)
+  ImU32  StateHash;      // IoFrame.state_hash (recorded fingerprint)
+  ImU32  Chain;          // IoFrame.chain recomputed from the Identity seed (divergence lives here)
+  int    InputOffset;    // InputFrame payload offset (-1 if not opt-in this tick)
+  int    SnapshotOffset; // StateSnapshot payload offset at this tick (-1 if none)
+
+  ImGuiAppRunTick() { Tick = 0; Tsc = 0; TimeSec = 0.0; FrameImage = -1; IoOffset = -1; StateHash = 0; Chain = 0; InputOffset = -1; SnapshotOffset = -1; }
+};
+
+// F62 build product: the per-tick index, the snapshot list, and the verify ladder, all from
+// ONE walk. Heap-owned by AppRunOpen; AppRunClose frees. Opaque to the snapshot contract.
+struct ImGuiAppRunIndex
+{
+  ImVector<char>            Meta;          // owned copy of the reconstructed meta buffer (offsets index into it)
+  ImGuiAppAVMetaHeader      Header;        // fps + start clocks
+  ImGuiAppRunMeta           Identity;      // decoded Identity (composition_id, schema_hash, versions)
+  ImVector<ImGuiAppRunTick> Ticks;         // FirstTick..LastTick in emission order
+  ImVector<int>             SnapshotTicks; // ascending tick-array indices where SnapshotOffset>=0 (nearest lookup)
+  ImGuiAppAVStreamStats     Stats;         // == AppAVMetaVerify output over the same bytes
+};
+
 namespace ImGui
 {
   // Close (if open) then Destroy any provider's encoder via its vtable. Null-safe.
@@ -185,6 +249,17 @@ namespace ImGui
   // divergence check pinpoints any non-determinism.
   IMGUI_API bool AppAVMetaReadInputLog(const void* meta, int meta_size, ImGuiAppInputLog* out_log);
   IMGUI_API bool AppAVMetaReadStateSnapshot(const void* meta, int meta_size, ImVector<char>* out_bytes, ImGuiID* out_composition_id);
+
+  // F62 loader/index. Build the tick index (docs/playback-debugger-design.md section 3)
+  // from a reconstructed meta buffer -- ONE linear walk reusing the same TLV traversal
+  // AppAVMetaVerify performs, landing each record's tick + payload offset. The path->buffer
+  // step is the per-backend extractor (ImGuiApp_Impl{Libav,Qoi}_ExtractEmbeddedMeta), same
+  // as the harness's own VerifyRecording: this core seam never names a provider. Returns a
+  // heap index (AppRunClose frees) or null on a bad/absent header.
+  IMGUI_API ImGuiAppRunIndex*      AppRunOpen(const void* meta, int meta_size);
+  IMGUI_API void                   AppRunClose(ImGuiAppRunIndex* run);
+  IMGUI_API int                    AppRunTickCount(const ImGuiAppRunIndex* run);          // == Ticks.Size; 0 on null
+  IMGUI_API const ImGuiAppRunTick* AppRunTickAt(const ImGuiAppRunIndex* run, int i);      // null when out of range
 
   // encoder is REQUIRED (providers live in backends/imguiapp_impl_*.h; the core seam
   // cannot pick one). Fails (null) when the platform backend has no CaptureFrame.

@@ -69,17 +69,8 @@ static ImU64 AvClockCounter()
 #endif
 }
 
-// Stream header. Field-exact contract with the parsers below; version bumps on any change.
-struct ImGuiAppAVMetaHeader
-{
-  char  Magic[8]; // "IMAVMETA"
-  ImU32 Version;  // 1
-  float Fps;
-  ImU64 StartTsc;
-  ImU64 QpcHz;
-  ImU64 StartQpc;
-};
-
+// Stream header (ImGuiAppAVMetaHeader) is declared in imguiapp_av.h -- field-exact
+// contract shared with the parsers below and the F62 run index.
 static const char* kAvMetaMagic = "IMAVMETA";
 
 // One framed record: {u32 type, u32 size, payload}. Append-only; buf may already hold records.
@@ -1581,6 +1572,149 @@ IMGUI_API bool AppAVMetaReadStateSnapshot(const void* meta, int meta_size, ImVec
     return true;
   }
   return false;
+}
+
+//-----------------------------------------------------------------------------
+// [SECTION] Run index (F62)
+//-----------------------------------------------------------------------------
+
+// Tick -> Ticks[] slot. Records land right after their Frame, so the last-pushed tick is
+// the common hit; a reverse scan covers the rare out-of-order (ring dump) case.
+static int RunTickSlot(const ImGuiAppRunIndex* run, ImU64 tick)
+{
+  for (int i = run->Ticks.Size - 1; i >= 0; i--)
+    if (run->Ticks.Data[i].Tick == tick)
+      return i;
+  return -1;
+}
+
+IMGUI_API ImGuiAppRunIndex* AppRunOpen(const void* meta, int meta_size)
+{
+  ImGuiAppAVMetaReader r;
+  if (!AvMetaInit(meta, meta_size, &r))
+    return nullptr;
+
+  ImGuiAppRunIndex* run = IM_NEW(ImGuiAppRunIndex)();
+  run->Meta.resize(meta_size);
+  memcpy(run->Meta.Data, meta, (size_t)meta_size);   // record offsets index THIS copy
+  run->Header = r.Header;
+
+  // The shipped verify ladder over the same bytes: authoritative counts, chain, digest, gaps.
+  AppAVMetaVerify(meta, meta_size, &run->Stats);
+
+  // ONE linear walk (the AppAVMetaVerify traversal): Frame records lay the tick spine in
+  // emission order (== QOI NNNNNN / mp4 sample ordinal); Io/Input/Snapshot land on their
+  // own tick by frame_index; the io chain recomputes from the Identity seed per tick.
+  ImU32 chain = 0;
+  bool identity_decoded = false;
+  int frame_ordinal = 0;
+  ImU32 type = 0;
+  const char* p = nullptr;
+  ImU32 size = 0;
+  while (AvMetaNext(&r, &type, &p, &size))
+  {
+    const int payload_off = (int)(p - r.Bytes.Data);
+    switch (type)
+    {
+    case ImGuiAppAVMetaRecordType_Identity:
+      // applayer_ver | imgui_ver | composition_id | schema_hash | embed_rows | block | rsvd
+      if (size >= 24 && !identity_decoded)
+      {
+        ImU32 av = 0, iv = 0, comp = 0, sh = 0, rows = 0;
+        ImU16 block = 0;
+        memcpy(&av, p, 4); memcpy(&iv, p + 4, 4); memcpy(&comp, p + 8, 4);
+        memcpy(&sh, p + 12, 4); memcpy(&rows, p + 16, 4); memcpy(&block, p + 20, 2);
+        run->Identity.ApplayerVersion = av;
+        run->Identity.ImguiVersion = iv;
+        run->Identity.CompositionID = (ImGuiID)comp;
+        run->Identity.SchemaHash = sh;
+        run->Identity.EmbedRows = rows;
+        run->Identity.BlockSize = block;
+        chain = sh;   // the io chain's seed
+        identity_decoded = true;
+      }
+      break;
+    case ImGuiAppAVMetaRecordType_Frame:
+    {
+      ImU64 tick = 0;
+      memcpy(&tick, p, 8);
+      if (tick == (ImU64)-1)
+        break;   // ring-dump reason marker: not a real tick
+      ImGuiAppRunTick t;
+      t.Tick = tick;
+      memcpy(&t.Tsc, p + 8, 8);
+      memcpy(&t.TimeSec, p + 16, 8);
+      t.FrameImage = frame_ordinal++;
+      run->Ticks.push_back(t);
+      break;
+    }
+    case ImGuiAppAVMetaRecordType_IoFrame:
+    {
+      if (size >= 33)
+      {
+        ImU64 tick = 0;
+        ImU32 state_hash = 0;
+        memcpy(&tick, p, 8);
+        memcpy(&state_hash, p + 25, 4);
+        chain = (ImU32)ImHashData(&state_hash, sizeof(ImU32), chain);
+        const int slot = RunTickSlot(run, tick);
+        if (slot >= 0)
+        {
+          run->Ticks.Data[slot].IoOffset = payload_off;
+          run->Ticks.Data[slot].StateHash = state_hash;
+          run->Ticks.Data[slot].Chain = chain;
+        }
+      }
+      break;
+    }
+    case ImGuiAppAVMetaRecordType_InputFrame:
+    {
+      if (size >= 12)
+      {
+        ImU64 tick = 0;
+        memcpy(&tick, p, 8);
+        const int slot = RunTickSlot(run, tick);
+        if (slot >= 0)
+          run->Ticks.Data[slot].InputOffset = payload_off;
+      }
+      break;
+    }
+    case ImGuiAppAVMetaRecordType_StateSnapshot:
+    {
+      if (size >= 16)
+      {
+        ImU64 tick = 0;
+        memcpy(&tick, p + 4, 8);   // comp(4) then frame_index
+        const int slot = RunTickSlot(run, tick);
+        if (slot >= 0)
+        {
+          run->Ticks.Data[slot].SnapshotOffset = payload_off;
+          run->SnapshotTicks.push_back(slot);   // ascending: snapshots arrive in tick order
+        }
+      }
+      break;
+    }
+    default: break;
+    }
+  }
+  return run;
+}
+
+IMGUI_API void AppRunClose(ImGuiAppRunIndex* run)
+{
+  IM_DELETE(run);   // null-safe
+}
+
+IMGUI_API int AppRunTickCount(const ImGuiAppRunIndex* run)
+{
+  return run != nullptr ? run->Ticks.Size : 0;
+}
+
+IMGUI_API const ImGuiAppRunTick* AppRunTickAt(const ImGuiAppRunIndex* run, int i)
+{
+  if (run == nullptr || i < 0 || i >= run->Ticks.Size)
+    return nullptr;
+  return &run->Ticks.Data[i];
 }
 
 } // namespace ImGui
