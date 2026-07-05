@@ -4882,8 +4882,24 @@ namespace ImGui
       const ImGuiAppNode* n = AppGraphFindNodeConst(g, g->ViewScope.Data[i]);
       if (n == nullptr || !AppScopeCanEnter(n))
       {
-        g->ViewScope.resize(i);
+        g->ViewScope.resize(i);   // a deleted / no-longer-enterable entry ends the breadcrumb here
         return;
+      }
+      if (i > 0)
+      {
+        // Breadcrumb chain == scope-parent chain: entry i must still be a member of the scope its
+        // predecessor opens (survives a reparent under drill, and honours the cross-cutting Command
+        // membership). Evaluate membership with the breadcrumb temporarily cut to the predecessor.
+        const int id = g->ViewScope.Data[i];
+        const int saved = g->ViewScope.Size;
+        g->ViewScope.Size = i;
+        const bool member = AppNodeInScope(g, id);
+        g->ViewScope.Size = saved;
+        if (!member)
+        {
+          g->ViewScope.resize(i);
+          return;
+        }
       }
     }
   }

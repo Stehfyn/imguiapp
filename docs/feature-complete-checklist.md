@@ -405,9 +405,16 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   density + rail order (Display: 3 windows then the sidebar; Task: C1 before C2 by data dependency;
   Command: the single command-emitting control). Members render as their node cards inside the walls.
   Nodes 91/91, headless 28/28, core 87/0.
-- [ ] **F43 scope invariant tests** — validate-on-mutate of ViewScope; breadcrumb chain ==
+- [x] **F43 scope invariant tests** — validate-on-mutate of ViewScope; breadcrumb chain ==
   scope-parent chain.
   *Accept: dedicated tests, including mutation-under-drill.*
+  DONE: `AppScopeValidate` (per-frame) strengthened -- beyond dropping deleted/non-enterable entries,
+  it now enforces breadcrumb chain == scope-parent chain: each entry must stay a member of the scope
+  its predecessor opens (evaluated with the breadcrumb cut to that predecessor, so cross-cutting
+  Command membership is honoured), truncating at the first break. `step83_scope_invariants` covers a
+  valid chain surviving, a broken chain [W, C2] truncating to [W], mutation-under-drill (deleting a
+  member keeps the scope), and validate-on-mutate (deleting the drilled node truncates to root).
+  Nodes 92/92, headless 28/28, core 87/0.
 - [ ] **F44 per-scope sequence tidy** — on-demand verb arranging members left→right in execution
   order (AppScopeSequenceIds; consumes F58's authored order automatically once it lands),
   writing THIS scope's placements only.
