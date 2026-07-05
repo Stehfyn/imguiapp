@@ -1901,6 +1901,39 @@ namespace
       {
         if (ImGui::BeginChild("##Tree", ImVec2(tree_w, body.y), ImGuiChildFlags_Borders))
         {
+          // Origin legend (F37): the three node origins with the SAME dot colours the canvas draws, so
+          // the outliner teaches what Design / Live / Promoted mean. Display-only flat labels; the
+          // HelpMarker carries the design -> live -> promotion story.
+          {
+            const ImGui::ImGuiAppComposerStyle* cst = ImGui::AppComposerGetStyle();
+            const ImGuiStyle&                   st  = ImGui::GetStyle();
+            auto legend = [&](const char* label, ImU32 col)
+            {
+              ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(0, 0, 0, 0));
+              ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(0, 0, 0, 0));
+              ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(0, 0, 0, 0));
+              ImGui::PushStyleColor(ImGuiCol_Text,          col);
+              ImGui::Button(label);   // flat + non-interactive by look; a real id so the legend copy is test-addressable
+              ImGui::PopStyleColor(4);
+            };
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(2.0f, st.FramePadding.y));
+            // Row 1: the three origin swatches. Row 2 leads with the HelpMarker so nothing is clipped
+            // off the narrow outliner's right edge.
+            legend(ICON_FA_CIRCLE "  Design###origin-design", ImGui::GetColorU32(ImGuiCol_TextDisabled));
+            ImGui::SameLine(0.0f, em * 0.1f);
+            legend(ICON_FA_CIRCLE "  Live###origin-live", cst->OriginLive);
+            ImGui::SameLine(0.0f, em * 0.1f);
+            legend(ICON_FA_CIRCLE "  Promoted###origin-promoted", cst->OriginPromoted);
+            legend("(?)###originhelp", ImGui::GetColorU32(ImGuiCol_TextDisabled));
+            if (ImGui::IsItemHovered())
+              ImGui::SetTooltip("You author Design nodes. Generate the C++, recompile, and the running app\n"
+                                "mirrors itself back as Live (read-only, blue). Promote a Live node to author\n"
+                                "against it; a running promoted design shows green.");
+            ImGui::SameLine(0.0f, em * 0.1f);
+            legend("Show live mirror: hiding never deletes your design.###livereassure", ImGui::GetColorU32(ImGuiCol_TextDisabled));
+            ImGui::PopStyleVar();
+            ImGui::Separator();
+          }
           ImGui::ShowAppGraphTree(app, graph, &selection, doc->ShowLive);
         }
         ImGui::EndChild();

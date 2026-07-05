@@ -296,9 +296,15 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   `AppComposerLayoutFlags` accessor + headless `composer_layout_presets`: each preset reads back
   its mask, holds across 40 frames, and a manual tree toggle un-matches. Headless 18/18, nodes
   82/82, core 87/0.
-- [ ] **F37 origin literacy row** — origin legend micro-row + design→live→promotion HelpMarker
+- [x] **F37 origin literacy row** — origin legend micro-row + design→live→promotion HelpMarker
   copy + "Show live mirror" checkbox wording ("Hiding never deletes your design.").
   *Accept: ItemExists tests on the copy.*
+  DONE: outliner head carries the origin legend (Design / Live / Promoted, drawn with the SAME
+  `AppComposerGetStyle()->Origin*` dot colours the canvas uses), a design→live→promotion HelpMarker
+  (`###originhelp` tooltip), and the live-mirror reassurance (`###livereassure`, "hiding never
+  deletes your design."). Display-only flat labels (transparent-button so plain text gets a real,
+  test-addressable id). headless `composer_origin_legend` ItemExists on all five. Headless 19/19,
+  nodes 82/82, core 87/0.
 - [ ] **F38 motion + quietness idiom** — single 150 ms linear alpha fade for transient chrome;
   overlay rest-opacity/hover-salience ladder; overlays dim during wire-drag/marquee.
   *Accept: style-table constants only; on-camera captures at rest vs hover vs gesture.*
