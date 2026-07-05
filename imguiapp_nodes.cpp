@@ -9002,6 +9002,30 @@ namespace ImGui
         }
       }
     }
+
+    // (e) Data-dependency adherence: a binding maps a producer field (Src) to a consumer field (Dst); both
+    // must be DECLARED. An undeclared field is a dead reference codegen drops with a // WARNING, so surface
+    // it here. Builtin/live producers and consumers carry their fields in compiled C++, not the draft -- skip.
+    for (int bi = 0; bi < g->Bindings.Size; bi++)
+    {
+      const ImGuiAppFieldBinding* b = &g->Bindings.Data[bi];
+      const ImGuiAppNodeLink* link = nullptr;
+      for (int li = 0; li < g->Links.Size; li++)
+        if (g->Links.Data[li].Id == b->LinkId) { link = &g->Links.Data[li]; break; }
+      if (link == nullptr || link->Kind != ImGuiAppEdgeKind_Data)
+        continue;   // dangling bindings are swept on load; only data edges carry a field mapping
+      const int cons_id = AppGraphPortOwnerId(g, link->EndAttr);
+      const int prod_id = AppGraphPortOwnerId(g, link->StartAttr);
+      const ImGuiAppNode* cons = AppGraphFindNodeConst(g, cons_id);
+      const ImGuiAppNode* prod = AppGraphFindNodeConst(g, prod_id);
+      if (cons != nullptr && !cons->IsLive && !cons->IsBuiltin && b->DstField[0]
+          && AppNodeEffectiveFieldType(g, cons, 0, b->DstField) < 0)
+        AppValidatePushIssue(out, cons_id, 2, "%s: binding writes undeclared field '%s'", cons->Draft.Name, b->DstField);
+      if (prod != nullptr && !prod->IsLive && !prod->IsBuiltin && b->SrcField[0]
+          && (prod->Kind == ImGuiAppNodeKind_Control || prod->Kind == ImGuiAppNodeKind_Struct)
+          && AppNodeEffectiveFieldType(g, prod, 0, b->SrcField) < 0)
+        AppValidatePushIssue(out, prod_id, 2, "%s: binding reads undeclared field '%s'", prod->Draft.Name, b->SrcField);
+    }
   }
 
   // Render one field list as live mock widgets. Numeric state is kept in the window's ImGuiStorage keyed by the

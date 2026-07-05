@@ -57,10 +57,12 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
 - [ ] **F11 phase-coherence audit refresh** — checklist pass over the new writers
   (Compose/ComposeImported, scoped tidy, nudge, group drag, explode anchors, fit).
   *Accept: phase-coherence-audit doc updated; violations fixed or entered as findings.*
-- [ ] **F12 data-dependency adherence validator** — AppGraphValidate error when an event expr or
+- [x] **F12 data-dependency adherence validator** — AppGraphValidate error when an event expr or
   binding references an undeclared dep; codegen test asserts emitted code touches
   data/temp/last_temp/dep params only per declaration.
-  *Accept: validator test + codegen grep test.*
+  *Accept: validator test + codegen grep test (step54: binding invariant (e) added to
+  AppGraphValidate — Src on the producer, Dst on the consumer; event-expr dep refs already gated by
+  AppExprPrimary; codegen touches `producer->value` only when the binding declares it).*
 - [ ] **F13 canvas input-family tests** — RMB menu, LMB-empty pan, wheel-zoom anchor, node drag
   at zoom≠1, GridSnap, wire-drop palette, detach-delete, Ctrl+click multi-select, builtin
   palette completeness (Default node) + wireable ports.
