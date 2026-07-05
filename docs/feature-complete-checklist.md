@@ -730,11 +730,18 @@ interpreter's vocabulary IS F53-F57's semantics.
   via a binding, the Changed edge fires EXACTLY once per edge (not per frame), the command dispatches once.
   Integration fix: the render core layer is `ImGuiAppDisplayLayer` on main (the module's old base called it
   ImGuiAppWindowLayer). F55/F56 stubs named in OnUpdate (Op-fold + animation dt).
-- [ ] **F68 preview surface** — the Preview tab (or floating viewport): run/pause/reinit,
+- [x] **F68 preview surface** — the Preview tab (or floating viewport): run/pause/reinit,
   direct interaction ("play with it"), graph edits apply next frame under F66's preserve
   policy; selected node's widgets halo in the preview and vice versa.
   *Accept: headless test drives a preview widget and asserts the model value; rewire test
   changes behavior next frame without reinit losing unrelated fields.*
+  DONE: Preview tab (Run/Pause/Reinit) hosting the F67 interpreter; on-camera field widgets bound to live
+  Temp; `AppPreviewReconcile` applies graph edits next frame (topo-check, capture Persist+LastTemp, rebuild,
+  copy back every (sanitized name,type,size)-matching slot, new/retyped slots zero) gated on AppGraphSignature;
+  two-way brushing (composer selection halos preview widgets; preview hover/click reports the owning node).
+  Per-instance state on ImGuiAppEditorState (no TU globals). `interpreter_reconcile_preserves` (core) +
+  step102_f68_preview_surface (nodes, drives a widget + asserts the model moved). core 256/0, nodes 111/111,
+  headless 31/31. Submodule 95f389c / outer 7e520c3.
 - [ ] **F69 contract parity** — the executable contract suite (UCR order, edge-once, same-frame
   latch, dedup dispatch, pop symmetry, render purity, time travel) runs against the
   INTERPRETER as a second backend beside generated code.
