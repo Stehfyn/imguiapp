@@ -691,7 +691,7 @@ interpreter's vocabulary IS F53-F57's semantics.
   (contract-7 machinery); inspector shows Persist/Temp values AT N; command log lists that
   tick's dispatches.
   *Accept: value-at-tick test matches the recorded digest's state; replay is exact.*
-- [ ] **F65 divergence surfacing** — digest-mismatch ticks marked on the timeline;
+- [x] **F65 divergence surfacing** — digest-mismatch ticks marked on the timeline;
   jump-to-first-divergence verb.
   *Accept: corrupted-fixture test flags the right tick; clean run shows none.*
 - [x] **F66 previewer design doc** — `previewer-design.md`: interpreter scope = everything the
