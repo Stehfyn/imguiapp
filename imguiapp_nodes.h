@@ -671,6 +671,11 @@ namespace ImGui
   // zero only byte 0, so ImHashData over the fixed buffer would be unstable).
   IMGUI_API ImGuiID             AppGraphSignature(const ImGuiAppGraph* g);
 
+  // What kinds compose into a drilled scope (F28): the single truth behind the interior palette and the
+  // empty-scope wall caption. A live non-layer scope (window/sidebar/control/struct mirror) takes nothing
+  // -- read-only -- so this returns false for every kind; the authored twin admits its members.
+  IMGUI_API bool                AppScopeKindComposable(const ImGuiAppGraph* g, int scope_id, ImGuiAppNodeKind kind);
+
   // Origin vocabulary (F26): the one colour shared by the canvas title-bar dot, the outliner row tint and
   // the demo legend. Live and Promoted (a design control whose emitted data type matches a live node) each
   // get a distinct mark; plain design returns 0 (no push -> default row colour). Single source, so the

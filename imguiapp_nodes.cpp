@@ -4743,7 +4743,7 @@ namespace ImGui
 
   // Kinds that compose into a drilled scope: what the interior palettes offer, and what a creation
   // road may adopt. Live non-layer scopes take nothing (the mirror is read-only; Promote authors).
-  static bool AppScopeKindComposable(const ImGuiAppGraph* g, int scope_id, ImGuiAppNodeKind kind)
+  bool AppScopeKindComposable(const ImGuiAppGraph* g, int scope_id, ImGuiAppNodeKind kind)
   {
     const ImGuiAppNode* s = AppGraphFindNodeConst(g, scope_id);
     if (s == nullptr)

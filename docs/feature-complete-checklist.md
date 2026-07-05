@@ -207,9 +207,14 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   verb), then reconciles with a second BuildAppLiveGraph pass (the fixture "relaunch"). Asserts the twin is
   marked IsPromoted (its emitted data type matches the running control), the live-control count is
   unchanged, and there is still exactly one live mirror row for that control (no duplicate).
-- [ ] **F28 live-scope surface tests** — walls caption facts from live placement, read-only
+- [x] **F28 live-scope surface tests** — walls caption facts from live placement, read-only
   palette in live window/sidebar/control/struct interiors (extends step44).
   *Accept: one test per live scope kind.*
+  DONE: AppScopeKindComposable is the single truth behind both the interior palette and the empty-scope
+  wall caption (both key off the live condition). Exposed it; step70 asserts it per live scope kind --
+  window/sidebar/struct/control mirrors admit nothing, the authored twins admit their member kind. step71
+  extends step44's on-camera drill to a live SIDEBAR: the interior palette offers no Control and nothing
+  is added. (step44 already drives the live WINDOW palette on-camera.)
 
 ## P6 — chrome tells the truth
 
