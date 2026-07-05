@@ -609,6 +609,8 @@ struct ImGuiAppEditorState
   int                                  ScopeWallScope = -1;                               // scope the wall rect belongs to (hysteresis resets on change)
   ImVector<ImVec4>                     ScopeStripRects;                                   // order-strip chip rects, screen space (published per frame for hit-tests/tests)
   ImVector<int>                        ScopeStripNodes;                                   // node id per chip, parallel to ScopeStripRects
+  ImVec4                               ScopeVoid[4] = {};                                 // figure-ground carve: the four dim bands outside the walls, screen space (top/bottom/left/right); published per frame for tests
+  bool                                 ScopeVoidValid = false;                            // ScopeVoid valid this frame (drawn with the walls)
 };
 
 // The whole authored graph. One monotonic id allocator shared by every node/port/body-attr/link:

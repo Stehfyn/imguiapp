@@ -532,11 +532,11 @@ Deliberately excluded: App-time transport (live debugging is parked by the proje
   - evidence: Grow-fast/shrink-slow per edge in AppDrawScopeWalls: dead = em_m * 1.5f; expansion applies immediately, contraction only past the deadband; rect reseeds on scope change (ScopeWallScope check).
 - [t] **Removal of number circles + dashed sequence arrows** — No test asserts absence (reasonable); nothing remains to remove.
   - evidence: No sequence-circle or dashed-sequence-arrow code found; remaining circles are severity dots (:8159-8174) and diff dots, remaining dashes are Soft-link wires (CanvasNextWireDashed:932, link loop). Sequence lives only in the strip + title ordinal.
-- [t] **Title ordinal badge on members** — Exercised by every drilled test but no assertion on badge presence/content.
+- [x] **Title ordinal badge on members** — SHIPPED-TESTED (F47/step87_scope_chrome): drilled, each member's `CanvasNodeTitleBadge` (new getter) reads a distinct "n/N".
   - evidence: Submission loop: when drilled, scope_seq lookup emits ImFormatString('%d/%d') → CanvasNextNodeTitleBadge per member — same idiom as the layer badge a few lines below.
-- [t] **Existing altitude gates (structs/fields/bindings below root)** — No test directly asserts struct/field root eviction or binding-row root gating (step37 covers the generalized density gate only).
+- [x] **Existing altitude gates (structs/fields/bindings below root)** — SHIPPED-TESTED (F47/step87_scope_chrome): at root (Display present) the struct/field are absent from PoolIds while sibling controls submit — the kind-specific altitude skip.
   - evidence: altitude_root (at_root && Display present): struct/field kinds never submit at root (submission-loop skip), struct/control-cluster group boxes gated !altitude_root, binding editors gated `detail && !altitude_root`.
-- [t] **Card geometry invariant across altitudes** — No test compares node width/rounding/pin positions across the flip.
+- [x] **Card geometry invariant across altitudes** — SHIPPED-TESTED (F47/step87_scope_chrome): two controls report equal CanvasNodeSize().x at root and drilled (UniformCardW > 0) — the uniform-per-altitude invariant (narrower than absolute width, which differs by design).
   - evidence: UniformCardW applied via CanvasNextNodeWidth to every non-layer node independent of altitude; rounding/title-chrome switch independent of the detail flag; deps/DataOut pins submitted at both altitudes so wires land identically.
 - [t] **Control scope interior (struct plates + fields)** — No test drills into a control scope and asserts the plates/fields population.
   - evidence: AppScopeCanEnter includes Control; struct's scope-parent is its owning control (AppScopeParentOf:4506 branch), fields chain through their struct; struct/field kinds never submit at root (altitude_root gate); no rail/walls for control scopes by design (AppScopeWallsWanted false).

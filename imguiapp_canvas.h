@@ -138,6 +138,7 @@ namespace ImGui
   IMGUI_API ImVec2 CanvasNodePos(const ImGuiCanvasState* c, int node_id);        // model
   IMGUI_API void   CanvasSetNodePos(ImGuiCanvasState* c, int node_id, ImVec2 model_pos);
   IMGUI_API ImVec2 CanvasNodeSize(const ImGuiCanvasState* c, int node_id);       // model; this frame if submitted, else last known
+  IMGUI_API const char* CanvasNodeTitleBadge(const ImGuiCanvasState* c, int node_id);   // title-bar badge text ("" if none / unknown node)
   IMGUI_API void   CanvasSetNodeDraggable(ImGuiCanvasState* c, int node_id, bool draggable);
   IMGUI_API void   CanvasSetNodeSolid(ImGuiCanvasState* c, int node_id, bool solid);   // solid nodes cannot be dragged into overlap with other solid nodes (slide to contact)
   // Declare a solid region (model units) for THIS frame: solid-node drags cannot enter it (the

@@ -440,16 +440,23 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   (`###scopehdr`, a flat button) that steps up one level on click (breadcrumb parity). `composer_scope_header`
   asserts the row is absent at root, appears when drilled into the Display layer, and disappears after
   clicking it steps back to root. Nodes 94/94, headless 29/29, core 87/0.
-- [ ] **F47 scope chrome test-debt** — end band, rails, void dim, shrink deadband, title
+- [x] **F47 scope chrome test-debt** — end band, rails, void dim, shrink deadband, title
   ordinals, struct/field root-eviction gates, card geometry invariance across altitudes.
   *Accept: audit `[t]` scope rows flip to shipped-tested.*
-  PROGRESS (multi-turn burn):
-  - end band + rails + face band: `step86_scope_wall_bands` drills into a window with two hosted
-    controls and asserts `ScopeWallRect` extends past the members on every side (left/right rails, face
-    band above, end band below) and that the face band (Begin line + strip) is taller than the end band.
-  Remaining: void dim, shrink deadband (grow-instant/shrink-1.5em), title ordinals, struct/field
-  root-eviction gates, card geometry across altitudes (uniform-width pool differs by altitude -- needs a
-  narrower invariant than absolute width).
+  DONE across two tests. `step86_scope_wall_bands`: end band + rails + face band -- `ScopeWallRect`
+  extends past the members on every side, face band (Begin line + strip) taller than the end band.
+  `step87_scope_chrome`: one drill covers the rest --
+  - struct/field root-eviction: at root (Display present) the struct/field are absent from `PoolIds`
+    while sibling controls at the SAME altitude submit -- the kind-specific altitude law (:6890), not
+    general visibility.
+  - card geometry invariance: two controls report equal `CanvasNodeSize().x` at both root and drilled
+    altitudes (`UniformCardW > 0`) -- the uniform-width-per-altitude invariant (narrower than absolute
+    width, which legitimately differs across the flip).
+  - title ordinal badge: each member's `CanvasNodeTitleBadge` reads a distinct "n/N" (new canvas getter).
+  - void dim: the walls pass publishes the four figure-ground carve bands (`ScopeVoid[4]`/`ScopeVoidValid`);
+    the test reconstructs the wall screen-rect from their inner edges and confirms they run far outward.
+  - grow-fast / shrink-deadband: widening a member grows `ScopeWallRect.z` the same frame; a 3px
+    contraction holds inside the 1.5-em band; a full contraction shrinks it.
 - [ ] **F48 canvas S2 slice** — annotation frames (R1) + align/distribute verbs (R3, registered
   in F34).
   *Accept: frame create/label/move test; align test on a selection.*

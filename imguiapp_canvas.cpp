@@ -1767,6 +1767,12 @@ namespace ImGui
     return n != nullptr ? n->Size : ImVec2(0.0f, 0.0f);
   }
 
+  const char* CanvasNodeTitleBadge(const ImGuiCanvasState* c, int node_id)
+  {
+    const ImGuiCanvasNodeRec* n = CanvasFindNode(const_cast<ImGuiCanvasState*>(c), node_id);
+    return n != nullptr ? n->Badge : "";
+  }
+
   void CanvasSetNodeSolid(ImGuiCanvasState* c, int node_id, bool solid)
   {
     CanvasFindOrCreateNode(c, node_id)->Solid = solid;

@@ -5636,6 +5636,7 @@ namespace ImGui
     ImGuiAppEditorState* ed = AppGraphEditorState(g);
     const bool was_valid = ed->ScopeWallValid;
     ed->ScopeWallValid = false;
+    ed->ScopeVoidValid = false;
     if (!AppScopeWallsWanted(g))
       return;
     const int top = AppScopeCurrent(g);
@@ -5751,13 +5752,20 @@ namespace ImGui
     const ImU32 muted = AppComposerGetStyle()->TextMuted;
     ImDrawList* dl = ImGui::CanvasBackgroundDrawList(cv);
 
-    // The void: outside the block, the canvas dims. Clipped by the canvas child.
+    // The void: outside the block, the canvas dims. Clipped by the canvas child. The four bands
+    // abut the wall screen-rect (top/bottom span the full width, left/right fill between) -- the
+    // figure-ground carve, published for the interior test.
     const float big = 100000.0f;
     const ImU32 void_col = AppThemeDark(0.45f);
-    dl->AddRectFilled(ImVec2(smn.x - big, smn.y - big), ImVec2(smx.x + big, smn.y), void_col);
-    dl->AddRectFilled(ImVec2(smn.x - big, smx.y), ImVec2(smx.x + big, smx.y + big), void_col);
-    dl->AddRectFilled(ImVec2(smn.x - big, smn.y), ImVec2(smn.x, smx.y), void_col);
-    dl->AddRectFilled(ImVec2(smx.x, smn.y), ImVec2(smx.x + big, smx.y), void_col);
+    ed->ScopeVoid[0] = ImVec4(smn.x - big, smn.y - big, smx.x + big, smn.y);   // top
+    ed->ScopeVoid[1] = ImVec4(smn.x - big, smx.y, smx.x + big, smx.y + big);   // bottom
+    ed->ScopeVoid[2] = ImVec4(smn.x - big, smn.y, smn.x, smx.y);               // left
+    ed->ScopeVoid[3] = ImVec4(smx.x, smn.y, smx.x + big, smx.y);               // right
+    ed->ScopeVoidValid = true;
+    dl->AddRectFilled(ImVec2(ed->ScopeVoid[0].x, ed->ScopeVoid[0].y), ImVec2(ed->ScopeVoid[0].z, ed->ScopeVoid[0].w), void_col);
+    dl->AddRectFilled(ImVec2(ed->ScopeVoid[1].x, ed->ScopeVoid[1].y), ImVec2(ed->ScopeVoid[1].z, ed->ScopeVoid[1].w), void_col);
+    dl->AddRectFilled(ImVec2(ed->ScopeVoid[2].x, ed->ScopeVoid[2].y), ImVec2(ed->ScopeVoid[2].z, ed->ScopeVoid[2].w), void_col);
+    dl->AddRectFilled(ImVec2(ed->ScopeVoid[3].x, ed->ScopeVoid[3].y), ImVec2(ed->ScopeVoid[3].z, ed->ScopeVoid[3].w), void_col);
 
     // Face band (Begin line + strip row), end band, rails, outline, kind-hue rule.
     dl->AddRectFilled(smn, ImVec2(smx.x, smn.y + band_h), band_bg, rounding, ImDrawFlags_RoundCornersTop);
