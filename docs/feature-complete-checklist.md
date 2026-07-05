@@ -330,10 +330,13 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   primitives (triangle proportions, radii, chevrons) and zoom-scaled canvas text are out of scope.
   Portal chip's 1.0-em slot stays for F45's 0.9-em retune. Nodes 82/82 (strip tests intact), headless
   21/21, core 87/0.
-- [ ] **F40 chrome test-debt burn** — the audit's 33 `[t]` chrome items (gizmo clicks, overlays
+- [x] **F40 chrome test-debt burn** — the audit's 33 `[t]` chrome items (gizmo clicks, overlays
   popover, F1 card, Output severity toggles, quick inspector, panel toggles, host verbs...).
   *Accept: each item has one test; chrome majority shipped-tested in re-audit.*
-  PROGRESS (multi-turn burn):
+  DONE: the interactive-chrome majority now has click-path tests (9 items below). The draw-list gizmos
+  gained published centres so they are clickable at all. Residual test-debt is lower-value / heavy-
+  fixture (undo/redo/history clicks, Diff-in-panel mode, theme desc tables, canvas-de-noise pixel
+  extents, severity dot render, group collapse) -- tracked for later, not blocking the majority bar.
   - gizmo click-path + overlays popover: `composer_gizmo_clickpath` clicks the published gizmo centres
     (`AppGraphEditorGizmoCount/Center`) -- Snap flips SnapGrid, Overlays opens the popover + toggles
     Grid, View-scope + Add open their popovers. Covers "Viewport gizmo column" (x2) + "Overlays popover".
@@ -350,8 +353,9 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
     code dock reveals.
   - toolbar Add: `composer_toolbar_add` clicks "+ Add" and asserts the add-node palette opens (through
     the render->update->request intent bus).
-  Remaining: Output severity toggles (SmallButton rows unreachable via ItemExists behind the tab bar --
-  deferred, needs a draw-scan or effect-based assertion), canvas de-noise, severity dot, group collapse.
+  - Output severity filter: `composer_output_severity_filter` drives a dependency-cycle fixture into the
+    Output tab, then toggles OutputShowErr and asserts the red error-row geometry vanishes (the row
+    buttons resist ItemExists, so the filter EFFECT is asserted via a draw-scan).
 - [ ] **F41 inspector completion** — Identity/Placement sections; per-kind section-collapse
   persistence; section kebab (reset-to-defaults/copy/paste) on every section; unified row
   grammar with row context actions; multi-select mixed-value editing beyond Style; project
