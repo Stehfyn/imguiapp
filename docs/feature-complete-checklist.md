@@ -317,9 +317,19 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   pointer to rest / hover / drag and asserts gesture < rest < hover after the fade settles. Headless
   20/20, nodes 82/82, core 87/0. (Other overlays can adopt the same table; the ladder idiom + the
   single fade constant are now established.)
-- [ ] **F39 typography/spacing audit** — enforce 1.0/0.9/0.8 em ladder + 0.25 em quanta from the
+- [x] **F39 typography/spacing audit** — enforce 1.0/0.9/0.8 em ladder + 0.25 em quanta from the
   style table (ad-hoc 0.7-0.8 factors normalized).
   *Accept: grep-audit test over the style constants; visual capture reviewed.*
+  DONE: the chrome scalar table (`ImGuiAppComposerMotion`) gained the type ladder (TypeBody 1.0 /
+  TypeSecondary 0.9 / TypeCaption 0.8) + SpaceQuantum 0.25. Every chrome PushFont size now reads a
+  ladder constant instead of a literal: the off-ladder text sizes (phase captions 0.78, scope-strip
+  kind readout 0.7 + its 0.75 measurement) normalized to the caption tier; the already-0.8 sites route
+  through the constant. `composer_type_ladder` audits the table (tiers exactly {0.8,0.9,1.0}, strictly
+  ascending, each on-ladder; quantum 0.25); a source grep confirms no `PushFont(... * 0.N)` literal
+  remains. The 0.25-em spacing factors (em*0.75 indents etc.) were already on the quantum; geometry
+  primitives (triangle proportions, radii, chevrons) and zoom-scaled canvas text are out of scope.
+  Portal chip's 1.0-em slot stays for F45's 0.9-em retune. Nodes 82/82 (strip tests intact), headless
+  21/21, core 87/0.
 - [ ] **F40 chrome test-debt burn** — the audit's 33 `[t]` chrome items (gizmo clicks, overlays
   popover, F1 card, Output severity toggles, quick inspector, panel toggles, host verbs...).
   *Accept: each item has one test; chrome majority shipped-tested in re-audit.*

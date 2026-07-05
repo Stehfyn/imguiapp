@@ -1105,7 +1105,7 @@ namespace
         // Phase captions: dim small-type row naming the flow under each cluster.
         {
           static const char* caps[4] = { "compose", "iterate", "persist", "produce" };
-          ImGui::PushFont(nullptr, ImGui::GetFontSize() * 0.78f);
+          ImGui::PushFont(nullptr, ImGui::GetFontSize() * ImGui::AppComposerGetMotion()->TypeCaption);   // F39 caption tier (was 0.78)
           ImGui::SetCursorPosX(cap_x[0]);
           ImGui::TextDisabled("%s", caps[0]);
           for (int i = 1; i < 4; i++)

@@ -902,14 +902,22 @@ namespace ImGui
   // global style also reseeds AppGraphChromeTheme, discarding live inspector edits.
   IMGUI_API void AppComposerStyleFromTheme(ImGuiAppComposerStyle* style);
 
-  // Motion + quietness idiom (F38): the overlay opacity ladder + the single transient-chrome fade.
-  // Scalar constants (not theme-derived); one table, so no overlay hard-codes an alpha of its own.
+  // Composer chrome scalar idiom -- one table for the motion (F38) and type/space ladders (F39). Not
+  // theme-derived; the single source so no overlay hard-codes an alpha, and no chrome text hard-codes
+  // an off-ladder size. Type tiers are RATIOS of the body font size; spacing steps in SpaceQuantum em.
   struct ImGuiAppComposerMotion
   {
+    // Motion + quietness (F38)
     float OverlayRest    = 0.55f;    // an idle canvas overlay sits quiet
     float OverlayHover   = 1.00f;    // ... brightens to full when the pointer rests on it
     float OverlayGesture = 0.20f;    // ... and recedes during a wire-drag / marquee (get out of the way)
     float FadeMs         = 150.0f;   // single linear alpha fade between those states (and for transient chrome)
+    // Typography ladder (F39): chrome text tiers, strictly descending
+    float TypeBody       = 1.00f;    // primary chrome text
+    float TypeSecondary  = 0.90f;    // secondary tier (chip labels, sub-rows)
+    float TypeCaption    = 0.80f;    // smallest tier (dense readouts, code gutter, scope strip)
+    // Spacing quantum (F39): chrome gaps step in this em fraction
+    float SpaceQuantum   = 0.25f;
   };
   IMGUI_API ImGuiAppComposerMotion* AppComposerGetMotion();
 

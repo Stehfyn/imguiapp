@@ -5493,17 +5493,18 @@ namespace ImGui
       const char* mname = tn->Draft.Name[0] ? tn->Draft.Name : AppNodeKindName(tn->Kind);
       char mcfg[96];
       AppNodeConfigSummary(tn, mcfg, IM_ARRAYSIZE(mcfg));
-      ImGui::PushFont(ed->CodeFont, em * 0.8f);
+      const float type_cap = em * AppComposerGetMotion()->TypeCaption;   // F39: strip text on the caption tier
+      ImGui::PushFont(ed->CodeFont, type_cap);
       float row1_need = ImGui::CalcTextSize("Begin(\"").x + ImGui::CalcTextSize(mname).x + ImGui::CalcTextSize("\")").x;
       ImGui::PopFont();
-      ImGui::PushFont(nullptr, em * 0.75f);
+      ImGui::PushFont(nullptr, type_cap);
       row1_need += em * 0.5f + ImGui::CalcTextSize(AppNodeKindTag(tn->Kind)).x + (mcfg[0] ? em * 1.0f + ImGui::CalcTextSize(mcfg).x : 0.0f);
       ImGui::PopFont();
 
       ImVector<int> mseq;
       AppScopeSequenceIds(g, &mseq);
       float row2_need = em * 1.5f;   // the strip's paragraph indent
-      ImGui::PushFont(nullptr, em * 0.8f);
+      ImGui::PushFont(nullptr, type_cap);
       const float arrow_w = em * 0.45f;   // draw-list chevron (the arrow glyph is not in the atlas)
       for (int i = 0; i < mseq.Size; i++)
       {
@@ -5575,7 +5576,7 @@ namespace ImGui
     // node content: node-title scale, clamped so it can never fill its band.
     const char* name = tn->Draft.Name[0] ? tn->Draft.Name : AppNodeKindName(tn->Kind);
     const float row1_top = smn.y + tpad_m * sc;
-    const float call_sz = em * 0.8f;   // fixed em multiple: same ratio to its row at every zoom
+    const float call_sz = em * AppComposerGetMotion()->TypeCaption;   // F39 caption tier: same ratio to its row at every zoom
     ImGui::PushFont(ed->CodeFont, call_sz);
     char idb[IM_LABEL_SIZE + 2];
     ImFormatString(idb, IM_ARRAYSIZE(idb), "\"%s\"", name);
@@ -5590,7 +5591,7 @@ namespace ImGui
     const float ey = smx.y - end_h + (end_h - ImGui::GetTextLineHeight()) * 0.5f;
     dl->AddText(ImVec2(smn.x + em * 0.75f, ey), muted, "End()");
     ImGui::PopFont();
-    ImGui::PushFont(nullptr, em * 0.7f);
+    ImGui::PushFont(nullptr, call_sz);   // F39: kind readout shares the caption tier (was an off-ladder 0.7)
     const char* kind_word = AppNodeKindTag(tn->Kind);
     const float ky = row1_top + (row1_h - ImGui::GetTextLineHeight()) * 0.5f;
     dl->AddText(ImVec2(tx, ky), muted, kind_word);
@@ -5639,7 +5640,7 @@ namespace ImGui
 
     // One type scale for the whole row (em multiple: zoom-proportional); chips keep air inside the row.
     int clicked = -1;
-    ImGui::PushFont(nullptr, em * 0.8f);
+    ImGui::PushFont(nullptr, em * AppComposerGetMotion()->TypeCaption);   // F39 caption tier
     const float th = ImGui::GetTextLineHeight();
     const float ch = (row_mx.y - row_mn.y) * 0.92f;
     const float arrow_w = em * 0.45f;   // draw-list chevron (the arrow glyph is not in the atlas)
