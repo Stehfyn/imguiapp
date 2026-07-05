@@ -320,6 +320,16 @@ namespace
     ComposerHostCmd_ToggleLive,
   };
 
+  // App-time transport (F29): a per-frame snapshot ring of the mirror's snapshottable (trivially-copyable)
+  // controls plus the scrub position. Lives OFF GraphDocData's snapshotted bytes -- the doc itself is
+  // opaque (non-POD), so AppStateSnapshot skips it and never captures this history. Heap, process lifetime.
+  struct ComposerTransport
+  {
+    ImGuiAppStateHistory History;
+    bool                 Frozen = false;   // engaged: hold + scrub instead of record
+    int                  Frame  = 0;       // scrub position (0..Count-1)
+  };
+
   struct GraphDocData
   {
     ImGuiAppGraph Graph;
@@ -346,6 +356,7 @@ namespace
     ImGuiID              LayoutSavedHash; // hash of the last-persisted layout fields (change detection)
     float                LayoutSaveT;     // debounce: seconds until the next layout-save check
     ImGuiApp*            Mirror;          // THE running app: the one hosting this control (set in OnInitialize)
+    ComposerTransport*   Transport;       // App-time scrubber state (heap; opaque, never snapshotted) -- F29
     int                  NumUnbuilt;      // per-frame count: authored nodes with no live counterpart in the running
                                       // binary -- nonzero == stale until Generate + recompile + relaunch
   };
@@ -472,6 +483,7 @@ namespace
       data->LayoutSavedHash = 0;
       data->LayoutSaveT = 0.0f;
       data->Mirror      = app;     // ONE application: the mirror IS the app hosting this control
+      data->Transport   = IM_NEW(ComposerTransport)();   // App-time scrubber (F29); heap, process lifetime
       data->NumUnbuilt  = 0;
       ImStrncpy(data->GraphPath,  "imguix_node_graph.txt",      sizeof(data->GraphPath));
       ImStrncpy(data->HeaderPath, "imguix_generated_control.h", sizeof(data->HeaderPath));
@@ -492,6 +504,25 @@ namespace
       if (data->Mirror != nullptr)
       {
         ImGui::BuildAppLiveGraph(data->Mirror, &data->Graph);
+      }
+
+      // App-time transport (F29). Gated on ShowLive + a mirror. While running, snapshot the mirror's
+      // snapshottable (POD) controls each frame and track the newest frame; while frozen, hold + restore
+      // the scrubbed frame's bytes back into the app (time travel). Opaque controls (this chrome) are
+      // skipped by AppStateSnapshot, so only the user app's state rewinds.
+      if (data->Mirror != nullptr && data->Transport != nullptr && data->ShowLive)
+      {
+        ComposerTransport* tr = data->Transport;
+        if (!tr->Frozen)
+        {
+          ImGui::AppStateSnapshot(data->Mirror, &tr->History);
+          tr->Frame = tr->History.Count - 1;   // live: follow the newest frame
+        }
+        else if (tr->History.Count > 0)
+        {
+          tr->Frame = ImClamp(tr->Frame, 0, tr->History.Count - 1);
+          ImGui::AppStateRestore(data->Mirror, &tr->History, tr->Frame);
+        }
       }
 
       // Publish the frame's derived values once; GraphDoc updates first (push order), so all consumers see the same values.
@@ -903,6 +934,39 @@ namespace
         if (show_live)
           ImGui::PopStyleColor();
         ImGui::SetItemTooltip("Show / hide read-only nodes mirrored from the running app");
+
+        // App-time transport (F29): freeze the running app and scrub its state history. Only offered with
+        // the live mirror shown; lit while frozen. Writes transient scrub state (never snapshotted).
+        if (show_live && doc->Transport != nullptr)
+        {
+          ComposerTransport* tr = doc->Transport;
+          const int frames = tr->History.Count;
+          ImGui::SameLine();
+          if (tr->Frozen)
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.52f, 0.39f, 0.14f, 1.0f));   // amber: app time engaged
+          if (ImGui::Button(tr->Frozen ? ICON_FA_PLAY "###apptime" : ICON_FA_PAUSE "###apptime"))
+            tr->Frozen = !tr->Frozen;
+          if (tr->Frozen)
+            ImGui::PopStyleColor();
+          ImGui::SetItemTooltip(tr->Frozen ? "Resume the running app (App time)" : "Freeze the app to scrub its state history (App time)");
+          if (tr->Frozen)
+          {
+            ImGui::SameLine();
+            if (ImGui::Button(ICON_FA_BACKWARD_STEP "###apptimeback"))
+              tr->Frame = ImMax(0, tr->Frame - 1);
+            ImGui::SetItemTooltip("Step back one frame");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(em * 8.0f);
+            int f = frames > 0 ? tr->Frame : 0;
+            if (ImGui::SliderInt("###apptimescrub", &f, 0, frames > 0 ? frames - 1 : 0, "f %d"))
+              tr->Frame = f;
+            ImGui::SetItemTooltip("Scrub App-time frame (0 = oldest, %d = newest)", frames > 0 ? frames - 1 : 0);
+            ImGui::SameLine();
+            if (ImGui::Button(ICON_FA_FORWARD_STEP "###apptimefwd"))
+              tr->Frame = frames > 0 ? ImMin(frames - 1, tr->Frame + 1) : 0;
+            ImGui::SetItemTooltip("Step forward one frame");
+          }
+        }
 
         // Palette pick from last frame's canvas folds into the same temp flags the buttons set.
         switch (ImGui::AppGraphConsumeHostCommand(&doc->Graph))
@@ -2091,6 +2155,18 @@ namespace ImGui
     if (doc == nullptr)
       return nullptr;
     return &doc->Graph;
+  }
+
+  // App-time transport frame count (F29): how many state snapshots the running composer has recorded
+  // (0 when no transport / not recording). Exposed for the headless scrub test.
+  IMGUI_API int AppComposerAppTimeFrames(ImGuiApp* host)
+  {
+    if (host == nullptr)
+      return 0;
+    GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiType<GraphDocData>::ID);
+    if (doc == nullptr || doc->Transport == nullptr)
+      return 0;
+    return doc->Transport->History.Count;
   }
 
   //-----------------------------------------------------------------------------

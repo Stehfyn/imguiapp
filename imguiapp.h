@@ -450,6 +450,10 @@ namespace ImGui
   // before composition. Test harnesses drive the editor camera through it.
   IMGUI_API ::ImGuiAppGraph* AppLayerDemoGraph(ImGuiApp* host);
 
+  // App-time transport (F29): number of state snapshots the running composer has recorded of its
+  // snapshottable controls (0 = none). Drives the toolbar scrubber; exposed for the headless scrub test.
+  IMGUI_API int AppComposerAppTimeFrames(ImGuiApp* host);
+
   // Push every Active (in-range) entry; returns the number pushed -- pop with PopStyleVar/PopStyleColor(count).
   IMGUI_API int PushAppStyleMods(const ImGuiAppStyleModDesc* mods, int count);
   IMGUI_API int PushAppColorMods(const ImGuiAppColorModDesc* mods, int count);
