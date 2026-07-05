@@ -951,6 +951,11 @@ namespace ImGui
   // `origin`. Returns controls added. (Deps, command selections and event blocks import in later passes.)
   IMGUI_API int                 AppGraphImportControlsFromCode(ImGuiAppGraph* g, const char* code, ImVec2 origin);
 
+  // Whole-program import (F23): seed the foundation layers, then import controls (and, as they land,
+  // custom layers, standalone structs, windows/sidebars and hosting) so that emit -> import -> emit is a
+  // byte-equal fixed point. Returns controls added.
+  IMGUI_API int                 AppGraphImportProgram(ImGuiAppGraph* g, const char* code);
+
   // Undo / redo. The editor calls AppGraphCheckpoint once per frame; snapshots coalesce while the
   // mouse is held or a widget is being edited, so a drag or inline rename folds into one step.
   // Ctrl+Z / Ctrl+Y are handled inside ShowAppGraphEditor; Undo/Redo are also exposed for a toolbar.

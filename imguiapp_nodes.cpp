@@ -11829,6 +11829,11 @@ namespace ImGui
               ImStrncpy(ev.TempField, tf, IM_ARRAYSIZE(ev.TempField));
               ImStrncpy(ev.Command, cmd, IM_ARRAYSIZE(ev.Command));
               ctrl->Events.push_back(ev);
+              // `dst` is the synthesized `<Cmd>Pending` latch: it is derived, not authored, and the
+              // emitter re-adds it. Drop it from the imported persist fields so re-emission doesn't double it.
+              for (int fi = ctrl->Draft.PersistFields.Size - 1; fi >= 0; fi--)
+                if (strcmp(ctrl->Draft.PersistFields.Data[fi].Name, dst) == 0)
+                  ctrl->Draft.PersistFields.erase(&ctrl->Draft.PersistFields.Data[fi]);
             }
           }
           else
@@ -11971,6 +11976,61 @@ namespace ImGui
       }
     }
     return added;
+  }
+
+  // Import the CommandLayer's command DEFINITIONS from the emitted `enum AppCommand { ... }`. Every entry
+  // but the None/Shutdown builtins and the COUNT terminator is a user command; add each to the layer.
+  static void AppImportCommandEnum(ImGuiAppGraph* g, const char* code)
+  {
+    const char* en = strstr(code, "enum AppCommand");
+    if (en == nullptr) return;
+    const char* body = strchr(en, '{');
+    const char* e = body != nullptr ? strchr(body, '}') : nullptr;
+    if (body == nullptr || e == nullptr) return;
+
+    ImGuiAppNode* cmdlayer = nullptr;
+    for (int i = 0; i < g->Nodes.Size; i++)
+      if (g->Nodes.Data[i].Kind == ImGuiAppNodeKind_Layer && g->Nodes.Data[i].LayerType == ImGuiAppLayerType_Command)
+      {
+        cmdlayer = &g->Nodes.Data[i];
+        break;
+      }
+    if (cmdlayer == nullptr) return;
+
+    const char* s = body;
+    while ((s = AppImportFind(s, e, "AppCommand_")) != nullptr)
+    {
+      const char* id = s + strlen("AppCommand_");
+      char name[IM_LABEL_SIZE];
+      int  ni = 0;
+      while (id < e && AppCImportIsIdent(*id) && ni < IM_LABEL_SIZE - 1) name[ni++] = *id++;
+      name[ni] = 0;
+      s = id;
+      if (name[0] == 0 || strcmp(name, "None") == 0 || strcmp(name, "Shutdown") == 0 || strcmp(name, "COUNT") == 0)
+        continue;
+      bool dup = false;
+      for (int k = 0; k < cmdlayer->Commands.Size && !dup; k++)
+        dup = strcmp(cmdlayer->Commands.Data[k].Name, name) == 0;
+      if (!dup)
+        AppNodeAddCommand(cmdlayer, name);
+    }
+  }
+
+  int AppGraphImportProgram(ImGuiAppGraph* g, const char* code)
+  {
+    IM_ASSERT(g != nullptr);
+    if (code == nullptr)
+      return 0;
+
+    // Every emitted program brings up the foundation layers, so seed them first (idempotent). Their
+    // node order matches EnsureFoundation, which matches the emitter's layer push order.
+    AppGraphEnsureFoundation(g);
+
+    // CommandLayer definitions (the AppCommand enum), then controls (with their inline Data/TempData
+    // fields, deps, commands and events).
+    AppImportCommandEnum(g, code);
+    const int controls = AppGraphImportControlsFromCode(g, code, ImVec2(0.0f, 0.0f));
+    return controls;
   }
 
   //-----------------------------------------------------------------------------
