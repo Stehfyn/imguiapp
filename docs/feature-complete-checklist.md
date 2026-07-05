@@ -366,6 +366,8 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
     fields wired to GridPos), above the collapsible sections. `step75_inspector_placement` asserts the
     fields render and ItemInputValue writes through to the node. (Note: DragFloatN nests its components
     under empty ids -- not ItemExists-addressable -- so single X/Y DragFloats are used.)
+  - Identity section: an always-visible Identity group -- editable Name (where authorable) + a kind/id
+    readout. `step76_inspector_identity` edits Name and asserts it writes through to the node.
   Remaining: Identity section, per-kind section-collapse persistence, section kebab (reset/copy/paste),
   unified row grammar + row context actions, multi-select mixed-value beyond Style, project logging
   section, quick-inspector pin/dismiss/"Inspect here".

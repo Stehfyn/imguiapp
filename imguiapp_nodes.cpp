@@ -4499,12 +4499,18 @@ namespace ImGui
       return;
     }
 
+    // Identity (F41): who this node is -- editable name (where a name is authorable) plus the kind and
+    // stable id readout. Rides above the collapsible sections, always visible.
+    ImGui::SeparatorText(ICON_FA_ID_CARD "  Identity");
     if (n->Kind != ImGuiAppNodeKind_Layer || n->LayerType == ImGuiAppLayerType_Custom)   // custom layer name = its class
     {
       ImGui::SetNextItemWidth(ImGui::GetFontSize() * 14.0f);
       ImGui::InputText("Name", n->Draft.Name, IM_ARRAYSIZE(n->Draft.Name));
-      ImGui::Separator();
     }
+    else
+      ImGui::TextDisabled("%s (core layer)", AppLayerNodeName(n->LayerType));
+    ImGui::TextDisabled("%s  \xc2\xb7  id %d", AppNodeKindName(n->Kind), n->Id);   // kind + stable id
+    ImGui::Separator();
 
     // Placement (F41): the node's authored root position -- fundamental identity, so it rides above the
     // collapsible sections (always visible). Layers are column-packed (position derived), no placement.
