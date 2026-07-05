@@ -149,10 +149,17 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
 
 ## P4 — ingest closes
 
-- [ ] **F22 control-skeleton importer** — parse the F16 emitter's full control output (fields,
+- [~] **F22 control-skeleton importer** — parse the F16 emitter's full control output (fields,
   dep params, event blocks, command emits) back into Control + struct nodes + links; structs
   parity kept.
   *Accept: import test per construct.*
+  IN PROGRESS: AppGraphImportControlsFromCode imports control + persist/temp FIELDS (step63), DEP edges
+  (matched producer->consumer by Data type name) and COMMAND selections (step64). REMAINING: EVENT blocks.
+  The event grammar is mapped -- OnUpdate guarded pairs (Rising `temp&&!last`, Falling `!temp&&last`,
+  Changed `^`/`!=`, Active `temp`) with SetField body `data->dst = <expr>` and edge-EmitCommand latch
+  `data-><Cmd>Pending = true`, plus Active-EmitCommand + the latch->command map in OnGetCommand
+  (`*cmd = (ImGuiAppCommand)AppCommand_<C>`). Skip the `= false` re-arm lines. NEXT: write the event
+  parser + a test per event kind; then this closes and F23 (fixed point) can build on it.
 - [ ] **F23 emit→import→emit fixed point** — corpus enumerated: control with persist+temp
   fields; deps hard and optional; events (set-field and emit-command); commands; standalone
   struct; hosted and unhosted control; custom layer. Second emission byte-equal to the first.
