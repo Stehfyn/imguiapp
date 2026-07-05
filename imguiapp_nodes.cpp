@@ -5201,11 +5201,11 @@ namespace ImGui
     const float pad_m = em_m * 0.9f;
     // Every band metric is an em multiple: em scales with zoom, so the band's proportions are
     // identical at every zoom (FrameHeight carries additive style padding and is NOT proportional).
-    const float tpad_m = em_m * 0.35f;              // clear air above the Begin line
+    const float tpad_m = em_m * 0.45f;              // clear air above the Begin line
     const float row1_m = em_m * 1.3f;               // the Begin line
-    const float rgap_m = em_m * 0.4f;               // clear air between the Begin line and the strip
+    const float rgap_m = em_m * 0.8f;               // clear air between the Begin line and the strip
     const float row2_m = em_m * 1.3f;               // the runs strip row
-    const float bpad_m = em_m * 0.35f;              // clear air between the strip and the band rule
+    const float bpad_m = em_m * 0.45f;              // clear air between the strip and the band rule
     const float band_m = tpad_m + row1_m + rgap_m + row2_m + bpad_m;   // face band = both rows + their spacing, one plate
     const float end_m = em_m * 1.1f;                // the End() band
     const float rail_m = em_m * 1.0f;               // portal rails
