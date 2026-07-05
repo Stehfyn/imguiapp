@@ -341,8 +341,14 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
     geometry appears/disappears (draw-list overlay, no id; F1 binding covered by the F34 registry test).
   - quick inspector: `composer_quick_inspector` selects a node, toggles QuickInspector, asserts the
     `###quick_insp` window shows then hides.
-  Remaining: Output severity toggles (panel/tab plumbing -- deferred), panel toggles, host verbs,
-  status-strip click-to-Output, canvas de-noise, severity dot, group collapse, ...
+  - host verbs in palette: `step74_host_verb_palette` (nodes) registers host commands, opens the
+    operator palette, clicks the "File: Save graph" row, and asserts AppGraphConsumeHostCommand returns
+    its id (the editor never acts for the host).
+  - panel toggles: already covered -- `composer_code_toggle` (Code dock) + `composer_status_zones`
+    (outliner/inspector toggles).
+  Remaining: Output severity toggles (SmallButton rows unreachable via ItemExists behind the tab bar --
+  deferred, needs a draw-scan or effect-based assertion), status-strip click-to-Output, canvas de-noise,
+  severity dot, group collapse.
 - [ ] **F41 inspector completion** — Identity/Placement sections; per-kind section-collapse
   persistence; section kebab (reset-to-defaults/copy/paste) on every section; unified row
   grammar with row context actions; multi-select mixed-value editing beyond Style; project
