@@ -9762,6 +9762,38 @@ namespace ImGui
         prev_rank = rank;
       }
     }
+
+    // (g) F59 authored order vs. topology. Codegen drains controls in the authored order where the data
+    // dependencies allow (GenerateAppGraphCodeEx). An order that lists a consumer control before one of its
+    // producers is topologically impossible -- producers must emit first -- so the authored push order can't
+    // be honored. Flag it rather than let codegen silently emit a different order than the one authored.
+    for (int oi = 0; oi < g->ScopeOrders.Size; oi++)
+    {
+      const ImGuiAppScopeOrder* ord = &g->ScopeOrders.Data[oi];
+      for (int cj = 0; cj < ord->NodeIds.Size; cj++)
+      {
+        const int cons_id = ord->NodeIds.Data[cj];
+        const ImGuiAppNode* cons = AppGraphFindNodeConst(g, cons_id);
+        if (cons == nullptr || cons->IsLive || cons->Kind != ImGuiAppNodeKind_Control)
+          continue;
+        for (int li = 0; li < g->Links.Size; li++)
+        {
+          if (g->Links.Data[li].Kind != ImGuiAppEdgeKind_Data)
+            continue;
+          if (AppGraphPortOwnerId(g, g->Links.Data[li].EndAttr) != cons_id)
+            continue;
+          const int prod_id = AppGraphPortOwnerId(g, g->Links.Data[li].StartAttr);
+          const ImGuiAppNode* prod = AppGraphFindNodeConst(g, prod_id);
+          if (prod == nullptr || prod->Kind != ImGuiAppNodeKind_Control)
+            continue;
+          int pi = -1;
+          for (int k = 0; k < ord->NodeIds.Size; k++)
+            if (ord->NodeIds.Data[k] == prod_id) { pi = k; break; }
+          if (pi > cj)
+            AppValidatePushIssue(out, cons_id, 2, "order record places '%s' before its data producer '%s' -- codegen emits producers first", cons->Draft.Name, prod->Draft.Name);
+        }
+      }
+    }
   }
 
   // Render one field list as live mock widgets. Numeric state is kept in the window's ImGuiStorage keyed by the
@@ -10045,7 +10077,7 @@ namespace ImGui
     return nullptr;
   }
 
-  bool AppGraphTopoOrder(const ImGuiAppGraph* g, ImVector<int>* out_control_ids, char* err, int err_size, bool include_live, ImVector<int>* out_cycle)
+  bool AppGraphTopoOrder(const ImGuiAppGraph* g, ImVector<int>* out_control_ids, char* err, int err_size, bool include_live, ImVector<int>* out_cycle, const ImVector<int>* priority)
   {
     IM_ASSERT(g != nullptr && out_control_ids != nullptr);
     out_control_ids->clear();
@@ -10088,11 +10120,30 @@ namespace ImGui
     done.resize(ctrl.Size);
     for (int i = 0; i < ctrl.Size; i++) done.Data[i] = false;
 
+    // F59: with a push-order preference (the authored per-scope order), the ready set drains in that
+    // preference where the topology allows -- among zero-in-degree controls the one ranked earliest in
+    // `priority` wins; unranked controls keep node (ctrl) order, so no preference reproduces the plain sort.
     for (int produced = 0; produced < ctrl.Size; produced++)
     {
       int pick = -1;
+      int pick_ranked = 1;   // lexicographic key (ranked?0:1, rank): ranked candidates drain first, in rank order
+      int pick_rank = 0;
       for (int i = 0; i < ctrl.Size; i++)
-        if (!done.Data[i] && indeg.Data[i] == 0) { pick = i; break; }
+      {
+        if (done.Data[i] || indeg.Data[i] != 0)
+          continue;
+        int ranked = 1;
+        int rank = i;          // unranked tiebreak = node order, matching the no-preference path byte-for-byte
+        if (priority != nullptr)
+          for (int p = 0; p < priority->Size; p++)
+            if (priority->Data[p] == ctrl.Data[i]) { ranked = 0; rank = p; break; }
+        if (pick < 0 || ranked < pick_ranked || (ranked == pick_ranked && rank < pick_rank))
+        {
+          pick = i;
+          pick_ranked = ranked;
+          pick_rank = rank;
+        }
+      }
 
       if (pick < 0)
       {
@@ -11425,10 +11476,18 @@ namespace ImGui
     };
 
     // 1) Topo order of ALL controls, authored and live (producers before consumers): the generated
-    // program reproduces the whole running composition, not just the authored subset.
+    // program reproduces the whole running composition, not just the authored subset. F59: the emitted
+    // push order follows the authored per-scope order (F58 ScopeOrders, concatenated into one preference)
+    // wherever the topology allows; a consumer authored before its producer can't be honored (producers
+    // emit first) -- AppGraphValidate flags that conflict, and the sort falls back to dependency order.
+    ImVector<int> pushpref;
+    for (int oi = 0; oi < g->ScopeOrders.Size; oi++)
+      for (int k = 0; k < g->ScopeOrders.Data[oi].NodeIds.Size; k++)
+        pushpref.push_back(g->ScopeOrders.Data[oi].NodeIds.Data[k]);
+
     ImVector<int> order;
     char err[160];
-    if (!AppGraphTopoOrder(g, &order, err, IM_ARRAYSIZE(err), true))
+    if (!AppGraphTopoOrder(g, &order, err, IM_ARRAYSIZE(err), true, nullptr, &pushpref))
     {
       out->appendf("// codegen aborted: %s\n", err[0] ? err : "dependency cycle");
       return;
@@ -12049,19 +12108,24 @@ namespace ImGui
       }
       else if (strncmp(p, "Order=", 6) == 0)
       {
-        ImGuiAppScopeOrder ord;
+        // Fill the record IN PLACE: ImVector::push_back memcpys, so pushing a local whose NodeIds already owns a
+        // heap buffer would alias it, then the local's destructor frees it (use-after-free). Push the empty record
+        // first (NodeIds Data == null: shallow copy is safe), then grow its NodeIds on the stored element.
         char* s = p + 6;
-        ord.ScopeId = (int)strtol(s, &s, 10);
+        const int scope_id = (int)strtol(s, &s, 10);
+        g->ScopeOrders.push_back(ImGuiAppScopeOrder());
+        ImGuiAppScopeOrder* ord = &g->ScopeOrders.back();
+        ord->ScopeId = scope_id;
         while (*s == ',')
         {
           char* e = s + 1;
           const int id = (int)strtol(s + 1, &e, 10);
           if (e == s + 1) break;   // no digits after the comma: stop
-          ord.NodeIds.push_back(id);
+          ord->NodeIds.push_back(id);
           s = e;
         }
-        if (ord.NodeIds.Size > 0)
-          g->ScopeOrders.push_back(ord);
+        if (ord->NodeIds.Size == 0)
+          g->ScopeOrders.pop_back();   // no members parsed: drop the empty record
       }
       else if (strncmp(p, "Bind=", 5) == 0)
       {
