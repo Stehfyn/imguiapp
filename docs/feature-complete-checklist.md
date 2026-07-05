@@ -130,9 +130,13 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   change (doc->CodegenWarnCount) and shown as an amber chip beside Generate; clicking lists the marker
   lines in a popup. Absent when the emission is clean. step61 pins: an undefined-command event warns
   (count>=1, list captures the line); defining the command clears it to zero.
-- [ ] **F20 custom-layer emission locked** — authored Custom layer → subclass skeleton +
+- [x] **F20 custom-layer emission locked** — authored Custom layer → subclass skeleton +
   `ImGui::PushAppLayer<Name>` at its stack position, byte-locked + compiled.
   *Accept: extends the codegen-proof corpus.*
+  DONE: the contract graph now authors a Custom "Analytics" layer. It emits a full ImGuiAppLayer subclass
+  skeleton (OnAttach/OnDetach/OnUpdate/OnRender) and PushAppLayer<Analytics>(app) at its position in the
+  bring-up stack (after the foundation layers, node order). Byte-locked by ProofDrift and compiled via the
+  #included contract header; ProofBehavior dispatches over the shell it belongs to.
 - [ ] **F21 cycle surfacing** — topo cycle name surfaced in the status strip + Select verb jumps
   selection to the cycle's nodes. Renders as plain status text until F33's HEALTH pill exists,
   then rides it (the P3 deliverable is the computation + verb, not the pill styling).
