@@ -5230,7 +5230,6 @@ namespace ImGui
       AppScopeSequenceIds(g, &mseq);
       float row2_need = 0.0f;
       ImGui::PushFont(nullptr, em * 0.8f);
-      row2_need += ImGui::CalcTextSize("runs").x + em * 0.6f;
       const float arrow_w = em * 0.45f;   // draw-list chevron (the arrow glyph is not in the atlas)
       for (int i = 0; i < mseq.Size; i++)
       {
@@ -5368,8 +5367,6 @@ namespace ImGui
     int clicked = -1;
     ImGui::PushFont(nullptr, em * 0.8f);
     const float th = ImGui::GetTextLineHeight();
-    dl->AddText(ImVec2(x, cy - th * 0.5f), AppThemeNeutral(0.45f), "runs");
-    x += ImGui::CalcTextSize("runs").x + em * 0.7f;
     const float ch = (row_mx.y - row_mn.y) * 0.92f;
     const float arrow_w = em * 0.45f;   // draw-list chevron (the arrow glyph is not in the atlas)
     for (int i = 0; i < seq.Size; i++)
