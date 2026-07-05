@@ -9,12 +9,13 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
 
 ## P1 — persistence + undo rails
 
-- [ ] **F01 round-trip harness** — test: build a maximal graph (every node kind, port set,
+- [x] **F01 round-trip harness** — test: build a maximal graph (every node kind, port set,
   link kind, bindings, events, style/color mods, scope placements, prefabs, custom layer,
   authored order once F58 exists) → serialize → load → **model-equal to the original
   (field-by-field compare — byte-stability alone cannot see a field nobody serializes)** →
   reserialize → byte-identical.
-  *Accept: test red on any lossy OR unserialized record.*
+  *Accept: test red on any lossy OR unserialized record (step49 + AppGraphModelEqual; prefabs join
+  when F04 lands, authored order when F58 lands).*
 - [x] **F02 Init=/Dock= records** — serialize + load HasInitialPlacement / InitialPos /
   InitialSize / DockDir / DockSize (today inspector-editable, written by no key). Also serializes
   the window/sidebar Flags mask (same class, previously written by no key).
