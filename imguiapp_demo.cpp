@@ -1923,7 +1923,7 @@ namespace
     bool  AckReveal;         // the bottom tab bar consumed the one-shot RevealPanel intent this frame
     bool  ClearLog;          // Output tab: clear the document log
     bool  ToggleDiffMode;    // Code tab header: flip whole-program <-> diff-vs-saved
-    int   StampPrefab;       // prefab index to instantiate (-1 = none)
+    int   StampPrefab;       // 1-based prefab index to stamp; 0 = none, so a zero-init (first-frame) TempData stamps nothing
   };
 
   // Empty selection shows the document, in the same section grammar as the node inspector.
@@ -2035,7 +2035,7 @@ namespace
         ImGui::TextUnformatted(ImGui::AppGraphPrefabName(&doc->Graph, i));
         ImGui::SameLine(ImGui::GetContentRegionMax().x - em * 4.0f);
         if (ImGui::SmallButton("Stamp"))
-          temp_data->StampPrefab = i;
+          temp_data->StampPrefab = i + 1;
         ImGui::SetItemTooltip("Instantiate this prefab on the canvas (fresh ids, selected)");
         ImGui::PopID();
       }
@@ -2118,10 +2118,11 @@ namespace
         ImGui::AppGraphRequestFitAll(&doc->Graph);
         DocLog(doc, 0, "loaded graph <- %s (Project)", doc->GraphPath);
       }
-      if (temp_data->StampPrefab >= 0)
+      if (temp_data->StampPrefab > 0)
       {
-        ImGui::AppGraphInstantiatePrefab(&doc->Graph, temp_data->StampPrefab, ImVec2(140.0f, 140.0f));
-        DocLog(doc, 0, "stamped prefab '%s'", ImGui::AppGraphPrefabName(&doc->Graph, temp_data->StampPrefab));
+        const int prefab_idx = temp_data->StampPrefab - 1;
+        ImGui::AppGraphInstantiatePrefab(&doc->Graph, prefab_idx, ImVec2(140.0f, 140.0f));
+        DocLog(doc, 0, "stamped prefab '%s'", ImGui::AppGraphPrefabName(&doc->Graph, prefab_idx));
       }
       data->ProjRescan -= dt;
       if (data->ProjRescan <= 0.0f)
@@ -2218,7 +2219,6 @@ namespace
     virtual void OnRender(const EditorBodyData* data, EditorBodyTempData* temp_data, const GraphDocData*) const override final
     {
       GraphDocData* doc = data->Doc;
-      temp_data->StampPrefab = -1;   // zero-init would read as prefab INDEX 0 -- "none" must be explicit
       if (doc->Mirror == nullptr)
       {
         return;
