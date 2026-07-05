@@ -245,6 +245,7 @@ enum ImGuiAppNodeKind_
   ImGuiAppNodeKind_Struct,    // a standalone data struct (PersistData/TempData), wired into a control's DataIn
   ImGuiAppNodeKind_Field,     // one field of a struct, "exploded" out for per-field wiring (drives bindings)
   ImGuiAppNodeKind_Note,      // non-semantic annotation frame (F48/R1): titled rect, excluded from codegen/validation. APPEND ONLY -- serialized as int
+  ImGuiAppNodeKind_Layout,    // dock-builder composition node (F57): Region/Split/Tabs variant in TypeName; Layout layer's first domain. APPEND ONLY -- serialized as int
   ImGuiAppNodeKind_COUNT,
 };
 
@@ -400,8 +401,9 @@ struct ImGuiAppNode
   bool                           HasInitialPlacement         = false;                  // Window/Sidebar first-use placement
   ImVec2                         InitialPos                  = ImVec2(0.0f, 0.0f);
   ImVec2                         InitialSize                 = ImVec2(0.0f, 0.0f);
-  ImGuiDir                       DockDir                     = ImGuiDir_Down;          // Sidebar dock direction
-  float                          DockSize                    = 0.0f;                   // Sidebar size
+  ImGuiDir                       DockDir                     = ImGuiDir_Down;          // Sidebar dock direction; Layout node: split side (F57)
+  float                          DockSize                    = 0.0f;                   // Sidebar size; Layout node: split fraction/size (F57)
+  char                           RegionRef[IM_LABEL_SIZE]    = "";                     // Window/Sidebar: name of the Layout region node it docks into (F57); empty = none
   ImGuiWindowFlags               Flags                       = ImGuiWindowFlags_None;  // Window/Sidebar flags
   ImVec2                         GridPos                     = ImVec2(0.0f, 0.0f);     // persisted canvas position
   bool                           HasGridPos                  = false;
@@ -605,7 +607,7 @@ struct ImGuiAppEditorState
   int                                  AppliedSel = -1;
   int                                  OutlinerRename = -1;         // node id being renamed in the tree, -1 = none
   bool                                 OutlinerRenameFocus = false;
-  bool                                 OutlinerKindVis[ImGuiAppNodeKind_COUNT] = { true, true, true, true, true, true, true, true };
+  bool                                 OutlinerKindVis[ImGuiAppNodeKind_COUNT] = { true, true, true, true, true, true, true, true, true };
   ImGuiTextFilter                      OutlinerFilter;
   bool                                 OutputShowErr = true;        // Output panel severity filters
   bool                                 OutputShowWarn = true;
