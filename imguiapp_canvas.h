@@ -87,6 +87,11 @@ namespace ImGui
   // Call between CanvasBegin and the first node; the next CanvasBeginNode restores the content channel.
   IMGUI_API ImDrawList* CanvasBackgroundDrawList(ImGuiCanvasState* c);
 
+  // Annotation hook: the canvas child's draw list AFTER CanvasEnd. Appended commands render above
+  // every merged channel (grid, plates, content) but stay inside the child's z-order -- annotations
+  // ride the canvas, they never paint over other windows (the viewport foreground list does).
+  IMGUI_API ImDrawList* CanvasAnnotationDrawList(ImGuiCanvasState* c);
+
   // ---- camera (pan in pixels, zoom unitless; screen = origin + pan + model * zoom) -------------
   IMGUI_API ImVec2 CanvasGetPan(const ImGuiCanvasState* c);
   IMGUI_API void   CanvasSetPan(ImGuiCanvasState* c, ImVec2 pan);

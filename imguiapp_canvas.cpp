@@ -1016,6 +1016,12 @@ namespace ImGui
     return c->DrawList;
   }
 
+  ImDrawList* CanvasAnnotationDrawList(ImGuiCanvasState* c)
+  {
+    IM_ASSERT(!c->InsideCanvas && c->DrawList != nullptr && "post-CanvasEnd only: appends above the merged channels");
+    return c->DrawList;
+  }
+
   void CanvasNextNodeTitle(ImGuiCanvasState* c, const char* title, ImU32 title_color)
   {
     if (title != nullptr)

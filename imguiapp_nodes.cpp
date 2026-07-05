@@ -5067,7 +5067,7 @@ namespace ImGui
       *s = m * z;
     };
 
-    ImDrawList* dl = ImGui::GetForegroundDrawList();   // above the canvas child: annotations must never hide under their nodes
+    ImDrawList* dl = ImGui::CanvasAnnotationDrawList(cv);   // above the merged canvas channels, inside the child's z-order
     dl->PushClipRect(editor_min, editor_min + editor_size, true);
     const float em = ImGui::GetFontSize() * z;   // post-CanvasEnd: the content font is popped, scale by hand
     const ImU32 accent = AppScopeAccent(g);
@@ -5398,7 +5398,7 @@ namespace ImGui
     ed->ScopeEndRect = ImVec4(wall.z - em * 0.75f - ew, wall.w - em * 0.5f - plate_h,
                               wall.z - em * 0.75f, wall.w - em * 0.5f);
 
-    ImDrawList* dl = ImGui::GetForegroundDrawList();   // above the canvas child, like the sequence pass
+    ImDrawList* dl = ImGui::CanvasAnnotationDrawList(cv);   // above the merged canvas channels, inside the child's z-order
     dl->PushClipRect(editor_min, editor_min + editor_size, true);
     auto plate = [&](const ImVec4& r, const char* txt)
     {
@@ -7822,8 +7822,10 @@ namespace ImGui
       const float r = em * 0.72f;
       const float step = r * 2.0f + em * 0.30f;
       // Viewport chrome renders ABOVE canvas content, always: the window list sits UNDER the canvas child, so
-      // a node scrolled beneath the gizmo column would occlude these controls.
-      ImDrawList* dl = ImGui::GetForegroundDrawList();
+      // a node scrolled beneath the gizmo column would occlude these controls. The canvas child's post-merge
+      // list (not the viewport foreground list) keeps the chrome inside the editor's z-order -- overlays must
+      // never paint over OTHER windows floating above the Composer.
+      ImDrawList* dl = ImGui::CanvasAnnotationDrawList(cv);
       dl->PushClipRect(editor_min, editor_min + editor_size, true);
 
       const int   count = 7;
