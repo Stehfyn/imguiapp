@@ -623,6 +623,17 @@ interpreter's vocabulary IS F53-F57's semantics.
   composer ↔ preview.
   *Accept: doc lands with the semantics table (per node kind: interpreted / reflected / stub);
   no code before it.*
+  DONE (`previewer-design.md`, every mechanism cited). The interpreter is a SECOND BACKEND that builds a
+  real `ImGuiApp` (inheriting AppRebuildUpdateOrder / RegisterAppStorage / ImGuiAppStateHistory + the four
+  passes) -- not a parallel loop. §9 semantics table classifies every kind: INTERPRETED (App/layers/window
+  hosts/design-draft controls/animation builtins/Ops/Layout Region-Split-Tabs/Struct-Field/events+commands),
+  REFLECTED (custom C++ bodies + un-ruled builtins -> honest field-widget card via AppGraphRenderMockPanel/
+  ImAppReflect, body NOT run, "runs after Generate"), STUB (Note nodes; a custom ImGuiAppLayer body, though
+  its windows still render). One `ImGuiAppPreviewControl` carries Persist|LastTemp|Temp byte buffers from an
+  effective-field manifest (AppNodeEffectiveFields); one evaluator = a value-returning walk of the
+  AppEventExprCheck grammar; edit-while-running preserves every (sanitized name, type) slot; input routes
+  through real widgets writing Temp; selection brushes both ways. Gates F67-F70; §10 pins contract parity (F69)
+  + the F70 record/scrub close.
 - [ ] **F67 graph interpreter core** — allocate Persist/Temp/LastTemp from effective fields;
   per frame: Task pass in topo order (builtin + tween/timer/spring semantics, op evaluation,
   event AST: `when <edge> → set / emit`), command collect/latch/dispatch-once, window pass
