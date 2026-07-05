@@ -57,9 +57,11 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
 - [x] **F11 phase-coherence audit refresh** — checklist pass over the new writers
   (Compose/ComposeImported, scoped tidy, nudge, group drag, explode anchors, fit).
   *Accept: phase-coherence-audit doc updated; violations fixed or entered as findings.
-  (phase-coherence-audit-2026-07-03.md "Refresh 2026-07-05" classifies all seven writers as
-  conforming — camera is an input to none; group drag carries the §1b kEps deadband; verdict
-  test-backed by step45/46/43 + canvas_c1/c4. No new violations.)*
+  (phase-coherence-audit-2026-07-03.md "Refresh 2026-07-05" audits each writer against the actual
+  T/T-1 relation — is a prior-frame MEASUREMENT combined with THIS frame's transform? — not the
+  wrong "is the camera a model input" framing an earlier draft used. All conforming: cross-frame
+  reads are invariant model units, and group drag's one screen read (`col_geom`) is verified
+  T-frame. Finding entered: the group-drag obstacle-clamp path has no zoom≠1 regression test.)*
 - [x] **F12 data-dependency adherence validator** — AppGraphValidate error when an event expr or
   binding references an undeclared dep; codegen test asserts emitted code touches
   data/temp/last_temp/dep params only per declaration.

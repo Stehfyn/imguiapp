@@ -68,28 +68,64 @@ drag transients). Finding D is the list of facts still outside the mechanism.
 ## Refresh 2026-07-05 (F11): the new placement writers
 
 Second-order writers landed with the P0 scope-composition push (steps 41-46) and F07's explode
-factoring. Each classified by the same method: does it derive a MODEL fact (GridPos / ScopePlacement)
-using the camera as an input, or read stale-phase pixels? Verdict: all conforming — the camera is an
-input to NONE of them, and the one that reads a T+1 measurement carries the §1b deadband. No new
-violations to fix.
+factoring. The question is NOT "does the fact depend on the camera" (subsequent dependence is not
+the bug class); it is the temporal one from §1: **does any value MEASURED in a prior frame (T-1)
+get combined with a TRANSFORM or INPUT from THIS frame (T)** — `f(measured(T-1), transform(T))` —
+or run a measure→apply→measure loop (§1b)? A T-1 value is safe across the boundary iff it is in
+transform-invariant (model) units; the defect is a T-1 *pixel/screen* value meeting T's camera.
 
-| Writer (nodes.cpp) | Fact written | Geometry inputs | Verdict |
+For each writer: its cross-frame reads (what was measured in another frame), the units, and the
+phase relation.
+
+| Writer (nodes.cpp) | Reads that cross a frame boundary | Phase relation | Verdict |
 |---|---|---|---|
-| `AppScopeComposeNewNode` (~5241) | root GridPos + this scope's placement | `owner->GridPos + (280,0)` (model); interior from `interior_pos` or `AppScopeInteriorDropPoint` (`ScopeWallRect`, published model units) | coherent — pure model, camera-free |
-| `AppScopeComposeImported` (~5266) | placements + root GridPos of a pasted/prefab cluster | `mn` of the cluster's model GridPos; `root_shift = owner->GridPos + (280,0) - mn`; anchor model | coherent — pure model |
-| scoped tidy (`AppScopeTidy*` ~4894) | this scope's placements, left→right | `AppLayoutPureSize` (explicitly zoom-idempotent) + tidy DAG; root vs scope by altitude | coherent — already commented "the camera is never an input"; step45 asserts GridPos untouched |
-| nudge (~7589) | canvas pos / GridPos or placement | `d` in MODEL grid units (1 / Shift 10); `AppCanvasNodePos + d` | coherent — "a grid unit is a grid unit at any zoom"; altitude-routed; step46 covers it |
-| group drag (~6259) | member model positions + `_GroupDragApplied` | `CanvasFromScreen(MousePos_now)` (same-frame mouse via current camera) − grab-time model origin; obstacle clamp vs `_GroupFramesPrev.MinM/MaxM` (published MODEL) with `kEps = 1.0` deadband | coherent — same-frame camera on a same-frame input; §1b fixed point present (kEps) |
-| explode anchors (`AppGraphAddExplodedField` ~2166) | field-node GridPos + scope placement | `owner->GridPos + field_off` (fixed MODEL offset per slot); `AppNodeScopePos(owner) + field_off` when drilled | coherent — pure model offsets, camera-free |
-| fit (`fit_all`/`fit_ids` ~7419) | camera pan/zoom (NOT a model fact) | bbox of `AppCanvasNodePos`/`AppNodeScopePos` (model) + `AppNodeModelSize` (the invariant cache) → `CanvasFitRect` | coherent — camera is the OUTPUT, derived from model rects; the inverse of the fact→camera law, never de-phasing a fact |
+| `AppScopeComposeNewNode` (~5241) | `ScopeWallRect` (published by last frame's interior submission) | MODEL units (invariant); combined only with fixed model offsets + `owner->GridPos` (persistent state, not a measurement). No T transform meets it. | coherent — T-1 value is invariant-unit |
+| `AppScopeComposeImported` (~5266) | none — `mn` is over the imported nodes' own GridPos (persistent state set at import, same call) | no measured geometry crosses a boundary | coherent |
+| scoped tidy (`AppScopeTidy*` ~4894) | none — `AppLayoutPureSize` recomputes a pure model size each call (zoom-idempotent), it is not a cached measurement | no cross-frame measurement | coherent — step45 asserts placements move, GridPos intact |
+| nudge (~7589) | `AppCanvasNodePos` (the engine's CURRENT model position, updated by this frame's input FSM before this handler) | model + a model-unit delta; no prior-frame pixel meets a transform | coherent — step46 covers the altitude routing |
+| group drag (~6259) | (a) `_GroupFramesPrev.MinM/MaxM` — T-1 published obstacle frames; (b) `col_geom.BoxMin/Max` — the layer box | (a) T-1 but MODEL units → safe across the boundary; (b) VERIFIED T-frame: `col_geom` is populated by `AppDrawLayerGroupBox` at ~6132 THIS frame from pre-submission-owned layer rows, so `CanvasFromScreen(col_geom.BoxMin)` is T-screen⊗T-camera (same phase), not T-1-screen⊗T-camera. Mouse is `CanvasFromScreen(MousePos_now)` (T⊗T). `kEps=1.0` is the §1b deadband on republished-frame variance. | coherent — the one site that had to be *read* (T-1 vs T of `col_geom`), and it is T |
+| explode anchors (`AppGraphAddExplodedField` ~2166) | none — `owner->GridPos` + fixed model slot offsets; persistent state, not a measurement | no cross-frame measurement | coherent |
+| fit (`fit_all`/`fit_ids` ~7419) | `AppNodeModelSize` (T-1 measured node size) | MODEL units (the invariant cache, audit #1/#7); the bbox stays in model and only `CanvasFitRect` turns it into a camera. A T-1 model size never meets a T camera as a fact. | coherent — camera is the output |
 
-`AddPopupGrid` (the drop-create anchor threaded into the two compose roads) is captured once as
-`CanvasFromScreen(screen_center_or_click)` at palette-open time and stored/consumed as a MODEL grid
-position — a same-frame screen→model conversion, camera-independent thereafter.
+`AddPopupGrid` crosses frames as a MODEL grid position (captured once as `CanvasFromScreen(screen)`
+at palette-open, stored, consumed later) — invariant, so the later consume is not de-phased.
 
-Test backing (per §3's lesson: a "conforming" verdict must be read, not sampled): step45 (tidy →
-placements, GridPos intact), step46 (nudge altitude), step43 (duplicate-in-scope seating), canvas_c1
-+ canvas_c4 (node drag at zoom≠1: model delta == px/zoom) exercise these writers at zoom≠1 and drilled
-altitudes — a camera term leaking into any of them would fail those checks. Suggested (not required):
-a multi-node group-drag-at-zoom test to cover the obstacle-clamp path directly (today it rides the
-same `CanvasFromScreen(mouse)` mechanism canvas_c1/c4 prove coherent).
+Correction note: an earlier draft of this section classified writers by "is the camera a model
+input" and called that phase coherence. It is not — that is the subsequent-dependence framing, and
+it would pass a genuinely mixed-phase writer that reads a T-1 SCREEN rect and multiplies this
+frame's zoom. The table above is redone against the actual T/T-1 measure-vs-transform relation; the
+only writer where the distinction bites is group drag's `col_geom` read, verified T-frame above.
+
+Test backing (§3: a "conforming" verdict must be read, not sampled): step45/46/43 + canvas_c1/c4
+exercise these writers at zoom≠1 and drilled altitudes — a T-1-pixel⊗T-transform slip would flash.
+GAP entered as a finding: the group-drag obstacle-clamp path (the `col_geom`/`_GroupFramesPrev`
+reads) has no direct zoom≠1 regression test; it rides the `CanvasFromScreen(mouse)` mechanism
+canvas_c1/c4 prove, but the clamp arithmetic itself is unexercised at zoom≠1.
+
+## Completed checklist items — phase-coherence sweep (2026-07-05)
+
+Phase coherence is a property of PER-FRAME render code that sizes / places / styles UI from
+MEASURED geometry (immediate mode measures as it draws; §1). Code that does not measure geometry
+each frame has no surface for the bug. Every completed checklist item classified by that surface:
+
+| Item | Production code added | Phase surface? | Verdict |
+|---|---|---|---|
+| F01 round-trip | test + `AppGraphModelEqual` | none | n/a — model-equality over serialized fields |
+| F02 Init=/Dock= | `AppEmitNodeRecord`/`AppGraphDeserialize` keys | none | serialize/parse of persistent `GridPos`/flags as DATA; never measured |
+| F03 events | test only | none | n/a |
+| F04 prefabs | sidecar serialize/deserialize + `AppGraphSeedStarterPrefabs` | none | serialization + scratch-graph seeder; positions are persistent data |
+| F05 undo roads | test only | none | n/a |
+| F06 ScopeCams sweep | 3-line erase in `AppGraphRemoveNode` | none | erases transient camera records on delete; no measurement |
+| F07 exploded-field routing | `AppGraphAddExplodedField` (place), `EditAppNodeFieldSection` (render) | **yes (read)** | placement is a ONE-SHOT mutation: `owner->GridPos` (persistent model) + fixed `field_off` (model, slot index) → member `GridPos`/placement; no per-frame measurement, no transform; `_NeedsPlace` is the deliberate-T+1 idiom (rule 4). Inspector render is em-scaled widget rows (this-frame `GetFontSize`), no cached measurement. Coherent. |
+| F08 history jump | test only | none | n/a |
+| F11 audit refresh | doc only | none | this document |
+| F12 dep validator | binding check in `AppGraphValidate` | none | pure model validation |
+| F13 canvas input tests | test only | none | tests ASSERT engine coherence (drag delta == px/zoom at zoom≠1) — no new render code |
+| F14 one feedback slot | REMOVED the canvas toast; status-hint expiry 3.0→2.5s | removal only | deletes a per-frame draw (which was itself this-frame `GetItemRect`, coherent); the retained status hint is a text notice on a `GetTime()` timeout — no geometry, no measure→apply loop |
+| F15 assert ring dump | av registry + `AppDumpAssertRings` + assert call | none | AV/assert path; `AvEmitPlaceholder` synthesizes a frame from the locked size, no cross-frame measurement |
+
+Conclusion: only F07 added placement/render code, and it carries no frame-phase dimension (a
+one-shot model mutation + an em-scaled widget list). The rest are serialization, validation, model
+mutation, AV, or tests — no measured-geometry surface. No phase-coherence defect introduced by any
+completed item. (The open GAP above — group-drag clamp at zoom≠1 — predates these items; it is
+existing editor code the F11 refresh surfaced, not something a completed feature added.)
