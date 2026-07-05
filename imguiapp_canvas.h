@@ -123,6 +123,7 @@ namespace ImGui
   IMGUI_API float  CanvasNodeNeededWidth(const ImGuiCanvasState* c, int node_id);        // content-derived width need (0 until measured)
   IMGUI_API void   CanvasNextNodeHeaderRule(ImGuiCanvasState* c, int rule, ImU32 color);
   IMGUI_API void   CanvasNextNodeEdgeStripe(ImGuiCanvasState* c, int side, ImU32 color, float model_thickness);
+  IMGUI_API void   CanvasNextNodeAlpha(ImGuiCanvasState* c, float alpha);   // < 1 dims plate + content (disabled look); consumed by the next CanvasBeginNode
   // Editable variant (host-driven rename): while *editing, the engine renders an InputText in the
   // title bar bound to buf and clears *editing when it deactivates. Pair with CanvasNodeDoubleClicked
   // to enter the state (the host decides whether a double-click renames or drills).

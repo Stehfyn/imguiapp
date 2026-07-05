@@ -497,6 +497,8 @@ struct ImGuiAppGraphViewState
   bool  OvBands;
   bool  OvFrames;
   bool  OvMinimap;
+  bool  TreeOpen;  // outliner sidebar shown; the host keeps its width across a collapse
+  bool  InspOpen;  // inspector sidebar shown; the host keeps its width across a collapse
   float Zoom; // canvas zoom, wheel-driven, [0.3, 2.5]; authored positions stay zoom-independent
 };
 
@@ -533,7 +535,7 @@ struct ImGuiAppEditorState
   mutable int                          HoverPrevNodeSrc = 0;
   mutable int                          HoverPrevLinkSrc = 0;
   mutable int                          HoverFrame = -1;
-  ImGuiAppGraphViewState               View = { false, true, true, true, true, 1.0f };   // snap off; overlays on; 1:1
+  ImGuiAppGraphViewState               View = { false, true, true, true, true, true, true, 1.0f };   // snap off; overlays + sidebars on; 1:1
   mutable ImVector<ImGui::ImGuiAppGraphIssue> IssuesCache;
   mutable ImGuiID                      IssuesSig = 0;
   mutable bool                         IssuesValid = false;

@@ -395,6 +395,8 @@ namespace
       else if (sscanf(p, "InspW=%f", &fv) == 1)     doc->InspW = fv;
       else if (sscanf(p, "CodeH=%f", &fv) == 1)     doc->CodeH = fv;
       else if (sscanf(p, "ShowLive=%d", &iv) == 1)  doc->ShowLive = iv != 0;
+      else if (sscanf(p, "TreeOpen=%d", &iv) == 1)  view->TreeOpen = iv != 0;
+      else if (sscanf(p, "InspOpen=%d", &iv) == 1)  view->InspOpen = iv != 0;
       else if (sscanf(p, "Snap=%d", &iv) == 1)      view->SnapGrid = iv != 0;
       else if (sscanf(p, "OvGrid=%d", &iv) == 1)    view->OvGrid = iv != 0;
       else if (sscanf(p, "OvBands=%d", &iv) == 1)   view->OvBands = iv != 0;
@@ -424,6 +426,7 @@ namespace
     {
       ImGuiTextBuffer buf;
       buf.appendf("TreeW=%g\nInspW=%g\nCodeH=%g\nShowLive=%d\n", f.TreeW, f.InspW, f.CodeH, f.ShowLive ? 1 : 0);
+      buf.appendf("TreeOpen=%d\nInspOpen=%d\n", f.View.TreeOpen ? 1 : 0, f.View.InspOpen ? 1 : 0);
       buf.appendf("Snap=%d\nOvGrid=%d\nOvBands=%d\nOvFrames=%d\nOvMinimap=%d\nZoom=%g\n",
                   f.View.SnapGrid ? 1 : 0, f.View.OvGrid ? 1 : 0, f.View.OvBands ? 1 : 0, f.View.OvFrames ? 1 : 0, f.View.OvMinimap ? 1 : 0, f.View.Zoom);
       ImFileWrite(buf.c_str(), sizeof(char), (ImU64)buf.size(), fh);
@@ -562,6 +565,8 @@ namespace
     bool WriteHeader;
     bool ToggleCode;
     bool ToggleLive;     // Live-eye toggle clicked this frame (OnUpdate derives the new state)
+    bool ToggleTree;     // outliner sidebar toggle clicked this frame
+    bool ToggleInsp;     // Inspector sidebar toggle clicked this frame
     bool Undo;           // undo / redo edit-intents (applied in OnUpdate)
     bool Redo;
     bool Diff;           // diff current graph's codegen vs the saved-on-disk graph -> clipboard
@@ -618,6 +623,14 @@ namespace
       if (temp_data->ToggleLive)
       {
         doc->ShowLive = !doc->ShowLive;
+      }
+      if (temp_data->ToggleTree)
+      {
+        ImGui::AppGraphViewState(&doc->Graph)->TreeOpen = !ImGui::AppGraphViewState(&doc->Graph)->TreeOpen;
+      }
+      if (temp_data->ToggleInsp)
+      {
+        ImGui::AppGraphViewState(&doc->Graph)->InspOpen = !ImGui::AppGraphViewState(&doc->Graph)->InspOpen;
       }
       if (temp_data->Undo)
       {
@@ -785,10 +798,14 @@ namespace
           ImFormatString(sync_lbl, IM_ARRAYSIZE(sync_lbl), "%s", ICON_FA_CIRCLE_CHECK "  Built###sync");
         const char* code_lbl = ICON_FA_CODE "  Code";
         const char* live_lbl = show_live ? ICON_FA_EYE "  Live###live" : ICON_FA_EYE_SLASH "  Live###live";
+        const char* tree_lbl = ICON_FA_LAYER_GROUP "###treetoggle";
+        const char* insp_lbl = ICON_FA_CIRCLE_INFO "###insptoggle";
         const float pad2 = style.FramePadding.x * 2.0f;
         const float cluster_w = ImGui::CalcTextSize(code_lbl).x + pad2
                               + ImGui::CalcTextSize(live_lbl, ImGui::FindRenderedTextEnd(live_lbl)).x + pad2 + style.ItemSpacing.x
-                              + ImGui::CalcTextSize(sync_lbl, ImGui::FindRenderedTextEnd(sync_lbl)).x + pad2 + style.ItemSpacing.x;
+                              + ImGui::CalcTextSize(sync_lbl, ImGui::FindRenderedTextEnd(sync_lbl)).x + pad2 + style.ItemSpacing.x
+                              + ImGui::CalcTextSize(tree_lbl, ImGui::FindRenderedTextEnd(tree_lbl)).x + pad2 + style.ItemSpacing.x
+                              + ImGui::CalcTextSize(insp_lbl, ImGui::FindRenderedTextEnd(insp_lbl)).x + pad2 + style.ItemSpacing.x;
         ImGui::SameLine(ImMax(ImGui::GetCursorPosX() + em, ImGui::GetContentRegionMax().x - cluster_w - em * 0.2f));
 
         // Amber ink when authored work is not compiled into the running app; quiet when in sync.
@@ -803,6 +820,23 @@ namespace
                                 "Live nodes always show what the running binary actually is.");
         else
           ImGui::SetItemTooltip("Everything authored is compiled into the running app.");
+        ImGui::SameLine();
+
+        const ImGuiAppGraphViewState* view = ImGui::AppGraphViewState(&doc->Graph);
+        if (view->TreeOpen)
+          ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonActive]);
+        temp_data->ToggleTree = ImGui::Button(tree_lbl);
+        if (view->TreeOpen)
+          ImGui::PopStyleColor();
+        ImGui::SetItemTooltip("Show / hide the Outliner sidebar");
+        ImGui::SameLine();
+
+        if (view->InspOpen)
+          ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonActive]);
+        temp_data->ToggleInsp = ImGui::Button(insp_lbl);
+        if (view->InspOpen)
+          ImGui::PopStyleColor();
+        ImGui::SetItemTooltip("Show / hide the Inspector sidebar");
         ImGui::SameLine();
 
         if (code_open)
@@ -1432,32 +1466,42 @@ namespace
       const float    code_max      = ImMax(0.0f, body.y - min_canvas_h - code_chrome);
       const float    code_h        = ImClamp(doc->CodeH, 0.0f, code_max);
       const float    canvas_h      = ImMax(0.0f, body.y - ((code_h > 0.0f) ? code_h + code_chrome : 0.0f));
-      const float    insp_grip     = em * 0.5f;
-      const float    tree_w        = ImClamp((doc->TreeW > 0.0f) ? doc->TreeW : em * 16.0f, em * 9.0f, ImMax(em * 9.0f, body.x - tree_grip - min_canvas_w));
-      const float    insp_w        = ImClamp((doc->InspW > 0.0f) ? doc->InspW : em * 22.0f, em * 14.0f, ImMax(em * 14.0f, body.x - tree_w - tree_grip - insp_grip - min_canvas_w));
-      const float    right_w       = ImMax(0.0f, body.x - tree_w - tree_grip - insp_grip - insp_w);
+      // A collapsed sidebar contributes zero width; its saved width survives for the next expand.
+      // Open flags are Composer view state (toolbar buttons + "View:" palette commands toggle them).
+      const bool     tree_open     = ImGui::AppGraphViewState(graph)->TreeOpen;
+      const bool     insp_open     = ImGui::AppGraphViewState(graph)->InspOpen;
+      const float    insp_grip     = insp_open ? em * 0.5f : 0.0f;
+      const float    tree_grip_w   = tree_open ? tree_grip : 0.0f;
+      const float    tree_w        = tree_open ? ImClamp((doc->TreeW > 0.0f) ? doc->TreeW : em * 16.0f, em * 9.0f, ImMax(em * 9.0f, body.x - tree_grip_w - min_canvas_w)) : 0.0f;
+      const float    insp_w        = insp_open ? ImClamp((doc->InspW > 0.0f) ? doc->InspW : em * 22.0f, em * 14.0f, ImMax(em * 14.0f, body.x - tree_w - tree_grip_w - insp_grip - min_canvas_w)) : 0.0f;
+      const float    right_w       = ImMax(0.0f, body.x - tree_w - tree_grip_w - insp_grip - insp_w);
       int            selection     = doc->Selection;
       float          col_w         = 0.0f;     // assigned inside ##Right (needs that child's content region)
 
-      if (ImGui::BeginChild("##Tree", ImVec2(tree_w, body.y), ImGuiChildFlags_Borders))
-      {
-        ImGui::ShowAppGraphTree(app, graph, &selection, doc->ShowLive);
-      }
-      ImGui::EndChild();
-
-      // Tree splitter: record raw input; the drag resolves in OnUpdate.
-      ImGui::SameLine(0.0f, 0.0f);
-      ImGui::InvisibleButton("##tsplit", ImVec2(tree_grip, body.y));
-      temp_data->TreeGripActivated = ImGui::IsItemActivated();
+      temp_data->TreeGripActivated = false;
       temp_data->MouseLeftDown     = ImGui::IsMouseDown(ImGuiMouseButton_Left);
       temp_data->MouseX            = io.MousePos.x;
-      temp_data->TreeGripMinX      = ImGui::GetItemRectMin().x;
+      temp_data->TreeGripMinX      = 0.0f;
       temp_data->TreeOriginX       = tree_origin_x;
-      if (data->TreeDragging || ImGui::IsItemHovered())
+      if (tree_open)
       {
-        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+        if (ImGui::BeginChild("##Tree", ImVec2(tree_w, body.y), ImGuiChildFlags_Borders))
+        {
+          ImGui::ShowAppGraphTree(app, graph, &selection, doc->ShowLive);
+        }
+        ImGui::EndChild();
+
+        // Tree splitter: record raw input; the drag resolves in OnUpdate.
+        ImGui::SameLine(0.0f, 0.0f);
+        ImGui::InvisibleButton("##tsplit", ImVec2(tree_grip, body.y));
+        temp_data->TreeGripActivated = ImGui::IsItemActivated();
+        temp_data->TreeGripMinX      = ImGui::GetItemRectMin().x;
+        if (data->TreeDragging || ImGui::IsItemHovered())
+        {
+          ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+        }
+        ImGui::SameLine(0.0f, 0.0f);
       }
-      ImGui::SameLine(0.0f, 0.0f);
 
       // NoScrollbar is a hard rule: children fill this column exactly; a scrollbar means the layout
       // math regressed and must fail visibly (clipped content).
@@ -1739,53 +1783,60 @@ namespace
       }
       ImGui::EndChild();
 
-      // Inspector splitter: record raw input; the drag resolves in OnUpdate.
-      ImGui::SameLine(0.0f, 0.0f);
-      ImGui::InvisibleButton("##isplit", ImVec2(insp_grip, body.y));
-      temp_data->InspGripActivated = ImGui::IsItemActivated();
-      temp_data->BodyMaxX          = ImGui::GetItemRectMax().x + insp_w;
-      if (data->InspDragging || ImGui::IsItemHovered())
+      temp_data->InspGripActivated = false;
+      temp_data->BodyMaxX          = 0.0f;
+      if (insp_open)
       {
-        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-      }
-      ImGui::SameLine(0.0f, 0.0f);
+        // Inspector splitter: record raw input; the drag resolves in OnUpdate.
+        ImGui::SameLine(0.0f, 0.0f);
+        ImGui::InvisibleButton("##isplit", ImVec2(insp_grip, body.y));
+        temp_data->InspGripActivated = ImGui::IsItemActivated();
+        temp_data->BodyMaxX          = ImGui::GetItemRectMax().x + insp_w;
+        if (data->InspDragging || ImGui::IsItemHovered())
+        {
+          ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+        }
+        ImGui::SameLine(0.0f, 0.0f);
 
-      if (ImGui::BeginChild("##Inspector", ImVec2(insp_w, body.y), ImGuiChildFlags_Borders))
-      {
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(ICON_FA_CIRCLE_INFO "  Inspector");
-        ImGui::Separator();
-        if (selection < 0)
+        if (ImGui::BeginChild("##Inspector", ImVec2(insp_w, body.y), ImGuiChildFlags_Borders))
         {
-          ShowComposerProjectInspector(doc, graph, temp_data);
-        }
-        else if (graph->Selection.Size > 1)
-        {
-          ImGui::EditAppNodesInspectorMulti(graph);
-        }
-        else
-        {
-          ImGui::EditAppNodeInspectorEx(graph, selection, doc->Mirror);
-          // Preview mocks a DESIGN control's UI from its drafted fields. A live node's reality is
-          // already on screen (and its values are the Data/Temp (live) sections above).
-          const ImGuiAppNode* seln = ImGui::AppGraphFindNode(graph, selection);
-          if (seln != nullptr && !seln->IsLive)
-            if (ImGui::AppInspectorSection("##sec_preview", ICON_FA_PLAY, "Preview", nullptr, nullptr))
-              ImGui::AppGraphRenderMockPanel(graph, selection, doc->Mirror);
-          if (data->HasNodeCode)
+          ImGui::AlignTextToFramePadding();
+          ImGui::TextUnformatted(ICON_FA_CIRCLE_INFO "  Inspector");
+          ImGui::Separator();
+          if (selection < 0)
           {
-            ImGui::SeparatorText("Generated C++");
-            ImGui::TextDisabled("%s", data->CodeName);
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Copy"))
+            ShowComposerProjectInspector(doc, graph, temp_data);
+          }
+          else if (graph->Selection.Size > 1)
+          {
+            ImGui::EditAppNodesInspectorMulti(graph);
+          }
+          else
+          {
+            ImGui::EditAppNodeInspectorEx(graph, selection, doc->Mirror);
+            // Preview mocks a DESIGN control's UI from its drafted fields. A live node's reality is
+            // already on screen (and its values are the Data/Temp (live) sections above).
+            const ImGuiAppNode* seln = ImGui::AppGraphFindNode(graph, selection);
+            if (seln != nullptr && !seln->IsLive)
+              if (ImGui::AppInspectorSection("##sec_preview", ICON_FA_PLAY, "Preview", nullptr, nullptr))
+                ImGui::AppGraphRenderMockPanel(graph, selection, doc->Mirror);
+            if (data->HasNodeCode)
             {
-              ImGui::SetClipboardText(data->CodeNodeText.c_str());
+              if (ImGui::AppInspectorSection("##sec_code", ICON_FA_CODE, "Generated C++", nullptr, nullptr))
+              {
+                ImGui::TextDisabled("%s", data->CodeName);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Copy"))
+                {
+                  ImGui::SetClipboardText(data->CodeNodeText.c_str());
+                }
+                ShowGeneratedCodeView(&doc->Graph, "##inspcode", data->CodeNodeText, data->NodeLines, nullptr, nullptr);
+              }
             }
-            ShowGeneratedCodeView(&doc->Graph, "##inspcode", data->CodeNodeText, data->NodeLines, nullptr, nullptr);
           }
         }
+        ImGui::EndChild();
       }
-      ImGui::EndChild();
 
       // The tree/canvas widgets edited the local copy; OnUpdate applies it.
       temp_data->SelectionChanged = (selection != doc->Selection);
@@ -1995,10 +2046,14 @@ namespace ImGui
       IM_ASSERT(panel != nullptr && metrics != nullptr && st != nullptr);
 
       // This call sits AFTER this frame's window render: consume the X buttons first, then impose
-      // the external/menu flags for the next frame.
-      if (p_open != nullptr && !panel->Open)   // panel X closes the whole demo
-        *p_open = false;
-      panel->Open = (p_open == nullptr) || *p_open;
+      // the external/menu flags for the next frame. Without a host flag the panel's Open is its own
+      // (X / outliner eye hide it; the eye shows it again).
+      if (p_open != nullptr)
+      {
+        if (!panel->Open)   // panel X closes the whole demo
+          *p_open = false;
+        panel->Open = *p_open;
+      }
       if (!metrics->Open)                      // Composer X syncs the menu toggle
         st->ShowMetrics = false;
       metrics->Open = st->ShowMetrics;

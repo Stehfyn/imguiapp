@@ -419,14 +419,19 @@ namespace ImGui
 
   // Inspector section header. Optional enable checkbox and kebab (pass null to omit); the caller answers
   // the kebab click with its own popup. Open state lives in the window's state storage (session-lived,
-  // shared per panel). Returns true while open.
+  // shared per panel). The first section submitted in a window each frame defaults open, the rest default
+  // collapsed; a user toggle overrides the default either way. Returns true while open.
   bool AppInspectorSection(const char* str_id, const char* icon, const char* label, bool* enabled, bool* kebab_clicked)
   {
     const float h = ImGui::GetFrameHeight();
     const float em = ImGui::GetFontSize();
     ImGuiStorage* st = ImGui::GetStateStorage();
+    const ImGuiID first_id = ImHashStr("AppInspectorSectionFirstFrame");   // window-wide: deliberately not seeded by the ID stack
+    const int frame = ImGui::GetFrameCount();
+    const bool is_first = st->GetInt(first_id, -1) != frame;
+    st->SetInt(first_id, frame);
     const ImGuiID open_id = ImGui::GetID(str_id);
-    bool open = st->GetInt(open_id, 1) != 0;
+    bool open = st->GetInt(open_id, is_first ? 1 : 0) != 0;
 
     const float avail = ImGui::GetContentRegionAvail().x;
     const ImVec2 mn = ImGui::GetCursorScreenPos();
@@ -471,7 +476,9 @@ namespace ImGui
       if (ImGui::IsItemHovered())
         ImGui::SetTooltip("enable/disable this whole section");
     }
-    ImGui::SetCursorScreenPos(after);
+    // Restores the flow position captured after the header item. Written directly (not SetCursorScreenPos)
+    // so a collapsed section as the window's last item doesn't trip the extend-parent-boundaries error check.
+    ImGui::GetCurrentWindow()->DC.CursorPos = after;
     ImGui::PopID();
     if (open)
       ImGui::Spacing();
@@ -4622,7 +4629,8 @@ namespace ImGui
   }
 
   // True if this node should NOT be submitted to the canvas: outside the current drill-down scope,
-  // explicitly hidden (outliner eye / isolate), or an ancestor group is collapsed or hidden.
+  // or an ancestor group is collapsed. Eye-hidden nodes STAY submitted -- they render with the
+  // disabled look (AppNodeCanvasOff) instead of vanishing.
   static bool AppNodeHiddenByCollapse(const ImGuiAppGraph* g, int id)
   {
     const ImGuiAppNode* self = AppGraphFindNodeConst(g, id);
@@ -4630,15 +4638,30 @@ namespace ImGui
       return false;
     if (!AppNodeInScope(g, id))
       return true;
-    // Foundation layers are permanent and always submitted (the packer + pipeline box read their geometry), so a
-    // stray Hidden flag on a layer never takes effect.
-    if (self->Hidden && self->Kind != ImGuiAppNodeKind_Layer)
-      return true;
     for (int owner = AppGroupOwnerOf(g, id); owner >= 0; owner = AppGroupOwnerOf(g, owner))
     {
       const ImGuiAppNode* o = AppGraphFindNodeConst(g, owner);
-      if (o != nullptr && (o->GroupCollapsed || o->Hidden))
+      if (o != nullptr && o->GroupCollapsed)
         return true;
+    }
+    return false;
+  }
+
+  // Disabled look: the node (or a containment ancestor) is eye-hidden, or its enclosing live
+  // window is closed (the display layer renders none of it).
+  static bool AppNodeCanvasOff(const ImGuiAppGraph* g, int id)
+  {
+    for (int cur = id; cur >= 0; cur = AppGroupOwnerOf(g, cur))
+    {
+      const ImGuiAppNode* o = AppGraphFindNodeConst(g, cur);
+      if (o == nullptr)
+        return false;
+      if (o->Hidden && o->Kind != ImGuiAppNodeKind_Layer)
+        return true;
+      if (o->IsLive && o->Kind == ImGuiAppNodeKind_Window && g->LiveApp != nullptr)
+        if (const ImGuiAppWindowBase* wb = (const ImGuiAppWindowBase*)AppGraphFindLiveItem(g->LiveApp, o))
+          if (!wb->Open)
+            return true;
     }
     return false;
   }
@@ -6048,6 +6071,10 @@ namespace ImGui
         AppGraphEditorState(g)->TitleEditing = was_editing;
         ImGui::CanvasNextNodeTitleEditable(cv, n->Draft.Name, IM_ARRAYSIZE(n->Draft.Name), &AppGraphEditorState(g)->TitleEditing, title_col);
       }
+      // Eye-hidden nodes and members of a closed live window stay on the canvas with the
+      // disabled look -- never removed.
+      if (AppNodeCanvasOff(g, n->Id))
+        ImGui::CanvasNextNodeAlpha(cv, 0.35f);
       ImGui::CanvasBeginNode(cv, n->Id);
 
       // Containment reads vertically, owner over child: the child's "parent" pin (ChildOut) sits on its TOP
@@ -7135,6 +7162,7 @@ namespace ImGui
         { "Scope: Enter selection", "Tab", 23 }, { "Scope: Up one level", "Esc", 24 },
         { "Scope: Whole app", "", 35 },
         { "View: Quick inspector", "N", 36 },
+        { "View: Outliner sidebar", "", 37 }, { "View: Inspector sidebar", "", 38 },
         { "Help: Shortcut card", "F1", 34 },
       };
       int run = -1;
@@ -7318,6 +7346,8 @@ namespace ImGui
         case 34: AppGraphEditorState(g)->HelpOverlay = !AppGraphEditorState(g)->HelpOverlay; break;
         case 35: g->ViewScope.clear(); break;
         case 36: AppGraphEditorState(g)->QuickInspector = !AppGraphEditorState(g)->QuickInspector; break;
+        case 37: AppGraphViewState(g)->TreeOpen = !AppGraphViewState(g)->TreeOpen; break;
+        case 38: AppGraphViewState(g)->InspOpen = !AppGraphViewState(g)->InspOpen; break;
         default: break;
         }
         if (added != nullptr)
@@ -11327,7 +11357,38 @@ namespace ImGui
     int   ActTarget; // reparent destination
     int   SetOpen;   // -1 none, 0 collapse-all, 1 expand-all (applied via SetNextItemOpen for one frame)
     bool  ShowLive;  // false: live-mirror rows are not listed (same toggle as the canvas)
+    ImGuiWindow* HostRoot; // window hosting this outliner (captured before popups, whose root is the popup itself)
   };
+
+  // Live Display-layer window behind a tree row (null for design rows and non-windows). Its eye/Hide
+  // toggles the RUNNING window's Open -- the display layer then skips the window entirely. The window
+  // hosting this composer is exempt: hiding the editor from inside itself is a softlock.
+  static ImGuiAppWindowBase* AppTreeLiveWindow(ImGuiAppGraph* g, const ImGuiAppNode* n, const ImGuiWindow* host_root, bool* hosts_composer)
+  {
+    *hosts_composer = false;
+    if (!n->IsLive || n->Kind != ImGuiAppNodeKind_Window)
+      return nullptr;
+    ImGuiAppWindowBase* wb = (ImGuiAppWindowBase*)AppGraphFindLiveItem(g->LiveApp, n);
+    if (wb != nullptr && wb->Window != nullptr && host_root != nullptr)
+      *hosts_composer = wb->Window == host_root;
+    return wb;
+  }
+
+  // The closed live window an enclosed live row inherits its visibility from (a closed window
+  // renders NONE of its members), or null when every enclosing live window is open.
+  static ImGuiAppWindowBase* AppTreeClosedLiveHost(ImGuiAppGraph* g, const ImGuiAppNode* n, const ImGuiWindow* host_root)
+  {
+    if (!n->IsLive)
+      return nullptr;
+    bool hosts_composer = false;
+    for (const ImGuiAppNode* p = AppGraphFindNodeConst(g, AppNodeTreeParent(g, n)); p != nullptr; p = AppGraphFindNodeConst(g, AppNodeTreeParent(g, p)))
+    {
+      ImGuiAppWindowBase* pw = AppTreeLiveWindow(g, p, host_root, &hosts_composer);
+      if (pw != nullptr)
+        return pw->Open ? nullptr : pw;
+    }
+    return nullptr;
+  }
 
   // Right-aligned metadata for a tree row: a count of what the node holds (fields, hosted controls, commands).
   static void AppTreeRowMeta(const ImGuiAppGraph* g, const ImGuiAppNode* n, char* out, int out_size)
@@ -11483,10 +11544,23 @@ namespace ImGui
       }
     }
 
-    // Visibility: hide/show this node (and its subtree) on the canvas, or isolate it (hide all other design nodes).
+    // Visibility: hide/show this node (and its subtree) on the canvas, or isolate it (hide all other
+    // design nodes). A live window row's Hide closes the RUNNING window instead; none for the
+    // composer's own host window.
     ImGui::Separator();
-    if (n->Kind != ImGuiAppNodeKind_Layer && ImGui::MenuItem(n->Hidden ? ICON_FA_EYE "  Show" : ICON_FA_EYE_SLASH "  Hide"))
-      n->Hidden = !n->Hidden;
+    bool hosts_composer = false;
+    ImGuiAppWindowBase* live_win = AppTreeLiveWindow(g, n, c->HostRoot, &hosts_composer);
+    if (n->Kind != ImGuiAppNodeKind_Layer && !hosts_composer)
+    {
+      const bool visible = live_win != nullptr ? live_win->Open : !n->Hidden;
+      if (ImGui::MenuItem(visible ? ICON_FA_EYE_SLASH "  Hide" : ICON_FA_EYE "  Show"))
+      {
+        if (live_win != nullptr)
+          live_win->Open = !live_win->Open;
+        else
+          n->Hidden = !n->Hidden;
+      }
+    }
     if (ImGui::MenuItem(ICON_FA_EYE "  Isolate"))
     {
       ImVector<int> keep;
@@ -11553,10 +11627,17 @@ namespace ImGui
     if (c->SetOpen >= 0 && has_children)
       ImGui::SetNextItemOpen(c->SetOpen == 1);
 
+    // Row visibility, one truth for tint + eye: a live window row reads its RUNNING window's Open,
+    // a live member row inherits an enclosing closed window, a design row reads canvas Hidden.
+    bool hosts_composer = false;
+    ImGuiAppWindowBase* live_win = AppTreeLiveWindow(g, n, c->HostRoot, &hosts_composer);
+    ImGuiAppWindowBase* closed_host = live_win == nullptr ? AppTreeClosedLiveHost(g, n, c->HostRoot) : nullptr;
+    const bool row_off = live_win != nullptr ? !live_win->Open : closed_host != nullptr ? true : n->Hidden;
+
     const ImU32 tint = AppGraphOriginColor(n);
     ImU32 row_col = tint ? tint : (n->Kind == ImGuiAppNodeKind_Layer ? AppLayerAccent(n->LayerType) : AppKindColor(n->Kind));
-    if (n->Hidden)
-      row_col = (row_col & 0x00FFFFFF) | (IM_COL32(0, 0, 0, 110) & 0xFF000000);   // faded when hidden on canvas
+    if (row_off)
+      row_col = (row_col & 0x00FFFFFF) | (IM_COL32(0, 0, 0, 110) & 0xFF000000);   // faded when not rendering (hidden / closed window)
     ImGui::PushStyleColor(ImGuiCol_Text, row_col);
     // Origin rides the row tint (and the canvas title dot); no text suffix.
     const bool open = ImGui::TreeNodeEx("##row", f, "%s  %s", AppNodeIcon(n), n->Draft.Name[0] ? n->Draft.Name : "(unnamed)");
@@ -11598,14 +11679,23 @@ namespace ImGui
       const float cy = (rmn.y + rmx.y) * 0.5f;
       float       x = rmx.x - r - rem * 0.2f;
 
-      // Foundation layers are always visible (permanent base) -- no eye toggle for them.
-      if (n->Kind != ImGuiAppNodeKind_Layer)
+      // Foundation layers are always visible (permanent base) -- no eye toggle for them. A live
+      // window row's eye drives the RUNNING window's Open (the display layer skips a closed window);
+      // no eye at all for the window hosting this composer. A member of a closed live window
+      // inherits the closed state; its eye reads slashed and a click reopens the host window.
+      if (n->Kind != ImGuiAppNodeKind_Layer && !hosts_composer)
       {
-        const char* eye_icon = n->Hidden ? ICON_FA_EYE_SLASH : ICON_FA_EYE;
-        const ImU32 eye_col = n->Hidden ? AppComposerGetStyle()->LayerCommand : ImGui::GetColorU32(ImGuiCol_Text, row_hovered ? 0.85f : 0.3f);
+        const bool visible = !row_off;
+        const char* eye_icon = visible ? ICON_FA_EYE : ICON_FA_EYE_SLASH;
+        const ImU32 eye_col = !visible ? AppComposerGetStyle()->LayerCommand : ImGui::GetColorU32(ImGuiCol_Text, row_hovered ? 0.85f : 0.3f);
         if (AppTreeRowIcon(eye_icon, ImVec2(x, cy), r, eye_col))
         {
-          n->Hidden = !n->Hidden;
+          if (live_win != nullptr)
+            live_win->Open = !live_win->Open;
+          else if (closed_host != nullptr)
+            closed_host->Open = true;
+          else
+            n->Hidden = !n->Hidden;
           icon_clicked = true;
         }
         x -= r * 2.0f + rem * 0.05f;
@@ -11734,6 +11824,7 @@ namespace ImGui
     ctx.SetOpen = -1;
 
     ctx.ShowLive = show_live;
+    ctx.HostRoot = ImGui::GetCurrentWindowRead() != nullptr ? ImGui::GetCurrentWindowRead()->RootWindow : nullptr;
 
     // Per-kind node counts (drive the filter buttons' badges); also tally hidden nodes for a
     // "show all" affordance. Hidden live rows are not listed, so they are not counted either.
@@ -11833,8 +11924,15 @@ namespace ImGui
         if (!show_live && n->IsLive)
           continue;
         ImGui::PushID(n->Id);
+        bool hosts_composer = false;
+        ImGuiAppWindowBase* live_win = AppTreeLiveWindow(g, n, ctx.HostRoot, &hosts_composer);
+        const bool row_off = live_win != nullptr ? !live_win->Open
+                           : AppTreeClosedLiveHost(g, n, ctx.HostRoot) != nullptr ? true : n->Hidden;
         const ImU32 tint = AppGraphOriginColor(n);
-        ImGui::PushStyleColor(ImGuiCol_Text, tint ? tint : (n->Kind == ImGuiAppNodeKind_Layer ? AppLayerAccent(n->LayerType) : AppKindColor(n->Kind)));
+        ImU32 row_col = tint ? tint : (n->Kind == ImGuiAppNodeKind_Layer ? AppLayerAccent(n->LayerType) : AppKindColor(n->Kind));
+        if (row_off)
+          row_col = (row_col & 0x00FFFFFF) | (IM_COL32(0, 0, 0, 110) & 0xFF000000);   // faded when not rendering
+        ImGui::PushStyleColor(ImGuiCol_Text, row_col);
         char label[IM_LABEL_SIZE + 32];
         ImFormatString(label, IM_ARRAYSIZE(label), "%s  %s  (%s)", AppNodeIcon(n), n->Draft.Name[0] ? n->Draft.Name : "(unnamed)", AppNodeKindName(n->Kind));
         if (ImGui::Selectable(label, AppSelContains(g, n->Id) || (selected_node_id && *selected_node_id == n->Id)))

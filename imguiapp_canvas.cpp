@@ -20,6 +20,15 @@
 // [SECTION] State
 //-----------------------------------------------------------------------------
 
+// Scale a color's alpha channel (disabled-look node plates).
+static inline ImU32 CanvasColMulAlpha(ImU32 col, float a)
+{
+  if (a >= 1.0f)
+    return col;
+  const ImU32 ca = (ImU32)(((col >> IM_COL32_A_SHIFT) & 0xFF) * a);
+  return (col & ~IM_COL32_A_MASK) | (ca << IM_COL32_A_SHIFT);
+}
+
 struct ImGuiCanvasNodeRec
 {
   int    Id;
@@ -39,6 +48,7 @@ struct ImGuiCanvasNodeRec
   int    StripeSide;   // ImGuiCanvasPinSide_ of an edge stripe; -1 = none
   ImU32  StripeColor;
   float  StripeThick;  // stripe thickness, MODEL units
+  float  Alpha;        // plate + content opacity multiplier (disabled look); 1 = normal
   bool   Draggable;
   bool   Solid;      // cannot be dragged into overlap with other Solid nodes (slide to contact)
   int    LastFrame;  // ImGui frame count of the last submission (cull/hit bookkeeping)
@@ -137,6 +147,7 @@ struct ImGuiCanvasState
   int    NextStripeSide;    // ImGuiCanvasPinSide_; -1 none
   ImU32  NextStripeColor;
   float  NextStripeThick;   // model units
+  float  NextAlpha;         // plate + content opacity multiplier; 1 = normal
   ImU32  NextPinColor;
   int    NextPinSide;       // -1 -> derive from Kind (In->Left, Out->Right)
   char*  NextEditBuf;
@@ -232,6 +243,7 @@ struct ImGuiCanvasState
     NextStripeSide    = -1;
     NextStripeColor   = 0;
     NextStripeThick   = 0.0f;
+    NextAlpha         = 1.0f;
     NextPinColor      = 0;
     NextPinSide       = -1;
     NextEditBuf       = nullptr;
@@ -366,6 +378,7 @@ static ImGuiCanvasNodeRec* CanvasFindOrCreateNode(ImGuiCanvasState* c, int node_
   rec.Rounding = -1.0f;
   rec.FixedWidth = -1.0f;
   rec.StripeSide = -1;
+  rec.Alpha = 1.0f;
   c->Nodes.push_back(rec);
   c->NodeIdx.SetInt((ImGuiID)node_id, c->Nodes.Size);   // index + 1
   return &c->Nodes.back();
@@ -1060,6 +1073,11 @@ namespace ImGui
     c->NextStripeThick = model_thickness;
   }
 
+  void CanvasNextNodeAlpha(ImGuiCanvasState* c, float alpha)
+  {
+    c->NextAlpha = ImClamp(alpha, 0.0f, 1.0f);
+  }
+
   void CanvasNextNodeTitleEditable(ImGuiCanvasState* c, char* buf, int buf_size, bool* editing, ImU32 title_color)
   {
     // An editable title always occupies its band, even when blank.
@@ -1088,6 +1106,7 @@ namespace ImGui
     n->StripeSide = c->NextStripeSide;
     n->StripeColor = c->NextStripeColor;
     n->StripeThick = c->NextStripeThick;
+    n->Alpha = c->NextAlpha;
     c->NextTitle[0] = 0;
     c->NextTitleColor = 0;
     c->NextTitleTag[0] = 0;
@@ -1101,6 +1120,7 @@ namespace ImGui
     c->NextStripeSide = -1;
     c->NextStripeColor = 0;
     c->NextStripeThick = 0.0f;
+    c->NextAlpha = 1.0f;
 
     // Rename hook: capture the host's edit binding for THIS node (pointers live for the frame only).
     c->EditNodeIdx = -1;
@@ -1141,6 +1161,7 @@ namespace ImGui
     PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(gs.ItemInnerSpacing.x * z, gs.ItemInnerSpacing.y * z));
     PushStyleVar(ImGuiStyleVar_IndentSpacing,    gs.IndentSpacing * z);
     PushStyleVar(ImGuiStyleVar_FrameRounding,    gs.FrameRounding * z);
+    PushStyleVar(ImGuiStyleVar_Alpha,            gs.Alpha * n->Alpha);   // content shares the plate's disabled look
     PushFont(nullptr, GetFontSize() * z);
 
     const float title_h = n->Title[0] ? GetFrameHeight() : 0.0f;
@@ -1221,14 +1242,15 @@ namespace ImGui
     const bool hovered = c->HoveredNode == n->Id;
     const bool selected = CanvasIsSelected(c, n->Id);
     const float rounding = (n->Rounding >= 0.0f ? n->Rounding : c->Style.NodeRounding) * z;
+    const float na = n->Alpha;
     c->Splitter.SetCurrentChannel(c->DrawList, 1);
-    c->DrawList->AddRectFilled(mn, mx, selected ? c->Style.NodeBgSelected : hovered ? c->Style.NodeBgHovered : c->Style.NodeBg, rounding);
+    c->DrawList->AddRectFilled(mn, mx, CanvasColMulAlpha(selected ? c->Style.NodeBgSelected : hovered ? c->Style.NodeBgHovered : c->Style.NodeBg, na), rounding);
     const bool editing_title = c->EditNodeIdx == c->CurNode && c->EditFlag != nullptr && *c->EditFlag && title_h > 0.0f;
     if (title_h > 0.0f)
     {
       const ImU32 tb = n->TitleColor != 0 ? n->TitleColor
                      : selected ? c->Style.TitleBarSelected : hovered ? c->Style.TitleBarHovered : c->Style.TitleBar;
-      c->DrawList->AddRectFilled(mn, ImVec2(mx.x, mn.y + title_h), tb, rounding, ImDrawFlags_RoundCornersTop);
+      c->DrawList->AddRectFilled(mn, ImVec2(mx.x, mn.y + title_h), CanvasColMulAlpha(tb, na), rounding, ImDrawFlags_RoundCornersTop);
       if (!editing_title)
       {
         float text_x = mn.x + c->Style.NodePadding.x * z;
@@ -1237,12 +1259,12 @@ namespace ImGui
           const float r = GetFontSize() * 0.17f;
           const ImVec2 dc(text_x + r, mn.y + title_h * 0.5f);
           if (n->DotRing)
-            c->DrawList->AddCircle(dc, r, n->OriginDot, 0, ImMax(1.2f, r * 0.7f));
+            c->DrawList->AddCircle(dc, r, CanvasColMulAlpha(n->OriginDot, na), 0, ImMax(1.2f, r * 0.7f));
           else
-            c->DrawList->AddCircleFilled(dc, r, n->OriginDot);
+            c->DrawList->AddCircleFilled(dc, r, CanvasColMulAlpha(n->OriginDot, na));
           text_x += r * 2.0f + GetFontSize() * 0.25f;
         }
-        c->DrawList->AddText(ImVec2(text_x, mn.y + (title_h - GetFontSize()) * 0.5f), c->Style.TitleText, n->Title);
+        c->DrawList->AddText(ImVec2(text_x, mn.y + (title_h - GetFontSize()) * 0.5f), CanvasColMulAlpha(c->Style.TitleText, na), n->Title);
         float after_x = text_x + CalcTextSize(n->Title).x;
         if (n->Badge[0])
         {
@@ -1250,9 +1272,9 @@ namespace ImGui
           const float pad = GetFontSize() * 0.25f;
           const ImVec2 bmn(after_x + GetFontSize() * 0.4f, mn.y + (title_h - (bs.y + pad)) * 0.5f);
           const ImVec2 bmx(bmn.x + bs.x + pad * 2.0f, bmn.y + bs.y + pad);
-          c->DrawList->AddRectFilled(bmn, bmx, IM_COL32(0, 0, 0, 70), 3.0f * z);
-          c->DrawList->AddRect(bmn, bmx, IM_COL32(255, 255, 255, 40), 3.0f * z);
-          c->DrawList->AddText(ImVec2(bmn.x + pad, bmn.y + pad * 0.5f), (c->Style.TitleText & 0x00FFFFFF) | 0xCC000000, n->Badge);
+          c->DrawList->AddRectFilled(bmn, bmx, CanvasColMulAlpha(IM_COL32(0, 0, 0, 70), na), 3.0f * z);
+          c->DrawList->AddRect(bmn, bmx, CanvasColMulAlpha(IM_COL32(255, 255, 255, 40), na), 3.0f * z);
+          c->DrawList->AddText(ImVec2(bmn.x + pad, bmn.y + pad * 0.5f), CanvasColMulAlpha((c->Style.TitleText & 0x00FFFFFF) | 0xCC000000, na), n->Badge);
           after_x = bmx.x;
         }
         if (n->KindTag[0])
@@ -1262,13 +1284,13 @@ namespace ImGui
           const float tag_x = mx.x - c->Style.NodePadding.x * z - ts.x;
           if (tag_x > after_x + GetFontSize())
             c->DrawList->AddText(ImVec2(tag_x, mn.y + (title_h - GetFontSize()) * 0.5f),
-                                 (c->Style.TitleText & 0x00FFFFFF) | 0x66000000, n->KindTag);
+                                 CanvasColMulAlpha((c->Style.TitleText & 0x00FFFFFF) | 0x66000000, na), n->KindTag);
         }
       }
       if (n->HeaderRule != 0)
       {
         const float ry = mn.y + title_h;
-        const ImU32 rc = n->HeaderRuleColor != 0 ? n->HeaderRuleColor : c->Style.NodeOutline;
+        const ImU32 rc = CanvasColMulAlpha(n->HeaderRuleColor != 0 ? n->HeaderRuleColor : c->Style.NodeOutline, na);
         if (n->HeaderRule == 1)
           c->DrawList->AddLine(ImVec2(mn.x, ry), ImVec2(mx.x, ry), rc, ImMax(1.0f, 2.0f * z));
         else
@@ -1279,15 +1301,16 @@ namespace ImGui
     if (n->StripeSide >= 0 && n->StripeThick > 0.0f)
     {
       const float t = n->StripeThick * z;
+      const ImU32 sc = CanvasColMulAlpha(n->StripeColor, na);
       switch (n->StripeSide)
       {
-      case ImGuiCanvasPinSide_Left:   c->DrawList->AddRectFilled(mn, ImVec2(mn.x + t, mx.y), n->StripeColor, rounding, ImDrawFlags_RoundCornersLeft); break;
-      case ImGuiCanvasPinSide_Right:  c->DrawList->AddRectFilled(ImVec2(mx.x - t, mn.y), mx, n->StripeColor, rounding, ImDrawFlags_RoundCornersRight); break;
-      case ImGuiCanvasPinSide_Top:    c->DrawList->AddRectFilled(mn, ImVec2(mx.x, mn.y + t), n->StripeColor, rounding, ImDrawFlags_RoundCornersTop); break;
-      case ImGuiCanvasPinSide_Bottom: c->DrawList->AddRectFilled(ImVec2(mn.x, mx.y - t), mx, n->StripeColor, rounding, ImDrawFlags_RoundCornersBottom); break;
+      case ImGuiCanvasPinSide_Left:   c->DrawList->AddRectFilled(mn, ImVec2(mn.x + t, mx.y), sc, rounding, ImDrawFlags_RoundCornersLeft); break;
+      case ImGuiCanvasPinSide_Right:  c->DrawList->AddRectFilled(ImVec2(mx.x - t, mn.y), mx, sc, rounding, ImDrawFlags_RoundCornersRight); break;
+      case ImGuiCanvasPinSide_Top:    c->DrawList->AddRectFilled(mn, ImVec2(mx.x, mn.y + t), sc, rounding, ImDrawFlags_RoundCornersTop); break;
+      case ImGuiCanvasPinSide_Bottom: c->DrawList->AddRectFilled(ImVec2(mn.x, mx.y - t), mx, sc, rounding, ImDrawFlags_RoundCornersBottom); break;
       }
     }
-    c->DrawList->AddRect(mn, mx, selected ? c->Style.NodeOutlineSelected : c->Style.NodeOutline, rounding, 0,
+    c->DrawList->AddRect(mn, mx, CanvasColMulAlpha(selected ? c->Style.NodeOutlineSelected : c->Style.NodeOutline, na), rounding, 0,
                          ImMax(1.0f, c->Style.NodeBorder * z));
     c->Splitter.SetCurrentChannel(c->DrawList, 2);
 
@@ -1312,7 +1335,7 @@ namespace ImGui
 
     PopID();
     PopFont();
-    PopStyleVar(5);
+    PopStyleVar(6);
     c->CurNode = -1;
   }
 

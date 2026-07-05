@@ -763,6 +763,11 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
 
     for (auto& window : app->Windows)
     {
+      // Closed window: composition member stays (mirror, wiring), but nothing renders -- no Begin,
+      // no OnRender, no hosted controls. Reopen by writing Open (outliner eye / host UI).
+      if (!window->Open)
+        continue;
+
       window->OnStylePush(app);
 
       // Never fight a dock binding: SetNextWindowPos undocks a docked window by design
