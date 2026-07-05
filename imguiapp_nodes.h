@@ -466,6 +466,19 @@ struct ImGuiAppScopePlacement
   ImVec2 Pos     = ImVec2(0.0f, 0.0f);
 };
 
+// Scope-local member ORDER (F58): the authored left-to-right / push order of a scope's members,
+// keyed by scope node. One record holds the whole sequence -- an order IS a sequence, so it is stored
+// as one; the flat per-(scope,node) index alternative scatters a single order across N rows and needs
+// a sort to read it back. ScopeId == -1 is the composition root (the phase-layer order). Serialized
+// (model state, like Place=); AppScopeSequenceIds returns members in THIS order when a record exists,
+// else the derived sequence. The core phase layers may never be reordered here (AppGraphValidate
+// rejects a record that permutes them).
+struct ImGuiAppScopeOrder
+{
+  int           ScopeId = -1;
+  ImVector<int> NodeIds;
+};
+
 // One cached trunk-route drawing primitive, in MODEL units (line-to / arc / cubic). The route is
 // computed once from model inputs and only re-derived when those inputs move -- the camera never
 // re-routes a settled link (transient, not serialized).
@@ -643,6 +656,7 @@ struct ImGuiAppGraph
   ImVector<int>                  ViewScope;                            // drill-down scope stack (node ids, outer->inner); empty = whole app; transient, not serialized
   ImVector<ImGuiAppScopeCamera>  ScopeCams;                            // per-branch camera memory (transient, not serialized)
   ImVector<ImGuiAppScopePlacement> ScopePlacements;                    // scope-local member positions (serialized; root layout stays in GridPos)
+  ImVector<ImGuiAppScopeOrder>   ScopeOrders;                          // per-scope authored member order (F58; serialized; empty = derive the sequence)
   ImVector<ImGuiAppTrunkRoute>   _TrunkRoutes;                         // cached trunk routes, model units (transient, not serialized)
   ImVector<ImGuiAppDragStick>    _DragStick;                           // cluster originals for the active layer drag (transient)
   int                            _DragStickAnchor           = 0;       // layer node the sticks belong to (0 = no active capture)

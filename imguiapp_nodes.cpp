@@ -2918,6 +2918,20 @@ namespace ImGui
     for (int ci = g->ScopeCams.Size - 1; ci >= 0; ci--)
       if (g->ScopeCams.Data[ci].ScopeId == node_id)
         g->ScopeCams.erase(g->ScopeCams.Data + ci);
+    for (int oi = g->ScopeOrders.Size - 1; oi >= 0; oi--)   // F58: sweep the dead node from every order record
+    {
+      if (g->ScopeOrders.Data[oi].ScopeId == node_id)
+      {
+        g->ScopeOrders.erase(g->ScopeOrders.Data + oi);
+        continue;
+      }
+      ImVector<int>& ids = g->ScopeOrders.Data[oi].NodeIds;
+      for (int k = ids.Size - 1; k >= 0; k--)
+        if (ids.Data[k] == node_id)
+          ids.erase(ids.Data + k);
+      if (ids.Size == 0)
+        g->ScopeOrders.erase(g->ScopeOrders.Data + oi);
+    }
 
     g->Nodes.erase(n);   // surviving nodes/ports/links keep their ids; ids are never reused
   }
@@ -5254,9 +5268,45 @@ namespace ImGui
     }
   }
 
+  static const ImGuiAppScopeOrder* AppScopeOrderFind(const ImGuiAppGraph* g, int scope_id)
+  {
+    for (int i = 0; i < g->ScopeOrders.Size; i++)
+      if (g->ScopeOrders.Data[i].ScopeId == scope_id)
+        return &g->ScopeOrders.Data[i];
+    return nullptr;
+  }
+
+  // F58 read side: reorder `seq` to the scope's authored order -- recorded members first in recorded order
+  // (those actually present this frame), then any unrecorded members in their derived order. No authored
+  // record, or an empty sequence, leaves `seq` untouched (fall back to the derivation).
+  static void AppScopeApplyAuthoredOrder(const ImGuiAppGraph* g, int scope_id, ImVector<int>* seq)
+  {
+    const ImGuiAppScopeOrder* ord = AppScopeOrderFind(g, scope_id);
+    if (ord == nullptr || seq->Size == 0)
+      return;
+    ImVector<int> ranked;
+    ranked.reserve(seq->Size);
+    for (int i = 0; i < ord->NodeIds.Size; i++)
+    {
+      const int id = ord->NodeIds.Data[i];
+      for (int j = 0; j < seq->Size; j++)
+        if (seq->Data[j] == id) { ranked.push_back(id); break; }
+    }
+    for (int j = 0; j < seq->Size; j++)
+    {
+      bool recorded = false;
+      for (int i = 0; i < ord->NodeIds.Size && !recorded; i++)
+        recorded = ord->NodeIds.Data[i] == seq->Data[j];
+      if (!recorded)
+        ranked.push_back(seq->Data[j]);
+    }
+    seq->swap(ranked);
+  }
+
   // Direct members of the current scope in EXECUTION order -- the per-frame event sequence the framework runs
   // them in: windows/sidebars in push (render) order, controls in dependency (update) order, command emitters in
-  // push order. Non-sequential scopes (control/struct/status) produce an empty list.
+  // push order. Non-sequential scopes (control/struct/status) produce an empty list. An authored order for the
+  // scope (F58) overrides the derivation.
   static void AppScopeSequenceIds(const ImGuiAppGraph* g, ImVector<int>* out)
   {
     out->clear();
@@ -5300,6 +5350,8 @@ namespace ImGui
         if (g->Nodes.Data[i].Kind == ImGuiAppNodeKind_Control && AppGraphParentOf(g, g->Nodes.Data[i].Id) == top)
           out->push_back(g->Nodes.Data[i].Id);
     }
+
+    AppScopeApplyAuthoredOrder(g, top, out);   // F58: authored order overrides derivation for this scope
   }
 
   // Per-scope sequence tidy (F44): arrange the drilled scope's members left -> right in execution order
@@ -9687,6 +9739,29 @@ namespace ImGui
           && AppNodeEffectiveFieldType(g, prod, 0, b->SrcField) < 0)
         AppValidatePushIssue(out, prod_id, 2, "%s: binding reads undeclared field '%s'", prod->Draft.Name, b->SrcField);
     }
+
+    // (f) F58 order records may not reorder the core phase layers. The five foundation layers run in a fixed
+    // per-frame sequence (Task -> Command -> Status -> Layout -> Display, the LayerType enum order); an authored
+    // order that lists them out of that relative order is rejected -- it would emit the wrong phase sequence.
+    // Non-core members carry no such constraint, so a scope-member reorder is accepted.
+    for (int oi = 0; oi < g->ScopeOrders.Size; oi++)
+    {
+      const ImGuiAppScopeOrder* ord = &g->ScopeOrders.Data[oi];
+      int prev_rank = -1;
+      for (int k = 0; k < ord->NodeIds.Size; k++)
+      {
+        const ImGuiAppNode* ln = AppGraphFindNodeConst(g, ord->NodeIds.Data[k]);
+        if (ln == nullptr || ln->IsLive || ln->Kind != ImGuiAppNodeKind_Layer || !AppLayerIsCore(ln->LayerType))
+          continue;
+        const int rank = (int)ln->LayerType;
+        if (rank < prev_rank)
+        {
+          AppValidatePushIssue(out, ln->Id, 2, "order record reorders core phase layer '%s' -- the foundation layers run in a fixed sequence", AppLayerNodeName(ln->LayerType));
+          break;
+        }
+        prev_rank = rank;
+      }
+    }
   }
 
   // Render one field list as live mock widgets. Numeric state is kept in the window's ImGuiStorage keyed by the
@@ -11693,6 +11768,16 @@ namespace ImGui
     for (int i = 0; i < g->ScopePlacements.Size; i++)
       buf->appendf("Place=%d,%d,%g,%g\n", g->ScopePlacements.Data[i].ScopeId, g->ScopePlacements.Data[i].NodeId,
                    g->ScopePlacements.Data[i].Pos.x, g->ScopePlacements.Data[i].Pos.y);
+    // F58 order records: one line per scope, "Order=<scopeId>,<id0>,<id1>,...". A default graph authors none,
+    // so the serialization stays byte-identical to the pre-feature format (like the sparse keymap below).
+    for (int i = 0; i < g->ScopeOrders.Size; i++)
+    {
+      const ImGuiAppScopeOrder* ord = &g->ScopeOrders.Data[i];
+      buf->appendf("Order=%d", ord->ScopeId);
+      for (int k = 0; k < ord->NodeIds.Size; k++)
+        buf->appendf(",%d", ord->NodeIds.Data[k]);
+      buf->append("\n");
+    }
     // F74 keymap: sparse user overrides only (a default graph writes none, so it stays byte-identical to
     // the pre-feature serialization). Key==0 (ImGuiKey_None) encodes an explicit unbind.
     for (int i = 0; i < g->Keymap.Size; i++)
@@ -11866,6 +11951,7 @@ namespace ImGui
     g->Links.clear();
     g->Bindings.clear();
     g->ScopePlacements.clear();
+    g->ScopeOrders.clear();
     g->Keymap.clear();
     g->Selection.clear();
     g->NextId = 1;
@@ -11960,6 +12046,22 @@ namespace ImGui
         ImGuiAppScopePlacement pl;
         if (sscanf(p + 6, "%d,%d,%f,%f", &pl.ScopeId, &pl.NodeId, &pl.Pos.x, &pl.Pos.y) == 4)
           g->ScopePlacements.push_back(pl);
+      }
+      else if (strncmp(p, "Order=", 6) == 0)
+      {
+        ImGuiAppScopeOrder ord;
+        char* s = p + 6;
+        ord.ScopeId = (int)strtol(s, &s, 10);
+        while (*s == ',')
+        {
+          char* e = s + 1;
+          const int id = (int)strtol(s + 1, &e, 10);
+          if (e == s + 1) break;   // no digits after the comma: stop
+          ord.NodeIds.push_back(id);
+          s = e;
+        }
+        if (ord.NodeIds.Size > 0)
+          g->ScopeOrders.push_back(ord);
       }
       else if (strncmp(p, "Bind=", 5) == 0)
       {
