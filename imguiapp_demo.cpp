@@ -867,6 +867,30 @@ namespace
           }
         }
 
+        // F31: problems-count badge. Worst severity wins the colour (red = errors, amber = warnings only);
+        // absent when the graph validates clean. Clicking opens the Output panel filtered to problems.
+        {
+          const int nwarn_v = doc->NumWarnings;
+          const int nprob   = nerr + nwarn_v;   // nerr captured with the Generate cluster above
+          if (nprob > 0)
+          {
+            ImGui::SameLine(0.0f, ImMax(1.0f, em * 0.25f));
+            ImGui::PushStyleColor(ImGuiCol_Button, nerr > 0 ? ImVec4(0.55f, 0.21f, 0.18f, 1.0f) : ImVec4(0.52f, 0.39f, 0.14f, 1.0f));
+            char prob_lbl[48];
+            ImFormatString(prob_lbl, IM_ARRAYSIZE(prob_lbl), ICON_FA_TRIANGLE_EXCLAMATION "  %d###problems", nprob);
+            if (ImGui::Button(prob_lbl))
+            {
+              temp_data->RevealPanel = ComposerPanel_Output;
+              ImGuiAppEditorState* ed = ImGui::AppGraphEditorState(&doc->Graph);
+              ed->OutputShowErr  = true;
+              ed->OutputShowWarn = true;
+              ed->OutputShowInfo = false;   // filter to problems: hide the info/log stream
+            }
+            ImGui::PopStyleColor();
+            ImGui::SetItemTooltip("%d problem(s): %d error(s), %d warning(s) -- click to open Output", nprob, nerr, nwarn_v);
+          }
+        }
+
         // App-time transport (F29): freeze the running app + scrub its state history. Flow-placed (left of
         // the right-aligned observe cluster) so it stays on the toolbar; only offered with the live mirror.
         if (show_live && doc->Transport != nullptr)

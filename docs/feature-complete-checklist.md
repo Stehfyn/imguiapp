@@ -238,9 +238,15 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   frozen, gone on resume -- which isolates it from node animation. Also moved the transport cluster into
   the toolbar flow (the right-aligned placement clipped it off-screen) and fixed a freeze-button crash:
   the click flipped Frozen between the style Push and Pop, so the state is now captured first.
-- [ ] **F31 problems-count toolbar badge** — worst-severity colored count; click opens Output
+- [x] **F31 problems-count toolbar badge** — worst-severity colored count; click opens Output
   filtered to problems.
   *Accept: badge test with engineered error graph.*
+  DONE: a toolbar badge shows the validation problem count (NumErrors + NumWarnings), coloured by worst
+  severity (red = errors, amber = warnings only) and absent when the graph is clean. Clicking sets
+  RevealPanel=Output and flips the Output filter to problems-only (err+warn on, info/log off).
+  composer_problems_badge engineers a severity-2 error (event emitting an undefined command) into the
+  composer graph, asserts the badge appears, clicking opens the Output panel, and removing the error
+  returns the badge to its pre-injection state.
 - [ ] **F32 frozen status-bar zone map** — fixed x anchors: keymap | breadcrumb (click selects
   scope owner) | counts (click filters outliner) | mirror facts (click toggles Live) | freshness
   (click generates). No width-dependent shifting.
