@@ -424,9 +424,16 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   falls back to `AppGraphAutoLayout` at root / non-sequential scopes. The Tidy verb (L key, gizmo,
   palette id 10) now calls it. `step84_scope_sequence_tidy` drills into a window with 3 hosted controls,
   tidies, and asserts left→right on one row with GridPos unchanged. Nodes 93/93, headless 28/28, core 87/0.
-- [ ] **F45 portal completion** — outbound label spec (`field ▸ Consumer`), outbound test, 0.9 em
+- [x] **F45 portal completion** — outbound label spec (`field ▸ Consumer`), outbound test, 0.9 em
   chip text slot, border mix toward neutral, inside-pin hover halo.
   *Accept: outbound + hover tests; on-camera chip capture.*
+  DONE (`AppDrawScopePortals`): outbound chips now read `field ▸ Consumer` (inside port's field name +
+  the remote); chip text dropped to the 0.9-em tier (`TypeSecondary`, the F39 deferral); the border
+  MIXES the kind hue toward the neutral wall line (`AppThemeMix`, more neutral at rest, more kind on
+  hover) instead of alpha over the plate; hovering a chip halos the in-scope pin it docks to.
+  `step85_outbound_portal` asserts the crossing edge collects outbound (Inbound == false, names the
+  consumer) and that clicking the right-wall chip jumps to the consumer's scope with it selected (the
+  hover→click path). Nodes 94/94, headless 28/28, core 87/0.
 - [ ] **F46 scope header row in inspector during drill.**
   *Accept: ItemExists test while drilled.*
 - [ ] **F47 scope chrome test-debt** — end band, rails, void dim, shrink deadband, title

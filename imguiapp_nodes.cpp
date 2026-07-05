@@ -5969,12 +5969,12 @@ namespace ImGui
     const bool win_hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
 
     int jump_to = -1;
-    ImGui::PushFont(nullptr, em);
+    ImGui::PushFont(nullptr, em * AppComposerGetMotion()->TypeSecondary);   // F45: 0.9 em chip text slot
     for (int i = 0; i < portals.Size; i++)
     {
       const ImGuiAppScopePortal* p = &portals.Data[i];
       ImGuiAppNode* inside_owner = nullptr;
-      AppGraphFindPort(g, p->InsidePortId, &inside_owner);
+      const ImGuiAppNodePort* inside_port = AppGraphFindPort(g, p->InsidePortId, &inside_owner);
       const ImGuiAppNode* remote = AppGraphFindNodeConst(g, p->OutsideNodeId);
       if (inside_owner == nullptr || remote == nullptr || !AppEditorNodeWasSubmitted(g, inside_owner->Id))
         continue;
@@ -5982,12 +5982,13 @@ namespace ImGui
       const ImVec2 pin_m = ImGui::CanvasPinPos(cv, p->InsidePortId);
       const ImVec2 pin_s = ImGui::CanvasToScreen(cv, pin_m);
 
-      char label[IM_LABEL_SIZE + 8];
+      char label[IM_LABEL_SIZE + 12];
       const char* rname = remote->Draft.Name[0] ? remote->Draft.Name : "(unnamed)";
+      const char* fld = (inside_port != nullptr && inside_port->Name[0]) ? inside_port->Name : "data";
       if (p->Inbound)
-        ImFormatString(label, IM_ARRAYSIZE(label), "\xe2\x96\xb8 %s", rname);
+        ImFormatString(label, IM_ARRAYSIZE(label), "\xe2\x96\xb8 %s", rname);          // inbound: from the producer
       else
-        ImFormatString(label, IM_ARRAYSIZE(label), "%s \xe2\x96\xb8", rname);
+        ImFormatString(label, IM_ARRAYSIZE(label), "%s \xe2\x96\xb8 %s", fld, rname);   // F45 outbound: field > Consumer
       const ImVec2 ts = ImGui::CalcTextSize(label);
       const float ch = em * 1.5f;
       const float cw = ts.x + em * 1.2f;
@@ -6008,7 +6009,12 @@ namespace ImGui
       const ImU32 kcol = AppKindColor(remote->Kind);
       const bool hov = win_hovered && ImGui::IsMouseHoveringRect(mn, mx);
       dl->AddRectFilled(mn, mx, AppThemeNeutral(hov ? 0.18f : 0.11f, 0.98f), ch * 0.5f);
-      dl->AddRect(mn, mx, AppColWithAlpha(kcol, hov ? 0.9f : 0.45f), ch * 0.5f, 0, ImMax(1.0f, em * 0.07f));
+      // F45: the border MIXES the kind hue toward the neutral wall line (a boundary reads as a line,
+      // not a loud accent) -- more neutral at rest, more kind on hover -- instead of alpha over the plate.
+      const ImVec4 kv = ImGui::ColorConvertU32ToFloat4(kcol);
+      const ImVec4 nv = ImGui::ColorConvertU32ToFloat4(AppThemeNeutral(0.5f));
+      const ImU32 border = AppThemeMix(kv, nv, hov ? 0.30f : 0.60f, hov ? 0.95f : 0.75f);
+      dl->AddRect(mn, mx, border, ch * 0.5f, 0, ImMax(1.0f, em * 0.07f));
       dl->AddText(ImVec2(mn.x + em * 0.6f, dock.y - ts.y * 0.5f), AppColWithAlpha(kcol, hov ? 1.0f : 0.75f), label);
 
       if (hov)
@@ -6016,6 +6022,8 @@ namespace ImGui
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         ImGui::SetTooltip(p->Inbound ? "from %s -- click to open its scope" : "feeds %s -- click to open its scope", rname);
         AppGraphHoverNode(g, p->OutsideNodeId, ImGuiAppHoverSource_Canvas);
+        // F45: halo the in-scope pin this portal docks to, so the boundary crossing is legible.
+        dl->AddCircle(pin_s, em * 0.55f, AppColWithAlpha(AppComposerGetStyle()->PinData, 0.9f), 0, ImMax(1.0f, em * 0.09f));
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
           jump_to = p->OutsideNodeId;
       }
