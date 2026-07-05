@@ -31,9 +31,10 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
 - [x] **F06 ScopeCams sweep on delete** — AppGraphRemoveNode drops the dead scope's camera
   records (mirrors the ScopePlacements sweep).
   *Accept: delete-scope-owner test asserts no ScopeCams entry remains (step47).*
-- [ ] **F07 inspector edits reach exploded lists** — field edits/adds route to the Field nodes
+- [x] **F07 inspector edits reach exploded lists** — field edits/adds route to the Field nodes
   while a Draft list is exploded (today: silent dead writes; collapse destroys them).
-  *Accept: edit-while-exploded test; collapse preserves the edit.*
+  *Accept: edit-while-exploded test; collapse preserves the edit (step48: inspector Add lands as a
+  containment-linked Field node, the exact shape collapse folds back; inline vector stays empty).*
 - [ ] **F08 history jump test** — HistoryGoto path (undo popup list) exercised.
   *Accept: jump N back → model equals snapshot N.*
 

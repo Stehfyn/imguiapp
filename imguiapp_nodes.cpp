@@ -2161,6 +2161,51 @@ namespace ImGui
     }
   }
 
+  // Create one Field node for member `fd` of an owner (Struct/Control) list, tied back to the owner via a
+  // containment edge and placed at slot `idx` around the owner. Anchors per altitude: offspring cluster
+  // around the owner's ROOT position in GridPos and around its interior position in the drilled scope's
+  // placements. Does NOT touch the owner's inline list. Shared by explode (every member at once) and the
+  // inspector's add-while-exploded road. Returns the new Field node id (0 if the owner vanished).
+  static int AppGraphAddExplodedField(ImGuiAppGraph* g, int owner_id, int list, const ImGuiAppFieldDesc& fd, int idx)
+  {
+    ImGuiAppNode* owner = AppGraphFindNode(g, owner_id);
+    if (owner == nullptr)
+      return 0;
+    // Snapshot off `owner` before AppGraphAddNode grows g->Nodes and dangles it.
+    const ImVec2 opos = owner->GridPos;
+    const int exp_scope = AppScopeCurrent(g);
+    const ImVec2 spos = exp_scope >= 0 ? AppNodeScopePos(g, owner) : opos;
+    int owner_in = 0;
+    for (int p = 0; p < owner->Ports.Size; p++)
+      if (owner->Ports.Data[p].Kind == ImGuiAppPortKind_ChildIn)
+        owner_in = owner->Ports.Data[p].Id;
+
+    ImGuiAppNode* fn = AppGraphAddNode(g, ImGuiAppNodeKind_Field, fd.Name);
+    fn->Draft.PersistFields.clear();
+    fn->Draft.PersistFields.push_back(fd);
+    fn->FieldList = list;
+    const ImVec2 field_off(-240.0f, (list == 1 ? 30.0f : -150.0f) + (float)idx * 70.0f);
+    fn->GridPos = opos + field_off;
+    fn->HasGridPos = true;
+    fn->_NeedsPlace = true;
+    if (exp_scope >= 0)
+      AppNodeScopePosStore(g, fn->Id, spos + field_off);
+    int field_childout = 0;
+    for (int p = 0; p < fn->Ports.Size; p++)
+      if (fn->Ports.Data[p].Kind == ImGuiAppPortKind_ChildOut)
+        field_childout = fn->Ports.Data[p].Id;
+    if (field_childout != 0 && owner_in != 0)
+    {
+      ImGuiAppNodeLink l;
+      l.Id = AppGraphAllocId(g);
+      l.StartAttr = field_childout;
+      l.EndAttr = owner_in;
+      l.Kind = ImGuiAppEdgeKind_Containment;
+      g->Links.push_back(l);
+    }
+    return fn->Id;
+  }
+
   // Explode an owner's (Struct or Control) Persist (0) / Temp (1) struct fields into individual Field nodes, each
   // linked back via containment and wireable. The owner's inline list is cleared (the Field nodes own it now).
   static void AppGraphExplodeFields(ImGuiAppGraph* g, ImGuiAppNode* owner, int list)
@@ -2179,54 +2224,10 @@ namespace ImGui
       return;
     }
 
-    // Snapshot off `owner` before AppGraphAddNode grows g->Nodes and dangles it.
     const int oid = owner->Id;
-    const ImVec2 opos = owner->GridPos;
-    // Anchor per altitude: offspring cluster around the owner's ROOT position in GridPos and
-    // around its interior position in the drilled scope's placements.
-    const int exp_scope = AppScopeCurrent(g);
-    const ImVec2 spos = exp_scope >= 0 ? AppNodeScopePos(g, owner) : opos;
-    int owner_in = 0;
-    for (int p = 0; p < owner->Ports.Size; p++)
-    {
-      if (owner->Ports.Data[p].Kind == ImGuiAppPortKind_ChildIn)
-      {
-        owner_in = owner->Ports.Data[p].Id;
-      }
-    }
     const ImVector<ImGuiAppFieldDesc> fields = *src;
-
     for (int i = 0; i < fields.Size; i++)
-    {
-      const ImGuiAppFieldDesc fd = fields.Data[i];
-      ImGuiAppNode* fn = AppGraphAddNode(g, ImGuiAppNodeKind_Field, fd.Name);
-      fn->Draft.PersistFields.clear();
-      fn->Draft.PersistFields.push_back(fd);
-      fn->FieldList = list;
-      const ImVec2 field_off(-240.0f, (list == 1 ? 30.0f : -150.0f) + (float)i * 70.0f);
-      fn->GridPos = opos + field_off;
-      fn->HasGridPos = true;
-      fn->_NeedsPlace = true;
-      if (exp_scope >= 0)
-        AppNodeScopePosStore(g, fn->Id, spos + field_off);
-      int field_childout = 0;
-      for (int p = 0; p < fn->Ports.Size; p++)
-      {
-        if (fn->Ports.Data[p].Kind == ImGuiAppPortKind_ChildOut)
-        {
-          field_childout = fn->Ports.Data[p].Id;
-        }
-      }
-      if (field_childout != 0 && owner_in != 0)
-      {
-        ImGuiAppNodeLink l;
-        l.Id = AppGraphAllocId(g);
-        l.StartAttr = field_childout;
-        l.EndAttr = owner_in;
-        l.Kind = ImGuiAppEdgeKind_Containment;
-        g->Links.push_back(l);
-      }
-    }
+      AppGraphAddExplodedField(g, oid, list, fields.Data[i], i);
     if (ImGuiAppNode* oo = AppGraphFindNode(g, oid))   // re-find: owner may have moved
     {
       AppNodeFieldList(oo, list)->clear();
@@ -2277,6 +2278,66 @@ namespace ImGui
     {
       *AppNodeFieldList(oo, list) = fields;
     }
+  }
+
+  // Inspector field editor that stays honest whether the (owner, list) members live inline or exploded
+  // into Field nodes. While exploded the owner's inline vector is empty -- the nodes own the members --
+  // so editing that vector is a dead write the next collapse discards. Route every edit/add/delete to the
+  // Field nodes instead; the node title is the authoritative member name on collapse.
+  static void EditAppNodeFieldSection(ImGuiAppGraph* g, ImGuiAppNode* owner, int list, const char* label)
+  {
+    if (AppGraphFieldNodeCount(g, owner->Id, list) == 0)
+    {
+      EditAppFieldList(label, AppNodeFieldList(owner, list), g);   // inline: edit the draft vector directly
+      return;
+    }
+
+    const int owner_id = owner->Id;
+    ImGui::PushID(label);
+    ImGui::TextDisabled("%s", label);
+
+    ImVector<int> ids;                                             // field node ids in node order (== collapse order)
+    for (int i = 0; i < g->Nodes.Size; i++)
+    {
+      const ImGuiAppNode* fn = &g->Nodes.Data[i];
+      if (fn->Kind == ImGuiAppNodeKind_Field && fn->FieldList == list && AppGraphParentOf(g, fn->Id) == owner_id)
+        ids.push_back(fn->Id);
+    }
+
+    const float em = ImGui::GetFontSize();
+    for (int i = 0; i < ids.Size; i++)
+    {
+      ImGuiAppNode* fn = AppGraphFindNode(g, ids.Data[i]);
+      if (fn == nullptr)
+        continue;
+      if (fn->Draft.PersistFields.Size == 0)
+        fn->Draft.PersistFields.push_back(ImGuiAppFieldDesc());
+      ImGui::PushID(ids.Data[i]);
+
+      // Title is authoritative on collapse; mirror it into the field desc so inline readers (codegen
+      // preview, summary lines) agree before the collapse happens.
+      if (AppBlInputText("##name", fn->Draft.Name, IM_ARRAYSIZE(fn->Draft.Name), em * 8.0f))
+        ImStrncpy(fn->Draft.PersistFields.Data[0].Name, fn->Draft.Name, IM_ARRAYSIZE(fn->Draft.PersistFields.Data[0].Name));
+      ImGui::SameLine();
+      EditAppFieldTypeControls(&fn->Draft.PersistFields.Data[0], em * 5.0f, g);
+      ImGui::SameLine();
+      if (AppRowDeleteButton("X"))
+      {
+        AppGraphRemoveNode(g, ids.Data[i]);
+        ImGui::PopID();
+        continue;
+      }
+      ImGui::PopID();
+    }
+
+    if (AppBlAddPill("Add field", "Add field"))
+    {
+      ImGuiAppFieldDesc fd;
+      ImStrncpy(fd.Name, "field", IM_ARRAYSIZE(fd.Name));
+      fd.Type = ImGuiAppFieldType_Float;
+      AppGraphAddExplodedField(g, owner_id, list, fd, AppGraphFieldNodeCount(g, owner_id, list));   // new member joins as a Field node
+    }
+    ImGui::PopID();
   }
 
   // Explode one of a Control's two structs OUT as a standalone Struct node (named <Control>Data /
@@ -4428,7 +4489,10 @@ namespace ImGui
       else
       {
         if (AppInspectorSection("##sec_fields", ICON_FA_TABLE_LIST, "Fields", nullptr, nullptr))
-          EditAppNodeDraftFields(&n->Draft);   // Persist + Temp field lists
+        {
+          EditAppNodeFieldSection(g, n, 0, "Persist");   // routes to the Field nodes when the list is exploded
+          EditAppNodeFieldSection(g, n, 1, "Temp");
+        }
         if (AppInspectorSection("##sec_events", ICON_FA_BOLT, "Events", nullptr, nullptr))
           EditAppControlEvents(g, n);          // temp-vs-last-temp reactions (see ImGuiAppEventDesc)
       }
@@ -4444,7 +4508,7 @@ namespace ImGui
       break;
     case ImGuiAppNodeKind_Struct:
       if (AppInspectorSection("##sec_fields", ICON_FA_TABLE_LIST, "Fields", nullptr, nullptr))
-        EditAppFieldList("fields", &n->Draft.PersistFields, g);
+        EditAppNodeFieldSection(g, n, 0, "fields");   // routes to the Field nodes when the list is exploded
       break;
     case ImGuiAppNodeKind_Field:
     {
