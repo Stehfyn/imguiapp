@@ -5199,10 +5199,10 @@ namespace ImGui
     const float em_m = em_base * ImGui::CanvasGetZoom(cv) / sc;
     const float fh_m = fh_base * em_m / em_base;
     const float pad_m = em_m * 0.9f;
-    const float row1_m = fh_m * 1.15f;              // the Begin line
-    const float row2_m = fh_m * 1.05f;              // the runs strip row
+    const float row1_m = fh_m * 0.95f;              // the Begin line
+    const float row2_m = fh_m * 0.95f;              // the runs strip row
     const float band_m = row1_m + row2_m;           // face band = both rows, one plate
-    const float end_m = fh_m * 0.85f;               // the End() band
+    const float end_m = fh_m * 0.70f;               // the End() band
     const float rail_m = em_m * 1.0f;               // portal rails
     ImVec4 tgt(mn.x - (pad_m + rail_m), mn.y - (band_m + pad_m * 0.6f),
                mx.x + pad_m + rail_m, mx.y + pad_m + end_m);
@@ -5256,9 +5256,11 @@ namespace ImGui
 
     // Begin("Name") -- the call is the wall: Begin( muted, the name in the kind hue, ) muted.
     // Kind word after; config readout right-aligned. The strip row beneath is drawn by the
-    // post-CanvasEnd order-strip pass (its chips are interactive).
+    // post-CanvasEnd order-strip pass (its chips are interactive). Chrome text is quieter than
+    // node content: node-title scale, clamped so it can never fill its band.
     const char* name = tn->Draft.Name[0] ? tn->Draft.Name : AppNodeKindName(tn->Kind);
-    ImGui::PushFont(ed->CodeFont, em);
+    const float call_sz = ImMin(em * 0.8f, row1_h * 0.6f);
+    ImGui::PushFont(ed->CodeFont, call_sz);
     char idb[IM_LABEL_SIZE + 2];
     ImFormatString(idb, IM_ARRAYSIZE(idb), "\"%s\"", name);
     const float ty = smn.y + (row1_h - ImGui::GetTextLineHeight()) * 0.5f;
@@ -5272,8 +5274,10 @@ namespace ImGui
     const float ey = smx.y - end_h + (end_h - ImGui::GetTextLineHeight()) * 0.5f;
     dl->AddText(ImVec2(smn.x + em * 0.75f, ey), muted, "End()");
     ImGui::PopFont();
+    ImGui::PushFont(nullptr, ImMin(em * 0.75f, row1_h * 0.55f));
     const char* kind_word = AppNodeKindTag(tn->Kind);
-    dl->AddText(ImVec2(tx, ty), muted, kind_word);
+    const float ky = smn.y + (row1_h - ImGui::GetTextLineHeight()) * 0.5f;
+    dl->AddText(ImVec2(tx, ky), muted, kind_word);
     tx += ImGui::CalcTextSize(kind_word).x;
     char cfg[96];
     AppNodeConfigSummary(tn, cfg, IM_ARRAYSIZE(cfg));
@@ -5282,8 +5286,9 @@ namespace ImGui
       const ImVec2 cs = ImGui::CalcTextSize(cfg);
       const float cx = smx.x - em * 0.75f - cs.x;
       if (cx > tx + em)   // drop the readout before it collides with the identity (never truncate mid-fact)
-        dl->AddText(ImVec2(cx, ty), muted, cfg);
+        dl->AddText(ImVec2(cx, ky), muted, cfg);
     }
+    ImGui::PopFont();
   }
 
   // The runs order strip: the face band's second row. One chip per member in execution order --
