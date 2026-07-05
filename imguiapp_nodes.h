@@ -245,6 +245,7 @@ enum ImGuiAppNodeKind_
   ImGuiAppNodeKind_Struct,    // a standalone data struct (PersistData/TempData), wired into a control's DataIn
   ImGuiAppNodeKind_Field,     // one field of a struct, "exploded" out for per-field wiring (drives bindings)
   ImGuiAppNodeKind_Note,      // non-semantic annotation frame (F48/R1): titled rect, excluded from codegen/validation. APPEND ONLY -- serialized as int
+  ImGuiAppNodeKind_Op,        // logic/compare/select/min-max operator (F54): operator in TypeName, IsBuiltin=false, folds into the consumer's expression (F55). APPEND ONLY -- serialized as int
   ImGuiAppNodeKind_COUNT,
 };
 
@@ -605,7 +606,7 @@ struct ImGuiAppEditorState
   int                                  AppliedSel = -1;
   int                                  OutlinerRename = -1;         // node id being renamed in the tree, -1 = none
   bool                                 OutlinerRenameFocus = false;
-  bool                                 OutlinerKindVis[ImGuiAppNodeKind_COUNT] = { true, true, true, true, true, true, true, true };
+  bool                                 OutlinerKindVis[ImGuiAppNodeKind_COUNT] = { true, true, true, true, true, true, true, true, true };
   ImGuiTextFilter                      OutlinerFilter;
   bool                                 OutputShowErr = true;        // Output panel severity filters
   bool                                 OutputShowWarn = true;
@@ -686,6 +687,10 @@ namespace ImGui
   IMGUI_API int                 AppGraphAllocId(ImGuiAppGraph* g);
   IMGUI_API ImGuiAppNode*       AppGraphAddNode(ImGuiAppGraph* g, ImGuiAppNodeKind kind, const char* name);
   IMGUI_API ImGuiAppNode*       AppGraphAddBuiltin(ImGuiAppGraph* g, ImGuiAppNodeKind kind, const char* type_name, const char* data_type_name);
+  // Add a logic Op node (F54). op_token is one of the AppEventExprCheck-checkable operators (AND/OR/XOR/NOT,
+  // ==/!=/</<=/>/>=, select, min/max); null or unknown => the default (AND). TypeName carries the operator and
+  // fixes the operand-pin arity; the result DataOut is stamped DataTypeId=0 (opts out of one-producer-per-type).
+  IMGUI_API ImGuiAppNode*       AppGraphAddOp(ImGuiAppGraph* g, const char* op_token);
   IMGUI_API void                AppGraphRemoveNode(ImGuiAppGraph* g, int node_id);
   IMGUI_API ImGuiAppNode*       AppGraphFindNode(ImGuiAppGraph* g, int node_id);
   IMGUI_API ImGuiAppNodePort*   AppGraphFindPort(ImGuiAppGraph* g, int port_id, ImGuiAppNode** out_owner);
@@ -898,6 +903,7 @@ namespace ImGui
     ImU32 KindControl;
     ImU32 KindStruct;
     ImU32 KindField;
+    ImU32 KindOp;
     ImU32 KindDefault;
     // Layer-type accents
     ImU32 LayerTask;
