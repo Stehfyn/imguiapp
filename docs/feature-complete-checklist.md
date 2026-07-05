@@ -533,7 +533,7 @@ Placed after the self-round-trip rails on purpose: P1 proves new records survive
 save/load/undo, P3/P4 prove new emissions stay byte-locked and importable — every feature below
 extends those rails rather than inventing parallel ones.
 
-- [ ] **F53 vocabulary design doc** — `vocabulary-nodes-design.md`: op-fold semantics (type
+- [x] **F53 vocabulary design doc** — `vocabulary-nodes-design.md`: op-fold semantics (type
   rules ride AppEventExprCheck), the animation builtin set and its phase discipline, and the
   layout evaluation covering ALL THREE candidate models — window placement facts (baseline,
   exists after F02), Region/Split/Tabs family composing into the Layout layer (primary), and
@@ -570,7 +570,7 @@ extends those rails rather than inventing parallel ones.
   Import note recorded: folded output re-imports as an expression, not as op nodes — the graph
   file, not the C++, is the op structure's home.
   *Accept: codegen-proof corpus extended with an op-chain fixture.*
-- [ ] **F56 animation builtin library** — Tween, Timer, Spring, Pulse as builtin Controls
+- [x] **F56 animation builtin library** — Tween, Timer, Spring, Pulse as builtin Controls
   (AppGraphAddBuiltin; RandomTime precedent): dt-driven Task-phase update, temp^last edge
   semantics, typed DataOut, "Animation" palette section; codegen emits push + wiring; mirror and
   time-travel work unchanged.
@@ -691,7 +691,7 @@ interpreter's vocabulary IS F53-F57's semantics.
 - [ ] **F65 divergence surfacing** — digest-mismatch ticks marked on the timeline;
   jump-to-first-divergence verb.
   *Accept: corrupted-fixture test flags the right tick; clean run shows none.*
-- [ ] **F66 previewer design doc** — `previewer-design.md`: interpreter scope = everything the
+- [x] **F66 previewer design doc** — `previewer-design.md`: interpreter scope = everything the
   MODEL defines (builtin controls, ops, tweens, events via the checked AST, commands, window
   composition); custom C++ control bodies render as a reflected field-widget card with a
   "body runs after Generate" note (never fake user code); storage from effective field lists
@@ -711,7 +711,7 @@ interpreter's vocabulary IS F53-F57's semantics.
   AppEventExprCheck grammar; edit-while-running preserves every (sanitized name, type) slot; input routes
   through real widgets writing Temp; selection brushes both ways. Gates F67-F70; §10 pins contract parity (F69)
   + the F70 record/scrub close.
-- [ ] **F67 graph interpreter core** — allocate Persist/Temp/LastTemp from effective fields;
+- [x] **F67 graph interpreter core** — allocate Persist/Temp/LastTemp from effective fields;
   per frame: Task pass in topo order (builtin + tween/timer/spring semantics, op evaluation,
   event AST: `when <edge> → set / emit`), command collect/latch/dispatch-once, window pass
   rendering composed windows with reflected widgets bound to live storage.
