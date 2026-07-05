@@ -47,34 +47,22 @@ model units, transformed by this frame's camera. Entering a node reads literally
 Tab'd into became the walls. *(Pillar: consistency — same silhouette at both altitudes. CDoN:
 visibility. Serves defect 1.)*
 
-### Rule B — lifecycle brackets (Begin/End as grey furniture)
+### Rule B — lifecycle brackets *(REMOVED — field verdict 2026-07-04)*
 
-Inside the walls, two small plates in the framework-internal grey of the Lifecycle chart
-(up-next.md: "Window band per-window Begin → OnRender → hosted OnRender → End"):
+Begin("name")/End() plates shipped and were cut the same day: in practice they read as unexplained
+chrome floating over the walls ("whatever this is"), duplicated the wall title bar's identity, and
+restated what the breadcrumb caption already says in words. The lifecycle-chart direction stays
+(up-next.md north star) — but as its own view, not as furniture inside every scope. The rail
+remains member → member with no endpoint segments; the sequence badges alone carry execution
+order. *(Meta-rule from usability-findings: chrome that needs a legend is worse than no chrome.)*
 
-- `▢ Begin("Mixer")` at the interior top-left, `▢ End()` at the interior bottom-right.
-- Monospace, muted text on a `#262a2f`-class grey plate, 1 px neutral outline, squared.
-- Non-selectable, non-draggable canvas furniture: no node id, no model record, no codegen, no
-  validation. They are drawn, not composed.
+### Rule C — the execution rail
 
-Per scope kind the bracket text changes with the scope's event contract (§4). *(Pillar:
-communicability — the caption's sentence becomes geometry. Serves defect 4.)*
-
-### Rule C — the execution rail gets endpoints
-
-Today's dashed cubic arrows + slate-marker number badges (`AppDrawScopeSequence`) extend to a
-path with a visible entry and exit:
-
-```
-Begin  ⌁→  ①  ⌁→  ②  ⌁→  …  ⌁→  End
-```
-
-- Same dash geometry and scope-accent color (accent at ~55% alpha), same badge style (accent
-  fill, dark outline, dark numeral) — nothing restyles, the rail only gains its first and last
-  segments, anchored to the bracket plates.
-- The rail is the affordance the planned sequence-order editing (up-next.md "Now") will snap to:
-  dragging a badge along the rail reorders the push. This design does not implement reordering;
-  it builds the geometry reordering needs.
+Today's dashed cubic arrows + slate-marker number badges (`AppDrawScopeSequence`), unchanged in
+style — drawn on the canvas annotation channel so badges are never occluded by the nodes they
+number. The rail is the affordance the planned sequence-order editing (up-next.md "Now") will
+snap to: dragging a badge along the rail reorders the push. This design does not implement
+reordering; it builds the geometry reordering needs.
 
 *(CDoN: role-expressiveness — the scope reads as a frame slice, not a bag of cards.)*
 
@@ -121,31 +109,30 @@ model, minus their fake-node materialization. Serves defect 3.)*
 | Element | Encodes | Form | Color |
 |---|---|---|---|
 | Walls | current scope's owner | owner's silhouette at room size; title bar + header rule | kind hue: rule + name; fill = kind hue ~4.5% alpha; outline neutral |
-| Bracket plate | frame entry/exit of the scope's event contract | small squared plate, `▢` glyph, monospace | framework grey plate, muted text |
 | Rail segment | execution order | dashed cubic, arrowhead | scope accent ~55% alpha (unchanged) |
 | Sequence badge | member's position in the sequence | slate-marker circle on card corner | scope accent fill, dark numeral (unchanged) |
 | Portal chip | off-scope endpoint of a data edge | wall-docked pill, `▸` jump glyph | remote kind hue at ~45% border / ~75% text |
 | Summary line | folded authoring detail | one dim text row | `TextMuted` |
 
 Depth order (slots from workbench §6.4): walls sit in the group-frame slot (behind containment
-wires, in the background draw list); brackets + rail render in the badge slot (above nodes,
-post-`CanvasEnd`); chips render with the overlay chrome (foreground list, clipped to the canvas)
-because they hit-test above canvas content. Typography: existing scale only (1.0 / 0.9 / 0.8 em);
+wires, in the background draw list); rail + badges + chips render on the canvas annotation
+channel (the child's post-merge list, clipped to the editor): above every node, never above
+other windows. Typography: existing scale only (1.0 / 0.9 / 0.8 em);
 spacing in 0.25 em quanta; no new constants outside the style table.
 
 ## 4. Per-scope-kind application
 
-| Scope | Members (density) | Rail order | Brackets |
-|---|---|---|---|
-| Window / Sidebar | controls (detail) | push order | `Begin("name")` / `End()` |
-| Display layer | windows + sidebars (identity + hosted count) | render order: windows pass, then sidebars | `NewFrame` / `Present` band edges — deferred, low value until window cards have a body worth flipping |
-| Task layer | controls (detail for app-level controls whose scope-parent is the Task layer) | dependency (topo) order | `Temp = {}` / `Last = Temp` — **the one-frame skew drawn where it happens**; the architecture's signature made visible |
-| Command layer | emitter controls (identity + command chips) | push order | `OnGetCommand` / `dispatch OnExecuteCommand` |
-| Control | Persist/Temp struct plates + fields (already below-root only) | none (data domain) | none — the caption sentence stays |
-| Struct | field pills | none | none |
+| Scope | Members (density) | Rail order |
+|---|---|---|
+| Window / Sidebar | controls (detail) | push order |
+| Display layer | windows + sidebars (identity + hosted count) | render order: windows pass, then sidebars |
+| Task layer | controls (detail for app-level controls whose scope-parent is the Task layer) | dependency (topo) order |
+| Command layer | emitter controls (identity + command chips) | push order |
+| Control | Persist/Temp struct plates + fields (already below-root only) | none (data domain) |
+| Struct | field pills | none |
 
 Window scope ships first: smallest surface, and it is where hosted-control authoring actually
-happens. Task-layer brackets are the highest-payoff follow-up.
+happens.
 
 ## 5. Root-side consequence
 
@@ -176,16 +163,18 @@ connectors, section packing, phase bands: unchanged.
 
 ## 7. Phase-coherence compliance (checklist applied at design time)
 
-- Walls: bounds from the model-unit geometry cache (`AppNodeModelSize` via the `group_box`
-  accumulation) + THIS frame's camera — the same transform-fresh path group frames use today.
-  Published like `_GroupFrames` (sole producer; consumers read the published rect).
-- Brackets: positioned from the wall rect (model units) — no measured geometry crosses a frame.
-- Rail endpoints: bracket rects, same frame, same transform as the existing badge/arrow pass.
+- Walls: bounds from engine positions (submitted) / this scope's model placements + THIS frame's
+  camera — the same transform-fresh path group frames use today. Published (sole producer;
+  consumers read the published rect same-frame).
 - Portal chips: derived every frame from `Links` + scope — no caches, no feedback loop. Chip
   anchor heights read pin rows from this frame's read-back geometry, drawn post-`CanvasEnd`
   (rule 5: post-submission reads are coherent).
 - Density flip: a pure predicate on model state (`AppScopeCurrent == AppScopeParentOf`); the
   card's measured size changes exactly when content changes — the framework's documented
   content-driven T+1, in invariant units, no visual artifact.
-- Hit-tests: chips follow the overlay rule (foreground list or overlay window;
-  `AllowWhenBlockedByActiveItem`; consume before the canvas).
+- Scope-local placement (`ScopePlacements`): the interior read-back writes the drilled scope's
+  records, the root read-back writes `GridPos` — one producer per altitude, no leak in either
+  direction. Serialized as `Place=` lines.
+- Hit-tests: chips follow the overlay rule (`AllowWhenBlockedByActiveItem` over the canvas child).
+- Draw altitude: all in-scope annotations use `CanvasAnnotationDrawList` — above the merged canvas
+  channels, inside the editor's z-order (never over other windows).

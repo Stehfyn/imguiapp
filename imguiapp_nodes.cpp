@@ -5046,8 +5046,7 @@ namespace ImGui
 
   // Execution-order badges + dashed flow arrows over the scope's members (the drilled-in counterpart of the
   // root pipeline rail). Numbering follows the full sequence; folded/hidden members keep their number unseen.
-  // Foreground list, clipped to the editor: the window list sits UNDER the canvas child, so anything drawn
-  // there is occluded by the nodes it annotates (the gizmo-cluster lesson, docs/phase-coherence.md #3).
+  // Annotation list: badges render above the nodes they number, clipped to the editor.
   static void AppDrawScopeSequence(const ImGuiAppGraph* g, bool show_live, ImVec2 editor_min, ImVec2 editor_size)
   {
     ImVector<int> seq;
@@ -5081,13 +5080,10 @@ namespace ImGui
 
     // Arrows first (behind the badges): last visible member -> next visible member.
     int prev = -1;
-    int first = -1;
     for (int i = 0; i < seq.Size; i++)
     {
       if (!visible(seq.Data[i]))
         continue;
-      if (first < 0)
-        first = seq.Data[i];
       if (prev >= 0)
       {
         ImVec2 ap, ad, bp, bd;
@@ -5096,20 +5092,6 @@ namespace ImGui
         AppDrawDashedArrow(dl, ImVec2(ap.x + ad.x, ap.y + ad.y * 0.5f), ImVec2(bp.x, bp.y + bd.y * 0.5f), flow, z);
       }
       prev = seq.Data[i];
-    }
-
-    // Rail endpoints: the walls' Begin/End brackets open and close the sequence (published by
-    // AppDrawScopeBrackets earlier this pass; absent outside window/sidebar scopes).
-    const ImGuiAppEditorState* ed = AppGraphEditorState(g);
-    if (first >= 0 && ed->ScopeWallValid && ed->ScopeBeginRect.z > ed->ScopeBeginRect.x)
-    {
-      ImVec2 p, d;
-      geom(first, &p, &d);
-      const ImVec2 b0 = ImGui::CanvasToScreen(cv, ImVec2(ed->ScopeBeginRect.z, (ed->ScopeBeginRect.y + ed->ScopeBeginRect.w) * 0.5f));
-      AppDrawDashedArrow(dl, b0, ImVec2(p.x, p.y + d.y * 0.5f), flow, z);
-      geom(prev, &p, &d);   // prev = last visible member after the loop
-      const ImVec2 e0 = ImGui::CanvasToScreen(cv, ImVec2(ed->ScopeEndRect.x, (ed->ScopeEndRect.y + ed->ScopeEndRect.w) * 0.5f));
-      AppDrawDashedArrow(dl, ImVec2(p.x + d.x, p.y + d.y * 0.5f), e0, flow, z);
     }
 
     const float r = em * 0.62f;
@@ -5133,24 +5115,19 @@ namespace ImGui
   }
 
   //-----------------------------------------------------------------------------
-  // [SECTION] Scope interior (walls, lifecycle brackets, boundary portals, density altitude)
+  // [SECTION] Scope interior (walls, boundary portals, density altitude, scope-local placement)
   //
   // What nodes look like below the composition root (docs/scope-interior-design.md). Inside a
   // window/sidebar scope: the owner's card silhouette becomes the room (walls with title bar +
-  // config readout), grey Begin/End bracket plates give the execution rail endpoints, data edges
-  // crossing the boundary dock on the wall as portal chips, and member cards carry full authoring
-  // detail while everywhere else they fold to identity cards.
+  // config readout), data edges crossing the boundary dock on the wall as portal chips, member
+  // cards carry full authoring detail while everywhere else they fold to identity cards, and each
+  // interior owns its own node arrangement (ScopePlacements; the root layout stays in GridPos).
   //
   // Geometry phase audit (docs/phase-coherence.md checklist, classified up front):
-  //   * walls           -- bounds from the model-unit geometry cache (AppNodeModelSize via the
-  //                        group_box accumulation) transformed by THIS frame's camera; drawn
-  //                        pre-submission on the background list, same path as group frames.
-  //                        Published to ImGuiAppEditorState::ScopeWallRect in model units.
-  //   * brackets        -- rects derived from the published wall rect (model units, same frame);
-  //                        drawn post-CanvasEnd with this frame's camera. No measured pixels cross
-  //                        a frame boundary.
-  //   * rail endpoints  -- read the published bracket rects in the same post-CanvasEnd pass that
-  //                        already draws badges/arrows from this frame's read-back.
+  //   * walls           -- bounds from engine positions / this scope's model placements with THIS
+  //                        frame's camera; drawn pre-submission on the background list, same path
+  //                        as group frames. Published to ImGuiAppEditorState::ScopeWallRect in
+  //                        model units.
   //   * portal chips    -- derived every frame from Links + ViewScope (pure model); chip anchors
   //                        read pin geometry post-CanvasEnd (coherent per rule 5). No caches, no
   //                        measure->apply loop.
@@ -5358,93 +5335,129 @@ namespace ImGui
     }
   }
 
-  // Lifecycle bracket plates: grey framework-internal Begin("name") / End() at the interior
-  // top-left / bottom-right of the walls -- the scope caption's sentence drawn as geometry
-  // (up-next.md lifecycle chart: grey internal rows). Non-selectable furniture: no node id, no
-  // model record, no codegen. Post-CanvasEnd: rects derive from the published wall rect (model
-  // units, this frame) and publish for the rail's endpoint segments.
-  static void AppDrawScopeBrackets(ImGuiAppGraph* g, ImVec2 editor_min, ImVec2 editor_size)
+  void AppScopeCollectPortals(const ImGuiAppGraph* g, ImVector<ImGuiAppScopePortal>* out)
+  {
+    out->resize(0);
+    if (AppScopeCurrent(g) < 0)
+      return;
+    for (int li = 0; li < g->Links.Size; li++)
+    {
+      const ImGuiAppNodeLink* l = &g->Links.Data[li];
+      if (l->Kind != ImGuiAppEdgeKind_Data)
+        continue;
+      const int producer = AppGraphPortOwnerId(g, l->StartAttr);
+      const int consumer = AppGraphPortOwnerId(g, l->EndAttr);
+      if (producer < 0 || consumer < 0)
+        continue;
+      const bool producer_in = AppNodeInScope(g, producer);
+      const bool consumer_in = AppNodeInScope(g, consumer);
+      if (producer_in == consumer_in)
+        continue;   // fully inside (normal wire) or fully outside (not this scope's concern)
+      ImGuiAppScopePortal p;
+      p.LinkId = l->Id;
+      p.Inbound = consumer_in;
+      p.InsidePortId = consumer_in ? l->EndAttr : l->StartAttr;
+      p.OutsideNodeId = consumer_in ? producer : consumer;
+      out->push_back(p);
+    }
+  }
+
+  // Jump navigation shared by portal chips (and future deep links): ViewScope becomes the target's
+  // scope-parent chain, the target becomes the selection. The scope-change handler owns the camera
+  // (per-branch memory, else deferred fit) -- no explicit centering here.
+  static void AppScopeJumpToNode(ImGuiAppGraph* g, int node_id, int* selected_node_id)
+  {
+    int chain[16];
+    int depth = 0;
+    for (int cur = AppScopeParentOf(g, node_id); cur >= 0 && depth < IM_ARRAYSIZE(chain); cur = AppScopeParentOf(g, cur))
+      chain[depth++] = cur;
+    g->ViewScope.clear();
+    for (int i = depth - 1; i >= 0; i--)
+      if (AppScopeCanEnter(AppGraphFindNodeConst(g, chain[i])))
+        g->ViewScope.push_back(chain[i]);
+    g->Selection.clear();
+    g->Selection.push_back(node_id);
+    if (selected_node_id != nullptr)
+      *selected_node_id = node_id;
+  }
+
+  // Portal chips: a wall-docked pill per boundary-crossing data edge, at the in-scope pin's row
+  // height (inbound producers on the left wall, outbound consumers on the right), wired to the
+  // real pin. Hover brushes the off-scope node; click jumps to its scope. Post-CanvasEnd on the
+  // annotation list; hit-tests follow the overlay rule (AllowWhenBlockedByActiveItem).
+  static void AppDrawScopePortals(ImGuiAppGraph* g, ImVec2 editor_min, ImVec2 editor_size, int* selected_node_id)
   {
     ImGuiAppEditorState* ed = AppGraphEditorState(g);
-    ed->ScopeBeginRect = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
-    ed->ScopeEndRect = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
     if (!ed->ScopeWallValid)
       return;
-    const ImGuiAppNode* tn = AppGraphFindNodeConst(g, AppScopeCurrent(g));
-    if (tn == nullptr)
+    ImVector<ImGuiAppScopePortal> portals;
+    AppScopeCollectPortals(g, &portals);
+    if (portals.Size == 0)
       return;
 
     ImGuiCanvasState* cv = AppEditorCanvas(g);
     const float z = AppCanvasScale(g);
-    const float em = ImGui::GetFontSize();      // post-CanvasEnd base font: 1 base px == 1 model unit
-    const float fh = ImGui::GetFrameHeight();
-
-    char begin_txt[IM_LABEL_SIZE + 16];
-    ImFormatString(begin_txt, IM_ARRAYSIZE(begin_txt), "Begin(\"%s\")", tn->Draft.Name[0] ? tn->Draft.Name : AppNodeKindName(tn->Kind));
-    const char* end_txt = "End()";
-
-    const float glyph_w = em * 0.55f;           // small square marker: framework internals, not a pin
-    const float pad_x = em * 0.6f;
-    const float plate_h = fh * 0.95f;
-    const float title_h_m = fh * 1.15f;         // the walls' title band, same derivation
-    const ImVec2 bts = ImGui::CalcTextSize(begin_txt);
-    const ImVec2 ets = ImGui::CalcTextSize(end_txt);
-    const float bw = pad_x * 2.0f + glyph_w + em * 0.3f + bts.x;
-    const float ew = pad_x * 2.0f + glyph_w + em * 0.3f + ets.x;
-
-    const ImVec4 wall = ed->ScopeWallRect;
-    ed->ScopeBeginRect = ImVec4(wall.x + em * 0.75f, wall.y + title_h_m + em * 0.5f,
-                                wall.x + em * 0.75f + bw, wall.y + title_h_m + em * 0.5f + plate_h);
-    ed->ScopeEndRect = ImVec4(wall.z - em * 0.75f - ew, wall.w - em * 0.5f - plate_h,
-                              wall.z - em * 0.75f, wall.w - em * 0.5f);
-
-    ImDrawList* dl = ImGui::CanvasAnnotationDrawList(cv);   // above the merged canvas channels, inside the child's z-order
+    const float em = ImGui::GetFontSize() * z;
+    ImDrawList* dl = ImGui::CanvasAnnotationDrawList(cv);
     dl->PushClipRect(editor_min, editor_min + editor_size, true);
-    auto plate = [&](const ImVec4& r, const char* txt)
+    const bool win_hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+
+    int jump_to = -1;
+    ImGui::PushFont(nullptr, em);
+    for (int i = 0; i < portals.Size; i++)
     {
-      const ImVec2 mn = ImGui::CanvasToScreen(cv, ImVec2(r.x, r.y));
-      const ImVec2 mx = ImGui::CanvasToScreen(cv, ImVec2(r.z, r.w));
-      const float line_w = ImMax(1.0f, em * z * 0.07f);
-      dl->AddRectFilled(mn, mx, AppThemeNeutral(0.17f), 2.0f * z);
-      dl->AddRect(mn, mx, AppThemeNeutral(0.38f, 0.75f), 2.0f * z, 0, line_w);
-      const float gw = glyph_w * z;
-      const float cy = (mn.y + mx.y) * 0.5f;
-      const ImVec2 gmn(mn.x + pad_x * z, cy - gw * 0.5f);
-      dl->AddRect(gmn, ImVec2(gmn.x + gw, gmn.y + gw), AppComposerGetStyle()->TextMuted, 1.0f * z, 0, line_w);
-      ImGui::PushFont(nullptr, em * z);
-      const ImVec2 ts = ImGui::CalcTextSize(txt);
-      dl->AddText(ImVec2(gmn.x + gw + em * 0.3f * z, cy - ts.y * 0.5f), AppComposerGetStyle()->TextMuted, txt);
-      ImGui::PopFont();
-    };
-    plate(ed->ScopeBeginRect, begin_txt);
-    plate(ed->ScopeEndRect, end_txt);
+      const ImGuiAppScopePortal* p = &portals.Data[i];
+      ImGuiAppNode* inside_owner = nullptr;
+      AppGraphFindPort(g, p->InsidePortId, &inside_owner);
+      const ImGuiAppNode* remote = AppGraphFindNodeConst(g, p->OutsideNodeId);
+      if (inside_owner == nullptr || remote == nullptr || !AppEditorNodeWasSubmitted(g, inside_owner->Id))
+        continue;
+
+      const ImVec2 pin_m = ImGui::CanvasPinPos(cv, p->InsidePortId);
+      const ImVec2 pin_s = ImGui::CanvasToScreen(cv, pin_m);
+
+      char label[IM_LABEL_SIZE + 8];
+      const char* rname = remote->Draft.Name[0] ? remote->Draft.Name : "(unnamed)";
+      if (p->Inbound)
+        ImFormatString(label, IM_ARRAYSIZE(label), "\xe2\x96\xb8 %s", rname);
+      else
+        ImFormatString(label, IM_ARRAYSIZE(label), "%s \xe2\x96\xb8", rname);
+      const ImVec2 ts = ImGui::CalcTextSize(label);
+      const float ch = em * 1.5f;
+      const float cw = ts.x + em * 1.2f;
+
+      // Chip center rides the wall edge at the pin's row.
+      const float wall_x_m = p->Inbound ? ed->ScopeWallRect.x : ed->ScopeWallRect.z;
+      const ImVec2 dock = ImGui::CanvasToScreen(cv, ImVec2(wall_x_m, pin_m.y));
+      const ImVec2 mn(dock.x - cw * 0.5f, dock.y - ch * 0.5f);
+      const ImVec2 mx(mn.x + cw, mn.y + ch);
+
+      // Wire first (under the chip): chip edge -> the real pin, data hue.
+      const ImVec2 a = p->Inbound ? ImVec2(mx.x, dock.y) : ImVec2(mn.x, dock.y);
+      const float bend = ImFabs(pin_s.x - a.x) * 0.5f + em * 0.5f;
+      dl->AddBezierCubic(a, ImVec2(a.x + (p->Inbound ? bend : -bend), a.y),
+                         ImVec2(pin_s.x + (p->Inbound ? -bend : bend), pin_s.y), pin_s,
+                         AppComposerGetStyle()->PinData, ImMax(1.0f, em * 0.11f));
+
+      const ImU32 kcol = AppKindColor(remote->Kind);
+      const bool hov = win_hovered && ImGui::IsMouseHoveringRect(mn, mx);
+      dl->AddRectFilled(mn, mx, AppThemeNeutral(hov ? 0.18f : 0.11f, 0.98f), ch * 0.5f);
+      dl->AddRect(mn, mx, AppColWithAlpha(kcol, hov ? 0.9f : 0.45f), ch * 0.5f, 0, ImMax(1.0f, em * 0.07f));
+      dl->AddText(ImVec2(mn.x + em * 0.6f, dock.y - ts.y * 0.5f), AppColWithAlpha(kcol, hov ? 1.0f : 0.75f), label);
+
+      if (hov)
+      {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        ImGui::SetTooltip(p->Inbound ? "from %s -- click to open its scope" : "feeds %s -- click to open its scope", rname);
+        AppGraphHoverNode(g, p->OutsideNodeId, ImGuiAppHoverSource_Canvas);
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+          jump_to = p->OutsideNodeId;
+      }
+    }
+    ImGui::PopFont();
     dl->PopClipRect();
-  }
-
-  // STUB (L1): implemented in the portals slice.
-  void AppScopeCollectPortals(const ImGuiAppGraph* g, ImVector<ImGuiAppScopePortal>* out)
-  {
-    IM_UNUSED(g);
-    out->resize(0);
-  }
-
-  // Portal chips: wall-docked pills for each crossing data edge (collected by
-  // AppScopeCollectPortals), wired to the in-scope pin; hover brushes both ends, click jumps to
-  // the off-scope node's scope. Overlay hit-test rules apply. STUB (L1).
-  static void AppDrawScopePortals(ImGuiAppGraph* g, int* selected_node_id)
-  {
-    IM_UNUSED(g);
-    IM_UNUSED(selected_node_id);
-  }
-
-  // Jump navigation shared by portal chips (and future deep links): ViewScope becomes the target's
-  // scope-parent chain, the target becomes the selection; the reveal uses minimal pan (the camera
-  // belongs to the user). STUB (L1).
-  static void AppScopeJumpToNode(ImGuiAppGraph* g, int node_id, int* selected_node_id)
-  {
-    IM_UNUSED(g);
-    IM_UNUSED(node_id);
-    IM_UNUSED(selected_node_id);
+    if (jump_to >= 0)
+      AppScopeJumpToNode(g, jump_to, selected_node_id);
   }
 
   // Pin color by port kind: data pins blue, containment pins orange (tie pins use AppPinTieColor green).
@@ -6918,13 +6931,11 @@ namespace ImGui
     }
     else
     {
-      // Drilled in: bracket plates give the sequence its entry/exit, then number the members in
-      // the order the framework runs them each frame, dock portal chips for boundary-crossing
-      // data edges, and invite the first build step when the scope is empty. The breadcrumb
-      // (below) names where we are and what executes here.
-      AppDrawScopeBrackets(g, editor_min, editor_size);
+      // Drilled in: number the members in the order the framework runs them each frame, dock
+      // portal chips for boundary-crossing data edges, and invite the first build step when the
+      // scope is empty. The breadcrumb (below) names where we are and what executes here.
       AppDrawScopeSequence(g, show_live, editor_min, editor_size);
-      AppDrawScopePortals(g, selected_node_id);
+      AppDrawScopePortals(g, editor_min, editor_size, selected_node_id);
       AppDrawScopeEmptyCTA(g, show_live, editor_min, editor_size);
     }
     AppGraphViewState(g)->Zoom = ImGui::CanvasGetZoom(cv);   // mirror the live camera into the saved view state
@@ -7821,10 +7832,7 @@ namespace ImGui
       const float em = ImGui::GetFontSize();
       const float r = em * 0.72f;
       const float step = r * 2.0f + em * 0.30f;
-      // Viewport chrome renders ABOVE canvas content, always: the window list sits UNDER the canvas child, so
-      // a node scrolled beneath the gizmo column would occlude these controls. The canvas child's post-merge
-      // list (not the viewport foreground list) keeps the chrome inside the editor's z-order -- overlays must
-      // never paint over OTHER windows floating above the Composer.
+      // Above canvas content, inside the editor's z-order (never over other windows).
       ImDrawList* dl = ImGui::CanvasAnnotationDrawList(cv);
       dl->PushClipRect(editor_min, editor_min + editor_size, true);
 

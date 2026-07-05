@@ -595,10 +595,8 @@ struct ImGuiAppEditorState
   ImVector<ImGuiAppPrefab>             Prefabs;                     // saved subtrees (owned strings)
   ImFont*                              CodeFont = nullptr;          // code panels; null -> UI font
   ImGuiAppEditorUndo                   Undo;
-  ImVec4                               ScopeWallRect = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);   // scope-interior walls, model units (min.xy, max.xy); published by the walls pass, consumed same-frame by brackets/rail/portals
-  ImVec4                               ScopeBeginRect = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);  // Begin bracket plate, model units
-  ImVec4                               ScopeEndRect = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);    // End bracket plate, model units
-  bool                                 ScopeWallValid = false;                            // rects above valid this frame (window/sidebar scope only)
+  ImVec4                               ScopeWallRect = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);   // scope-interior walls, model units (min.xy, max.xy); published by the walls pass, consumed same-frame by the portal pass
+  bool                                 ScopeWallValid = false;                            // rect above valid this frame (window/sidebar scope only)
 };
 
 // The whole authored graph. One monotonic id allocator shared by every node/port/body-attr/link:
