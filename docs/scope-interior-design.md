@@ -10,21 +10,27 @@ law), [composer-workbench-design.md](composer-workbench-design.md) (grammar v2, 
 table), [phase-coherence.md](phase-coherence.md) (every geometry rule below complies; §7),
 [up-next.md](up-next.md) (the Lifecycle north star this design advances).
 
-## 1. Diagnosis — the drilled view today
+## 1. Diagnosis — the drilled view before rules A–E (all resolved)
 
-Entering a scope filters which nodes submit and adds sequence badges. Four defects:
+Entering a scope filters which nodes submit and adds sequence badges. Four defects motivated the
+rules below; each is now resolved (resolving rule + function cited):
 
 1. **The owner evaporates.** Enter "Mixer" and Mixer itself is gone; only breadcrumb text says
-   where you are. The room has no walls. *(CDoN: visibility of context.)*
+   where you are. The room has no walls. *(CDoN: visibility of context.)* **Resolved** (rules A/B):
+   `AppDrawScopeWalls` draws the owner's silhouette as walls, publishing `ScopeWallRect`.
 2. **No altitude change in the cards.** A control renders the identical full card at root and in
    scope — only binding rows gate on `altitude_root`. Drilling changes *which* nodes, not *what*
    nodes look like: semantic zoom without the zoom. Root group frames are correspondingly noisy.
+   **Resolved** (rule D): `AppScopeDetailAltitude` gates the full authoring body on the
+   scope-parent, an identity card elsewhere; proven by `step37_density_flip`.
 3. **Cross-scope wires vanish.** A link whose other endpoint is outside the scope is simply not
    submitted, so the dependency disappears from view — the exact "hidden dependencies" failure the
-   design docs name as the killer for graph notations.
+   design docs name as the killer for graph notations. **Resolved** (rule E): `AppDrawScopePortals`
+   docks a portal chip on the wall for every crossing edge.
 4. **The sequence is annotation, not structure.** Badges and dashed arrows float over free-placed
    cards; the scope caption *says* "push order between the host's Begin/End" but nothing shows
-   Begin or End.
+   Begin or End. **Resolved** (rules B/C): the walls ARE the Begin/End pair and
+   `AppDrawScopeOrderStrip` renders the order strip; members carry title ordinals.
 
 ## 2. The rules
 
@@ -91,8 +97,9 @@ scope-parent** (`AppScopeParentOf`). Everywhere else it shows an identity card.
 | detail (inside its host's scope) | identity content **plus** PersistData/TempData rows with inline field editors and current values, tie-pin explode disclosures, event rows (`when dragging ^ → set level`), command chips, per-edge binding editors (`from RandomTime: timer_secs ← max_timer_secs`) |
 
 Same card width (`UniformCardW`), same rounding, same title anatomy at both altitudes — only the
-depth of content changes, so spatial memory survives the flip. Wires land identically. The R7
-per-node LOD toggle (composer-ui-design.md) remains as a manual override on top. *(CDoN:
+depth of content changes, so spatial memory survives the flip. Wires land identically. Per-node
+LOD (R7, composer-ui-design.md) is parked — not implemented; the density flip is the only
+altitude mechanism. *(CDoN:
 details-on-demand at the scope granularity; de-noises root for free. Serves defect 2.)*
 
 ### Rule E — boundary portals (the walls take the cross-scope wires)

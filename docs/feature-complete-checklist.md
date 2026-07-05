@@ -480,10 +480,20 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
     to NoteSize) and round-trips kind/footprint/name/position.
   Remaining (R1 step 2): drag-moves-contained-nodes (UE behavior), interactive resize handle,
   per-note color, outliner dimmed/bottom ordering; a create/move acceptance test.
-- [ ] **F49 doc + comment hygiene** — refresh scope-interior-design §1 stale diagnoses; delete
+- [x] **F49 doc + comment hygiene** — refresh scope-interior-design §1 stale diagnoses; delete
   stale bracket comments; resolve the R7-LOD claim (implement or strike); fix the MMB-pan and
   transport claims in composer-workbench-design; sweep remaining narrative comments.
   *Accept: audit re-run finds no doc claim contradicting code.*
+  DONE (verify-then-fix, each edit cited to code): the over-canvas MMB-pan hint claim -> the real
+  `drag pan · wheel zoom` gesture (the MMB text lived in composer-ui-design.md §3, not the workbench doc;
+  canvas FSM `LmbPansEmptyCanvas`/`RmbPans`, no middle button); R7 per-node LOD STRUCK as parked
+  (composer-ui-design.md R7 + scope-interior Rule D -- no LOD symbol exists); transport claims in
+  composer-workbench-design.md §2/§4.1 corrected to the shipped TOOLBAR App-time transport (F29/F30,
+  ShowLive-gated, not a bottom-center overlay); scope-interior-design.md §1's four "defects" retitled
+  "resolved" each citing its shipping function (AppDrawScopeWalls / AppScopeDetailAltitude+step37 /
+  AppDrawScopePortals / AppDrawScopeOrderStrip); one stale group-drag history comment deleted (behavior
+  comments kept). No `[FIXME]`/`[stale]` bracket markers existed; the `// TODO:` hits are codegen OUTPUT
+  strings, not source comments.
 - [x] **F50 pin pre-coloring / can-link telegraph** — type-compatibility shown at drag time
   (pin tint or cursor), not only post-release toast.
   *Accept: drag-over test asserts the telegraph state.*

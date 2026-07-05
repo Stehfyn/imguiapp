@@ -7718,9 +7718,7 @@ namespace ImGui
     // Deferred group-drag application (docs/phase-coherence.md: mutate the model in the update pass, never
     // mid-render). A group drag detected during the canvas pass recorded its owner in _GroupDragPending;
     // the slide-to-contact clamp + the member position writes run HERE, where THIS frame's group frames
-    // (_GroupFrames) and layer box (_LayerBox) are fully published. The old inline write gated the clamp on
-    // last frame's obstacle set (_GroupFramesPrev, the only complete set available mid-render) -- so a group
-    // clipped past a neighbour it should slide against and could not reach contact with the layer column.
+    // (_GroupFrames) and layer box (_LayerBox) are fully published.
     // Applied here, the group + its nodes move on the next frame (deliberate T+1 in model units, rule 4).
     if (g->_GroupDragPending >= 0 && g->_GroupDragOrig.Size > 0)
     {

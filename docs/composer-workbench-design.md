@@ -58,7 +58,7 @@ Not decoration. Three testable properties:
 
 Landed and assumed by everything below: document toolbar (health-carrying Generate, file/edit
 verbs, right-aligned Code/Live toggles) · viewport gizmo column (add/frame/fit/tidy/snap/overlays
-popover) · transport overlay (App-time freeze + scrub) · viewport health strip (click → Output) ·
+popover) · toolbar App-time transport (freeze + frame scrub, ShowLive-gated) · viewport health strip (click → Output) ·
 status bar (keymap hints + facts) · bottom panel tabs Code (source-mapped) / Project (doc files) /
 Preview / Output (issues + log, brushing) · outliner with filter buttons · per-node inspector column
 (fields, events, commands, style/color mod descs) · brushing hover sync · ambient problem marks ·
@@ -123,7 +123,7 @@ Every overlay names its slot; new overlays must claim a vacant one:
 | Top-left | scope breadcrumb | view state; clickable path |
 | Top-right | gizmo column | view verbs only |
 | Bottom-left | health strip (+ last log line) | click → Output |
-| Bottom-center | transport (App time) | run state; appears only when a mirror exists |
+| Bottom-center | (free) | App-time transport lives in the toolbar cluster instead (ShowLive-gated) |
 | Bottom-right | minimap | overlay toggle; click/drag jumps |
 | Bottom edge (inside) | status hint line | what the mouse does now |
 | Cursor | context menu, wire-drop palette, quick inspector (§5.4) | transient, Fitts-optimal |

@@ -75,8 +75,8 @@ hovers, read by all panels next frame (same one-frame-latency idiom the title-fi
 ### T2. Status-bar keymap hints — Blender's signature, and the cheapest teacher
 A one-line strip under the canvas showing what the mouse does *right now*, given hover target and
 modifier state: over node → `LMB select · drag move · dbl-click rename · Tab enter · RMB menu`;
-over pin → `drag wire (release on canvas: filtered add)`; over wire → `drag end rewire · Alt+LMB
-detach`; over canvas → `RMB add · MMB pan · Space palette`. Recognition over recall (Nielsen);
+over pin → `drag wire (release on canvas: filtered add)`; over wire → `drag end rewire · click select · Del
+delete`; over canvas → `drag pan · wheel zoom · RMB add · Space palette`. Recognition over recall (Nielsen);
 teaches the whole gesture vocabulary passively. The F1 card stays as the full reference; the
 status bar replaces it as the *first* teacher. Also the natural home for the last validation error
 (replacing the floating link-error fade) and the fresh/STALE indicator.
@@ -149,7 +149,8 @@ arguably better than optical zoom for a *compositional* model), F/Home framing, 
 group collapse (LOD by folding). Revisit only if medium-graph navigation still fails after R4+T3
 land. Decision recorded here so the gap is chosen, not accidental.
 
-**R7. Node-body LOD.** A collapsed node state (Blender `H` on a node): title bar + pins only,
+**R7. Node-body LOD** *(parked — not implemented; see the checklist's "Explicitly parked:
+per-node LOD").* A collapsed node state (Blender `H` on a node): title bar + pins only,
 body folded. Per-node toggle (dbl-click title-bar icon; chevron on hover). The inspector already
 holds the long tail; node bodies should identify and wire, not editorialize. Density becomes a
 user choice per node — details-on-demand at the node granularity.
