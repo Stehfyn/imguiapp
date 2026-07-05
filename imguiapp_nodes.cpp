@@ -2789,6 +2789,9 @@ namespace ImGui
     for (int si = g->Selection.Size - 1; si >= 0; si--)
       if (g->Selection.Data[si] == node_id)
         g->Selection.erase(g->Selection.Data + si);
+    for (int pi = g->ScopePlacements.Size - 1; pi >= 0; pi--)
+      if (g->ScopePlacements.Data[pi].NodeId == node_id || g->ScopePlacements.Data[pi].ScopeId == node_id)
+        g->ScopePlacements.erase(g->ScopePlacements.Data + pi);
 
     g->Nodes.erase(n);   // surviving nodes/ports/links keep their ids; ids are never reused
   }
@@ -5056,7 +5059,7 @@ namespace ImGui
     auto geom = [&](int id, ImVec2* p, ImVec2* s)
     {
       const ImGuiAppNode* n = AppGraphFindNodeConst(g, id);
-      *p = ImGui::CanvasToScreen(cv, n->GridPos);
+      *p = ImGui::CanvasToScreen(cv, AppCanvasNodePos(g, id));   // post-CanvasEnd engine pos: coherent at any altitude (GridPos is root-only state)
       ImVec2 m;
       if (!AppNodeModelSize(g, id, &m))
         m = AppLayoutNodeSize(g, n);
@@ -5134,6 +5137,48 @@ namespace ImGui
   //   * density flip    -- pure predicate on model state; the card resize it causes is the
   //                        framework's documented content-driven T+1 in invariant units.
   //-----------------------------------------------------------------------------
+
+  // Scope-local placement: each drilled interior owns its own arrangement. The effective position
+  // of a node in the CURRENT scope is its (scope, node) placement record when one exists, else
+  // GridPos (first entry inherits the root layout); the root always reads GridPos. The interior
+  // read-back writes placements, the root read-back writes GridPos -- moving a node in one
+  // altitude never moves it in the other.
+  static const ImGuiAppScopePlacement* AppScopePlacementFind(const ImGuiAppGraph* g, int scope_id, int node_id)
+  {
+    for (int i = 0; i < g->ScopePlacements.Size; i++)
+      if (g->ScopePlacements.Data[i].ScopeId == scope_id && g->ScopePlacements.Data[i].NodeId == node_id)
+        return &g->ScopePlacements.Data[i];
+    return nullptr;
+  }
+
+  static ImVec2 AppNodeScopePos(const ImGuiAppGraph* g, const ImGuiAppNode* n)
+  {
+    const int top = AppScopeCurrent(g);
+    if (top >= 0)
+    {
+      const ImGuiAppScopePlacement* pl = AppScopePlacementFind(g, top, n->Id);
+      if (pl != nullptr)
+        return pl->Pos;
+    }
+    return n->GridPos;
+  }
+
+  static void AppNodeScopePosStore(ImGuiAppGraph* g, int node_id, const ImVec2& pos)
+  {
+    const int top = AppScopeCurrent(g);
+    IM_ASSERT(top >= 0 && "root read-back writes GridPos, never a placement record");
+    for (int i = 0; i < g->ScopePlacements.Size; i++)
+      if (g->ScopePlacements.Data[i].ScopeId == top && g->ScopePlacements.Data[i].NodeId == node_id)
+      {
+        g->ScopePlacements.Data[i].Pos = pos;
+        return;
+      }
+    ImGuiAppScopePlacement pl;
+    pl.ScopeId = top;
+    pl.NodeId = node_id;
+    pl.Pos = pos;
+    g->ScopePlacements.push_back(pl);
+  }
 
   // Detail altitude: a node shows its full authoring body only when the current scope is its
   // scope-parent; everywhere else it folds to an identity card (title, pins, one summary line).
@@ -5229,7 +5274,9 @@ namespace ImGui
       return;
     const ImGuiAppNode* tn = AppGraphFindNodeConst(g, AppScopeCurrent(g));
 
-    // Members' model bounds -- the same filters the submission loop applies.
+    // Members' model bounds -- the same filters the submission loop applies. Positions follow the
+    // group-frame discipline (engine pos when submitted, else this scope's model placement); a
+    // still-unseated member (scope-transition frame) makes the bounds unknowable -- skip a frame.
     ImVec2 mn(FLT_MAX, FLT_MAX);
     ImVec2 mx(-FLT_MAX, -FLT_MAX);
     for (int i = 0; i < g->Nodes.Size; i++)
@@ -5237,11 +5284,14 @@ namespace ImGui
       const ImGuiAppNode* n = &g->Nodes.Data[i];
       if ((!show_live && n->IsLive) || AppNodeHiddenByCollapse(g, n->Id))
         continue;
+      if (n->_NeedsPlace)
+        return;
+      const ImVec2 p = AppEditorNodeWasSubmitted(g, n->Id) ? AppCanvasNodePos(g, n->Id) : AppNodeScopePos(g, n);
       ImVec2 m;
       if (!AppNodeModelSize(g, n->Id, &m))
         m = AppLayoutNodeSize(g, n);
-      mn = ImMin(mn, n->GridPos);
-      mx = ImMax(mx, n->GridPos + m);
+      mn = ImMin(mn, p);
+      mx = ImMax(mx, p + m);
     }
     if (mn.x > mx.x)
       return;
@@ -6213,7 +6263,7 @@ namespace ImGui
 
       if (n->_NeedsPlace)
       {
-        AppCanvasSetNodePos(g, n->Id, n->GridPos);
+        AppCanvasSetNodePos(g, n->Id, AppNodeScopePos(g, n));   // drilled scopes seat from their own placements
         n->_NeedsPlace = false;
       }
 
@@ -6736,6 +6786,8 @@ namespace ImGui
 
     // Persist canvas layout for save/load. Skip hidden live nodes: they were not submitted, so a read-back
     // would assert; skipping also correctly retains each hidden node's last-shown GridPos.
+    // Altitude split: the root read-back owns GridPos; a drilled read-back owns that scope's
+    // placement records -- interior drags never leak into the root layout (or vice versa).
     int moved_layer_id = 0;
     ImVec2 moved_layer_pos(0.0f, 0.0f);
     for (int i = 0; i < g->Nodes.Size; i++)
@@ -6744,6 +6796,11 @@ namespace ImGui
       if (AppNodeHiddenByCollapse(g, g->Nodes.Data[i].Id)) continue;
       ImGuiAppNode* n = &g->Nodes.Data[i];
       const ImVec2 pos = AppCanvasNodePos(g, n->Id);   // model units, like GridPos (drags land here)
+      if (!at_root)
+      {
+        AppNodeScopePosStore(g, n->Id, pos);
+        continue;
+      }
       if (n->Kind == ImGuiAppNodeKind_Layer && n->HasGridPos
           && (ImAbs(pos.x - n->GridPos.x) > 0.5f || ImAbs(pos.y - n->GridPos.y) > 0.5f))
       {
@@ -10234,6 +10291,9 @@ namespace ImGui
       buf->appendf("Link=%d,%d,%d,%d\n", g->Links.Data[i].Id, g->Links.Data[i].StartAttr, g->Links.Data[i].EndAttr, (int)g->Links.Data[i].Kind);
     for (int i = 0; i < g->Bindings.Size; i++)
       buf->appendf("Bind=%d,%s,%s\n", g->Bindings.Data[i].LinkId, g->Bindings.Data[i].DstField, g->Bindings.Data[i].SrcField);
+    for (int i = 0; i < g->ScopePlacements.Size; i++)
+      buf->appendf("Place=%d,%d,%g,%g\n", g->ScopePlacements.Data[i].ScopeId, g->ScopePlacements.Data[i].NodeId,
+                   g->ScopePlacements.Data[i].Pos.x, g->ScopePlacements.Data[i].Pos.y);
   }
 
   bool SaveAppGraph(const char* path, const ImGuiAppGraph* g)
@@ -10310,6 +10370,7 @@ namespace ImGui
     g->Nodes.clear();
     g->Links.clear();
     g->Bindings.clear();
+    g->ScopePlacements.clear();
     g->Selection.clear();
     g->NextId = 1;
     g->EditingNodeId = -1;
@@ -10393,6 +10454,12 @@ namespace ImGui
         ImGuiAppNodeLink l; int kind = ImGuiAppEdgeKind_Data;
         const int got = sscanf(p + 5, "%d,%d,%d,%d", &l.Id, &l.StartAttr, &l.EndAttr, &kind);
         if (got >= 3) { l.Kind = (ImGuiAppEdgeKind)kind; g->Links.push_back(l); if (l.Id > max_id) max_id = l.Id; }
+      }
+      else if (strncmp(p, "Place=", 6) == 0)
+      {
+        ImGuiAppScopePlacement pl;
+        if (sscanf(p + 6, "%d,%d,%f,%f", &pl.ScopeId, &pl.NodeId, &pl.Pos.x, &pl.Pos.y) == 4)
+          g->ScopePlacements.push_back(pl);
       }
       else if (strncmp(p, "Bind=", 5) == 0)
       {

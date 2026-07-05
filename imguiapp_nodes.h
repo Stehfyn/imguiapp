@@ -440,6 +440,18 @@ struct ImGuiAppScopeCamera
   float  Zoom    = 1.0f;
 };
 
+// Scope-local node placement: a member's position INSIDE a drilled scope, keyed by (scope node,
+// member node). Each drill-down interior owns its own arrangement -- moving a node inside a group
+// never moves it at the composition root (GridPos), and vice versa. First entry into a scope
+// falls back to GridPos, then the interior read-back writes here. Serialized (layout is model
+// state, like Pos=).
+struct ImGuiAppScopePlacement
+{
+  int    ScopeId = -1;
+  int    NodeId  = -1;
+  ImVec2 Pos     = ImVec2(0.0f, 0.0f);
+};
+
 // One cached trunk-route drawing primitive, in MODEL units (line-to / arc / cubic). The route is
 // computed once from model inputs and only re-derived when those inputs move -- the camera never
 // re-routes a settled link (transient, not serialized).
@@ -599,6 +611,7 @@ struct ImGuiAppGraph
   ImVector<int>                  Selection;                            // multi-selection (node ids); the single selected_node_id is primary
   ImVector<int>                  ViewScope;                            // drill-down scope stack (node ids, outer->inner); empty = whole app; transient, not serialized
   ImVector<ImGuiAppScopeCamera>  ScopeCams;                            // per-branch camera memory (transient, not serialized)
+  ImVector<ImGuiAppScopePlacement> ScopePlacements;                    // scope-local member positions (serialized; root layout stays in GridPos)
   ImVector<ImGuiAppTrunkRoute>   _TrunkRoutes;                         // cached trunk routes, model units (transient, not serialized)
   ImVector<ImGuiAppDragStick>    _DragStick;                           // cluster originals for the active layer drag (transient)
   int                            _DragStickAnchor           = 0;       // layer node the sticks belong to (0 = no active capture)
