@@ -159,18 +159,17 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   yields Active EmitCommand events + a latch->command map; OnUpdate's events block yields SetField
   (`data->dst = <expr>`) and edge EmitCommand events, edge decoded from the guard shape (Rising/Falling/
   Changed/Active), the `= false` re-arm lines skipped. One import test per construct.
-- [~] **F23 emit→import→emit fixed point** — corpus enumerated: control with persist+temp
+- [x] **F23 emit→import→emit fixed point** — corpus enumerated: control with persist+temp
   fields; deps hard and optional; events (set-field and emit-command); commands; standalone
   struct; hosted and unhosted control; custom layer. Second emission byte-equal to the first.
   *Accept: fixed-point test green over the enumerated corpus.*
-  IN PROGRESS: AppGraphImportProgram (whole-program import) + step66 byte-equal fixed point green for
-  CONTROLS (deps, events, commands), CUSTOM LAYER, and STANDALONE STRUCT. Fixes surfaced by the byte-diff:
-  import the AppCommand enum onto the CommandLayer; drop the synthesized `<Cmd>Pending` latch field on
-  import (emitter re-adds it). REMAINING: hosted/unhosted control. Blocker: the emitter names window/
-  sidebar hosting locals `win_<node_id>`/`sb_<node_id>` (imguiapp_nodes.cpp ~10756/10801), and node ids
-  don't survive import -> breaks byte-equality. FIX: make those locals name-based (`win_<Name>`, stable +
-  clearer; contract corpus has none so it's unaffected), add window/sidebar + containment-edge import,
-  then grow step66 with a hosted + an unhosted control.
+  DONE: AppGraphImportProgram imports the whole program -- foundation + custom layers, the AppCommand
+  enum onto the CommandLayer, controls (fields/deps/events/commands), standalone structs (the control
+  Data/TempData filtered out), and windows/sidebars + hosting containment edges. step66 emits the full
+  enumerated corpus (both event kinds, a dep, a command, a standalone struct, a custom layer, a hosted
+  and an unhosted control), imports it, re-emits, and asserts byte-equality. Fixes surfaced by the diff:
+  import the command enum; drop the synthesized `<Cmd>Pending` latch on import; and make the emitter's
+  window/sidebar hosting locals name-based (`win_<Name>`) so hosting survives import (node ids don't).
 - [ ] **F24 import-merge policy** — importing into a non-empty graph updates the matching node
   by type name (no dup), creates otherwise.
   *Accept: merge test: import twice = import once.*

@@ -10753,7 +10753,7 @@ namespace ImGui
           AppEmitLivePlacementLines(n, "app->Windows.back()", out);
         AppEmitStyleModLines(n, "app->Windows.back()", "  ", out);
         if (AppGraphHostsControl(g, n->Id))
-          out->appendf("  ImGuiAppWindowBase* win_%d = app->Windows.back();\n", n->Id);
+          out->appendf("  ImGuiAppWindowBase* win_%s = app->Windows.back();\n", base);   // name-based local: stable across import
         span(n->Id, begin);
       }
     }
@@ -10774,7 +10774,7 @@ namespace ImGui
           AppEmitLivePlacementLines(n, "app->Sidebars.back()", out);
         AppEmitStyleModLines(n, "app->Sidebars.back()", "  ", out);
         if (AppGraphHostsControl(g, n->Id))
-          out->appendf("  ImGuiAppSidebarBase* sb_%d = app->Sidebars.back();\n", n->Id);
+          out->appendf("  ImGuiAppSidebarBase* sb_%s = app->Sidebars.back();\n", base);   // name-based local: stable across import
         span(n->Id, begin);
       }
     }
@@ -10792,14 +10792,16 @@ namespace ImGui
       const ImGuiAppNode* pn = parent >= 0 ? AppGraphFindNodeConst(g, parent) : nullptr;
       if (pn && pn->Kind == ImGuiAppNodeKind_Sidebar)
       {
-        out->appendf("  ImGui::PushSidebarControl<%s>(app, sb_%d); // hosted by %s\n", base, pn->Id, pn->Draft.Name);
-        char expr[48]; ImFormatString(expr, IM_ARRAYSIZE(expr), "sb_%d->Controls.back()", pn->Id);
+        char pbase[IM_LABEL_SIZE]; AppNodeBaseName(pn, pbase, IM_ARRAYSIZE(pbase));
+        out->appendf("  ImGui::PushSidebarControl<%s>(app, sb_%s); // hosted by %s\n", base, pbase, pn->Draft.Name);
+        char expr[IM_LABEL_SIZE + 32]; ImFormatString(expr, IM_ARRAYSIZE(expr), "sb_%s->Controls.back()", pbase);
         AppEmitStyleModLines(n, expr, "  ", out);
       }
       else if (pn && pn->Kind == ImGuiAppNodeKind_Window)
       {
-        out->appendf("  ImGui::PushWindowControl<%s>(app, win_%d); // hosted by %s\n", base, pn->Id, pn->Draft.Name);
-        char expr[48]; ImFormatString(expr, IM_ARRAYSIZE(expr), "win_%d->Controls.back()", pn->Id);
+        char pbase[IM_LABEL_SIZE]; AppNodeBaseName(pn, pbase, IM_ARRAYSIZE(pbase));
+        out->appendf("  ImGui::PushWindowControl<%s>(app, win_%s); // hosted by %s\n", base, pbase, pn->Draft.Name);
+        char expr[IM_LABEL_SIZE + 32]; ImFormatString(expr, IM_ARRAYSIZE(expr), "win_%s->Controls.back()", pbase);
         AppEmitStyleModLines(n, expr, "  ", out);
       }
       else
@@ -12041,6 +12043,86 @@ namespace ImGui
     }
   }
 
+  // Import Window / Sidebar host nodes from their `ImGui::PushAppWindow<Name>` / `PushAppSidebar<Name>`
+  // lines, in source order (= the emitter's node order among hosts).
+  static void AppImportHosts(ImGuiAppGraph* g, const char* code)
+  {
+    struct Spec { const char* Push; ImGuiAppNodeKind Kind; };
+    const Spec specs[] = { { "PushAppWindow<", ImGuiAppNodeKind_Window }, { "PushAppSidebar<", ImGuiAppNodeKind_Sidebar } };
+    for (int si = 0; si < IM_ARRAYSIZE(specs); si++)
+    {
+      const char* p = code;
+      while ((p = strstr(p, specs[si].Push)) != nullptr)
+      {
+        const char* a = p + strlen(specs[si].Push);
+        char name[IM_LABEL_SIZE];
+        int  ni = 0;
+        while (AppCImportIsIdent(*a) && ni < IM_LABEL_SIZE - 1) name[ni++] = *a++;
+        name[ni] = 0;
+        if (name[0])
+          AppGraphAddNode(g, specs[si].Kind, name);
+        p = a;
+      }
+    }
+  }
+
+  // Import hosting: each `PushWindowControl<Ctrl>(app, win_<Host>)` / `PushSidebarControl<Ctrl>(app,
+  // sb_<Host>)` re-forms a containment edge Ctrl.ChildOut -> Host.ChildIn. PushAppControl is unhosted.
+  static void AppImportHosting(ImGuiAppGraph* g, const char* code)
+  {
+    auto port_of = [](const ImGuiAppNode* nd, ImGuiAppPortKind k) -> int
+    {
+      for (int i = 0; i < nd->Ports.Size; i++)
+        if (nd->Ports.Data[i].Kind == k) return nd->Ports.Data[i].Id;
+      return -1;
+    };
+    auto find_named = [&](ImGuiAppNodeKind kind, const char* name) -> ImGuiAppNode*
+    {
+      for (int i = 0; i < g->Nodes.Size; i++)
+        if (g->Nodes.Data[i].Kind == kind && strcmp(g->Nodes.Data[i].Draft.Name, name) == 0)
+          return &g->Nodes.Data[i];
+      return nullptr;
+    };
+    struct Spec { const char* Push; const char* Local; ImGuiAppNodeKind Kind; };
+    const Spec specs[] = { { "PushWindowControl<", "win_", ImGuiAppNodeKind_Window }, { "PushSidebarControl<", "sb_", ImGuiAppNodeKind_Sidebar } };
+    for (int si = 0; si < IM_ARRAYSIZE(specs); si++)
+    {
+      const char* p = code;
+      while ((p = strstr(p, specs[si].Push)) != nullptr)
+      {
+        const char* a = p + strlen(specs[si].Push);
+        char ctrl[IM_LABEL_SIZE];
+        int  ci = 0;
+        while (AppCImportIsIdent(*a) && ci < IM_LABEL_SIZE - 1) ctrl[ci++] = *a++;
+        ctrl[ci] = 0;
+        const char* eol = a;
+        while (*eol != 0 && *eol != '\n') eol++;
+        char host[IM_LABEL_SIZE];
+        host[0] = 0;
+        if (const char* loc = AppImportFind(a, eol, specs[si].Local))
+        {
+          loc += strlen(specs[si].Local);
+          int hi = 0;
+          while (loc < eol && AppCImportIsIdent(*loc) && hi < IM_LABEL_SIZE - 1) host[hi++] = *loc++;
+          host[hi] = 0;
+        }
+        p = a;
+        ImGuiAppNode* c = find_named(ImGuiAppNodeKind_Control, ctrl);
+        ImGuiAppNode* h = host[0] ? find_named(specs[si].Kind, host) : nullptr;
+        if (c == nullptr || h == nullptr) continue;
+        const int co = port_of(c, ImGuiAppPortKind_ChildOut);
+        const int hin = port_of(h, ImGuiAppPortKind_ChildIn);
+        if (co < 0 || hin < 0) continue;
+        ImGuiAppNodeLink l;
+        l.Id = AppGraphAllocId(g);
+        l.StartAttr = co;
+        l.EndAttr = hin;
+        l.Kind = ImGuiAppEdgeKind_Containment;
+        g->Links.push_back(l);
+      }
+    }
+  }
+
   int AppGraphImportProgram(ImGuiAppGraph* g, const char* code)
   {
     IM_ASSERT(g != nullptr);
@@ -12086,6 +12168,10 @@ namespace ImGui
     }
     for (int i = 0; i < spurious.Size; i++)
       AppGraphRemoveNode(g, spurious.Data[i]);
+
+    // Windows / sidebars, then the hosting containment edges (needs both endpoints present).
+    AppImportHosts(g, code);
+    AppImportHosting(g, code);
 
     return controls;
   }
