@@ -137,10 +137,15 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   skeleton (OnAttach/OnDetach/OnUpdate/OnRender) and PushAppLayer<Analytics>(app) at its position in the
   bring-up stack (after the foundation layers, node order). Byte-locked by ProofDrift and compiled via the
   #included contract header; ProofBehavior dispatches over the shell it belongs to.
-- [ ] **F21 cycle surfacing** — topo cycle name surfaced in the status strip + Select verb jumps
+- [x] **F21 cycle surfacing** — topo cycle name surfaced in the status strip + Select verb jumps
   selection to the cycle's nodes. Renders as plain status text until F33's HEALTH pill exists,
   then rides it (the P3 deliverable is the computation + verb, not the pill styling).
   *Accept: cyclic-graph test asserts status text + selection.*
+  DONE: AppGraphDependencyCycle (reusing AppGraphTopoOrder's Kahn pass via a new out_cycle param, no
+  duplicated cycle logic) returns the unscheduled controls + a member name. The status strip shows a red
+  "cycle: <name> +N" readout with a Select verb; clicking jumps Graph.Selection to the cycle nodes,
+  applied in OnUpdate (the model write stays out of the render pass). step62 pins name + node set + the
+  Select assignment; acyclic returns nothing.
 
 ## P4 — ingest closes
 

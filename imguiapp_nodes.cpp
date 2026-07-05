@@ -9267,10 +9267,11 @@ namespace ImGui
     return nullptr;
   }
 
-  bool AppGraphTopoOrder(const ImGuiAppGraph* g, ImVector<int>* out_control_ids, char* err, int err_size, bool include_live)
+  bool AppGraphTopoOrder(const ImGuiAppGraph* g, ImVector<int>* out_control_ids, char* err, int err_size, bool include_live, ImVector<int>* out_cycle)
   {
     IM_ASSERT(g != nullptr && out_control_ids != nullptr);
     out_control_ids->clear();
+    if (out_cycle != nullptr) out_cycle->clear();
     if (err && err_size > 0) err[0] = 0;
 
     // Collect control node ids (stable order = node order, for deterministic output). Validation/health
@@ -9317,10 +9318,16 @@ namespace ImGui
 
       if (pick < 0)
       {
-        // Remaining nodes form a cycle; name one for the message.
+        // Remaining nodes form a cycle (plus anything it blocks); name one for the message and, when
+        // asked, hand the caller the whole unscheduled set for the Select verb.
         const char* who = "control";
+        bool named = false;
         for (int i = 0; i < ctrl.Size; i++)
-          if (!done.Data[i]) { const ImGuiAppNode* nn = AppGraphFindNodeConst(g, ctrl.Data[i]); if (nn) who = nn->Draft.Name; break; }
+          if (!done.Data[i])
+          {
+            if (!named) { const ImGuiAppNode* nn = AppGraphFindNodeConst(g, ctrl.Data[i]); if (nn) who = nn->Draft.Name; named = true; }
+            if (out_cycle != nullptr) out_cycle->push_back(ctrl.Data[i]);
+          }
         char msg[160];
         ImFormatString(msg, IM_ARRAYSIZE(msg), "dependency cycle at %s", who);
         AppSetErr(err, err_size, msg);
@@ -9342,6 +9349,28 @@ namespace ImGui
       }
     }
     return true;
+  }
+
+  int AppGraphDependencyCycle(const ImGuiAppGraph* g, ImVector<int>* out_nodes, char* out_name, int name_size)
+  {
+    IM_ASSERT(g != nullptr);
+    if (out_nodes != nullptr) out_nodes->clear();
+    if (out_name != nullptr && name_size > 0) out_name[0] = 0;
+
+    ImVector<int> order;
+    ImVector<int> cycle;
+    char err[160] = "";
+    if (AppGraphTopoOrder(g, &order, err, IM_ARRAYSIZE(err), false, &cycle))
+      return 0;   // acyclic
+
+    if (out_name != nullptr && name_size > 0)
+    {
+      const ImGuiAppNode* nn = cycle.Size > 0 ? AppGraphFindNodeConst(g, cycle.Data[0]) : nullptr;
+      ImStrncpy(out_name, nn != nullptr ? nn->Draft.Name : "control", name_size);
+    }
+    if (out_nodes != nullptr)
+      *out_nodes = cycle;
+    return cycle.Size;
   }
 
   // Distinct producer node ids feeding a consumer control via data edges, in node order (deterministic).

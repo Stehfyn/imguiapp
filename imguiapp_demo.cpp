@@ -952,19 +952,29 @@ namespace
     char          MirrorCounts[64];              // "L# W# S# C#"
     char          Breadcrumb[IM_LABEL_SIZE * 2]; // selection breadcrumb
     char          Msg[64];                       // transient write/diff confirmation (doc->WriteMsg snapshot)
+    char          CycleMsg[96];                  // "cycle: <name> (+N)" when a data-dependency cycle blocks codegen (F21)
+    int           CycleCount;                    // nodes the topo sort could not schedule; 0 = acyclic
+    ImVector<int> CycleNodes;                    // those node ids -- the Select verb's target
+    ImGuiID       CycleSig;                      // FrameSig the cycle was last computed at (recompute gate)
   };
-  struct StatusStripTempData {};   // read-only display, captures no input
+  struct StatusStripTempData
+  {
+    bool SelectCycle;   // the Select verb was clicked this frame -> jump selection to the cycle nodes (applied next update)
+  };
   struct StatusStripControl : ImGuiAppControl<StatusStripData, StatusStripTempData, GraphDocData>
   {
     virtual void OnInitialize(ImGuiApp* app, StatusStripData* data, const GraphDocData*) const override final
     {
       data->Doc = GetGraphDoc(app);
+      data->CycleMsg[0] = 0;
+      data->CycleCount  = 0;
+      data->CycleSig    = 0;
     }
 
-    virtual void OnUpdate(float dt, StatusStripData* data, const StatusStripTempData*, const StatusStripTempData*, const GraphDocData*) const override final
+    virtual void OnUpdate(float dt, StatusStripData* data, const StatusStripTempData* temp_data, const StatusStripTempData*, const GraphDocData*) const override final
     {
       IM_UNUSED(dt);
-      const GraphDocData* doc = data->Doc;
+      GraphDocData* doc = data->Doc;
 
       int nd = 0;
       int nl = 0;
@@ -1005,12 +1015,37 @@ namespace
 
       ImGui::AppGraphSelectionBreadcrumb(&doc->Graph, doc->Selection, data->Breadcrumb, IM_ARRAYSIZE(data->Breadcrumb));
       ImStrncpy(data->Msg, doc->WriteMsg, IM_ARRAYSIZE(data->Msg));
+
+      // Data-dependency cycle (F21): recompute on signature change; surface a name + the node set the
+      // Select verb jumps to. Applying the recorded Select click is a model write, so it lands here in
+      // the update pass, not in OnRender.
+      if (data->CycleSig != doc->FrameSig)
+      {
+        data->CycleSig = doc->FrameSig;
+        char name[IM_LABEL_SIZE];
+        data->CycleCount = ImGui::AppGraphDependencyCycle(&doc->Graph, &data->CycleNodes, name, IM_ARRAYSIZE(name));
+        if (data->CycleCount > 0)
+        {
+          if (data->CycleCount > 1)
+            ImFormatString(data->CycleMsg, IM_ARRAYSIZE(data->CycleMsg), "cycle: %s +%d", name, data->CycleCount - 1);
+          else
+            ImFormatString(data->CycleMsg, IM_ARRAYSIZE(data->CycleMsg), "cycle: %s", name);
+        }
+        else
+          data->CycleMsg[0] = 0;
+      }
+      if (temp_data->SelectCycle && data->CycleNodes.Size > 0)
+      {
+        doc->Graph.Selection = data->CycleNodes;   // multi-select the whole cycle
+        doc->Selection = data->CycleNodes.Data[0]; // primary = first member (drives the breadcrumb + inspector)
+      }
     }
 
-    virtual void OnRender(const StatusStripData* data, StatusStripTempData*, const GraphDocData* doc_dep) const override final
+    virtual void OnRender(const StatusStripData* data, StatusStripTempData* temp_data, const GraphDocData* doc_dep) const override final
     {
       const float       em    = ImGui::GetFontSize();
       const ImGuiStyle& style = ImGui::GetStyle();
+      temp_data->SelectCycle = false;
       if (ImGui::BeginChild("##Strip", ImVec2(0.0f, 0.0f), ImGuiChildFlags_FrameStyle | ImGuiChildFlags_AutoResizeY))
       {
         // Left: live keymap hint; refused links show in red.
@@ -1018,6 +1053,19 @@ namespace
         const char* hint = ImGui::AppGraphStatusHint(&doc_dep->Graph, &sev);
         ImGui::AlignTextToFramePadding();
         ImGui::TextColored(sev >= 2 ? ImVec4(0.90f, 0.42f, 0.38f, 1.0f) : style.Colors[ImGuiCol_TextDisabled], "%s", hint);
+
+        // Data-dependency cycle readout + Select verb (F21): plain red status text until F33's HEALTH
+        // pill, then it rides that. Clicking Select jumps the selection to the cycle's nodes.
+        if (data->CycleCount > 0)
+        {
+          ImGui::SameLine(0.0f, em);
+          ImGui::AlignTextToFramePadding();
+          ImGui::TextColored(ImVec4(0.90f, 0.42f, 0.38f, 1.0f), ICON_FA_TRIANGLE_EXCLAMATION "  %s", data->CycleMsg);
+          ImGui::SameLine(0.0f, em * 0.4f);
+          if (ImGui::SmallButton("Select###selectcycle"))
+            temp_data->SelectCycle = true;
+          ImGui::SetItemTooltip("Select the %d node(s) in the dependency cycle", data->CycleCount);
+        }
 
         char right[512];
         int  len = 0;

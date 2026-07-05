@@ -735,7 +735,12 @@ namespace ImGui
   // Topologically order the Control nodes by data dependency (producers before consumers). Returns
   // false and writes err on a cycle. out_control_ids receives node ids in push order. include_live
   // false = authored domain only (validation/health); true = the full mirrored composition (codegen).
-  IMGUI_API bool                AppGraphTopoOrder(const ImGuiAppGraph* g, ImVector<int>* out_control_ids, char* err, int err_size, bool include_live = false);
+  IMGUI_API bool                AppGraphTopoOrder(const ImGuiAppGraph* g, ImVector<int>* out_control_ids, char* err, int err_size, bool include_live = false, ImVector<int>* out_cycle = nullptr);
+
+  // Data-dependency (topo) cycle surfacing (F21). Fills out_nodes with the controls the topo sort could
+  // not schedule -- the cycle plus anything it blocks -- and out_name (optional) with a member's name.
+  // Returns the count (0 when acyclic). The Select verb jumps the selection to out_nodes.
+  IMGUI_API int                 AppGraphDependencyCycle(const ImGuiAppGraph* g, ImVector<int>* out_nodes, char* out_name, int name_size);
 
   // One problem found by AppGraphValidate. Severity: 1 = warning, 2 = error. NodeId is the node to
   // reveal (-1 for whole-graph issues).
