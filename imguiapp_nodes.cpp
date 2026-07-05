@@ -11633,6 +11633,63 @@ namespace ImGui
     }
   }
 
+  // strstr bounded to [b, e): the leftmost occurrence of needle that starts before e, or null.
+  static const char* AppImportFind(const char* b, const char* e, const char* needle)
+  {
+    const char* s = strstr(b, needle);
+    return (s != nullptr && s < e) ? s : nullptr;
+  }
+
+  // Find `<method>(...) ... {` inside [b, e) and return its brace body span. Skips the arg-list parens so
+  // the body brace is the method's, not something inside the signature.
+  static bool AppImportMethodBody(const char* b, const char* e, const char* method, const char** out_body, const char** out_end)
+  {
+    const char* s = b;
+    while ((s = AppImportFind(s, e, method)) != nullptr)
+    {
+      const char* a = s + strlen(method);
+      while (a < e && AppCImportIsSpace(*a)) a++;
+      if (a >= e || *a != '(')                       { s += strlen(method); continue; }   // not a call/def
+      int pd = 0;
+      const char* c = a;
+      while (c < e) { if (*c == '(') pd++; else if (*c == ')') { pd--; if (pd == 0) { c++; break; } } c++; }
+      while (c < e && *c != '{' && *c != ';') c++;
+      if (c >= e || *c != '{')                       { s += strlen(method); continue; }
+      const char* body = c + 1;
+      const char* be = body;
+      int depth = 1;
+      while (be < e && depth > 0) { if (*be == '{') depth++; else if (*be == '}') { depth--; if (depth == 0) break; } be++; }
+      *out_body = body;
+      *out_end = be;
+      return true;
+    }
+    return false;
+  }
+
+  // Parse an event guard condition in [cond, cond_end) to (edge, temp field). The emitter's guard shapes:
+  // rising `temp && !last`, falling `!temp && last`, changed `temp ^ last` / `temp != last`, active `temp`.
+  static bool AppImportParseGuard(const char* cond, const char* cond_end, ImGuiAppEventEdge* out_edge, char* out_temp, int temp_size)
+  {
+    const char* t = AppImportFind(cond, cond_end, "temp_data->");   // leftmost is always the real temp field
+    if (t == nullptr) return false;
+    const bool temp_negated = (t > cond && t[-1] == '!');
+    t += 11;
+    int i = 0;
+    while (t < cond_end && AppCImportIsIdent(*t) && i < temp_size - 1) out_temp[i++] = *t++;
+    out_temp[i] = 0;
+    if (out_temp[0] == 0) return false;
+
+    const bool has_last = AppImportFind(cond, cond_end, "last_temp_data->") != nullptr;
+    if (!has_last)                                             { *out_edge = ImGuiAppEventEdge_Active; return true; }
+    if (AppImportFind(cond, cond_end, "^") || AppImportFind(cond, cond_end, "!="))
+      *out_edge = ImGuiAppEventEdge_Changed;
+    else if (temp_negated)
+      *out_edge = ImGuiAppEventEdge_Falling;
+    else
+      *out_edge = ImGuiAppEventEdge_Rising;
+    return true;
+  }
+
   int AppGraphImportControlsFromCode(ImGuiAppGraph* g, const char* code, ImVec2 origin)
   {
     IM_ASSERT(g != nullptr);
@@ -11659,6 +11716,135 @@ namespace ImGui
         if (!dup)
           AppNodeAddCommand(ctrl, cmd);
         s = id;
+      }
+    };
+
+    // Reconstruct events from the two method bodies. OnGetCommand yields Active EmitCommand events (their
+    // `if (temp_data->X)` guard) plus a latch->command map (`if (data-><Cmd>Pending)`); OnUpdate's events
+    // block yields SetField events (`data->dst = <expr>`) and edge EmitCommand events (`data-><latch> = true`
+    // under an edge guard, command resolved via that map). The `= false` re-arm lines carry no guard, so the
+    // if-scan skips them.
+    auto import_events = [](ImGuiAppNode* ctrl, const char* cb, const char* ce)
+    {
+      struct LatchCmd { char Latch[IM_LABEL_SIZE + 16]; char Cmd[IM_LABEL_SIZE]; };
+      ImVector<LatchCmd> latches;
+
+      const char* gb = nullptr;
+      const char* ge = nullptr;
+      if (AppImportMethodBody(cb, ce, "OnGetCommand", &gb, &ge))
+      {
+        const char* s = gb;
+        while ((s = AppImportFind(s, ge, "if (")) != nullptr)
+        {
+          const char* cond = s + 4;
+          const char* cend = cond;
+          int pd = 1;
+          while (cend < ge && pd > 0) { if (*cend == '(') pd++; else if (*cend == ')') { pd--; if (pd == 0) break; } cend++; }
+          const char* emit = AppImportFind(cend, ge, "(ImGuiAppCommand)AppCommand_");
+          const char* next_if = AppImportFind(cend, ge, "if (");
+          s = cend + 1;
+          if (emit == nullptr) continue;
+          if (next_if != nullptr && emit > next_if) continue;   // guard has no emission of its own
+          const char* id = emit + strlen("(ImGuiAppCommand)AppCommand_");
+          char cmd[IM_LABEL_SIZE];
+          int  ci = 0;
+          while (id < ge && AppCImportIsIdent(*id) && ci < IM_LABEL_SIZE - 1) cmd[ci++] = *id++;
+          cmd[ci] = 0;
+          if (cmd[0] == 0) continue;
+
+          if (AppImportFind(cond, cend, "temp_data->") != nullptr)
+          {
+            char tf[IM_LABEL_SIZE];
+            ImGuiAppEventEdge edge;
+            if (AppImportParseGuard(cond, cend, &edge, tf, IM_ARRAYSIZE(tf)))
+            {
+              ImGuiAppEventDesc ev;
+              ev.Edge = ImGuiAppEventEdge_Active;
+              ev.Action = ImGuiAppEventAction_EmitCommand;
+              ImStrncpy(ev.TempField, tf, IM_ARRAYSIZE(ev.TempField));
+              ImStrncpy(ev.Command, cmd, IM_ARRAYSIZE(ev.Command));
+              ctrl->Events.push_back(ev);
+            }
+          }
+          else if (const char* d = AppImportFind(cond, cend, "data->"))
+          {
+            d += 6;
+            LatchCmd lc;
+            int li = 0;
+            while (d < cend && AppCImportIsIdent(*d) && li < (int)sizeof(lc.Latch) - 1) lc.Latch[li++] = *d++;
+            lc.Latch[li] = 0;
+            ImStrncpy(lc.Cmd, cmd, IM_ARRAYSIZE(lc.Cmd));
+            if (lc.Latch[0])
+              latches.push_back(lc);
+          }
+        }
+      }
+
+      const char* ub = nullptr;
+      const char* ue = nullptr;
+      if (AppImportMethodBody(cb, ce, "OnUpdate", &ub, &ue))
+      {
+        const char* ev_start = AppImportFind(ub, ue, "// events:");
+        const char* s = ev_start;
+        while (s != nullptr && (s = AppImportFind(s, ue, "if (")) != nullptr)
+        {
+          const char* cond = s + 4;
+          const char* cend = cond;
+          int pd = 1;
+          while (cend < ue && pd > 0) { if (*cend == '(') pd++; else if (*cend == ')') { pd--; if (pd == 0) break; } cend++; }
+          const char* asg = AppImportFind(cend, ue, "data->");
+          const char* semi = asg != nullptr ? AppImportFind(asg, ue, ";") : nullptr;
+          const char* next_if = AppImportFind(cend, ue, "if (");
+          s = cend + 1;
+          if (asg == nullptr || semi == nullptr) continue;
+          if (next_if != nullptr && asg > next_if) continue;   // guard body is not a data-> assignment
+          const char* eq = AppImportFind(asg, semi, "=");
+          if (eq == nullptr) continue;
+
+          const char* dp = asg + 6;
+          char dst[IM_LABEL_SIZE];
+          int  di = 0;
+          while (dp < eq && AppCImportIsIdent(*dp) && di < IM_LABEL_SIZE - 1) dst[di++] = *dp++;
+          dst[di] = 0;
+          char rest[IM_LABEL_SIZE];
+          int  ri = 0;
+          for (const char* r = eq + 1; r < semi && ri < IM_LABEL_SIZE - 1; r++) rest[ri++] = *r;
+          rest[ri] = 0;
+          AppImportTrim(rest);
+
+          char tf[IM_LABEL_SIZE];
+          ImGuiAppEventEdge edge;
+          if (!AppImportParseGuard(cond, cend, &edge, tf, IM_ARRAYSIZE(tf))) continue;
+
+          if (strcmp(rest, "true") == 0)
+          {
+            const char* cmd = nullptr;
+            for (int k = 0; k < latches.Size && cmd == nullptr; k++)
+              if (strcmp(latches.Data[k].Latch, dst) == 0) cmd = latches.Data[k].Cmd;
+            if (cmd != nullptr)
+            {
+              ImGuiAppEventDesc ev;
+              ev.Edge = edge;
+              ev.Action = ImGuiAppEventAction_EmitCommand;
+              ImStrncpy(ev.TempField, tf, IM_ARRAYSIZE(ev.TempField));
+              ImStrncpy(ev.Command, cmd, IM_ARRAYSIZE(ev.Command));
+              ctrl->Events.push_back(ev);
+            }
+          }
+          else
+          {
+            ImGuiAppEventDesc ev;
+            ev.Edge = edge;
+            ev.Action = ImGuiAppEventAction_SetField;
+            ImStrncpy(ev.TempField, tf, IM_ARRAYSIZE(ev.TempField));
+            ImStrncpy(ev.DstField, dst, IM_ARRAYSIZE(ev.DstField));
+            char noexpr[IM_LABEL_SIZE + 16];
+            ImFormatString(noexpr, IM_ARRAYSIZE(noexpr), "temp_data->%s", tf);
+            if (strcmp(rest, noexpr) != 0)
+              ImStrncpy(ev.Expr, rest, IM_ARRAYSIZE(ev.Expr));
+            ctrl->Events.push_back(ev);
+          }
+        }
       }
     };
 
@@ -11744,6 +11930,7 @@ namespace ImGui
         int depth = 1;
         while (*e2 != 0 && depth > 0) { if (*e2 == '{') depth++; else if (*e2 == '}') depth--; e2++; }
         import_commands(c, open, e2);
+        import_events(c, open, e2);
         p = e2;
       }
       else
