@@ -10272,6 +10272,35 @@ namespace ImGui
     return g->GenSignature != 0 && AppGraphSignature(g) == g->GenSignature;
   }
 
+  int AppScanCodegenWarnings(const char* code, ImGuiTextBuffer* out_list)
+  {
+    IM_ASSERT(code != nullptr);
+    static const char* markers[] = { "// WARNING", "// codegen aborted" };
+    int count = 0;
+    const char* line = code;
+    while (*line)
+    {
+      const char* eol = line;
+      while (*eol != 0 && *eol != '\n') eol++;
+      bool hit = false;
+      for (int m = 0; m < IM_ARRAYSIZE(markers) && !hit; m++)
+        hit = ImStristr(line, eol, markers[m], nullptr) != nullptr;
+      if (hit)
+      {
+        count++;
+        if (out_list != nullptr)
+        {
+          const char* s = line;
+          while (s < eol && (*s == ' ' || *s == '\t')) s++;   // trim leading indent
+          out_list->append(s, eol);
+          out_list->append("\n");
+        }
+      }
+      line = (*eol == '\n') ? eol + 1 : eol;
+    }
+    return count;
+  }
+
   // Emit the ImGuiAppLayer subclass a Custom layer node names: the phase hooks, stubbed at their positions in
   // the loop. Core layers ship with the framework and emit nothing but their bring-up line.
   static void AppEmitCustomLayerCode(const ImGuiAppNode* n, ImGuiTextBuffer* out)

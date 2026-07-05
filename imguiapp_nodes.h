@@ -681,6 +681,12 @@ namespace ImGui
   IMGUI_API bool                AppGraphCodeStale(const ImGuiAppGraph* g);
   IMGUI_API bool                AppGraphCodeFresh(const ImGuiAppGraph* g);
 
+  // Count the codegen self-diagnostics embedded in generated text (F19): the "// WARNING" comments the
+  // emitter drops for degenerate constructs and the "// codegen aborted" banner. Scans the emitted C++
+  // itself (single source: the emitter), never re-deriving the conditions. out_list (optional) receives
+  // each marker line trimmed of leading indent, one per line.
+  IMGUI_API int                 AppScanCodegenWarnings(const char* code, ImGuiTextBuffer* out_list);
+
   // CanLink validates an attempted edge (kind pairing, no self/dup, no duplicate dep type, no cycle),
   // writing a reason to err on rejection. CaptureAppGraphLinks folds the canvas wire events, refusing
   // illegal creations; returns true if the model changed.

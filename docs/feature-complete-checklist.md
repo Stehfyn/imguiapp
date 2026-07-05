@@ -122,9 +122,14 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   (in OnUpdate). All read the single AppGraphCodeFresh/Stale bit. composer_codegen_freshness drives the
   REAL toolbar Generate through the render->update path: stale -> click -> fresh -> authored edit ->
   stale. (step60 pins the model cycle underneath.)
-- [ ] **F19 codegen warnings surfaced** — count of `// WARNING` / `// codegen aborted` in the
+- [x] **F19 codegen warnings surfaced** — count of `// WARNING` / `// codegen aborted` in the
   generated text shown beside Generate with listing popup.
   *Accept: graph engineered to warn shows the count; clean graph shows none.*
+  DONE: AppScanCodegenWarnings scans the emitted C++ for the "// WARNING"/"// codegen aborted" markers
+  (single source: the emitter, no re-derived conditions). The count is published once per signature
+  change (doc->CodegenWarnCount) and shown as an amber chip beside Generate; clicking lists the marker
+  lines in a popup. Absent when the emission is clean. step61 pins: an undefined-command event warns
+  (count>=1, list captures the line); defining the command clears it to zero.
 - [ ] **F20 custom-layer emission locked** — authored Custom layer → subclass skeleton +
   `ImGui::PushAppLayer<Name>` at its stack position, byte-locked + compiled.
   *Accept: extends the codegen-proof corpus.*

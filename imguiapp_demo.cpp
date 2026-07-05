@@ -335,6 +335,8 @@ namespace
     ImGuiID FrameSig;  // this frame's AppGraphSignature
     int     NumErrors; // cached-validation counts
     int     NumWarnings;
+    int     CodegenWarnCount;   // "// WARNING"/"// codegen aborted" markers in the last-generated C++ (F19); refreshed on signature change
+    ImGuiID CodegenWarnSig;     // signature the codegen-warning count was scanned at (gate: rescan only on change)
     char    GraphPath[256];
     char    HeaderPath[256];
     struct DocLogLine { int Severity; char Text[184]; };
@@ -463,6 +465,8 @@ namespace
       data->FrameSig    = 0;
       data->NumErrors   = 0;
       data->NumWarnings = 0;
+      data->CodegenWarnCount = 0;
+      data->CodegenWarnSig   = 0;
       data->RevealPanel = ComposerPanel_None;
       data->LinkErrSeqSeen = 0;
       data->LayoutSavedHash = 0;
@@ -501,6 +505,17 @@ namespace
         data->NumWarnings = 0;
         for (int i = 0; i < issues->Size; i++)
           (issues->Data[i].Severity >= 2 ? data->NumErrors : data->NumWarnings)++;
+      }
+
+      // Codegen self-diagnostics (F19): count the "// WARNING"/"// codegen aborted" markers the emitter
+      // embeds in the generated C++. Scan the emitted text (single source), gated on the signature so a
+      // static graph costs nothing. The listing popup regenerates on open.
+      if (data->CodegenWarnSig != data->FrameSig)
+      {
+        data->CodegenWarnSig = data->FrameSig;
+        ImGuiTextBuffer code;
+        ImGui::GenerateAppGraphCode(&data->Graph, &code);
+        data->CodegenWarnCount = ImGui::AppScanCodegenWarnings(code.c_str(), nullptr);
       }
 
       // Fold editor notices (refused links, composition refusals) into the document log; the
@@ -791,6 +806,34 @@ namespace
           if (ImGui::MenuItem(ICON_FA_CODE_COMPARE "  Diff vs saved graph -> clipboard"))
             temp_data->Diff = true;
           ImGui::EndPopup();
+        }
+
+        // Codegen self-diagnostics chip (F19): count of "// WARNING"/"// codegen aborted" markers in the
+        // emitted C++, beside Generate. Amber, click to list; absent when the emission is clean.
+        if (doc->CodegenWarnCount > 0)
+        {
+          ImGui::SameLine(0.0f, ImMax(1.0f, em * 0.25f));
+          ImGui::PushStyleColor(ImGuiCol_Text, ImLerp(kDemoGold, style.Colors[ImGuiCol_Text], 0.15f));
+          char warn_lbl[48];
+          ImFormatString(warn_lbl, IM_ARRAYSIZE(warn_lbl), ICON_FA_TRIANGLE_EXCLAMATION "  %d###codegenwarn", doc->CodegenWarnCount);
+          const bool open_warn = ImGui::Button(warn_lbl);
+          ImGui::PopStyleColor();
+          ImGui::SetItemTooltip("%d codegen warning(s) embedded in the generated C++ -- click to list", doc->CodegenWarnCount);
+          if (open_warn)
+            ImGui::OpenPopup("##codegen_warn_list");
+          if (ImGui::BeginPopup("##codegen_warn_list"))
+          {
+            ImGui::TextDisabled("Codegen warnings (%d)", doc->CodegenWarnCount);
+            ImGui::Separator();
+            ImGuiTextBuffer code;
+            ImGui::GenerateAppGraphCode(&doc->Graph, &code);   // pure read; the list regenerates while the popup is open
+            ImGuiTextBuffer list;
+            ImGui::AppScanCodegenWarnings(code.c_str(), &list);
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
+            ImGui::TextUnformatted(list.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::EndPopup();
+          }
         }
 
         // -- observe (right-aligned): bootstrap-state readout + panel toggles. The Live eye
