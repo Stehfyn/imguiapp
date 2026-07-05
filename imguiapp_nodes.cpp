@@ -5228,7 +5228,7 @@ namespace ImGui
 
       ImVector<int> mseq;
       AppScopeSequenceIds(g, &mseq);
-      float row2_need = 0.0f;
+      float row2_need = em * 1.5f;   // the strip's paragraph indent
       ImGui::PushFont(nullptr, em * 0.8f);
       const float arrow_w = em * 0.45f;   // draw-list chevron (the arrow glyph is not in the atlas)
       for (int i = 0; i < mseq.Size; i++)
@@ -5361,7 +5361,7 @@ namespace ImGui
     const ImVec2 row_mx = ImGui::CanvasToScreen(cv, ImVec2(ed->ScopeStripRow.z, ed->ScopeStripRow.w));
     const float cy = (row_mn.y + row_mx.y) * 0.5f;
     const float right_limit = row_mx.x - em * 0.75f;   // row content never touches the wall edge
-    float x = row_mn.x + em * 0.75f;
+    float x = row_mn.x + em * 2.25f;   // paragraph indent: the strip opens 1.5 em deeper than its Begin line
 
     // One type scale for the whole row (em multiple: zoom-proportional); chips keep air inside the row.
     int clicked = -1;
