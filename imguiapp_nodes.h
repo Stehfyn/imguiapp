@@ -840,7 +840,10 @@ namespace ImGui
   // Topologically order the Control nodes by data dependency (producers before consumers). Returns
   // false and writes err on a cycle. out_control_ids receives node ids in push order. include_live
   // false = authored domain only (validation/health); true = the full mirrored composition (codegen).
-  IMGUI_API bool                AppGraphTopoOrder(const ImGuiAppGraph* g, ImVector<int>* out_control_ids, char* err, int err_size, bool include_live = false, ImVector<int>* out_cycle = nullptr);
+  // priority (F59): optional push-order preference (the concatenated F58 authored orders) -- among ready
+  // zero-in-degree controls the earliest-ranked one drains first, so a topologically legal authored order
+  // emits verbatim; null reproduces the plain node-order sort.
+  IMGUI_API bool                AppGraphTopoOrder(const ImGuiAppGraph* g, ImVector<int>* out_control_ids, char* err, int err_size, bool include_live = false, ImVector<int>* out_cycle = nullptr, const ImVector<int>* priority = nullptr);
 
   // Data-dependency (topo) cycle surfacing (F21). Fills out_nodes with the controls the topo sort could
   // not schedule -- the cycle plus anything it blocks -- and out_name (optional) with a member's name.
