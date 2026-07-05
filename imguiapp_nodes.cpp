@@ -1210,34 +1210,19 @@ namespace ImGui
       out->appendf("  %-*s %s;\n", type_w, AppFieldDeclTypeName(f), name);
   }
 
+  static void AppEmitControlWithDeps(const ImGuiAppGraph* g, const ImGuiAppNode* n, ImGuiTextBuffer* out);   // fwd (the one control emitter)
+
+  // F16: a lone draft is the graph emitter's depCount==0 path -- a single Control node with no incoming
+  // data edges, no events, no commands. Build that scratch node and emit through the ONE control emitter
+  // (AppEmitControlWithDeps), so there is no parallel codegen path to drift. The historic single-control
+  // output is byte-locked in the codegen proof.
   void GenerateAppControlCode(const ImGuiAppNodeDraft* draft, ImGuiTextBuffer* out)
   {
     IM_ASSERT(draft != nullptr && out != nullptr);
-
-    char base[IM_LABEL_SIZE];
-    AppSanitizeIdentifier(base, IM_ARRAYSIZE(base), draft->Name);
-
-    out->appendf("struct %sData\n{\n", base);
-    int type_w = AppFieldDeclTypeWidth(draft->PersistFields.Data, draft->PersistFields.Size);
-    for (int i = 0; i < draft->PersistFields.Size; i++)
-      AppEmitFieldDecl(out, &draft->PersistFields.Data[i], type_w);
-    out->appendf("};\n\n");
-
-    out->appendf("struct %sTempData\n{\n", base);
-    type_w = AppFieldDeclTypeWidth(draft->TempFields.Data, draft->TempFields.Size);
-    for (int i = 0; i < draft->TempFields.Size; i++)
-      AppEmitFieldDecl(out, &draft->TempFields.Data[i], type_w);
-    out->appendf("};\n\n");
-
-    // Dependencies (extra ImGuiAppControl<> template args) derive from incoming graph links; a single
-    // draft emits none.
-    out->appendf("struct %s : ImGuiAppControl<%sData, %sTempData>\n{\n", base, base, base);
-    out->appendf("  virtual void OnInitialize(ImGuiApp* app, %sData* data) const override final\n", base);
-    out->appendf("  {\n    IM_UNUSED(app); IM_UNUSED(data);\n    // TODO: initialize persistent data\n  }\n\n");
-    out->appendf("  virtual void OnUpdate(float dt, %sData* data, const %sTempData* temp_data, const %sTempData* last_temp_data) const override final\n", base, base, base);
-    out->appendf("  {\n    IM_UNUSED(dt); IM_UNUSED(data); IM_UNUSED(temp_data); IM_UNUSED(last_temp_data);\n    // TODO: update state from temp_data\n  }\n\n");
-    out->appendf("  virtual void OnRender(const %sData* data, %sTempData* temp_data) const override final\n", base, base);
-    out->appendf("  {\n    IM_UNUSED(data); IM_UNUSED(temp_data);\n    // TODO: render widgets, write temp_data\n  }\n};\n");
+    ImGuiAppGraph g;
+    ImGuiAppNode* n = AppGraphAddNode(&g, ImGuiAppNodeKind_Control, draft->Name);
+    n->Draft = *draft;
+    AppEmitControlWithDeps(&g, n, out);
   }
 
   //-----------------------------------------------------------------------------

@@ -97,9 +97,14 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
 
 ## P3 — one emitter, byte-locked
 
-- [ ] **F16 single control emitter** — legacy GenerateAppControlCode subsumed by
+- [x] **F16 single control emitter** — legacy GenerateAppControlCode subsumed by
   AppEmitControlWithDeps (depCount==0 path); both historic outputs byte-locked in tests/data.
   *Accept: one emission function; byte-diff test on both corpora.*
+  DONE: GenerateAppControlCode is now a wrapper that builds a lone Control node and emits through
+  AppEmitControlWithDeps -- the single-draft output is strictly the graph emitter's depCount==0 path
+  (gains OnGetCommand + field-aware render hints). Whole-graph corpus byte-locked by ProofDrift
+  (imguix_contract_generated.h); single-control corpus byte-locked by the new ProofControlDrift
+  (imguix_control_generated.h). step6/step7 substring asserts survive.
 - [ ] **F17 whole-graph signature + dirty bit** — AppGraphSignature (ImHashData over fixed
   buffers) + Revision; edit flips STALE, generate clears.
   *Accept: signature-stability test (reload same file = same signature) + dirty-bit test.*
