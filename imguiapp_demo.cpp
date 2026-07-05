@@ -15,6 +15,7 @@
 #include "imguiapp_nodes.h"
 #include "imguiapp_canvas.h"
 #include "imguiapp_av.h"                     // F63: run index + FILE-mode transport view
+#include "imguiapp_preview.h"                // F68: live preview interpreter session
 #include "backends/imguiapp_impl_qoi.h"      // F63: on-demand QOI frame decode + meta extract
 #ifdef IMGUIX_HAS_LIBAV
 #include "backends/imguiapp_impl_libav.h"    // F63: on-demand mp4 frame decode + meta extract
@@ -1456,6 +1457,7 @@ namespace
         case ComposerHostCmd_Diff:         temp_data->Diff = true; break;
         case ComposerHostCmd_PanelCode:    temp_data->RevealPanel = ComposerPanel_Code; break;
         case ComposerHostCmd_PanelProject: temp_data->RevealPanel = ComposerPanel_Project; break;
+        case ComposerHostCmd_PanelPreview: temp_data->RevealPanel = ComposerPanel_Preview; break;
         case ComposerHostCmd_PanelOutput:  temp_data->RevealPanel = ComposerPanel_Output; break;
         case ComposerHostCmd_ToggleLive:   temp_data->ToggleLive = true; break;
         default: break;
@@ -2352,6 +2354,7 @@ namespace
             { "File: Diff vs saved -> clipboard", "", ComposerHostCmd_Diff },
             { "Panel: Code", "", ComposerHostCmd_PanelCode },
             { "Panel: Project", "", ComposerHostCmd_PanelProject },
+            { "Panel: Preview", "", ComposerHostCmd_PanelPreview },
             { "Panel: Output", "", ComposerHostCmd_PanelOutput },
             { "View: Toggle live mirror", "", ComposerHostCmd_ToggleLive },
           };
@@ -2556,6 +2559,77 @@ namespace
                   }
                   ImGui::EndTable();
                 }
+                ImGui::EndTabItem();
+              }
+              // Preview (F68): run the composed graph live -- the interpreter (imguiapp_preview) builds a real
+              // ImGuiApp from the graph and renders its controls' widgets here, interactive. Edits apply next
+              // frame (preserve-by-(name,type) reconcile); selection brushes both ways with the canvas/tree.
+              if (ImGui::BeginTabItem("Preview", nullptr, doc->RevealPanel == ComposerPanel_Preview ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
+              {
+                ImGuiAppEditorState* ed = ImGui::AppGraphEditorState(graph);
+
+                // Create lazily on first view; a signature change reconciles preserving values by (name,type)
+                // field (design 7). A dependency cycle refuses -- the last good preview keeps running.
+                char pverr[192] = "";
+                const ImGuiID pvsig = ImGui::AppGraphSignature(graph);
+                if (ed->Preview == nullptr)
+                {
+                  ed->Preview = ImGui::AppPreviewCreate(graph, pverr, IM_ARRAYSIZE(pverr));
+                  ImGui::AppPreviewSetSurface(ed->Preview, true);
+                  ed->PreviewSig = pvsig;
+                }
+                else if (pvsig != ed->PreviewSig)
+                {
+                  if (ImGui::AppPreviewReconcile(ed->Preview, pverr, IM_ARRAYSIZE(pverr)))
+                    ed->PreviewSig = pvsig;
+                }
+
+                // Transport: run / pause / reinit. Icon+text buttons (never bare glyphs), theme-styled.
+                ImGui::AlignTextToFramePadding();
+                if (ImGui::Button(ed->PreviewRun ? ICON_FA_PAUSE "  Pause###pvrun" : ICON_FA_PLAY "  Run###pvrun"))
+                  ed->PreviewRun = !ed->PreviewRun;
+                ImGui::SetItemTooltip(ed->PreviewRun ? "Pause the previewed model (widgets stay live)" : "Run the previewed model");
+                ImGui::SameLine();
+                if (ImGui::Button(ICON_FA_ARROW_ROTATE_LEFT "  Reinit"))
+                {
+                  ImGui::AppPreviewDestroy(ed->Preview);   // rebuilt from field defaults next frame
+                  ed->Preview = nullptr;
+                }
+                ImGui::SetItemTooltip("Rebuild the preview from field defaults (discard live values)");
+                ImGui::SameLine();
+                if (pverr[0] != 0)
+                  ImGui::TextColored(ImVec4(0.92f, 0.45f, 0.45f, 1.0f), ICON_FA_TRIANGLE_EXCLAMATION "  %s", pverr);
+                else
+                  ImGui::TextDisabled("Interpreted live -- edits apply next frame");
+                ImGui::Separator();
+
+                // The surface. The interpreter's controls render their manifest-bound widgets into this child;
+                // interaction records TempData that next frame's Task consumes (design 8.1). Brushing: the
+                // selected/hovered node's widgets halo here; a widget click selects its node in the canvas.
+                if (ImGui::BeginChild("##pvsurface", ImVec2(-FLT_MIN, -FLT_MIN)))
+                {
+                  if (ed->Preview != nullptr)
+                  {
+                    int hov_src = 0;
+                    const int canvas_hover = ImGui::AppGraphHoveredNode(graph, &hov_src);
+                    ImGui::AppPreviewSetBrush(ed->Preview, selection, canvas_hover);   // composer -> preview
+
+                    if (ed->PreviewRun) ImGui::AppPreviewFrame(ed->Preview, io.DeltaTime);
+                    else                ImGui::AppPreviewRender(ed->Preview);
+
+                    const int pv_hover = ImGui::AppPreviewHoveredNode(ed->Preview);    // preview -> composer
+                    if (pv_hover >= 0)
+                      ImGui::AppGraphHoverNode(graph, pv_hover, ImGui::ImGuiAppHoverSource_External);
+                    const int pv_click = ImGui::AppPreviewTakeClickedNode(ed->Preview);
+                    if (pv_click >= 0)
+                      selection = pv_click;
+                  }
+                  else
+                  {
+                    ImGui::TextDisabled("No preview -- the graph has a dependency cycle or no controls yet.");
+                  }
+                }
+                ImGui::EndChild();
                 ImGui::EndTabItem();
               }
               char output_label[32];
