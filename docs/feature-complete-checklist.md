@@ -434,8 +434,12 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   `step85_outbound_portal` asserts the crossing edge collects outbound (Inbound == false, names the
   consumer) and that clicking the right-wall chip jumps to the consumer's scope with it selected (the
   hover→click path). Nodes 94/94, headless 28/28, core 87/0.
-- [ ] **F46 scope header row in inspector during drill.**
+- [x] **F46 scope header row in inspector during drill.**
   *Accept: ItemExists test while drilled.*
+  DONE: while `graph->ViewScope` is non-empty, the inspector sidebar leads with a `Scope: <name>` row
+  (`###scopehdr`, a flat button) that steps up one level on click (breadcrumb parity). `composer_scope_header`
+  asserts the row is absent at root, appears when drilled into the Display layer, and disappears after
+  clicking it steps back to root. Nodes 94/94, headless 29/29, core 87/0.
 - [ ] **F47 scope chrome test-debt** — end band, rails, void dim, shrink deadband, title
   ordinals, struct/field root-eviction gates, card geometry invariance across altitudes.
   *Accept: audit `[t]` scope rows flip to shipped-tested.*

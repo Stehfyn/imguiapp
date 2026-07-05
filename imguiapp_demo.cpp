@@ -2301,6 +2301,21 @@ namespace
           ImGui::AlignTextToFramePadding();
           ImGui::TextUnformatted(ICON_FA_CIRCLE_INFO "  Inspector");
           ImGui::Separator();
+          // Scope header row (F46): while drilled, name the current scope at the top of the inspector;
+          // clicking it steps up one level (breadcrumb parity). ViewScope is transient view state.
+          if (graph->ViewScope.Size > 0)
+          {
+            const ImGuiAppNode* sn = ImGui::AppGraphFindNode(graph, graph->ViewScope.back());
+            const char* snm = (sn != nullptr && sn->Draft.Name[0]) ? sn->Draft.Name : "scope";
+            char hdr[96];
+            ImFormatString(hdr, IM_ARRAYSIZE(hdr), ICON_FA_LAYER_GROUP "  Scope: %s###scopehdr", snm);
+            ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
+            if (ImGui::Button(hdr))
+              graph->ViewScope.pop_back();
+            ImGui::PopStyleColor();
+            ImGui::SetItemTooltip("Current drill scope -- click to step up one level");
+            ImGui::Separator();
+          }
           if (selection < 0)
           {
             ShowComposerProjectInspector(doc, graph, temp_data);
