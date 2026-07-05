@@ -945,6 +945,12 @@ namespace ImGui
   // per struct (fields, types mapped back). New nodes laid out at `origin`. Returns structs added.
   IMGUI_API int                 AppGraphImportStructsFromCode(ImGuiAppGraph* g, const char* code, ImVec2 origin);
 
+  // Parse the F16 control emitter's output back into Control nodes (F22). Each `struct <Name> :
+  // ImGuiAppControl<<Data>, <TempData>[, deps...]>` becomes a Control node; its PersistFields/TempFields
+  // are read from the referenced Data/TempData struct blocks in the same source. New nodes laid out at
+  // `origin`. Returns controls added. (Deps, command selections and event blocks import in later passes.)
+  IMGUI_API int                 AppGraphImportControlsFromCode(ImGuiAppGraph* g, const char* code, ImVec2 origin);
+
   // Undo / redo. The editor calls AppGraphCheckpoint once per frame; snapshots coalesce while the
   // mouse is held or a widget is being edited, so a drag or inline rename folds into one step.
   // Ctrl+Z / Ctrl+Y are handled inside ShowAppGraphEditor; Undo/Redo are also exposed for a toolbar.

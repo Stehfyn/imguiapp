@@ -11573,6 +11573,143 @@ namespace ImGui
     return added;
   }
 
+  // Trim leading/trailing import whitespace in place.
+  static void AppImportTrim(char* s)
+  {
+    char* b = s;
+    while (*b != 0 && AppCImportIsSpace(*b)) b++;
+    if (b != s) memmove(s, b, strlen(b) + 1);
+    int n = (int)strlen(s);
+    while (n > 0 && AppCImportIsSpace(s[n - 1])) s[--n] = 0;
+  }
+
+  // Locate `struct <name> { ... }` (a plain struct, no base) and return the body span (inside the braces).
+  // Skips inheriting structs (control shells), so the Data/TempData block is found, not the control itself.
+  static bool AppImportFindNamedStruct(const char* code, const char* name, const char** out_body, const char** out_end)
+  {
+    const char* p = code;
+    while ((p = strstr(p, "struct")) != nullptr)
+    {
+      if (p != code && AppCImportIsIdent(p[-1]))     { p += 6; continue; }
+      const char* q = p + 6;
+      if (!AppCImportIsSpace(*q))                    { p = q; continue; }
+      while (AppCImportIsSpace(*q)) q++;
+      char nm[IM_LABEL_SIZE];
+      int  ni = 0;
+      while (AppCImportIsIdent(*q) && ni < IM_LABEL_SIZE - 1) nm[ni++] = *q++;
+      nm[ni] = 0;
+      while (AppCImportIsSpace(*q)) q++;
+      if (*q != '{' || strcmp(nm, name) != 0)        { p = q; continue; }   // fwd-decl / inheriting / wrong name
+      const char* body = q + 1;
+      const char* e = body;
+      int depth = 1;
+      while (*e != 0 && depth > 0) { if (*e == '{') depth++; else if (*e == '}') { depth--; if (depth == 0) break; } e++; }
+      *out_body = body;
+      *out_end = e;
+      return true;
+    }
+    return false;
+  }
+
+  // Parse the `type name;` members of a struct body span into fields (shared by struct + control import).
+  static void AppImportParseStructMembers(const char* body, const char* e, ImVector<ImGuiAppFieldDesc>* fields)
+  {
+    const char* m = body;
+    while (m < e)
+    {
+      const char* c = m;
+      while (c < e && *c != ';' && *c != '{') c++;
+      if (c < e && *c == '{')
+      {
+        int d2 = 1;
+        c++;
+        while (c < e && d2 > 0) { if (*c == '{') d2++; else if (*c == '}') d2--; c++; }
+        while (c < e && *c != ';') c++;
+        m = (c < e) ? c + 1 : e;
+        continue;
+      }
+      AppImportParseMember(m, c, fields);
+      m = c + 1;
+    }
+  }
+
+  int AppGraphImportControlsFromCode(ImGuiAppGraph* g, const char* code, ImVec2 origin)
+  {
+    IM_ASSERT(g != nullptr);
+    if (code == nullptr)
+      return 0;
+
+    int added = 0;
+    const char* p = code;
+    while ((p = strstr(p, "struct")) != nullptr)
+    {
+      if (p != code && AppCImportIsIdent(p[-1]))     { p += 6; continue; }
+      const char* q = p + 6;
+      if (!AppCImportIsSpace(*q))                    { p = q; continue; }
+      while (AppCImportIsSpace(*q)) q++;
+
+      char name[IM_LABEL_SIZE];
+      int  ni = 0;
+      while (AppCImportIsIdent(*q) && ni < IM_LABEL_SIZE - 1) name[ni++] = *q++;
+      name[ni] = 0;
+      while (AppCImportIsSpace(*q)) q++;
+      if (ni == 0 || *q != ':')                      { p = q; continue; }   // a control shell inherits a base
+      q++;
+      while (AppCImportIsSpace(*q)) q++;
+      if (strncmp(q, "ImGuiAppControl<", 16) != 0)   { p = q; continue; }   // ... specifically ImGuiAppControl<>
+      q += 16;
+
+      // Split the template arg list at depth-0 commas: [0]=PersistData, [1]=TempData, [2..]=dep Data types.
+      char args[8][IM_LABEL_SIZE];
+      int  arg_count = 0;
+      {
+        const char* a = q;
+        int  depth = 1;
+        char cur[IM_LABEL_SIZE];
+        int  ci = 0;
+        while (*a != 0 && depth > 0 && arg_count < 8)
+        {
+          if (*a == '<') { depth++; if (ci < IM_LABEL_SIZE - 1) cur[ci++] = *a; }
+          else if (*a == '>')
+          {
+            depth--;
+            if (depth == 0) { cur[ci] = 0; AppImportTrim(cur); if (cur[0]) ImStrncpy(args[arg_count++], cur, IM_LABEL_SIZE); break; }
+            if (ci < IM_LABEL_SIZE - 1) cur[ci++] = *a;
+          }
+          else if (*a == ',' && depth == 1) { cur[ci] = 0; AppImportTrim(cur); if (cur[0]) ImStrncpy(args[arg_count++], cur, IM_LABEL_SIZE); ci = 0; }
+          else if (ci < IM_LABEL_SIZE - 1) cur[ci++] = *a;
+          a++;
+        }
+      }
+
+      ImGuiAppNode* c = AppGraphAddNode(g, ImGuiAppNodeKind_Control, name);
+      ImVec2 pos = origin + ImVec2((float)(added % 4) * 300.0f, (float)(added / 4) * 220.0f);
+      AppGraphPlaceNode(g, c, &pos);
+
+      // Persist + temp fields from the referenced Data / TempData struct blocks.
+      const char* body = nullptr;
+      const char* end  = nullptr;
+      if (arg_count >= 1 && AppImportFindNamedStruct(code, args[0], &body, &end))
+        AppImportParseStructMembers(body, end, &c->Draft.PersistFields);
+      if (arg_count >= 2 && AppImportFindNamedStruct(code, args[1], &body, &end))
+        AppImportParseStructMembers(body, end, &c->Draft.TempFields);
+
+      // Skip past this control's body so the scan resumes after it.
+      const char* open = strchr(q, '{');
+      if (open != nullptr)
+      {
+        const char* e2 = open + 1;
+        int depth = 1;
+        while (*e2 != 0 && depth > 0) { if (*e2 == '{') depth++; else if (*e2 == '}') depth--; e2++; }
+        p = (*e2 != 0) ? e2 : e2;
+      }
+      else
+        p = q;
+      added++;
+    }
+    return added;
+  }
+
   //-----------------------------------------------------------------------------
   // [SECTION] Undo / redo (in-memory serialized snapshots)
   //-----------------------------------------------------------------------------
