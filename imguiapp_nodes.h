@@ -595,8 +595,12 @@ struct ImGuiAppEditorState
   ImVector<ImGuiAppPrefab>             Prefabs;                     // saved subtrees (owned strings)
   ImFont*                              CodeFont = nullptr;          // code panels; null -> UI font
   ImGuiAppEditorUndo                   Undo;
-  ImVec4                               ScopeWallRect = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);   // scope-interior walls, model units (min.xy, max.xy); published by the walls pass, consumed same-frame by the portal pass
-  bool                                 ScopeWallValid = false;                            // rect above valid this frame (window/sidebar scope only)
+  ImVec4                               ScopeWallRect = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);   // scope-interior walls incl. face/end bands, model units (min.xy, max.xy); published by the walls pass, consumed same-frame by the strip + portal passes
+  ImVec4                               ScopeStripRow = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);   // the face band's order-strip row, model units
+  bool                                 ScopeWallValid = false;                            // rects above valid this frame (window/sidebar scope only)
+  int                                  ScopeWallScope = -1;                               // scope the wall rect belongs to (hysteresis resets on change)
+  ImVector<ImVec4>                     ScopeStripRects;                                   // order-strip chip rects, screen space (published per frame for hit-tests/tests)
+  ImVector<int>                        ScopeStripNodes;                                   // node id per chip, parallel to ScopeStripRects
 };
 
 // The whole authored graph. One monotonic id allocator shared by every node/port/body-attr/link:

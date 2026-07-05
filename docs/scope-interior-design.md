@@ -31,40 +31,53 @@ Entering a scope filters which nodes submit and adds sequence badges. Four defec
 ### Rule A — the owner's silhouette becomes the room (walls)
 
 The scope frame reuses the owner's root-level card silhouette at wall size. For a window scope:
-squared corners (rounding 2 model units), a 1 px header rule in the window hue under the title
-bar, neutral outline, translucent fill one step brighter than a root group frame
-(window hue at ~4.5% alpha vs the neutral `GroupFill`). Title bar anatomy, left to right:
-
-- **Name** in the owner's kind hue, weight as a node title (1.0 em scale slot).
-- **Kind word** dim, 0.9 slot (`window`, `sidebar`, `Task`, …) — same muted kind word the card
-  title bar carries.
-- **Config readout**, right-aligned, dim, monospace: the owner's placement/dock facts
-  (`320×240 @ (64,48) · AlwaysAutoResize`; a sidebar shows `dock Down · 0 px · AutoResize`).
-  Read-only — editing stays in the inspector; the wall states identity, it does not editorialize.
+squared corners (rounding 2 model units), a kind-hue rule under the face band, neutral outline.
+No interior fill — rule B's void carries figure-ground. Face band anatomy is rule B's (the Begin
+line); the config readout is right-aligned, dim, code font: the owner's placement/dock facts
+(`320x240 @ (64,48) · AlwaysAutoResize`; a sidebar shows `dock Down · auto`). Read-only —
+editing stays in the inspector; the wall states identity, it does not editorialize.
 
 The wall rect derives from the members' bounds (the `group_box` accumulation) plus padding, in
 model units, transformed by this frame's camera. Entering a node reads literally: the card you
 Tab'd into became the walls. *(Pillar: consistency — same silhouette at both altitudes. CDoN:
 visibility. Serves defect 1.)*
 
-### Rule B — lifecycle brackets *(REMOVED — field verdict 2026-07-04)*
+### Rule B — the walls ARE the Begin/End pair (rev 4, shipped)
 
-Begin("name")/End() plates shipped and were cut the same day: in practice they read as unexplained
-chrome floating over the walls ("whatever this is"), duplicated the wall title bar's identity, and
-restated what the breadcrumb caption already says in words. The lifecycle-chart direction stays
-(up-next.md north star) — but as its own view, not as furniture inside every scope. The rail
-remains member → member with no endpoint segments; the sequence badges alone carry execution
-order. *(Meta-rule from usability-findings: chrome that needs a legend is worse than no chrome.)*
+Field history: Begin/End plates shipped as floating furniture and were cut same-day (the TEXT was
+right, the floating rendering was the defect). Rev 4 fuses the calls into the walls — the room is
+drawn as the code block it generates:
 
-### Rule C — the execution rail
+- **Face band (top wall)**: the `Begin("Mixer")` line in the code font — `Begin(` muted
+  framework-grey, the name in the owner's kind hue, `)` muted — kind word after, config readout
+  right-aligned. The runs order strip (rule C) is the band's second row; one plate, one kind-hue
+  rule at its base.
+- **End band (bottom wall)**: a thin closing band, `End()` muted, same font, left-aligned under
+  the Begin column. Members run between the two lines, top to bottom.
+- **The void**: interior fill is gone; instead everything OUTSIDE the walls dims (~45% dark) —
+  figure-ground: inside is stated by light. No translucent box competing with group frames.
+- **Rails**: the left/right edges thicken to ~1 em; portal chips (rule E) dock straddling them.
+  An empty rail reads as "no external dependencies" at a glance.
+- **Stability**: the wall rect grows instantly and shrinks only past a 1.5 em deadband
+  (phase-coherence §1b fixed point) — the room does not breathe during drags.
 
-Today's dashed cubic arrows + slate-marker number badges (`AppDrawScopeSequence`), unchanged in
-style — drawn on the canvas annotation channel so badges are never occluded by the nodes they
-number. The rail is the affordance the planned sequence-order editing (up-next.md "Now") will
-snap to: dragging a badge along the rail reorders the push. This design does not implement
-reordering; it builds the geometry reordering needs.
+*(Pillar: the model is the interface — the scope caption's sentence became the geometry.)*
 
-*(CDoN: role-expressiveness — the scope reads as a frame slice, not a bag of cards.)*
+### Rule C — sequence: order strip + title ordinals (rev 2/4, shipped)
+
+The slate number circles and dashed arrows are gone (floating annotation — needed a legend,
+occluded card corners). Execution order lives in two existing surfaces:
+
+- **Order strip** (`AppDrawScopeOrderStrip`): the face band's second row — `runs 1 Gain → 2 Meter
+  → 3 Scope`, one chip per member in execution order. Hover halos the member (brushing bus,
+  External source); click selects it; overflow folds to a stated `+N`. Chip rects publish per
+  frame (`ScopeStripRects/Nodes`) — the coming sequence-reorder drag rides them: dragging a chip
+  in a 1D strip beats repositioning badges in 2D space.
+- **Title ordinal**: members carry `1/3` in their title bar via `CanvasNextNodeTitleBadge` — the
+  exact idiom the layer nodes wear at root (`3/5`). Order is part of the card; nothing floats,
+  nothing occludes.
+
+*(CDoN: role-expressiveness + consistency — one badge grammar at every altitude.)*
 
 ### Rule D — detail lives one scope below its owner (density flip)
 
@@ -108,9 +121,9 @@ model, minus their fake-node materialization. Serves defect 3.)*
 
 | Element | Encodes | Form | Color |
 |---|---|---|---|
-| Walls | current scope's owner | owner's silhouette at room size; title bar + header rule | kind hue: rule + name; fill = kind hue ~4.5% alpha; outline neutral |
-| Rail segment | execution order | dashed cubic, arrowhead | scope accent ~55% alpha (unchanged) |
-| Sequence badge | member's position in the sequence | slate-marker circle on card corner | scope accent fill, dark numeral (unchanged) |
+| Walls | the owner's Begin/End call pair | face band (Begin line + runs strip) / end band (End()) / 1 em rails; void dims outside | kind hue: rule + name; bands opaque title-bg; void dark ~45% |
+| Order-strip chip | member's place in the sequence | small squared chip in the face band, `n Name`, `→` separators | ordinal in scope accent; chip neutral; hover border accent |
+| Title ordinal | member's place in the sequence | `n/N` badge in the member title bar | scope accent (layer-badge idiom) |
 | Portal chip | off-scope endpoint of a data edge | wall-docked pill, `▸` jump glyph | remote kind hue at ~45% border / ~75% text |
 | Summary line | folded authoring detail | one dim text row | `TextMuted` |
 
