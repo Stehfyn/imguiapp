@@ -5546,6 +5546,12 @@ namespace ImGui
     if (col_geom.Valid)
       ImGui::CanvasAddSolidRect(cv, ImGui::CanvasFromScreen(cv, col_geom.BoxMin), ImGui::CanvasFromScreen(cv, col_geom.BoxMax));
 
+    // Scope walls (docs/scope-interior-design.md rule A): drilled into a window/sidebar, the
+    // owner's silhouette becomes the room. Background channel like the pipeline box; publishes
+    // the wall/bracket rects (model units) that the post-CanvasEnd brackets/rail/portal passes
+    // consume this same frame. Self-gates (clears ScopeWallValid at root / non-wall scopes).
+    AppDrawScopeWalls(g, cv, show_live, em_base, fh_base);
+
     // Owners whose group frame swallowed their containment fan this frame: one trunk connector
     // per owner replaces the per-control wires (rebuilt every frame; consumed by the link loop).
     ImVector<int> trunked_owners;
@@ -6244,8 +6250,13 @@ namespace ImGui
         ImGui::CanvasEndPin(cv);
       }
 
+      // Detail altitude (docs/scope-interior-design.md rule D): the full authoring body renders
+      // only in the node's scope-parent's scope; everywhere else the card folds to identity
+      // (title, pins, summary line). Deps pins stay at both altitudes -- wires must land.
+      const bool detail = AppScopeDetailAltitude(g, n);
+
       // A control's exploded PersistData/TempData tie pins, each on its own row (so the wire enters at that line).
-      if (n->Kind == ImGuiAppNodeKind_Control && !n->IsBuiltin && !n->IsLive)
+      if (n->Kind == ImGuiAppNodeKind_Control && !n->IsBuiltin && !n->IsLive && detail)
       {
         for (int list = 0; list < 2; list++)
         {
@@ -6285,7 +6296,7 @@ namespace ImGui
           else if (!n->IsLive && !n->IsPromoted)
             ImGui::TextDisabled("builtin");
         }
-        else
+        else if (detail)
         {
           // A control HAS two structs: PersistData (0) and TempData (1). A non-exploded one is edited inline with a
           // disclosure triangle to explode it out (the exploded ones render above as tie-pin rows).
@@ -6311,11 +6322,19 @@ namespace ImGui
             EditAppControlEvents(g, n);   // "when <temp> <edge> -> <action>": the ^ idiom, authored in place
           }
         }
+        else
+        {
+          // Identity card: one dim summary line folds the authoring detail this altitude hides.
+          char sum[96];
+          AppNodeSummaryLine(g, n, sum, IM_ARRAYSIZE(sum));
+          if (sum[0])
+            ImGui::TextDisabled("%s", sum);
+        }
 
         // Every incoming data edge (struct/control/field producer) gets its own binding editor,
-        // labelled by the producer. Binding detail lives BELOW the breadcrumb: the composition
-        // root shows relationships only (the pin row already names each producer).
-        if (!altitude_root)
+        // labelled by the producer. Binding detail lives BELOW the breadcrumb at detail altitude:
+        // the composition root shows relationships only (the pin row already names each producer).
+        if (detail && !altitude_root)
           for (int li = 0; li < g->Links.Size; li++)
           {
             if (g->Links.Data[li].Kind != ImGuiAppEdgeKind_Data) continue;
@@ -6663,9 +6682,13 @@ namespace ImGui
     }
     else
     {
-      // Drilled in: number the members in the order the framework runs them each frame, and invite the first
-      // build step when the scope is empty. The breadcrumb (below) names where we are and what executes here.
+      // Drilled in: bracket plates give the sequence its entry/exit, then number the members in
+      // the order the framework runs them each frame, dock portal chips for boundary-crossing
+      // data edges, and invite the first build step when the scope is empty. The breadcrumb
+      // (below) names where we are and what executes here.
+      AppDrawScopeBrackets(g);
       AppDrawScopeSequence(g, show_live, editor_min);
+      AppDrawScopePortals(g, selected_node_id);
       AppDrawScopeEmptyCTA(g, show_live, editor_min, editor_size);
     }
     AppGraphViewState(g)->Zoom = ImGui::CanvasGetZoom(cv);   // mirror the live camera into the saved view state
