@@ -346,9 +346,12 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
     its id (the editor never acts for the host).
   - panel toggles: already covered -- `composer_code_toggle` (Code dock) + `composer_status_zones`
     (outliner/inspector toggles).
+  - status-strip click: `composer_sync_reveals_panel` clicks the toolbar `###sync` pill and asserts the
+    code dock reveals.
+  - toolbar Add: `composer_toolbar_add` clicks "+ Add" and asserts the add-node palette opens (through
+    the render->update->request intent bus).
   Remaining: Output severity toggles (SmallButton rows unreachable via ItemExists behind the tab bar --
-  deferred, needs a draw-scan or effect-based assertion), status-strip click-to-Output, canvas de-noise,
-  severity dot, group collapse.
+  deferred, needs a draw-scan or effect-based assertion), canvas de-noise, severity dot, group collapse.
 - [ ] **F41 inspector completion** — Identity/Placement sections; per-kind section-collapse
   persistence; section kebab (reset-to-defaults/copy/paste) on every section; unified row
   grammar with row context actions; multi-select mixed-value editing beyond Style; project
