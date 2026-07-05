@@ -454,6 +454,9 @@ namespace ImGui
   // snapshottable controls (0 = none). Drives the toolbar scrubber; exposed for the headless scrub test.
   IMGUI_API int AppComposerAppTimeFrames(ImGuiApp* host);
 
+  // Composer outliner column width (F32): >0 shown, 0 hidden. Exposed for the status-bar zone test.
+  IMGUI_API float AppComposerOutlinerWidth(ImGuiApp* host);
+
   // Push every Active (in-range) entry; returns the number pushed -- pop with PopStyleVar/PopStyleColor(count).
   IMGUI_API int PushAppStyleMods(const ImGuiAppStyleModDesc* mods, int count);
   IMGUI_API int PushAppColorMods(const ImGuiAppColorModDesc* mods, int count);

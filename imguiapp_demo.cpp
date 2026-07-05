@@ -463,6 +463,24 @@ namespace
       doc->Log.erase(doc->Log.Data, doc->Log.Data + 64);
   }
 
+  // Generate the whole-graph C++ to the header path + stamp the fresh baseline. Shared by the toolbar
+  // Generate button and the status-bar freshness zone (F32) so both take the identical road.
+  static void ComposerGenerateHeader(GraphDocData* doc)
+  {
+    ImGuiTextBuffer full;
+    ImGui::GenerateAppGraphCode(&doc->Graph, &full);
+    if (ImFileHandle fh = ImFileOpen(doc->HeaderPath, "wt"))
+    {
+      ImFileWrite(full.c_str(), sizeof(char), (ImU64)full.size(), fh);
+      ImFileClose(fh);
+      ImFormatString(doc->WriteMsg, IM_ARRAYSIZE(doc->WriteMsg), "wrote %s", doc->HeaderPath);
+      ImGui::AppGraphMarkGenerated(&doc->Graph);
+      DocLog(doc, 0, "generated C++ -> %s", doc->HeaderPath);
+    }
+    else
+      DocLog(doc, 2, "could not open %s for writing", doc->HeaderPath);
+  }
+
   struct GraphDocControl : ImGuiAppControl<GraphDocData, GraphDocTempData>
   {
     virtual void OnInitialize(ImGuiApp* app, GraphDocData* data) const override final
@@ -650,22 +668,7 @@ namespace
         DocLog(doc, 0, "loaded graph <- %s", doc->GraphPath);
       }
       if (temp_data->WriteHeader)
-      {
-        ImGuiTextBuffer full;
-        ImGui::GenerateAppGraphCode(&doc->Graph, &full);
-        if (ImFileHandle fh = ImFileOpen(doc->HeaderPath, "wt"))
-        {
-          ImFileWrite(full.c_str(), sizeof(char), (ImU64)full.size(), fh);
-          ImFileClose(fh);
-          ImFormatString(doc->WriteMsg, IM_ARRAYSIZE(doc->WriteMsg), "wrote %s", doc->HeaderPath);
-          ImGui::AppGraphMarkGenerated(&doc->Graph);   // stamp the fresh/stale baseline (single source: the graph's GenSignature)
-          DocLog(doc, 0, "generated C++ -> %s", doc->HeaderPath);
-        }
-        else
-        {
-          DocLog(doc, 2, "could not open %s for writing", doc->HeaderPath);
-        }
-      }
+        ComposerGenerateHeader(doc);
       if (temp_data->ToggleCode)
       {
         doc->CodeH = (doc->CodeH > 0.0f) ? 0.0f : ImGui::GetFontSize() * 12.0f;
@@ -1049,6 +1052,10 @@ namespace
   struct StatusStripTempData
   {
     bool SelectCycle;   // the Select verb was clicked this frame -> jump selection to the cycle nodes (applied next update)
+    bool SelectScope;   // F32 breadcrumb zone -> select the current scope owner
+    bool RevealTree;    // F32 counts zone     -> reveal the outliner
+    bool ToggleLive;    // F32 mirror zone     -> toggle the live mirror
+    bool Generate;      // F32 freshness zone  -> generate the header
   };
   struct StatusStripControl : ImGuiAppControl<StatusStripData, StatusStripTempData, GraphDocData>
   {
@@ -1086,13 +1093,9 @@ namespace
         }
       }
       if (doc->ShowLive)
-      {
-        ImFormatString(data->CountMsg, IM_ARRAYSIZE(data->CountMsg), "design %d  live %d  promoted %d", nd, nl, np);
-      }
+        ImFormatString(data->CountMsg, IM_ARRAYSIZE(data->CountMsg), "d%d l%d p%d", nd, nl, np);   // design / live / promoted
       else
-      {
-        ImFormatString(data->CountMsg, IM_ARRAYSIZE(data->CountMsg), "design %d", nd);
-      }
+        ImFormatString(data->CountMsg, IM_ARRAYSIZE(data->CountMsg), "d%d", nd);
 
       data->HasMirror = (doc->Mirror != nullptr);
       if (data->HasMirror)
@@ -1128,6 +1131,33 @@ namespace
         doc->Graph.Selection = data->CycleNodes;   // multi-select the whole cycle
         doc->Selection = data->CycleNodes.Data[0]; // primary = first member (drives the breadcrumb + inspector)
       }
+
+      // F32 status-bar zone actions (model writes -> update pass, not render).
+      if (temp_data->SelectScope)
+      {
+        int owner = -1;
+        if (doc->Graph.ViewScope.Size > 0)
+          owner = doc->Graph.ViewScope.back();   // innermost drilled scope
+        else
+        {
+          for (int i = 0; i < doc->Graph.Nodes.Size; i++)   // root: the App node names the whole app
+            if (doc->Graph.Nodes.Data[i].Kind == ImGuiAppNodeKind_App) { owner = doc->Graph.Nodes.Data[i].Id; break; }
+          if (owner < 0 && doc->Graph.Nodes.Size > 0)
+            owner = doc->Graph.Nodes.Data[0].Id;   // fallback: first node
+        }
+        if (owner >= 0)
+        {
+          doc->Selection = owner;
+          doc->Graph.Selection.resize(0);
+          doc->Graph.Selection.push_back(owner);
+        }
+      }
+      if (temp_data->RevealTree)
+        doc->TreeW = doc->TreeW > 0.0f ? 0.0f : 220.0f;   // show / hide the outliner column
+      if (temp_data->ToggleLive)
+        doc->ShowLive = !doc->ShowLive;
+      if (temp_data->Generate)
+        ComposerGenerateHeader(doc);
     }
 
     virtual void OnRender(const StatusStripData* data, StatusStripTempData* temp_data, const GraphDocData* doc_dep) const override final
@@ -1135,16 +1165,46 @@ namespace
       const float       em    = ImGui::GetFontSize();
       const ImGuiStyle& style = ImGui::GetStyle();
       temp_data->SelectCycle = false;
+      temp_data->SelectScope = false;
+      temp_data->RevealTree  = false;
+      temp_data->ToggleLive  = false;
+      temp_data->Generate    = false;
+      const ImVec4 dim = style.Colors[ImGuiCol_TextDisabled];
+
       if (ImGui::BeginChild("##Strip", ImVec2(0.0f, 0.0f), ImGuiChildFlags_FrameStyle | ImGuiChildFlags_AutoResizeY))
       {
-        // Left: live keymap hint; refused links show in red.
+        // Fixed x anchors (em from content-left): the zones never shift as their own text changes width,
+        // so each topic stays where the eye learned it. keymap | breadcrumb | counts | mirror | freshness.
+        const float A_bread  = em * 11.0f;
+        const float A_count  = em * 20.0f;
+        const float A_mirror = em * 29.0f;
+        const float A_fresh  = em * 38.0f;
+
+        // A clickable zone at a fixed anchor: an invisible button (### id -> test-addressable) with the
+        // label drawn over it; brightens on hover. The button is clamped to its slot (up to the next
+        // anchor) so adjacent zones never overlap -- each anchor owns exactly one hit region.
+        auto zone = [&](float anchor, float slot, const char* id, const char* txt, const ImVec4& col) -> bool
+        {
+          ImGui::SameLine(anchor);
+          const ImVec2 p  = ImGui::GetCursorScreenPos();
+          const ImVec2 sz = ImGui::CalcTextSize(txt);
+          const bool clicked = ImGui::InvisibleButton(id, ImVec2(ImClamp(sz.x, em, slot), ImGui::GetFrameHeight()));
+          const bool hov = ImGui::IsItemHovered();
+          if (hov)
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+          ImGui::GetWindowDrawList()->AddText(ImVec2(p.x, p.y + style.FramePadding.y),
+                                              ImGui::GetColorU32(hov ? style.Colors[ImGuiCol_Text] : col), txt);
+          return clicked;
+        };
+        const float slot = em * 8.5f;   // each zone owns ~8.5em before the next anchor (9em apart)
+
+        // keymap (left, informational): live hint; refused links show red.
         int sev = 0;
         const char* hint = ImGui::AppGraphStatusHint(&doc_dep->Graph, &sev);
         ImGui::AlignTextToFramePadding();
-        ImGui::TextColored(sev >= 2 ? ImVec4(0.90f, 0.42f, 0.38f, 1.0f) : style.Colors[ImGuiCol_TextDisabled], "%s", hint);
+        ImGui::TextColored(sev >= 2 ? ImVec4(0.90f, 0.42f, 0.38f, 1.0f) : dim, "%s", hint);
 
-        // Data-dependency cycle readout + Select verb (F21): plain red status text until F33's HEALTH
-        // pill, then it rides that. Clicking Select jumps the selection to the cycle's nodes.
+        // Cycle readout + Select verb (F21) rides in the keymap zone when a cycle blocks codegen.
         if (data->CycleCount > 0)
         {
           ImGui::SameLine(0.0f, em);
@@ -1156,17 +1216,30 @@ namespace
           ImGui::SetItemTooltip("Select the %d node(s) in the dependency cycle", data->CycleCount);
         }
 
-        char right[512];
-        int  len = 0;
-        if (data->Msg[0])
-          len += ImFormatString(right + len, IM_ARRAYSIZE(right) - len, "%s      ", data->Msg);
-        len += ImFormatString(right + len, IM_ARRAYSIZE(right) - len, "%s      %s", data->Breadcrumb, data->CountMsg);
-        if (data->HasMirror)
-          ImFormatString(right + len, IM_ARRAYSIZE(right) - len, "      %s  %s", data->MirrorCounts, data->MirrorInit ? "composed" : "uncomposed");
-        const float w = ImGui::CalcTextSize(right).x;
-        ImGui::SameLine(ImMax(ImGui::GetCursorPosX() + em, ImGui::GetContentRegionMax().x - w - em * 0.4f));
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("%s", right);
+        // breadcrumb -> select the scope owner.
+        if (zone(A_bread, slot, "###zbread", data->Breadcrumb[0] ? data->Breadcrumb : "(root)", dim))
+          temp_data->SelectScope = true;
+        ImGui::SetItemTooltip("Select the current scope owner");
+
+        // counts -> show / hide the outliner.
+        if (zone(A_count, slot, "###zcount", data->CountMsg, dim))
+          temp_data->RevealTree = true;
+        ImGui::SetItemTooltip("Show / hide the outliner");
+
+        // mirror facts -> toggle the live mirror.
+        const char* mir = data->HasMirror ? data->MirrorCounts : "no mirror";
+        if (zone(A_mirror, slot, "###zmirror", mir, dim))
+          temp_data->ToggleLive = true;
+        ImGui::SetItemTooltip("Toggle the live mirror (currently %s; %s)", doc_dep->ShowLive ? "on" : "off",
+                              data->HasMirror ? (data->MirrorInit ? "composed" : "uncomposed") : "no mirror");
+
+        // freshness -> generate.
+        const bool fresh = ImGui::AppGraphCodeFresh(&doc_dep->Graph);
+        char frz[48];
+        ImFormatString(frz, IM_ARRAYSIZE(frz), "%s  %s", fresh ? ICON_FA_CIRCLE_CHECK : ICON_FA_FILE_EXPORT, fresh ? "fresh" : "generate");
+        if (zone(A_fresh, slot, "###zfresh", frz, fresh ? ImVec4(0.45f, 0.75f, 0.50f, 1.0f) : ImVec4(0.80f, 0.66f, 0.36f, 1.0f)))
+          temp_data->Generate = true;
+        ImGui::SetItemTooltip(fresh ? "Header matches the graph" : "Generate the whole-graph header");
       }
       ImGui::EndChild();
     }
@@ -2205,6 +2278,15 @@ namespace ImGui
     if (doc == nullptr || doc->Transport == nullptr)
       return 0;
     return doc->Transport->History.Count;
+  }
+
+  // Composer outliner column width (F32): >0 when shown, 0 when hidden. Exposed for the status-zone test.
+  IMGUI_API float AppComposerOutlinerWidth(ImGuiApp* host)
+  {
+    if (host == nullptr)
+      return 0.0f;
+    GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiType<GraphDocData>::ID);
+    return doc != nullptr ? doc->TreeW : 0.0f;
   }
 
   //-----------------------------------------------------------------------------

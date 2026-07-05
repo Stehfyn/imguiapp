@@ -247,10 +247,17 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   composer_problems_badge engineers a severity-2 error (event emitting an undefined command) into the
   composer graph, asserts the badge appears, clicking opens the Output panel, and removing the error
   returns the badge to its pre-injection state.
-- [ ] **F32 frozen status-bar zone map** — fixed x anchors: keymap | breadcrumb (click selects
+- [x] **F32 frozen status-bar zone map** — fixed x anchors: keymap | breadcrumb (click selects
   scope owner) | counts (click filters outliner) | mirror facts (click toggles Live) | freshness
   (click generates). No width-dependent shifting.
   *Accept: per-zone click test + anchor invariance test across window widths.*
+  DONE: the status strip is now five fixed em-anchor zones (keymap | breadcrumb | counts | mirror |
+  freshness), each drawn at SameLine(em*K) -- no width term, so nothing shifts as the strip resizes. Each
+  clickable zone is an invisible button (### id) clamped to its slot so adjacent zones never overlap.
+  Actions: breadcrumb selects the scope owner (ViewScope back / App node), counts shows/hides the
+  outliner, mirror toggles ShowLive, freshness generates the header (shared ComposerGenerateHeader with
+  the toolbar). composer_status_zones clicks each zone and asserts its effect, then toggles the inspector
+  (width change from the right) and confirms the freshness zone parks at the same screen x.
 - [ ] **F33 StatusPill grammar + HEALTH/PERF segments** — shared pill primitive (ok/warn/err);
   HEALTH: "graph ok" / cycle name / "codegen blocked"; PERF: FPS + ms, tooltip backend/vtx/idx.
   *Accept: pill states driven by fixtures; no inline color triples left at call sites.*
