@@ -443,6 +443,13 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
 - [ ] **F47 scope chrome test-debt** — end band, rails, void dim, shrink deadband, title
   ordinals, struct/field root-eviction gates, card geometry invariance across altitudes.
   *Accept: audit `[t]` scope rows flip to shipped-tested.*
+  PROGRESS (multi-turn burn):
+  - end band + rails + face band: `step86_scope_wall_bands` drills into a window with two hosted
+    controls and asserts `ScopeWallRect` extends past the members on every side (left/right rails, face
+    band above, end band below) and that the face band (Begin line + strip) is taller than the end band.
+  Remaining: void dim, shrink deadband (grow-instant/shrink-1.5em), title ordinals, struct/field
+  root-eviction gates, card geometry across altitudes (uniform-width pool differs by altitude -- needs a
+  narrower invariant than absolute width).
 - [ ] **F48 canvas S2 slice** — annotation frames (R1) + align/distribute verbs (R3, registered
   in F34).
   *Accept: frame create/label/move test; align test on a selection.*
