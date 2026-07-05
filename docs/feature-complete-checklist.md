@@ -361,6 +361,14 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   grammar with row context actions; multi-select mixed-value editing beyond Style; project
   inspector logging section; quick-inspector pin/dismiss/"Inspect here".
   *Accept: one test per subsystem; audit rows flip to shipped-tested.*
+  PROGRESS (multi-turn):
+  - Placement section: every design non-layer node gets an always-visible Placement group (X/Y drag
+    fields wired to GridPos), above the collapsible sections. `step75_inspector_placement` asserts the
+    fields render and ItemInputValue writes through to the node. (Note: DragFloatN nests its components
+    under empty ids -- not ItemExists-addressable -- so single X/Y DragFloats are used.)
+  Remaining: Identity section, per-kind section-collapse persistence, section kebab (reset/copy/paste),
+  unified row grammar + row context actions, multi-select mixed-value beyond Style, project logging
+  section, quick-inspector pin/dismiss/"Inspect here".
 
 ## P7 — scopes + canvas completion
 

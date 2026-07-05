@@ -4506,6 +4506,22 @@ namespace ImGui
       ImGui::Separator();
     }
 
+    // Placement (F41): the node's authored root position -- fundamental identity, so it rides above the
+    // collapsible sections (always visible). Layers are column-packed (position derived), no placement.
+    if (n->Kind != ImGuiAppNodeKind_Layer)
+    {
+      ImGui::SeparatorText(ICON_FA_UP_DOWN_LEFT_RIGHT "  Placement");
+      const float pw = ImGui::GetFontSize() * 5.0f;
+      ImGui::SetNextItemWidth(pw);
+      ImGui::DragFloat("X", &n->GridPos.x, 1.0f, 0.0f, 0.0f, "%.0f");
+      ImGui::SetItemTooltip("Authored X on the root canvas (grid units).");
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(pw);
+      ImGui::DragFloat("Y", &n->GridPos.y, 1.0f, 0.0f, 0.0f, "%.0f");
+      ImGui::SetItemTooltip("Authored Y on the root canvas (grid units).");
+      ImGui::Separator();
+    }
+
     switch (n->Kind)
     {
     case ImGuiAppNodeKind_Control:
