@@ -586,13 +586,19 @@ extends those rails rather than inventing parallel ones.
   strictly under Fixed dt=1/60, `AppStateRestore(10)` returns the accumulator byte-for-byte + replay reproduces
   the trajectory byte-identical (Contract 7 generalized) -- holds because the accumulator lives ENTIRELY in
   snapshottable PersistData (no TU globals). core 244 checks / 0 failures.
-- [ ] **F57 layout node family** — Region/Split/Tabs nodes compose INTO the Layout layer (its
+- [x] **F57 layout node family** — Region/Split/Tabs nodes compose INTO the Layout layer (its
   first real domain: AppNodeInScope + AppScopeKindComposable rows, enterable interior per the
   par.4 grammar); windows reference their region via the mechanism F53 decides (reference edge
   vs node field — the doc must pick one and say why); codegen emits the dock-builder sequence.
   Constraint model built or formally rejected per F53's verdict.
   *Accept: compose window into a region → generated app docks accordingly (headless-verify
   frame); layout-scope interior test; F01/F05 cover the records.*
+  DONE: new Layout node kind (Region/Split/Tabs variant in TypeName), composes into the Layout layer;
+  a Split/Tabs is an enterable interior whose members are its child regions; windows reference a region
+  by `RegionRef` field (+ DockDir/DockSize on the node). Codegen emits a once-guarded DockBuilder
+  OnLayout() override. Node-kind machinery reconciled against Op (F54): Op keeps enum slot 8 / cmd 47,
+  Layout appends at 9 / cmds 48-50. step99_layout_scope_interior, step100_layout_region_dock_codegen,
+  step101_layout_region_roundtrip. nodes 110/110, core 244/0, headless 31/31. Submodule a783c2d / outer dc760a3.
 
 ## P9 — sequence-order write path (deferred until here by decision)
 
