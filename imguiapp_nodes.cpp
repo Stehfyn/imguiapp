@@ -8720,6 +8720,17 @@ namespace ImGui
         return add_scope < 0 || AppScopeKindComposable(g, add_scope, k);
       };
 
+      // Animation builtins (F56): compiled dt-driven controls (imguiapp_anim.h), added as builtin Controls so
+      // palette legality, wiring, codegen, mirror and time-travel reuse the Control machinery unchanged.
+      struct AnimBuiltin { const char* Label; const char* Type; const char* Data; };
+      static const AnimBuiltin kAnimBuiltins[] =
+      {
+        { "Tween",  "ImAppTween",  "ImAppTweenData"  },
+        { "Timer",  "ImAppTimer",  "ImAppTimerData"  },
+        { "Spring", "ImAppSpring", "ImAppSpringData" },
+        { "Pulse",  "ImAppPulse",  "ImAppPulseData"  },
+      };
+
       int added_id = -1;
       if (AppGraphEditorState(g)->AddFilter.IsActive())
       {
@@ -8756,6 +8767,10 @@ namespace ImGui
             }
           }
         }
+        if (addable(ImGuiAppNodeKind_Control))
+          for (int i = 0; i < IM_ARRAYSIZE(kAnimBuiltins); i++)
+            if (AppGraphEditorState(g)->AddFilter.PassFilter(kAnimBuiltins[i].Label) && ImGui::Selectable(kAnimBuiltins[i].Label))
+              added_id = AppGraphAddBuiltin(g, ImGuiAppNodeKind_Control, kAnimBuiltins[i].Type, kAnimBuiltins[i].Data)->Id;
       }
       else
       {
@@ -8776,6 +8791,14 @@ namespace ImGui
           added_id = AppGraphAddNode(g, ImGuiAppNodeKind_Window,  "Window")->Id;
         if (addable(ImGuiAppNodeKind_Sidebar) && ImGui::MenuItem("Sidebar"))
           added_id = AppGraphAddNode(g, ImGuiAppNodeKind_Sidebar, "Sidebar")->Id;
+        // Animation builtins (F56): compiled dt-driven controls grouped under one section.
+        if (addable(ImGuiAppNodeKind_Control) && ImGui::BeginMenu("Animation"))
+        {
+          for (int i = 0; i < IM_ARRAYSIZE(kAnimBuiltins); i++)
+            if (ImGui::MenuItem(kAnimBuiltins[i].Label))
+              added_id = AppGraphAddBuiltin(g, ImGuiAppNodeKind_Control, kAnimBuiltins[i].Type, kAnimBuiltins[i].Data)->Id;
+          ImGui::EndMenu();
+        }
         // Templates rebuild the whole document -- a root verb (drilled, the wipe would take the scope owner).
         if (add_scope < 0)
         {
