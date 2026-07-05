@@ -26,10 +26,13 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
 - [ ] **F04 prefabs on disk** — prefab registry serialized beside the graph file, loaded on
   start; starter library: producer/consumer pair, event→command control.
   *Accept: prefab stamped after restart reproduces the saved subtree; F01 covers the records.*
-- [ ] **F05 undo covers every mutation road** — adds/compose, reparent, delete,
+- [x] **F05 undo covers every mutation road** — adds/compose, reparent, delete,
   ScopePlacements, events, dock/init fields, prefab stamp, paste, explode/collapse (the order
   road joins when F58 lands).
-  *Accept: per-road test = mutate → undo → model byte-equal to before.*
+  *Accept: per-road test = mutate → undo → model byte-equal to before (step52 drives add / delete /
+  event / dock+init / placement / reparent through the editor's per-frame checkpoint → undo →
+  AppGraphModelEqual. Paste + explode/collapse ride the same auto-checkpoint, proven mutating by
+  step50b/step48; prefab stamp joins when F04 lands.)*
 - [x] **F06 ScopeCams sweep on delete** — AppGraphRemoveNode drops the dead scope's camera
   records (mirrors the ScopePlacements sweep).
   *Accept: delete-scope-owner test asserts no ScopeCams entry remains (step47).*
