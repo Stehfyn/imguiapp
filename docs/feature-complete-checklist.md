@@ -572,6 +572,16 @@ extends those rails rather than inventing parallel ones.
   time-travel work unchanged.
   *Accept: compiled+run test — Tween output advances deterministically under Fixed-dt; App-time
   scrub (F29) restores it.*
+  DONE: `imguiapp_anim.h` -- four compiled `ImGuiAppControl` builtins (ImAppTween/ImAppTimer/ImAppSpring/
+  ImAppPulse), each PersistData holding the accumulator + a typed DataOut, OnUpdate the sole mutator,
+  Timer/Tween restart on the temp^last rising edge (§2.1 formulas). "Animation" section in the ##AppGraphAdd
+  palette registers them via `AppGraphAddBuiltin` (the only nodes.cpp edit, +23). Codegen (proven by
+  `ProofBuiltinWiring`): a wired builtin emits `PushAppControl<ImAppTween>(app)` + the consumer's dep template
+  arg + `const ImAppTweenData*` param + binding, NO struct body (compiled type) -- single emitter, not folded
+  into the compile+run corpus (external type). `Test_contract_anim_tween_scrub`: a compiled Tween advances
+  strictly under Fixed dt=1/60, `AppStateRestore(10)` returns the accumulator byte-for-byte + replay reproduces
+  the trajectory byte-identical (Contract 7 generalized) -- holds because the accumulator lives ENTIRELY in
+  snapshottable PersistData (no TU globals). core 244 checks / 0 failures.
 - [ ] **F57 layout node family** — Region/Split/Tabs nodes compose INTO the Layout layer (its
   first real domain: AppNodeInScope + AppScopeKindComposable rows, enterable interior per the
   par.4 grammar); windows reference their region via the mechanism F53 decides (reference edge
