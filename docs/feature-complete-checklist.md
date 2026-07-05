@@ -600,9 +600,16 @@ interpreter's vocabulary IS F53-F57's semantics.
   switch behind a `Count()/Show()` view; state-at-tick = restore-nearest-snapshot + `AppInputReplay`
   (contract 7); two divergence layers (chain/digest integrity vs recorded-vs-replayed state_hash) + exact-tick
   jump. (Flagged: `ComposerTransport` is in imguiapp_demo.cpp, not nodes.cpp.)
-- [ ] **F62 run-file loader + index** — open a recorded run in the Composer: parse container,
+- [x] **F62 run-file loader + index** — open a recorded run in the Composer: parse container,
   build tick index (inputs, commands, snapshots, digests, frame images).
   *Accept: headless-verify's own output opens; index counts match the recorder's summary line.*
+  DONE: `AppRunOpen`/`AppRunClose`/`AppRunTickCount`/`AppRunTickAt` (imguiapp_av.h/.cpp) build the F61
+  `ImGuiAppRunIndex` (per-tick `ImGuiAppRunTick` + `SnapshotTicks` + `Stats`) over the SAME meta buffer +
+  the SAME static TLV reader (`AvMetaInit`/`AvMetaNext`) the shipped `AppAVMetaVerify` uses -- no parallel
+  parser, path->buffer stays the per-backend extractor. One linear walk lands each record's tick + payload
+  offset (Frame = tick spine, IoFrame/Input/Snapshot attach by frame_index, chain recomputes from the Identity
+  seed). Test (headless): open headless-verify's OWN run -> index counts equal the recorder's summary line
+  (`[F62] run-open OK: ticks=1280 io=1280 ... chain=ok digest=ok`).
 - [ ] **F63 playback transport (FILE mode)** — the F29 transport gains a source switch; timeline
   strip with per-tick markers (input ticks, command dispatches, snapshot points); scrub shows
   the decoded QOI frame; step lands on exact ticks.
