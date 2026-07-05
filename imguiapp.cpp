@@ -1149,6 +1149,23 @@ namespace ImGui
       return h;
   }
 
+  IMGUI_API ImU32 AppStateSchemaHash(const ImGuiApp* app)
+  {
+      IM_ASSERT(app != nullptr);
+      if (app == nullptr)
+        return 0;
+      ImGuiID schema = 0;
+      for (int i = 0; i < app->StorageEntries.Size; i++)
+      {
+        const ImGuiAppStorageEntry& e = app->StorageEntries[i];
+        if (e.Size <= 0 || e.Ptr == nullptr)
+          continue;
+        const ImU32 fields[4] = { (ImU32)e.ID, (ImU32)e.Size, (ImU32)e.TempOffset, (ImU32)e.TempSize };
+        schema = ImHashData(fields, sizeof(fields), schema);
+      }
+      return (ImU32)schema;
+  }
+
   IMGUI_API void AppInputLogClear(ImGuiAppInputLog* log)
   {
       IM_ASSERT(log != nullptr);

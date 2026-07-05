@@ -213,8 +213,21 @@ struct ImGuiAppRunTick
   ImU32  Chain;          // IoFrame.chain recomputed from the Identity seed (divergence lives here)
   int    InputOffset;    // InputFrame payload offset (-1 if not opt-in this tick)
   int    SnapshotOffset; // StateSnapshot payload offset at this tick (-1 if none)
+  int    WalFirst;       // slice start into ImGuiAppRunIndex::Commands (this tick's dispatches); -1 = none
+  int    WalCount;       // command dispatches at this tick (0 until AppRunAttachWal parses a sibling WAL)
 
-  ImGuiAppRunTick() { Tick = 0; Tsc = 0; TimeSec = 0.0; FrameImage = -1; IoOffset = -1; StateHash = 0; Chain = 0; InputOffset = -1; SnapshotOffset = -1; }
+  ImGuiAppRunTick() { Tick = 0; Tsc = 0; TimeSec = 0.0; FrameImage = -1; IoOffset = -1; StateHash = 0; Chain = 0; InputOffset = -1; SnapshotOffset = -1; WalFirst = -1; WalCount = 0; }
+};
+
+// One WAL-correlated command dispatch: the "execute command %d" line's tick + command id
+// (imguiapp.cpp Command layer). AppRunAttachWal buckets these by [tick:N]; the per-tick slice
+// is ImGuiAppRunTick::WalFirst..+WalCount. Read-only annotation -- the recording is authoritative.
+struct ImGuiAppRunCommand
+{
+  ImU64 Tick;
+  int   CommandId;
+
+  ImGuiAppRunCommand() { Tick = 0; CommandId = 0; }
 };
 
 // F62 build product: the per-tick index, the snapshot list, and the verify ladder, all from
@@ -226,7 +239,36 @@ struct ImGuiAppRunIndex
   ImGuiAppRunMeta           Identity;      // decoded Identity (composition_id, schema_hash, versions)
   ImVector<ImGuiAppRunTick> Ticks;         // FirstTick..LastTick in emission order
   ImVector<int>             SnapshotTicks; // ascending tick-array indices where SnapshotOffset>=0 (nearest lookup)
+  ImVector<ImGuiAppRunCommand> Commands;   // WAL command dispatches, tick-sorted (AppRunAttachWal); empty until attached
   ImGuiAppAVStreamStats     Stats;         // == AppAVMetaVerify output over the same bytes
+};
+
+//-----------------------------------------------------------------------------
+// [SECTION] State-at-tick (F64): restore nearest snapshot + replay inputs to tick N
+//-----------------------------------------------------------------------------
+// docs/playback-debugger-design.md section 5. Reconstructs the app's VALUES at a scrubbed tick
+// by the contract-7 machinery: restore the nearest StateSnapshot <= N, then AppInputReplay the
+// reconstructed input log's frames (S,N] into a reconstruction app. Reconstruction is legal only
+// when the recon app's composition + schema equal the take's Identity; on mismatch it is refused,
+// never faked. A raw-io-only take (no snapshots/input) reports values unavailable and degrades.
+
+// Result of AppRunStateAtTick. Values live in the recon app's storage after a successful call;
+// this struct carries the reconstruction's provenance + the exactness check the debugger surfaces.
+struct ImGuiAppRunState
+{
+  int     TickIndex;          // requested N (index into ImGuiAppRunIndex::Ticks)
+  ImU64   Tick;               // Ticks[N].Tick
+  int     SnapshotTickIndex;  // tick-array index of the nearest snapshot S<=N restored from (-1 = none)
+  ImU64   SnapshotTick;       // Ticks[S].Tick
+  int     ReplayedFrames;     // input frames replayed forward (S,N]; 0 when N is itself a snapshot tick
+  int     FirstDivergence;    // AppInputReplay's first divergent replayed frame (-1 = exact reproduction)
+  ImU32   RecordedStateHash;  // Ticks[N].StateHash (the recorded ground truth)
+  ImGuiID ReconstructedHash;  // AppStateHash(recon) after restore+replay (== RecordedStateHash on exact)
+  int     CmdFirst;           // Ticks[N].WalFirst -- this tick's command dispatches (needs AppRunAttachWal)
+  int     CmdCount;           // Ticks[N].WalCount
+  bool    Reconstructed;      // identity gate + snapshot restore + replay all succeeded
+
+  ImGuiAppRunState() { TickIndex = -1; Tick = 0; SnapshotTickIndex = -1; SnapshotTick = 0; ReplayedFrames = 0; FirstDivergence = -1; RecordedStateHash = 0; ReconstructedHash = 0; CmdFirst = -1; CmdCount = 0; Reconstructed = false; }
 };
 
 //-----------------------------------------------------------------------------
@@ -298,6 +340,20 @@ namespace ImGui
   IMGUI_API void                   AppRunClose(ImGuiAppRunIndex* run);
   IMGUI_API int                    AppRunTickCount(const ImGuiAppRunIndex* run);          // == Ticks.Size; 0 on null
   IMGUI_API const ImGuiAppRunTick* AppRunTickAt(const ImGuiAppRunIndex* run, int i);      // null when out of range
+
+  // F64 state-at-tick (docs/playback-debugger-design.md section 5). Restore the nearest snapshot
+  // <= tick_index into recon_app, then AppInputReplay the reconstructed input log forward to
+  // tick_index -- the contract-7 restore-and-replay. recon_app's storage holds the app AT that tick
+  // on success (its Persist/Temp are the inspector's values). Returns false (out->Reconstructed
+  // false) when the identity gate fails or the take lacks a reachable snapshot/input for N -- the
+  // debugger states the capability rather than faking. out may be null.
+  IMGUI_API bool AppRunStateAtTick(ImGuiApp* recon_app, const ImGuiAppRunIndex* run, int tick_index, ImGuiAppRunState* out);
+
+  // Correlate the sibling <name>.wal's command dispatches to ticks: parse each "[tick:N] ... execute
+  // command %d" line (imguiapp.cpp Command layer), fill run->Commands tick-sorted, and set each
+  // tick's WalFirst/WalCount slice. Optional -- the recording is authoritative, so a missing/again-
+  // parsed WAL just clears the annotation. Returns false on a null run or unreadable path.
+  IMGUI_API bool AppRunAttachWal(ImGuiAppRunIndex* run, const char* wal_path);
 
   // F63 FILE-mode transport view over a run index (docs/playback-debugger-design.md section 4).
   // Count == AppRunTickCount(view->Run). Show(view, i) lands on tick index i: it sets

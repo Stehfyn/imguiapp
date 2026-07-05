@@ -704,31 +704,19 @@ namespace
 #endif
 
   // WAL command dispatches, bucketed by tick: the sibling <name>.wal's "[tick:N] ... execute command"
-  // lines (imguiapp.cpp). Optional -- the recording is authoritative, so a missing WAL just omits markers.
+  // lines correlate through F62's index (AppRunAttachWal fills run->Commands + each tick's WalFirst/
+  // WalCount, the F64 command log). Optional -- the recording is authoritative, so a missing WAL just
+  // omits markers. CommandTicks mirrors the command ticks for the timeline strip.
   static void ComposerLoadWalCommandTicks(ComposerTransport* tr)
   {
     tr->CommandTicks.clear();
+    if (tr->Run == nullptr)
+      return;
     char wal_path[300];
     ImFormatString(wal_path, IM_ARRAYSIZE(wal_path), "%s.wal", tr->RunName);
-    size_t size = 0;
-    void* bytes = ImFileLoadToMemory(wal_path, "rb", &size, 1);   // +1: null-terminated for line scan
-    if (bytes == nullptr)
-      return;
-    char* line = (char*)bytes;
-    char* buf_end = (char*)bytes + size;
-    while (line < buf_end)
-    {
-      char* nl = strchr(line, '\n');
-      if (nl != nullptr)
-        *nl = 0;
-      const char* tk = strstr(line, "[tick:");
-      if (tk != nullptr && strstr(line, "execute command") != nullptr)
-        tr->CommandTicks.push_back((ImU64)strtoull(tk + 6, nullptr, 10));
-      if (nl == nullptr)
-        break;
-      line = nl + 1;
-    }
-    IM_FREE(bytes);
+    ImGui::AppRunAttachWal(tr->Run, wal_path);
+    for (int c = 0; c < tr->Run->Commands.Size; c++)
+      tr->CommandTicks.push_back(tr->Run->Commands.Data[c].Tick);
   }
 
   static void ComposerCloseRun(ComposerTransport* tr)
@@ -897,7 +885,78 @@ namespace
 
   // The FILE playback window: open/close a run, the timeline strip, step + slider (exact-tick), and the
   // decoded frame at the scrub tick, with a per-tick readout. Rendered from the toolbar control.
-  static void ComposerRenderPlayback(ComposerTransport* tr, float em, const ImGuiStyle& style)
+  // Reconstruct + show the app's VALUES at the scrubbed tick (F64). Restores the recorded state into
+  // the live Mirror (the running composition that IS this take) bracketed by a save/restore of the
+  // Mirror's own live state, so scrubbing never disturbs it. Restore-only ticks (a snapshot lands at
+  // N) are safe -- no OnUpdate runs; replay-needed ticks are NOT reconstructed live (their OnUpdate
+  // would re-dispatch commands into the running app), matching section 5's degrade-don't-fake rule.
+  static void ComposerRenderStateAtTick(ComposerTransport* tr, ImGuiApp* mirror, int scrub)
+  {
+    const ImGuiAppRunIndex* run = tr->Run;
+    const ImGuiAppRunTick* cur = ImGui::AppRunTickAt(run, scrub);
+    if (cur == nullptr)
+      return;
+
+    ImGui::SeparatorText("State @ tick");
+
+    // Command dispatches at this tick (the WAL slice, F64 command log).
+    if (cur->WalCount > 0 && cur->WalFirst >= 0)
+    {
+      ImGui::TextUnformatted("dispatch:");
+      for (int c = cur->WalFirst; c < cur->WalFirst + cur->WalCount && c < run->Commands.Size; c++)
+      {
+        ImGui::SameLine();
+        ImGui::Text("command %d", run->Commands.Data[c].CommandId);
+      }
+    }
+    else
+    {
+      ImGui::TextDisabled("dispatch: (none this tick)");
+    }
+
+    // Value reconstruction: identity gate first, then restore-nearest(+replay). Live-mirror only.
+    const bool identity_ok = mirror != nullptr
+                          && ImGui::GetAppCompositionID(mirror) == run->Identity.CompositionID
+                          && ImGui::AppStateSchemaHash(mirror) == run->Identity.SchemaHash;
+    if (!identity_ok)
+    {
+      ImGui::TextDisabled("values: composition/schema differ from this build -- reconstruction refused");
+      return;
+    }
+    if (run->SnapshotTicks.Size == 0)
+    {
+      ImGui::TextDisabled("values: raw-io take (no snapshots) -- image + io + command log only");
+      return;
+    }
+    if (cur->SnapshotOffset < 0)
+    {
+      ImGui::TextDisabled("values: available at snapshot ticks (gold) -- scrub to one to inspect");
+      return;
+    }
+
+    // Restore-only (this tick is a snapshot): bracket the live Mirror's state, reconstruct, read, restore.
+    // The scratch restore is read-only debugger state, not a real transition -- silence the Mirror's WAL.
+    ImGuiAppWAL* saved_wal = mirror->WAL;
+    mirror->WAL = nullptr;
+    ImGuiAppStateHistory live;
+    const bool saved = ImGui::AppStateSnapshot(mirror, &live);
+    ImGuiAppRunState st;
+    const bool ok = ImGui::AppRunStateAtTick(mirror, run, scrub, &st);
+    const ImGuiID recon_hash = ImGui::AppStateHash(mirror);
+    if (saved)
+      ImGui::AppStateRestore(mirror, &live, 0);   // return the Mirror to its live state
+    mirror->WAL = saved_wal;
+
+    if (ok)
+      ImGui::Text("values: restored snapshot   hash 0x%08X %s   %d Persist/Temp slot(s)",
+                  (unsigned)recon_hash,
+                  recon_hash == st.RecordedStateHash ? "== recorded" : "!= recorded",
+                  live.SlotIds.Size);
+    else
+      ImGui::TextDisabled("values: reconstruction unavailable at this tick");
+  }
+
+  static void ComposerRenderPlayback(ComposerTransport* tr, ImGuiApp* mirror, float em, const ImGuiStyle& style)
   {
     if (!tr->PlaybackOpen)
       return;
@@ -976,6 +1035,9 @@ namespace
       ImGui::SameLine();
       ImGui::TextDisabled("%s%s", has_snap ? "[snapshot] " : "", has_input ? "[input] " : "");
     }
+
+    // F64 state-at-tick: the reconstructed values + this tick's command dispatches.
+    ComposerRenderStateAtTick(tr, mirror, tr->FileView.Scrub);
 
     // Decode+blit the frame image at the scrub tick.
     if (ComposerSyncFrameTexture(tr) && tr->FrameTex != nullptr)
@@ -1481,7 +1543,7 @@ namespace
 
       // F63 FILE-mode playback timeline window (a top-level window, opened by the transport source switch).
       if (doc->Transport != nullptr)
-        ComposerRenderPlayback(doc->Transport, em, style);
+        ComposerRenderPlayback(doc->Transport, doc->Mirror, em, style);
     }
   };
 
