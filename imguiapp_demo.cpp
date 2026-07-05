@@ -493,6 +493,8 @@ namespace
       // Publish the frame's derived values once; GraphDoc updates first (push order), so all consumers see the same values.
       ImGui::AppGraphSyncRevision(&data->Graph);   // one signature fold per frame -> Revision pulse + _SigCache
       data->FrameSig = data->Graph._SigCache;
+      if (data->WriteMsg[0] && ImGui::AppGraphCodeStale(&data->Graph))
+        data->WriteMsg[0] = 0;   // the "wrote/copied" confirmation stops being true the frame the graph diverges from disk
       {
         const ImVector<ImGui::ImGuiAppGraphIssue>* issues = ImGui::AppGraphIssuesCached(&data->Graph);
         data->NumErrors = 0;
@@ -764,7 +766,9 @@ namespace
         cap_x[3] = ImGui::GetCursorPosX();
         const int   nerr  = doc->NumErrors;
         const bool  fresh = ImGui::AppGraphCodeFresh(&doc->Graph);
-        const char* gen_label = nerr > 0 ? ICON_FA_TRIANGLE_EXCLAMATION "  Generate" : fresh ? ICON_FA_CHECK "  Generated" : ICON_FA_FILE_EXPORT "  Generate";
+        // Stable ### id: the visible label swings Generate/Generated with health, but the widget keeps one
+        // identity (no focus/press churn across states; test-addressable).
+        const char* gen_label = nerr > 0 ? ICON_FA_TRIANGLE_EXCLAMATION "  Generate###generate" : fresh ? ICON_FA_CHECK "  Generated###generate" : ICON_FA_FILE_EXPORT "  Generate###generate";
         ImGui::PushStyleColor(ImGuiCol_Button, nerr > 0 ? ImVec4(0.55f, 0.21f, 0.18f, 1.0f)
                                              : fresh    ? ImVec4(0.16f, 0.38f, 0.22f, 1.0f)
                                                         : ImVec4(0.52f, 0.39f, 0.14f, 1.0f));
@@ -1608,7 +1612,18 @@ namespace
               {
                 // Shared tab header grammar: context label left, actions right.
                 ImGui::AlignTextToFramePadding();
-                ImGui::TextDisabled(data->DiffMode ? "Diff vs saved graph" : "Whole program");
+                // Header context label. Amber when the shown code is ahead of the file on disk (never
+                // written, or diverged since); neutral when fresh, empty, or diffing.
+                const bool code_fresh = ImGui::AppGraphCodeFresh(&doc->Graph);
+                const bool code_ahead = !code_fresh && data->HasCode && !data->DiffMode;
+                if (data->DiffMode)
+                  ImGui::TextDisabled("Diff vs saved graph");
+                else if (!code_ahead)
+                  ImGui::TextDisabled("Whole program");
+                else
+                  ImGui::TextColored(ImLerp(kDemoGold, ImGui::GetStyleColorVec4(ImGuiCol_Text), 0.25f),
+                                     doc->Graph.GenSignature != 0 ? ICON_FA_TRIANGLE_EXCLAMATION "  Whole program -- ahead of file"
+                                                                  : ICON_FA_TRIANGLE_EXCLAMATION "  Whole program -- unwritten");
                 if (doc->WriteMsg[0])
                 {
                   ImGui::SameLine();
@@ -1624,8 +1639,15 @@ namespace
                     ImGui::PopStyleColor();
                   ImGui::SetItemTooltip("Show the generated C++ as a diff against the SAVED graph");
                   ImGui::SameLine();
+                  if (code_ahead)
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImLerp(kDemoGold, ImGui::GetStyleColorVec4(ImGuiCol_Text), 0.2f));
                   if (ImGui::SmallButton("Copy"))
                     ImGui::SetClipboardText(data->DiffMode ? data->DiffText.c_str() : data->CodeText.c_str());
+                  if (code_ahead)
+                  {
+                    ImGui::PopStyleColor();
+                    ImGui::SetItemTooltip("This C++ is ahead of %s -- Generate to write it", doc->HeaderPath);
+                  }
                 }
                 if (data->DiffMode)
                 {

@@ -113,9 +113,15 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   AppGraphCodeStale/AppGraphCodeFresh compare live vs stamp. Migrated the demo's per-doc WrittenSig
   onto the graph so there is no parallel dirty bit. step60 pins signature-stability across save/load,
   position-only edits as no-ops, and the STALE->generate->FRESH cycle + Revision pulse.
-- [ ] **F18 fresh/STALE surfaced** — Generate button health state, code-panel stale tint,
+- [x] **F18 fresh/STALE surfaced** — Generate button health state, code-panel stale tint,
   Copy/Write warning tint, WriteMsg cleared on first stale frame.
   *Accept: UI test drives edit→stale→generate→fresh.*
+  DONE: Generate button carries a stable ###generate id + health tint (green Generated / amber Generate
+  / red on errors); the code-panel header reads amber "ahead of file"/"unwritten" and the Copy button
+  tints amber when the shown C++ is ahead of disk; WriteMsg clears the first frame the graph goes stale
+  (in OnUpdate). All read the single AppGraphCodeFresh/Stale bit. composer_codegen_freshness drives the
+  REAL toolbar Generate through the render->update path: stale -> click -> fresh -> authored edit ->
+  stale. (step60 pins the model cycle underneath.)
 - [ ] **F19 codegen warnings surfaced** — count of `// WARNING` / `// codegen aborted` in the
   generated text shown beside Generate with listing popup.
   *Accept: graph engineered to warn shows the count; clean graph shows none.*
