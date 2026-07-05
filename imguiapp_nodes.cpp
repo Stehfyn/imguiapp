@@ -11692,6 +11692,31 @@ namespace ImGui
     return true;
   }
 
+  // Merge policy (F24): imports find an existing node of the same kind + name and update it in place;
+  // otherwise they create. So importing the same source twice equals importing it once.
+  static ImGuiAppNode* AppImportFindNode(ImGuiAppGraph* g, ImGuiAppNodeKind kind, const char* name)
+  {
+    for (int i = 0; i < g->Nodes.Size; i++)
+      if (g->Nodes.Data[i].Kind == kind && !g->Nodes.Data[i].IsLive && strcmp(g->Nodes.Data[i].Draft.Name, name) == 0)
+        return &g->Nodes.Data[i];
+    return nullptr;
+  }
+
+  // Add a link only if an identical one (endpoints + kind) is absent, so re-import does not double edges.
+  static bool AppImportAddLinkUnique(ImGuiAppGraph* g, int start, int end, ImGuiAppEdgeKind kind)
+  {
+    for (int i = 0; i < g->Links.Size; i++)
+      if (g->Links.Data[i].StartAttr == start && g->Links.Data[i].EndAttr == end && g->Links.Data[i].Kind == kind)
+        return false;
+    ImGuiAppNodeLink l;
+    l.Id = AppGraphAllocId(g);
+    l.StartAttr = start;
+    l.EndAttr = end;
+    l.Kind = kind;
+    g->Links.push_back(l);
+    return true;
+  }
+
   int AppGraphImportControlsFromCode(ImGuiAppGraph* g, const char* code, ImVec2 origin)
   {
     IM_ASSERT(g != nullptr);
@@ -11909,9 +11934,21 @@ namespace ImGui
         }
       }
 
-      ImGuiAppNode* c = AppGraphAddNode(g, ImGuiAppNodeKind_Control, name);
-      ImVec2 pos = origin + ImVec2((float)(added % 4) * 300.0f, (float)(added / 4) * 220.0f);
-      AppGraphPlaceNode(g, c, &pos);
+      ImGuiAppNode* c = AppImportFindNode(g, ImGuiAppNodeKind_Control, name);
+      if (c != nullptr)
+      {
+        // Update in place: clear the reflected content before re-populating (merge, not duplicate).
+        c->Draft.PersistFields.clear();
+        c->Draft.TempFields.clear();
+        c->Events.clear();
+        c->Commands.clear();
+      }
+      else
+      {
+        c = AppGraphAddNode(g, ImGuiAppNodeKind_Control, name);
+        ImVec2 pos = origin + ImVec2((float)(added % 4) * 300.0f, (float)(added / 4) * 220.0f);
+        AppGraphPlaceNode(g, c, &pos);
+      }
 
       // Persist + temp fields from the referenced Data / TempData struct blocks.
       const char* body = nullptr;
@@ -11969,12 +12006,7 @@ namespace ImGui
         const int out_port = port_of(producer, ImGuiAppPortKind_DataOut);
         const int in_port  = port_of(consumer, ImGuiAppPortKind_DataIn);
         if (out_port < 0 || in_port < 0) continue;
-        ImGuiAppNodeLink l;
-        l.Id = AppGraphAllocId(g);
-        l.StartAttr = out_port;
-        l.EndAttr = in_port;
-        l.Kind = ImGuiAppEdgeKind_Data;
-        g->Links.push_back(l);
+        AppImportAddLinkUnique(g, out_port, in_port, ImGuiAppEdgeKind_Data);
       }
     }
     return added;
@@ -12038,7 +12070,8 @@ namespace ImGui
       q++;
       while (AppCImportIsSpace(*q)) q++;
       if (strncmp(q, "ImGuiAppLayer", 13) != 0 || AppCImportIsIdent(q[13])) { p = q; continue; }   // not exactly ImGuiAppLayer
-      AppGraphAddNode(g, ImGuiAppNodeKind_Layer, name)->LayerType = ImGuiAppLayerType_Custom;
+      if (AppImportFindNode(g, ImGuiAppNodeKind_Layer, name) == nullptr)
+        AppGraphAddNode(g, ImGuiAppNodeKind_Layer, name)->LayerType = ImGuiAppLayerType_Custom;
       p = q + 13;
     }
   }
@@ -12059,7 +12092,7 @@ namespace ImGui
         int  ni = 0;
         while (AppCImportIsIdent(*a) && ni < IM_LABEL_SIZE - 1) name[ni++] = *a++;
         name[ni] = 0;
-        if (name[0])
+        if (name[0] && AppImportFindNode(g, specs[si].Kind, name) == nullptr)
           AppGraphAddNode(g, specs[si].Kind, name);
         p = a;
       }
@@ -12113,13 +12146,61 @@ namespace ImGui
         const int co = port_of(c, ImGuiAppPortKind_ChildOut);
         const int hin = port_of(h, ImGuiAppPortKind_ChildIn);
         if (co < 0 || hin < 0) continue;
-        ImGuiAppNodeLink l;
-        l.Id = AppGraphAllocId(g);
-        l.StartAttr = co;
-        l.EndAttr = hin;
-        l.Kind = ImGuiAppEdgeKind_Containment;
-        g->Links.push_back(l);
+        AppImportAddLinkUnique(g, co, hin, ImGuiAppEdgeKind_Containment);
       }
+    }
+  }
+
+  // Import true standalone structs (plain `struct <Name> { ... }`), excluding each control's inline
+  // `<X>Data`/`<X>TempData` (carried as inline control fields). Find-or-update by name (merge policy).
+  static void AppImportStandaloneStructs(ImGuiAppGraph* g, const char* code)
+  {
+    const char* p = code;
+    while ((p = strstr(p, "struct")) != nullptr)
+    {
+      if (p != code && AppCImportIsIdent(p[-1]))     { p += 6; continue; }
+      const char* q = p + 6;
+      if (!AppCImportIsSpace(*q))                    { p = q; continue; }
+      while (AppCImportIsSpace(*q)) q++;
+      char name[IM_LABEL_SIZE];
+      int  ni = 0;
+      while (AppCImportIsIdent(*q) && ni < IM_LABEL_SIZE - 1) name[ni++] = *q++;
+      name[ni] = 0;
+      while (AppCImportIsSpace(*q)) q++;
+      if (ni == 0 || *q != '{')                      { p = q; continue; }   // plain struct only (no base)
+      const char* body = q + 1;
+      const char* e = body;
+      int depth = 1;
+      while (*e != 0 && depth > 0) { if (*e == '{') depth++; else if (*e == '}') { depth--; if (depth == 0) break; } e++; }
+      p = (*e != 0) ? e + 1 : e;
+
+      bool is_ctrl_data = false;
+      for (int j = 0; j < g->Nodes.Size && !is_ctrl_data; j++)
+      {
+        const ImGuiAppNode* n = &g->Nodes.Data[j];
+        if (n->Kind != ImGuiAppNodeKind_Control)
+          continue;
+        char base[IM_LABEL_SIZE];
+        AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
+        char dn[IM_LABEL_SIZE + 12];
+        char tn[IM_LABEL_SIZE + 12];
+        ImFormatString(dn, IM_ARRAYSIZE(dn), "%sData", base);
+        ImFormatString(tn, IM_ARRAYSIZE(tn), "%sTempData", base);
+        is_ctrl_data = strcmp(name, dn) == 0 || strcmp(name, tn) == 0;
+      }
+      if (is_ctrl_data)
+        continue;
+
+      ImGuiAppNode* s = AppImportFindNode(g, ImGuiAppNodeKind_Struct, name);
+      if (s != nullptr)
+        s->Draft.PersistFields.clear();
+      else
+      {
+        s = AppGraphAddNode(g, ImGuiAppNodeKind_Struct, name);
+        ImVec2 pos = ImVec2(0.0f, 0.0f);
+        AppGraphPlaceNode(g, s, &pos);
+      }
+      AppImportParseStructMembers(body, e, &s->Draft.PersistFields);
     }
   }
 
@@ -12139,35 +12220,8 @@ namespace ImGui
     AppImportCommandEnum(g, code);
     const int controls = AppGraphImportControlsFromCode(g, code, ImVec2(0.0f, 0.0f));
 
-    // Standalone structs: the plain-struct importer also grabs each control's inline `<X>Data`/
-    // `<X>TempData` (those are carried as inline control fields, not nodes), so drop them afterward and
-    // keep only true standalone structs.
-    AppGraphImportStructsFromCode(g, code, ImVec2(0.0f, 0.0f));
-    ImVector<int> spurious;
-    for (int i = 0; i < g->Nodes.Size; i++)
-    {
-      const ImGuiAppNode* s = &g->Nodes.Data[i];
-      if (s->Kind != ImGuiAppNodeKind_Struct)
-        continue;
-      bool is_ctrl_data = false;
-      for (int j = 0; j < g->Nodes.Size && !is_ctrl_data; j++)
-      {
-        const ImGuiAppNode* n = &g->Nodes.Data[j];
-        if (n->Kind != ImGuiAppNodeKind_Control)
-          continue;
-        char base[IM_LABEL_SIZE];
-        AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
-        char dn[IM_LABEL_SIZE + 12];
-        char tn[IM_LABEL_SIZE + 12];
-        ImFormatString(dn, IM_ARRAYSIZE(dn), "%sData", base);
-        ImFormatString(tn, IM_ARRAYSIZE(tn), "%sTempData", base);
-        is_ctrl_data = strcmp(s->Draft.Name, dn) == 0 || strcmp(s->Draft.Name, tn) == 0;
-      }
-      if (is_ctrl_data)
-        spurious.push_back(s->Id);
-    }
-    for (int i = 0; i < spurious.Size; i++)
-      AppGraphRemoveNode(g, spurious.Data[i]);
+    // True standalone structs (control Data/TempData excluded), find-or-update by name.
+    AppImportStandaloneStructs(g, code);
 
     // Windows / sidebars, then the hosting containment edges (needs both endpoints present).
     AppImportHosts(g, code);

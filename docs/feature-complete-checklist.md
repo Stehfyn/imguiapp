@@ -170,9 +170,14 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   and an unhosted control), imports it, re-emits, and asserts byte-equality. Fixes surfaced by the diff:
   import the command enum; drop the synthesized `<Cmd>Pending` latch on import; and make the emitter's
   window/sidebar hosting locals name-based (`win_<Name>`) so hosting survives import (node ids don't).
-- [ ] **F24 import-merge policy** — importing into a non-empty graph updates the matching node
+- [x] **F24 import-merge policy** — importing into a non-empty graph updates the matching node
   by type name (no dup), creates otherwise.
   *Accept: merge test: import twice = import once.*
+  DONE: every importer find-or-updates by kind + name (AppImportFindNode) instead of always creating --
+  a matched control/struct clears and re-populates its reflected content in place; matched layers/
+  windows/sidebars are left as-is; edges add only when absent (AppImportAddLinkUnique). step67 imports a
+  multi-kind program (custom layer, standalone struct, control, hosting window) twice into one graph and
+  asserts identical node/link counts and byte-identical re-emission.
 
 ## P5 — mirror never lies
 
