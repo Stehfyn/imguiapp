@@ -1838,7 +1838,7 @@ namespace
           // Document verbs for the canvas palette; the pick comes back through AppGraphConsumeHostCommand.
           static const ImGui::ImGuiAppGraphHostCmd host_cmds[] =
           {
-            { "File: Save graph", "Ctrl+S", ComposerHostCmd_Save },
+            { "File: Save graph", "Ctrl+S", ComposerHostCmd_Save, ImGuiKey_S, ImGuiMod_Ctrl },
             { "File: Load graph", "", ComposerHostCmd_Load },
             { "File: Generate C++ header", "", ComposerHostCmd_Generate },
             { "File: Copy generated C++", "", ComposerHostCmd_CopyCode },

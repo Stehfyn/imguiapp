@@ -279,9 +279,14 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   operator palette. step72_command_registry_four_roads: data-completeness (palette-complete,
   shortcut⟺key, add⟺kind+menu+gizmo, unique ids) + palette-reachability (every available palette
   verb renders a row). Nodes 81/81, core 87/0, headless 17/17.
-- [ ] **F35 keyboard completions** — Ctrl+P palette; key-driven tests for F2 rename, Del, nudge,
+- [x] **F35 keyboard completions** — Ctrl+P palette; key-driven tests for F2 rename, Del, nudge,
   Ctrl+S.
   *Accept: key tests green.*
+  DONE: Ctrl+P opens the operator palette (alias of Space). Host commands gained an optional
+  keyboard road (Key/Mods on ImGuiAppGraphHostCmd); the editor records a chord match exactly as a
+  palette click, so the demo's Ctrl+S "Save graph" fires from the keyboard. step73_keyboard_
+  completions drives all five key roads through the focused editor (drilled member for the nudge,
+  per step46's free-placement idiom). Nodes 82/82, core 87/0, headless 17/17.
 - [ ] **F36 layout presets** — Compose / Review / Observe presets over the panel sidecar state.
   *Accept: preset switch test asserts panel visibilities persist.*
 - [ ] **F37 origin literacy row** — origin legend micro-row + design→live→promotion HelpMarker

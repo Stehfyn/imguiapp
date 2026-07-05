@@ -824,6 +824,8 @@ namespace ImGui
     const char* Label;    // e.g. "File: Save graph"
     const char* Shortcut; // displayed dim + right-aligned; "" = none
     int         Id;       // host-defined, returned by AppGraphConsumeHostCommand
+    ImGuiKey    Key = ImGuiKey_None;   // optional keyboard road; the editor records a match, host owns the meaning
+    int         Mods = 0;              // ImGuiMod_ combo required with Key
   };
   IMGUI_API void                AppGraphSetHostCommands(const ImGuiAppGraph* g, const ImGuiAppGraphHostCmd* cmds, int count);
   IMGUI_API int                 AppGraphConsumeHostCommand(const ImGuiAppGraph* g);   // picked host cmd id since last call, or -1

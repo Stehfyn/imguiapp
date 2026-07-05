@@ -7572,8 +7572,17 @@ namespace ImGui
         AppGraphEditorState(g)->HelpOverlay = !AppGraphEditorState(g)->HelpOverlay;             // toggle shortcut cheat-sheet
       if (ImGui::IsKeyPressed(ImGuiKey_N, false))
         AppGraphEditorState(g)->QuickInspector = !AppGraphEditorState(g)->QuickInspector; // Blender N-panel: floating inspector beside the selection
-      if (ImGui::IsKeyPressed(ImGuiKey_Space, false))
-        ImGui::OpenPopup("##cmdpalette");   // Blender-style operator search
+      if (ImGui::IsKeyPressed(ImGuiKey_Space, false) || ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_P))
+        ImGui::OpenPopup("##cmdpalette");   // Blender Space / VS Code Ctrl+P: same operator search
+
+      // Host verbs may claim a keyboard road (Shortcut is display text; Key/Mods is the live chord). A match
+      // records the pick exactly as a palette click would -- the editor never acts on the host's behalf.
+      for (int i = 0; i < AppGraphEditorState(g)->HostCmdCount; i++)
+      {
+        const ImGuiAppGraphHostCmd* hc = &AppGraphEditorState(g)->HostCmds[i];
+        if (hc->Key != ImGuiKey_None && ImGui::IsKeyChordPressed((ImGuiKeyChord)(hc->Key | hc->Mods)))
+          AppGraphEditorState(g)->HostCmdPicked = hc->Id;
+      }
 
       // F2 renames the primary SELECTION inline (the same editor the title double-click opens). Acts on
       // selection, never hover -- hover is for brushing. Live mirrors and core layers keep their names.
