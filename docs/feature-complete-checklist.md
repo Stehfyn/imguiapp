@@ -792,6 +792,29 @@ rather than being deferred only because the retrofit is cheap and self-contained
   *Accept: the editor renders an addressable row per rebindable verb; capture rebinds; reset restores the
   default (step89_keymap_rebind UI-render assertions).*
 
+## P12 — DLL runtime live preview (decided 2026-07-05; requested after F68)
+
+The live preview should run the REAL generated program, not an interpretation of the graph. F67/F68's
+interpreter stays as the instant / no-compiler fallback; a DLL backend compiles the emitted C++ and runs
+the same code the user ships. Design fixes the mechanism before code (`dll-preview-design.md`): the crux is
+ONE runtime (context + allocator + framework globals + vtables), resolved by a shared `imguix-core`, not by
+static-relink bridging (which would duplicate imguix globals -- the flow3 double-register hazard).
+
+- [x] **F76 DLL preview design doc** — `dll-preview-design.md`: shared-core verdict, C-ABI create/destroy,
+  async monotonic-name reload with F68 state-preserve, toolset-pinned compile, source-mapped error
+  surfacing, interpreter as the no-compiler fallback.
+  *Accept: doc lands with the ABI verdict + lifecycle; no code before it.*
+- [ ] **F77 imguix-core shared split** — carve the framework runtime (imgui + imguiapp core, minus
+  demo/composer/editor) into a shared target; `IMGUI_API`/`IMGUIX_API` become dllexport/dllimport; host +
+  tests link it. Pure build refactor -- all suites stay green, zero behavior change. Gates F78.
+  *Accept: full rebuild green (nodes + core + headless-verify) against the shared core.*
+- [ ] **F78 DLL preview backend** — `GenerateAppPreviewModuleCode`, the `ImGuiAppPreviewDll` session
+  (compile / load / create / tick / async reload / state preserve / source-mapped error surface), the
+  Preview tab backend toggle (DLL when a toolset exists, interpreter otherwise).
+  *Accept: `dll_preview_roundtrip` (drive a widget on real compiled code, assert the model) +
+  `dll_preview_reload_preserves` (rewire + reload keeps unrelated fields); skipped-with-note where no
+  toolset is present, never vacuous.*
+
 ## Dependency spine + parallel lanes
 
 The phase order is the safe SERIAL order; most features do not actually block each other. The
