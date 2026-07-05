@@ -191,9 +191,14 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   self-guards added to EditAppNodeFieldSection + EditAppControlEvents; AppGraphRemoveNode deliberately
   keeps NO live guard (the mirror rebuild deletes stale live nodes through it). step68 drives F2 on a live
   control and asserts the notice fires, rename does not start, name untouched.
-- [ ] **F26 IsPromoted rendered** — promoted mark on canvas card + outliner row (computed flag
+- [x] **F26 IsPromoted rendered** — promoted mark on canvas card + outliner row (computed flag
   exists, never drawn).
   *Accept: promoted fixture shows the mark; unpromoted twin does not.*
+  DONE: the mark is drawn from ONE source (AppGraphOriginColor): the canvas title-bar dot renders as a
+  RING for promoted / FILLED for live / none for design (imguiapp_canvas.cpp:1263-1270), and the outliner
+  row text tints to match (imguiapp_nodes.cpp:13495). Exposed AppGraphOriginColor in the header (its own
+  comment already declared it meant-to-be-public) so step69 can pin the vocabulary: promoted != 0,
+  design == 0, live != 0, promoted != live -- and renders the outliner to exercise the tint path.
 - [ ] **F27 promote/reconcile round-trip** — promote live control → edit → generate → (fixture
   relaunch) → twin marked promoted, no duplicate mirror row.
   *Accept: headless test with simulated LiveApp fixture.*

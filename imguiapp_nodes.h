@@ -671,6 +671,12 @@ namespace ImGui
   // zero only byte 0, so ImHashData over the fixed buffer would be unstable).
   IMGUI_API ImGuiID             AppGraphSignature(const ImGuiAppGraph* g);
 
+  // Origin vocabulary (F26): the one colour shared by the canvas title-bar dot, the outliner row tint and
+  // the demo legend. Live and Promoted (a design control whose emitted data type matches a live node) each
+  // get a distinct mark; plain design returns 0 (no push -> default row colour). Single source, so the
+  // three surfaces cannot drift.
+  IMGUI_API ImU32               AppGraphOriginColor(const ImGuiAppNode* n);
+
   // Codegen freshness (F17). The signature is the single source of truth: AppGraphSyncRevision folds
   // it once per frame and bumps Revision on any content change; AppGraphMarkGenerated stamps the
   // signature at codegen time; the graph is STALE while the live signature differs from that stamp
