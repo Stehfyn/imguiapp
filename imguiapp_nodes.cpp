@@ -10915,6 +10915,84 @@ namespace ImGui
                    g->ScopePlacements.Data[i].Pos.x, g->ScopePlacements.Data[i].Pos.y);
   }
 
+  // The prefab registry (F04) rides in a sidecar file beside the graph ("<graph>.prefabs"). Each entry
+  // is a name plus a serialized subtree -- itself multi-line -- fenced by <<< / >>> so the subtree's own
+  // newlines survive the line-based format.
+  static void AppGraphPrefabSidecarPath(const char* graph_path, char* out, int out_size)
+  {
+    ImFormatString(out, (size_t)out_size, "%s.prefabs", graph_path);
+  }
+
+  static void AppGraphSerializePrefabs(const ImGuiAppGraph* g, ImGuiTextBuffer* buf)
+  {
+    const ImVector<ImGuiAppPrefab>& prefabs = AppGraphEditorState(g)->Prefabs;
+    for (int i = 0; i < prefabs.Size; i++)
+    {
+      buf->appendf("[Prefab]\nName=%s\n<<<\n", prefabs.Data[i].Name);
+      const char* d = prefabs.Data[i].Data;
+      const size_t dl = d ? strlen(d) : 0;
+      if (dl > 0)
+        buf->append(d);
+      if (dl == 0 || d[dl - 1] != '\n')   // guarantee >>> sits on its own line
+        buf->appendf("\n");
+      buf->appendf(">>>\n");
+    }
+  }
+
+  static void AppGraphDeserializePrefabs(ImGuiAppGraph* g, char* data)
+  {
+    ImVector<ImGuiAppPrefab>* prefabs = &AppGraphEditorState(g)->Prefabs;
+    for (int i = 0; i < prefabs->Size; i++)
+      IM_FREE(prefabs->Data[i].Data);
+    prefabs->clear();
+
+    char name[64] = "";
+    ImGuiTextBuffer body;
+    bool in_body = false;
+    char* p = data;
+    while (*p)
+    {
+      char* eol = p;
+      while (*eol != 0 && *eol != '\n') eol++;
+      const char saved = *eol;
+      *eol = 0;
+      if (eol > p && eol[-1] == '\r') eol[-1] = 0;
+
+      if (in_body && strcmp(p, ">>>") == 0)
+      {
+        in_body = false;
+        ImGuiAppPrefab pf;
+        ImStrncpy(pf.Name, name[0] ? name : "prefab", IM_ARRAYSIZE(pf.Name));
+        const char* bs = body.c_str();
+        const size_t bl = strlen(bs);
+        char* dup = (char*)IM_ALLOC(bl + 1);
+        memcpy(dup, bs, bl);
+        dup[bl] = 0;
+        pf.Data = dup;
+        prefabs->push_back(pf);
+        body.clear();
+      }
+      else if (in_body)
+      {
+        body.append(p);
+        body.appendf("\n");
+      }
+      else if (strncmp(p, "Name=", 5) == 0)
+      {
+        ImStrncpy(name, p + 5, IM_ARRAYSIZE(name));
+      }
+      else if (strcmp(p, "<<<") == 0)
+      {
+        in_body = true;
+        body.clear();
+      }
+      // "[Prefab]" itself needs no handling: Name= carries the name, <<< opens the body.
+
+      if (saved == 0) break;
+      p = eol + 1;
+    }
+  }
+
   bool SaveAppGraph(const char* path, const ImGuiAppGraph* g)
   {
     IM_ASSERT(path != nullptr && g != nullptr);
@@ -10927,6 +11005,20 @@ namespace ImGui
       return false;
     ImFileWrite(buf.c_str(), sizeof(char), (ImU64)buf.size(), fh);
     ImFileClose(fh);
+
+    // Prefab registry sidecar (F04): written only when non-empty.
+    if (AppGraphPrefabCount(g) > 0)
+    {
+      char sidecar[1024];
+      AppGraphPrefabSidecarPath(path, sidecar, IM_ARRAYSIZE(sidecar));
+      ImGuiTextBuffer pbuf;
+      AppGraphSerializePrefabs(g, &pbuf);
+      if (ImFileHandle pfh = ImFileOpen(sidecar, "wt"))
+      {
+        ImFileWrite(pbuf.c_str(), sizeof(char), (ImU64)pbuf.size(), pfh);
+        ImFileClose(pfh);
+      }
+    }
     return true;
   }
 
@@ -11131,6 +11223,16 @@ namespace ImGui
 
     AppGraphDeserialize(g, data);
     IM_FREE(data);
+
+    // Load the prefab registry sidecar if present (F04): the prefabs authored beside this graph.
+    char sidecar[1024];
+    AppGraphPrefabSidecarPath(path, sidecar, IM_ARRAYSIZE(sidecar));
+    size_t psize = 0;
+    if (char* pdata = (char*)ImFileLoadToMemory(sidecar, "rb", &psize, 1))
+    {
+      AppGraphDeserializePrefabs(g, pdata);
+      IM_FREE(pdata);
+    }
     return true;
   }
 
@@ -11884,6 +11986,83 @@ namespace ImGui
     if (index < 0 || index >= prefabs->Size)
       return 0;
     return AppGraphImportSerialized(g, prefabs->Data[index].Data, origin);
+  }
+
+  // Push `scratch` (all of it) into g's prefab registry under `name`, replacing a same-named entry. The
+  // scratch graph is a disposable staging area authored only to be serialized.
+  static void AppSeedPrefabFromGraph(ImGuiAppGraph* g, const ImGuiAppGraph* scratch, const char* name)
+  {
+    ImVector<int> roots;
+    for (int i = 0; i < scratch->Nodes.Size; i++)
+      roots.push_back(scratch->Nodes.Data[i].Id);
+    char* data = AppGraphSerializeSubsetString(scratch, roots);
+    if (data == nullptr)
+      return;
+    ImVector<ImGuiAppPrefab>* prefabs = &AppGraphEditorState(g)->Prefabs;
+    for (int i = 0; i < prefabs->Size; i++)
+      if (strcmp(prefabs->Data[i].Name, name) == 0)
+      {
+        IM_FREE(prefabs->Data[i].Data);
+        prefabs->Data[i].Data = data;
+        return;
+      }
+    ImGuiAppPrefab pf;
+    ImStrncpy(pf.Name, name, IM_ARRAYSIZE(pf.Name));
+    pf.Data = data;
+    prefabs->push_back(pf);
+  }
+
+  static int AppNodeFirstPortOfKind(const ImGuiAppNode* n, ImGuiAppPortKind kind)
+  {
+    for (int p = 0; p < n->Ports.Size; p++)
+      if (n->Ports.Data[p].Kind == kind)
+        return n->Ports.Data[p].Id;
+    return 0;
+  }
+
+  // Seed the starter prefab library (F04) if the registry is empty: a producer/consumer pair wired by a
+  // data edge + binding, and an event->command control. Never clobbers a loaded or authored registry.
+  void AppGraphSeedStarterPrefabs(ImGuiAppGraph* g)
+  {
+    IM_ASSERT(g != nullptr);
+    if (AppGraphPrefabCount(g) > 0)
+      return;
+
+    {
+      ImGuiAppGraph s;
+      ImGuiAppNode* prod = AppGraphAddNode(&s, ImGuiAppNodeKind_Control, "Producer");
+      AppNodeDraftAddField(&prod->Draft.PersistFields, "value", ImGuiAppFieldType_Float);
+      const int prod_out = AppNodeFirstPortOfKind(prod, ImGuiAppPortKind_DataOut);   // capture before the next add dangles prod
+      ImGuiAppNode* cons = AppGraphAddNode(&s, ImGuiAppNodeKind_Control, "Consumer");
+      AppNodeDraftAddField(&cons->Draft.PersistFields, "input", ImGuiAppFieldType_Float);
+      const int cons_in = AppNodeFirstPortOfKind(cons, ImGuiAppPortKind_DataIn);
+      ImGuiAppNodeLink l;
+      l.Id = AppGraphAllocId(&s);
+      l.StartAttr = prod_out;
+      l.EndAttr = cons_in;
+      l.Kind = ImGuiAppEdgeKind_Data;
+      s.Links.push_back(l);
+      ImGuiAppFieldBinding b;
+      b.LinkId = l.Id;
+      ImStrncpy(b.DstField, "input", IM_ARRAYSIZE(b.DstField));
+      ImStrncpy(b.SrcField, "value", IM_ARRAYSIZE(b.SrcField));
+      s.Bindings.push_back(b);
+      AppSeedPrefabFromGraph(g, &s, "Producer/Consumer");
+    }
+    {
+      ImGuiAppGraph s;
+      ImGuiAppNode* c = AppGraphAddNode(&s, ImGuiAppNodeKind_Control, "Trigger");
+      AppNodeDraftAddField(&c->Draft.TempFields, "hit", ImGuiAppFieldType_Bool);
+      c->Commands.push_back(ImGuiAppCommandDesc());
+      ImStrncpy(c->Commands.back().Name, "Fire", IM_ARRAYSIZE(c->Commands.back().Name));
+      ImGuiAppEventDesc ev;
+      ev.Edge = ImGuiAppEventEdge_Changed;
+      ev.Action = ImGuiAppEventAction_EmitCommand;
+      ImStrncpy(ev.TempField, "hit", IM_ARRAYSIZE(ev.TempField));
+      ImStrncpy(ev.Command, "Fire", IM_ARRAYSIZE(ev.Command));
+      c->Events.push_back(ev);
+      AppSeedPrefabFromGraph(g, &s, "Event -> Command");
+    }
   }
 
   //-----------------------------------------------------------------------------

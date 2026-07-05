@@ -23,9 +23,11 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
 - [x] **F03 event round-trip tests** — ImGuiAppEventDesc through save/load, undo, copy/paste.
   *Accept: dedicated test (step50 save/load + undo; step50b Ctrl+C/Ctrl+V; all four edges, both
   actions, comma-bearing expr).*
-- [ ] **F04 prefabs on disk** — prefab registry serialized beside the graph file, loaded on
+- [x] **F04 prefabs on disk** — prefab registry serialized beside the graph file, loaded on
   start; starter library: producer/consumer pair, event→command control.
-  *Accept: prefab stamped after restart reproduces the saved subtree; F01 covers the records.*
+  *Accept: prefab stamped after restart reproduces the saved subtree; F01 covers the records.
+  (step53: `<graph>.prefabs` sidecar written/read by Save/LoadAppGraph; AppGraphSeedStarterPrefabs
+  seeds the two starter prefabs on empty registry, wired into the demo's SeedAppGraph.)*
 - [x] **F05 undo covers every mutation road** — adds/compose, reparent, delete,
   ScopePlacements, events, dock/init fields, prefab stamp, paste, explode/collapse (the order
   road joins when F58 lands).

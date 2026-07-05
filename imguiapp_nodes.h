@@ -943,6 +943,10 @@ namespace ImGui
   IMGUI_API const char*         AppGraphPrefabName(const ImGuiAppGraph* g, int index);
   IMGUI_API int                 AppGraphInstantiatePrefab(ImGuiAppGraph* g, int index, ImVec2 origin);
 
+  // Seed the starter prefab library (producer/consumer pair, event->command control) when the registry
+  // is empty. The registry itself persists in a "<graph>.prefabs" sidecar written/read by Save/LoadAppGraph.
+  IMGUI_API void                AppGraphSeedStarterPrefabs(ImGuiAppGraph* g);
+
   // Ensure the four foundation layers (Window, Task, Command, Status) exist in g -- adds missing,
   // never duplicates. They are permanent (AppGraphRemoveNode refuses them). Call on new/empty graphs
   // and after load.

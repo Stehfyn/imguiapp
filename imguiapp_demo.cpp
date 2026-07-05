@@ -260,6 +260,8 @@ namespace
   {
     // BuildAppLiveGraph upserts onto the foundation layers, so design/live phases never duplicate.
     ImGui::AppGraphEnsureFoundation(graph);
+    // Starter prefab library on start (no-op once a saved registry loaded from the sidecar).
+    ImGui::AppGraphSeedStarterPrefabs(graph);
   }
 
   void ShowNodePalette(ImGuiAppGraph* graph)
