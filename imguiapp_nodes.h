@@ -576,8 +576,6 @@ struct ImGuiAppEditorState
   int                                  ErrSeqSeen = 0;
   double                               ErrTime = -1000.0;
   int                                  DropSrcAttr = -1;
-  int                                  ToastSeq = -1;
-  float                                ToastT0 = 0.0f;
   int                                  AppliedSel = -1;
   int                                  OutlinerRename = -1;         // node id being renamed in the tree, -1 = none
   bool                                 OutlinerRenameFocus = false;

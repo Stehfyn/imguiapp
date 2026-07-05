@@ -69,11 +69,12 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   *Accept: one test per gesture; all green. (canvas_c4: pan/wheel/drag-at-zoom/GridSnap/Ctrl-multi;
   canvas_c5: detach-delete; step55: palette completeness + wireable ports; wire-drop = canvas_c2;
   RMB menu = step42/43.)*
-- [ ] **F14 one feedback slot** — floating canvas link toast removed; ALL transient feedback
+- [x] **F14 one feedback slot** — floating canvas link toast removed; ALL transient feedback
   (link/compose refusals, copy/save confirmations) renders in the status-bar slot, single 2.5 s
   expiry (its fade constant is later unified by F38's motion idiom).
   *Accept: no canvas-corner toast; status-slot test asserts notice text for a refused link AND a
-  refused compose.*
+  refused compose (step56; the B1 canvas toast + its ToastSeq/ToastT0 state are gone; status-hint
+  expiry unified to 2.5 s).*
 - [ ] **F15 assert → flight-recorder dump** — ImGuiAppAssertFail dumps registered AV record rings
   before exit (wiring exists for WAL only today).
   *Accept: forced-assert child-process test finds the ring dump beside the assert WAL.*

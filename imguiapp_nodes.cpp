@@ -8283,15 +8283,16 @@ namespace ImGui
     }
 
     // Status hint: what the mouse does RIGHT NOW given the hover target. Composed here (only the editor
-    // knows the hover target), rendered by the host's status bar via AppGraphStatusHint. Transient
-    // feedback (refused links) overrides for three seconds.
+    // knows the hover target), rendered by the host's status bar via AppGraphStatusHint. This is the ONE
+    // feedback slot (F14): every transient notice -- refused links, refused composes, AppGraphNotify --
+    // rides the LastLinkErr channel and shows here for a single 2.5 s window. No floating canvas toast.
     {
       if (g->LastLinkErrSeq != AppGraphEditorState(g)->ErrSeqSeen)
       {
         AppGraphEditorState(g)->ErrSeqSeen = g->LastLinkErrSeq;
         AppGraphEditorState(g)->ErrTime = ImGui::GetTime();
       }
-      const bool show_err = g->LastLinkErr[0] != 0 && (ImGui::GetTime() - AppGraphEditorState(g)->ErrTime) < 3.0;
+      const bool show_err = g->LastLinkErr[0] != 0 && (ImGui::GetTime() - AppGraphEditorState(g)->ErrTime) < 2.5;
 
       AppGraphEditorState(g)->StatusSev = show_err ? 2 : 0;
       if (show_err)
@@ -8583,24 +8584,8 @@ namespace ImGui
       ImGui::EndPopup();
     }
 
-    // B1: transient link-rejection toast at the canvas bottom-left. The editor child is the last item after
-    // EndNodeEditor; fade alpha over ~2.5s, the timer re-armed whenever LastLinkErrSeq changes (single owner).
-    {
-      const float kFade = 2.5f;
-      if (g->LastLinkErrSeq != AppGraphEditorState(g)->ToastSeq) { AppGraphEditorState(g)->ToastSeq = g->LastLinkErrSeq; AppGraphEditorState(g)->ToastT0 = (float)ImGui::GetTime(); }
-      const float age = (float)ImGui::GetTime() - AppGraphEditorState(g)->ToastT0;
-      if (g->LastLinkErr[0] && g->LastLinkErrSeq > 0 && age < kFade)
-      {
-        const float em = ImGui::GetFontSize();
-        const ImVec2 mn = ImGui::GetItemRectMin();
-        const ImVec2 mx = ImGui::GetItemRectMax();
-        char msg[IM_LABEL_SIZE + 32];
-        ImFormatString(msg, IM_ARRAYSIZE(msg), "%s", g->LastLinkErr);
-        const ImVec2 ts = ImGui::CalcTextSize(msg);
-        const ImU32 col = AppColWithAlpha(AppComposerGetStyle()->Danger, 1.0f - age / kFade);
-        ImGui::GetWindowDrawList()->AddText(ImVec2(mn.x + em * 0.6f, mx.y - em * 0.6f - ts.y), col, msg);
-      }
-    }
+    // (F14 removed the floating canvas-corner rejection toast: transient feedback lives only in the
+    // status-bar slot above, so the same notice never renders twice.)
 
     // A scope mutation THIS frame (Tab/Esc/double-click/breadcrumb/palette, all handled above): selection
     // does not survive scope transitions by design -- drop it before the sync below re-applies the survivor.
