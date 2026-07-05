@@ -14,6 +14,11 @@
 #include "imguiapp.h"
 #include "imguiapp_nodes.h"
 #include "imguiapp_canvas.h"
+#include "imguiapp_av.h"                     // F63: run index + FILE-mode transport view
+#include "backends/imguiapp_impl_qoi.h"      // F63: on-demand QOI frame decode + meta extract
+#ifdef IMGUIX_HAS_LIBAV
+#include "backends/imguiapp_impl_libav.h"    // F63: on-demand mp4 frame decode + meta extract
+#endif
 #include "imgui_internal.h"
 #include "IconsFontAwesome6.h"
 
@@ -323,11 +328,25 @@ namespace
   // App-time transport (F29): a per-frame snapshot ring of the mirror's snapshottable (trivially-copyable)
   // controls plus the scrub position. Lives OFF GraphDocData's snapshotted bytes -- the doc itself is
   // opaque (non-POD), so AppStateSnapshot skips it and never captures this history. Heap, process lifetime.
+  // F63 adds a SOURCE switch: LIVE (the ring above + the mirror) vs FILE (a recorded run scrubbed offline).
   struct ComposerTransport
   {
     ImGuiAppStateHistory History;
     bool                 Frozen = false;   // engaged: hold + scrub instead of record
     int                  Frame  = 0;       // scrub position (0..Count-1)
+
+    // FILE source (F63). One transport, two sources: LIVE restores bytes into the mirror; FILE decodes
+    // the recorded frame image at a tick and blits it. All FILE state rides this object -- no TU globals.
+    int                  Source = ImGuiAppTransportSource_LiveRing;
+    bool                 PlaybackOpen = false;                 // the FILE playback timeline window is showing
+    ImGuiAppRunIndex*    Run = nullptr;                        // the opened run (owned; AppRunClose on close/reopen)
+    ImGuiAppRunTransport FileView;                             // run index + decoder behind Count()/Show(int)
+    ImVector<ImU64>      CommandTicks;                         // ticks with a WAL "execute command" dispatch (marker source)
+    ImTextureData*       FrameTex = nullptr;                   // GPU texture holding the decoded frame (lazy)
+    int                  FrameTexTick = -1;                    // tick uploaded to FrameTex (decode/upload cache)
+    char                 RunName[256] = "headless-artifacts/composer-headless";  // recording path (QOI take directory)
+    char                 RunDir[256]  = "";                    // resolved directory handed to the decoder
+    char                 OpenErr[160] = "";                    // last open failure, shown in the window
   };
 
   struct GraphDocData
@@ -664,6 +683,318 @@ namespace
   }
 
   //-----------------------------------------------------------------------------
+  // [SECTION] Playback debugger -- FILE-mode transport (F63)
+  //-----------------------------------------------------------------------------
+  // The App-time transport's FILE source: open a recorded QOI run through F62's AppRunOpen,
+  // scrub it via the shared AppRunTransportShow (Count()/Show(int)) reader, and blit the decoded
+  // frame at the slider tick. All state rides ComposerTransport -- no TU globals.
+
+  // Adapt the QOI provider's frame decode to the core ImGuiAppRunFrameDecodeFn seam (user = the
+  // recording directory). The core index stays provider-agnostic; the demo names the provider.
+  static bool ComposerQoiDecodeFrame(void* user, int frame_ordinal, ImVector<char>* out_rgba, int* out_w, int* out_h)
+  {
+    return ImGuiApp_ImplQoi_DecodeFrame((const char*)user, frame_ordinal, out_rgba, out_w, out_h);
+  }
+#ifdef IMGUIX_HAS_LIBAV
+  static bool ComposerLibavDecodeFrame(void* user, int frame_ordinal, ImVector<char>* out_rgba, int* out_w, int* out_h)
+  {
+    return ImGuiApp_ImplLibav_DecodeFrame((const char*)user, frame_ordinal, out_rgba, out_w, out_h);
+  }
+#endif
+
+  // WAL command dispatches, bucketed by tick: the sibling <name>.wal's "[tick:N] ... execute command"
+  // lines (imguiapp.cpp). Optional -- the recording is authoritative, so a missing WAL just omits markers.
+  static void ComposerLoadWalCommandTicks(ComposerTransport* tr)
+  {
+    tr->CommandTicks.clear();
+    char wal_path[300];
+    ImFormatString(wal_path, IM_ARRAYSIZE(wal_path), "%s.wal", tr->RunName);
+    size_t size = 0;
+    void* bytes = ImFileLoadToMemory(wal_path, "rb", &size, 1);   // +1: null-terminated for line scan
+    if (bytes == nullptr)
+      return;
+    char* line = (char*)bytes;
+    char* buf_end = (char*)bytes + size;
+    while (line < buf_end)
+    {
+      char* nl = strchr(line, '\n');
+      if (nl != nullptr)
+        *nl = 0;
+      const char* tk = strstr(line, "[tick:");
+      if (tk != nullptr && strstr(line, "execute command") != nullptr)
+        tr->CommandTicks.push_back((ImU64)strtoull(tk + 6, nullptr, 10));
+      if (nl == nullptr)
+        break;
+      line = nl + 1;
+    }
+    IM_FREE(bytes);
+  }
+
+  static void ComposerCloseRun(ComposerTransport* tr)
+  {
+    if (tr->Run != nullptr)
+      ImGui::AppRunClose(tr->Run);
+    tr->Run = nullptr;
+    tr->FileView.Run = nullptr;
+    tr->FileView.ShownImage = -1;
+    tr->FileView.Scrub = 0;
+    tr->CommandTicks.clear();
+    tr->FrameTexTick = -1;   // the held texture no longer matches any tick
+    tr->RunDir[0] = 0;
+  }
+
+  // Open RunName as a recorded take: an mp4 (<name>.mp4, when libav is built) or a QOI directory
+  // (<name>/NNNNNN.qoi). Extract the embedded meta stream, build the F62 index, wire the matching
+  // frame decoder. Frame images decode on demand at the scrub position (never a full preload).
+  static void ComposerOpenRun(ComposerTransport* tr)
+  {
+    tr->OpenErr[0] = 0;
+    ComposerCloseRun(tr);
+
+    const int embed_rows = ImGuiAppAVEncodeConfig().EmbedRows;   // the take's default strip depth
+    ImVector<char> meta;
+    bool is_mp4 = false;
+    char mp4[300];
+    ImFormatString(mp4, IM_ARRAYSIZE(mp4), "%s.mp4", tr->RunName);
+#ifdef IMGUIX_HAS_LIBAV
+    if (ImGuiApp_ImplLibav_ExtractEmbeddedMeta(mp4, embed_rows, &meta))
+      is_mp4 = true;
+#endif
+    if (!is_mp4 && !ImGuiApp_ImplQoi_ExtractEmbeddedMeta(tr->RunName, embed_rows, &meta))
+    {
+      ImFormatString(tr->OpenErr, IM_ARRAYSIZE(tr->OpenErr), "No run at '%s' (looked for %s.mp4 and a <dir>/NNNNNN.qoi sequence).", tr->RunName, tr->RunName);
+      return;
+    }
+    ImGuiAppRunIndex* run = ImGui::AppRunOpen(meta.Data, meta.Size);
+    if (run == nullptr)
+    {
+      ImFormatString(tr->OpenErr, IM_ARRAYSIZE(tr->OpenErr), "Meta stream in '%s' rejected (bad/absent header).", tr->RunName);
+      return;
+    }
+    tr->Run = run;
+    tr->FileView.Run = run;
+#ifdef IMGUIX_HAS_LIBAV
+    if (is_mp4)
+    {
+      ImStrncpy(tr->RunDir, mp4, sizeof(tr->RunDir));
+      tr->FileView.Decode = ComposerLibavDecodeFrame;
+    }
+    else
+#endif
+    {
+      ImStrncpy(tr->RunDir, tr->RunName, sizeof(tr->RunDir));
+      tr->FileView.Decode = ComposerQoiDecodeFrame;
+    }
+    tr->FileView.DecodeUser = tr->RunDir;
+    tr->FileView.Scrub = 0;
+    tr->FrameTexTick = -1;
+    ComposerLoadWalCommandTicks(tr);
+    ImGui::AppRunTransportShow(&tr->FileView, 0);   // land on the first tick
+  }
+
+  // Upload the FILE view's decoded RGBA into the transport's GPU texture (created once per run size,
+  // then full-rect updated on each scrub). Returns true when FrameTex holds tick-current pixels.
+  static bool ComposerSyncFrameTexture(ComposerTransport* tr)
+  {
+    const ImGuiAppRunTransport* v = &tr->FileView;
+    const int need = v->Width * v->Height * 4;
+    if (v->ShownImage < 0 || v->Width <= 0 || v->Height <= 0 || v->Pixels.Size < need)
+      return false;
+    // Size change (differently-sized run reopened): hand the old texture back, take a fresh object.
+    if (tr->FrameTex != nullptr && tr->FrameTex->Status != ImTextureStatus_Destroyed
+        && (tr->FrameTex->Width != v->Width || tr->FrameTex->Height != v->Height))
+    {
+      tr->FrameTex->WantDestroyNextFrame = true;   // backend frees the GPU side next frame
+      tr->FrameTex = nullptr;
+      tr->FrameTexTick = -1;
+    }
+    if (tr->FrameTex == nullptr)
+    {
+      tr->FrameTex = IM_NEW(ImTextureData)();
+      ImGui::RegisterUserTexture(tr->FrameTex);   // processed by the renderer backend while registered
+    }
+    ImTextureData* tex = tr->FrameTex;
+    if (tex->Status == ImTextureStatus_Destroyed)
+    {
+      tex->Create(ImTextureFormat_RGBA32, v->Width, v->Height);
+      memcpy(tex->GetPixels(), v->Pixels.Data, (size_t)need);
+      tr->FrameTexTick = (int)v->ShownTick;
+      return true;
+    }
+    if (tr->FrameTexTick != (int)v->ShownTick)
+    {
+      memcpy(tex->GetPixels(), v->Pixels.Data, (size_t)need);
+      tex->UpdateRect.x = 0;
+      tex->UpdateRect.y = 0;
+      tex->UpdateRect.w = (unsigned short)v->Width;
+      tex->UpdateRect.h = (unsigned short)v->Height;
+      tex->UsedRect = tex->UpdateRect;
+      tex->SetStatus(ImTextureStatus_WantUpdates);
+      tr->FrameTexTick = (int)v->ShownTick;
+    }
+    return true;
+  }
+
+  // Timeline strip: the F29 slider widened into a marked rail. Per-tick markers come from the F62
+  // index (snapshot points, opt-in input frames, chain divergence) plus the WAL (command dispatch);
+  // the scrub cursor rides the current tick. Clicking/dragging the rail scrubs. Returns the picked
+  // scrub index (-1 = unchanged). The addressable SliderInt lives beside it for tests.
+  static int ComposerPlaybackTimeline(ComposerTransport* tr, float em, const ImGuiStyle& style)
+  {
+    const int count = ImGui::AppRunTransportCount(&tr->FileView);
+    if (count <= 0)
+      return -1;
+    const ImGuiAppRunIndex* run = tr->Run;
+    const ImU64 first_tick = run->Ticks.Data[0].Tick;
+
+    int picked = -1;
+    const float strip_h = em * 1.6f;
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    const float strip_w = ImMax(em * 8.0f, ImGui::GetContentRegionAvail().x);
+    ImGui::InvisibleButton("###filestrip", ImVec2(strip_w, strip_h));
+    const bool active = ImGui::IsItemActive();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 rail_min = ImVec2(p0.x, p0.y + strip_h * 0.5f - em * 0.09f);
+    const ImVec2 rail_max = ImVec2(p0.x + strip_w, p0.y + strip_h * 0.5f + em * 0.09f);
+    dl->AddRectFilled(rail_min, rail_max, DemoThemeCol(style.Colors[ImGuiCol_FrameBg], 1.0f), em * 0.09f);
+
+    auto tick_x = [&](int idx) -> float
+    {
+      const float t = count > 1 ? (float)idx / (float)(count - 1) : 0.0f;
+      return p0.x + em * 0.25f + t * (strip_w - em * 0.5f);
+    };
+    auto mark = [&](int idx, const ImVec4& col, float half_h)
+    {
+      if (idx < 0 || idx >= count)
+        return;
+      const float x = tick_x(idx);
+      dl->AddLine(ImVec2(x, p0.y + strip_h * 0.5f - half_h), ImVec2(x, p0.y + strip_h * 0.5f + half_h), DemoThemeCol(col, 0.9f), ImMax(1.0f, em * 0.08f));
+    };
+
+    // Input ticks (opt-in InputFrame): faint. Snapshot points: gold. Command dispatch: green.
+    for (int i = 0; i < count; i++)
+      if (run->Ticks.Data[i].InputOffset >= 0)
+        mark(i, style.Colors[ImGuiCol_TextDisabled], em * 0.30f);
+    for (int s = 0; s < run->SnapshotTicks.Size; s++)
+      mark(run->SnapshotTicks.Data[s], kDemoGold, em * 0.55f);
+    for (int c = 0; c < tr->CommandTicks.Size; c++)
+      mark((int)(tr->CommandTicks.Data[c] - first_tick), ImVec4(0.45f, 0.85f, 0.45f, 1.0f), em * 0.42f);
+    if (run->Stats.ChainDivergesAt >= 0)   // first recording-integrity divergence (io-frame ordinal == tick index)
+      mark(run->Stats.ChainDivergesAt, ImVec4(0.92f, 0.45f, 0.45f, 1.0f), em * 0.6f);
+
+    // Scrub cursor + rail hit-test.
+    const float cx = tick_x(tr->FileView.Scrub);
+    dl->AddLine(ImVec2(cx, p0.y), ImVec2(cx, p0.y + strip_h), DemoThemeCol(kDemoGold, 1.0f), ImMax(1.5f, em * 0.12f));
+    dl->AddCircleFilled(ImVec2(cx, p0.y + strip_h * 0.5f), em * 0.22f, DemoThemeCol(kDemoGold, 1.0f));
+    if (active && count > 1)
+    {
+      const float rel = ImClamp((ImGui::GetIO().MousePos.x - (p0.x + em * 0.25f)) / (strip_w - em * 0.5f), 0.0f, 1.0f);
+      picked = (int)(rel * (count - 1) + 0.5f);
+    }
+    return picked;
+  }
+
+  // The FILE playback window: open/close a run, the timeline strip, step + slider (exact-tick), and the
+  // decoded frame at the scrub tick, with a per-tick readout. Rendered from the toolbar control.
+  static void ComposerRenderPlayback(ComposerTransport* tr, float em, const ImGuiStyle& style)
+  {
+    if (!tr->PlaybackOpen)
+      return;
+    ImGui::SetNextWindowSize(ImVec2(em * 34.0f, em * 30.0f), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin(ICON_FA_FILM "  Playback (FILE)###ComposerPlayback", &tr->PlaybackOpen))
+    {
+      ImGui::End();
+      return;
+    }
+
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Run");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(em * 16.0f);
+    ImGui::InputText("###filerunname", tr->RunName, IM_ARRAYSIZE(tr->RunName));
+    ImGui::SameLine();
+    if (ImGui::Button(ICON_FA_FOLDER_OPEN "  Open###filerunopen"))
+      ComposerOpenRun(tr);
+    ImGui::SetItemTooltip("Open this recorded run (QOI take directory)");
+    if (tr->Run != nullptr)
+    {
+      ImGui::SameLine();
+      if (ImGui::Button(ICON_FA_XMARK "  Close###filerunclose"))
+        ComposerCloseRun(tr);
+    }
+    if (tr->OpenErr[0])
+      ImGui::TextColored(ImVec4(0.92f, 0.45f, 0.45f, 1.0f), "%s", tr->OpenErr);
+
+    if (tr->Run == nullptr)
+    {
+      ImGui::TextDisabled("No run open. Enter a recording path and Open.");
+      ImGui::End();
+      return;
+    }
+
+    const int count = ImGui::AppRunTransportCount(&tr->FileView);
+
+    // Identity + integrity line.
+    ImGui::Separator();
+    ImGui::Text("composition 0x%08X   schema 0x%08X   %d tick(s)   chain %s   digest %s",
+                (unsigned)tr->Run->Identity.CompositionID, (unsigned)tr->Run->Identity.SchemaHash, count,
+                tr->Run->Stats.ChainOk ? "ok" : "BROKEN",
+                tr->Run->Stats.DigestState == 0 ? "ok" : tr->Run->Stats.DigestState == 1 ? "missing" : "MISMATCH");
+
+    // Step-back | slider | step-forward -- integer tick indices, so every landing is an exact tick.
+    int scrub = tr->FileView.Scrub;
+    if (ImGui::Button(ICON_FA_BACKWARD_STEP "###filescrubback"))
+      scrub = ImMax(0, scrub - 1);
+    ImGui::SetItemTooltip("Step back one tick");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(em * 14.0f);
+    if (ImGui::SliderInt("###filescrub", &scrub, 0, count > 0 ? count - 1 : 0, "frame %d"))
+      scrub = ImClamp(scrub, 0, count - 1);
+    ImGui::SetItemTooltip("Scrub the recorded run (frame index; tick shown below)");
+    ImGui::SameLine();
+    if (ImGui::Button(ICON_FA_FORWARD_STEP "###filescrubfwd"))
+      scrub = count > 0 ? ImMin(count - 1, scrub + 1) : 0;
+    ImGui::SetItemTooltip("Step forward one tick");
+
+    const int strip_pick = ComposerPlaybackTimeline(tr, em, style);
+    if (strip_pick >= 0)
+      scrub = strip_pick;
+
+    if (scrub != tr->FileView.Scrub)
+      ImGui::AppRunTransportShow(&tr->FileView, scrub);   // shared reader: decode + ShownTick = Ticks[scrub].Tick
+
+    // Per-tick readout: the shown tick IS the slider tick (Show addresses Ticks[i].Tick directly).
+    const ImGuiAppRunTick* cur = ImGui::AppRunTickAt(tr->Run, tr->FileView.Scrub);
+    if (cur != nullptr)
+    {
+      const bool has_input = cur->InputOffset >= 0;
+      const bool has_snap  = cur->SnapshotOffset >= 0;
+      ImGui::Text("tick %llu   frame %d/%d   image #%d   t=%.3fs   hash 0x%08X",
+                  (unsigned long long)tr->FileView.ShownTick, tr->FileView.Scrub, count - 1,
+                  tr->FileView.ShownImage, cur->TimeSec, (unsigned)cur->StateHash);
+      ImGui::SameLine();
+      ImGui::TextDisabled("%s%s", has_snap ? "[snapshot] " : "", has_input ? "[input] " : "");
+    }
+
+    // Decode+blit the frame image at the scrub tick.
+    if (ComposerSyncFrameTexture(tr) && tr->FrameTex != nullptr)
+    {
+      const float avail_w = ImGui::GetContentRegionAvail().x;
+      const float avail_h = ImGui::GetContentRegionAvail().y;
+      const float sx = avail_w / (float)tr->FileView.Width;
+      const float sy = avail_h / (float)tr->FileView.Height;
+      const float sc = ImMax(0.05f, ImMin(sx, sy));
+      const ImVec2 img_sz = ImVec2(tr->FileView.Width * sc, tr->FileView.Height * sc);
+      ImGui::Image(tr->FrameTex->GetTexRef(), img_sz);
+    }
+    else
+    {
+      ImGui::TextDisabled("(no frame image at this tick)");
+    }
+    ImGui::End();
+  }
+
+  //-----------------------------------------------------------------------------
   // [SECTION] Composer toolbar (flow-ordered: compose -> iterate -> persist -> produce | observe)
   //-----------------------------------------------------------------------------
 
@@ -948,37 +1279,65 @@ namespace
 
         temp_data->ApplyPreset = ComposerLayoutPreset_None;
 
-        // App-time transport (F29): freeze the running app + scrub its state history. Flow-placed (left of
-        // the right-aligned observe cluster) so it stays on the toolbar; only offered with the live mirror.
+        // App-time transport (F29/F63): a SOURCE switch (LIVE ring vs a recorded FILE run) then the
+        // source-agnostic scrub chrome. Flow-placed (left of the right-aligned observe cluster); only
+        // offered with the live mirror. LIVE freezes + scrubs the running app; FILE opens the playback window.
         if (show_live && doc->Transport != nullptr)
         {
           ComposerTransport* tr = doc->Transport;
-          const int frames = tr->History.Count;
-          const bool was_frozen = tr->Frozen;   // capture: the button click below flips Frozen mid-Push/Pop
+          const bool file_src = tr->Source == ImGuiAppTransportSource_FileRun;
           EditorToolSep(em);
-          if (was_frozen)
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.52f, 0.39f, 0.14f, 1.0f));   // amber: app time engaged
-          if (ImGui::Button(was_frozen ? ICON_FA_PLAY "###apptime" : ICON_FA_PAUSE "###apptime"))
-            tr->Frozen = !tr->Frozen;
-          if (was_frozen)
+          // Source switch (icon-only to keep the flow row narrow, so the right-aligned observe cluster
+          // does not shift): toggle LIVE ring <-> a recorded FILE run; FILE opens the playback window.
+          if (file_src)
+            ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonActive]);
+          if (ImGui::Button(file_src ? ICON_FA_FILM "###apptimesrc" : ICON_FA_TOWER_BROADCAST "###apptimesrc"))
+          {
+            tr->Source = file_src ? ImGuiAppTransportSource_LiveRing : ImGuiAppTransportSource_FileRun;
+            if (tr->Source == ImGuiAppTransportSource_FileRun)
+              tr->PlaybackOpen = true;
+          }
+          if (file_src)
             ImGui::PopStyleColor();
-          ImGui::SetItemTooltip(tr->Frozen ? "Resume the running app (App time)" : "Freeze the app to scrub its state history (App time)");
-          if (tr->Frozen)
+          ImGui::SetItemTooltip(file_src ? "Transport source: recorded FILE run (click for LIVE app ring)"
+                                         : "Transport source: LIVE app ring (click for a recorded FILE run)");
+
+          if (!file_src)
           {
             ImGui::SameLine();
-            if (ImGui::Button(ICON_FA_BACKWARD_STEP "###apptimeback"))
-              tr->Frame = ImMax(0, tr->Frame - 1);
-            ImGui::SetItemTooltip("Step back one frame");
+            const int frames = tr->History.Count;
+            const bool was_frozen = tr->Frozen;   // capture: the button click below flips Frozen mid-Push/Pop
+            if (was_frozen)
+              ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.52f, 0.39f, 0.14f, 1.0f));   // amber: app time engaged
+            if (ImGui::Button(was_frozen ? ICON_FA_PLAY "###apptime" : ICON_FA_PAUSE "###apptime"))
+              tr->Frozen = !tr->Frozen;
+            if (was_frozen)
+              ImGui::PopStyleColor();
+            ImGui::SetItemTooltip(tr->Frozen ? "Resume the running app (App time)" : "Freeze the app to scrub its state history (App time)");
+            if (tr->Frozen)
+            {
+              ImGui::SameLine();
+              if (ImGui::Button(ICON_FA_BACKWARD_STEP "###apptimeback"))
+                tr->Frame = ImMax(0, tr->Frame - 1);
+              ImGui::SetItemTooltip("Step back one frame");
+              ImGui::SameLine();
+              ImGui::SetNextItemWidth(em * 8.0f);
+              int f = frames > 0 ? tr->Frame : 0;
+              if (ImGui::SliderInt("###apptimescrub", &f, 0, frames > 0 ? frames - 1 : 0, "f %d"))
+                tr->Frame = f;
+              ImGui::SetItemTooltip("Scrub App-time frame (0 = oldest, %d = newest)", frames > 0 ? frames - 1 : 0);
+              ImGui::SameLine();
+              if (ImGui::Button(ICON_FA_FORWARD_STEP "###apptimefwd"))
+                tr->Frame = frames > 0 ? ImMin(frames - 1, tr->Frame + 1) : 0;
+              ImGui::SetItemTooltip("Step forward one frame");
+            }
+          }
+          else
+          {
             ImGui::SameLine();
-            ImGui::SetNextItemWidth(em * 8.0f);
-            int f = frames > 0 ? tr->Frame : 0;
-            if (ImGui::SliderInt("###apptimescrub", &f, 0, frames > 0 ? frames - 1 : 0, "f %d"))
-              tr->Frame = f;
-            ImGui::SetItemTooltip("Scrub App-time frame (0 = oldest, %d = newest)", frames > 0 ? frames - 1 : 0);
-            ImGui::SameLine();
-            if (ImGui::Button(ICON_FA_FORWARD_STEP "###apptimefwd"))
-              tr->Frame = frames > 0 ? ImMin(frames - 1, tr->Frame + 1) : 0;
-            ImGui::SetItemTooltip("Step forward one frame");
+            if (ImGui::Button(tr->PlaybackOpen ? ICON_FA_EYE "###apptimefile" : ICON_FA_EYE_SLASH "###apptimefile"))
+              tr->PlaybackOpen = !tr->PlaybackOpen;
+            ImGui::SetItemTooltip("Show / hide the FILE playback timeline window");
           }
         }
 
@@ -1117,6 +1476,10 @@ namespace
         }
       }
       ImGui::EndChild();
+
+      // F63 FILE-mode playback timeline window (a top-level window, opened by the transport source switch).
+      if (doc->Transport != nullptr)
+        ComposerRenderPlayback(doc->Transport, em, style);
     }
   };
 
@@ -2501,6 +2864,29 @@ namespace ImGui
     if (doc == nullptr || doc->Transport == nullptr)
       return 0;
     return doc->Transport->History.Count;
+  }
+
+  // Transport source (F63): ImGuiAppTransportSource_ (LiveRing default). Exposed for the FILE-mode test.
+  IMGUI_API int AppComposerTransportSource(ImGuiApp* host)
+  {
+    if (host == nullptr)
+      return ImGuiAppTransportSource_LiveRing;
+    GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiType<GraphDocData>::ID);
+    if (doc == nullptr || doc->Transport == nullptr)
+      return ImGuiAppTransportSource_LiveRing;
+    return doc->Transport->Source;
+  }
+
+  // Tick currently shown by the FILE-mode transport (F63): == Ticks[Scrub].Tick, 0 when no run is open.
+  // The scrub-to-tick acceptance reads this back after driving the timeline.
+  IMGUI_API ImU64 AppComposerFileRunShownTick(ImGuiApp* host)
+  {
+    if (host == nullptr)
+      return 0;
+    GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiType<GraphDocData>::ID);
+    if (doc == nullptr || doc->Transport == nullptr || doc->Transport->Run == nullptr)
+      return 0;
+    return doc->Transport->FileView.ShownTick;
   }
 
   // Composer outliner column width (F32): >0 when shown, 0 when hidden. Exposed for the status-zone test.

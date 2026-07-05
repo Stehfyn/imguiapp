@@ -540,6 +540,113 @@ IMGUI_API bool ImGuiApp_ImplLibav_ExtractEmbeddedMeta(const char* video_path, in
   return LibavExtractMetaInternal(video_path, embed_rows, out_meta, nullptr);
 }
 
+IMGUI_API bool ImGuiApp_ImplLibav_DecodeFrame(const char* video_path, int frame_ordinal, ImVector<char>* out_rgba, int* out_w, int* out_h)
+{
+  if (video_path == nullptr || out_rgba == nullptr || frame_ordinal < 0)
+    return false;
+
+  AVFormatContext* fmt = nullptr;
+  if (avformat_open_input(&fmt, video_path, nullptr, nullptr) < 0)
+    return false;
+
+  bool ok = false;
+  AVCodecContext* dec = nullptr;
+  SwsContext* to_rgba = nullptr;
+  AVFrame* frame = av_frame_alloc();
+  AVPacket* pkt = av_packet_alloc();
+  int stream_index = -1;
+  int ordinal = 0;
+
+  do
+  {
+    if (frame == nullptr || pkt == nullptr)
+      break;
+    if (avformat_find_stream_info(fmt, nullptr) < 0)
+      break;
+    const AVCodec* codec = nullptr;
+    stream_index = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
+    if (stream_index < 0 || codec == nullptr)
+      break;
+    dec = avcodec_alloc_context3(codec);
+    if (dec == nullptr)
+      break;
+    if (avcodec_parameters_to_context(dec, fmt->streams[stream_index]->codecpar) < 0)
+      break;
+    if (avcodec_open2(dec, codec, nullptr) < 0)
+      break;
+
+    // Linear decode to the target ordinal (no seek: the debugger scrubs on demand, the take is
+    // modest, and CFR ordinals are exact this way regardless of keyframe spacing).
+    bool draining = false;
+    bool failed = false;
+    bool found = false;
+    while (!failed && !found)
+    {
+      if (!draining)
+      {
+        const int r = av_read_frame(fmt, pkt);
+        if (r < 0)
+        {
+          draining = true;
+          avcodec_send_packet(dec, nullptr);
+        }
+        else
+        {
+          if (pkt->stream_index == stream_index)
+            avcodec_send_packet(dec, pkt);
+          av_packet_unref(pkt);
+          if (pkt->stream_index != stream_index && !draining)
+            continue;
+        }
+      }
+
+      for (;;)
+      {
+        const int r = avcodec_receive_frame(dec, frame);
+        if (r == AVERROR(EAGAIN))
+          break;
+        if (r == AVERROR_EOF || r < 0)
+        {
+          failed = true;   // ran out before reaching the ordinal
+          break;
+        }
+        if (ordinal == frame_ordinal)
+        {
+          to_rgba = sws_getContext(frame->width, frame->height, (AVPixelFormat)frame->format,
+                                   frame->width, frame->height, AV_PIX_FMT_RGBA,
+                                   SWS_BILINEAR, nullptr, nullptr, nullptr);
+          if (to_rgba != nullptr)
+          {
+            out_rgba->resize(frame->width * frame->height * 4);
+            uint8_t* dst[4] = { (uint8_t*)out_rgba->Data, nullptr, nullptr, nullptr };
+            int dst_stride[4] = { frame->width * 4, 0, 0, 0 };
+            sws_scale(to_rgba, frame->data, frame->linesize, 0, frame->height, dst, dst_stride);
+            if (out_w != nullptr)
+              *out_w = frame->width;
+            if (out_h != nullptr)
+              *out_h = frame->height;
+            ok = true;
+          }
+          found = true;
+          av_frame_unref(frame);
+          break;
+        }
+        ordinal++;
+        av_frame_unref(frame);
+      }
+    }
+  } while (false);
+
+  if (to_rgba != nullptr)
+    sws_freeContext(to_rgba);
+  av_frame_free(&frame);
+  av_packet_free(&pkt);
+  if (dec != nullptr)
+    avcodec_free_context(&dec);
+  avformat_close_input(&fmt);
+  return ok;
+}
+
 IMGUI_API bool ImGuiApp_ImplLibav_ReadEmbeddedInputLog(const char* video_path, int embed_rows, ImGuiAppInputLog* out_log, int* out_corrupt_frames)
 {
   IM_ASSERT(out_log != nullptr);

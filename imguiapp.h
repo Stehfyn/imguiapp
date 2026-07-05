@@ -454,6 +454,13 @@ namespace ImGui
   // snapshottable controls (0 = none). Drives the toolbar scrubber; exposed for the headless scrub test.
   IMGUI_API int AppComposerAppTimeFrames(ImGuiApp* host);
 
+  // App-time transport source (F63): ImGuiAppTransportSource_ (LiveRing vs FileRun). Exposed for tests.
+  IMGUI_API int AppComposerTransportSource(ImGuiApp* host);
+
+  // Tick shown by the FILE-mode transport (F63): the decoded frame's tick at the current scrub index
+  // (0 when no recorded run is open). Exposed for the scrub-to-tick acceptance.
+  IMGUI_API ImU64 AppComposerFileRunShownTick(ImGuiApp* host);
+
   // Composer outliner column width (F32): >0 shown, 0 hidden. Exposed for the status-bar zone test.
   IMGUI_API float AppComposerOutlinerWidth(ImGuiApp* host);
 
