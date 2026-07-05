@@ -199,9 +199,14 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   row text tints to match (imguiapp_nodes.cpp:13495). Exposed AppGraphOriginColor in the header (its own
   comment already declared it meant-to-be-public) so step69 can pin the vocabulary: promoted != 0,
   design == 0, live != 0, promoted != live -- and renders the outliner to exercise the tint path.
-- [ ] **F27 promote/reconcile round-trip** — promote live control → edit → generate → (fixture
+- [x] **F27 promote/reconcile round-trip** — promote live control → edit → generate → (fixture
   relaunch) → twin marked promoted, no duplicate mirror row.
   *Accept: headless test with simulated LiveApp fixture.*
+  DONE: composer_promote_reconcile mirrors the running composer (the simulated live app) into a local
+  graph, promotes a live control (a design twin with the same name + DataTypeName, the "Promote to design"
+  verb), then reconciles with a second BuildAppLiveGraph pass (the fixture "relaunch"). Asserts the twin is
+  marked IsPromoted (its emitted data type matches the running control), the live-control count is
+  unchanged, and there is still exactly one live mirror row for that control (no duplicate).
 - [ ] **F28 live-scope surface tests** — walls caption facts from live placement, read-only
   palette in live window/sidebar/control/struct interiors (extends step44).
   *Accept: one test per live scope kind.*
