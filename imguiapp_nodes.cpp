@@ -5046,14 +5046,15 @@ namespace ImGui
 
   // Execution-order badges + dashed flow arrows over the scope's members (the drilled-in counterpart of the
   // root pipeline rail). Numbering follows the full sequence; folded/hidden members keep their number unseen.
-  static void AppDrawScopeSequence(const ImGuiAppGraph* g, bool show_live, ImVec2 editor_min)
+  // Foreground list, clipped to the editor: the window list sits UNDER the canvas child, so anything drawn
+  // there is occluded by the nodes it annotates (the gizmo-cluster lesson, docs/phase-coherence.md #3).
+  static void AppDrawScopeSequence(const ImGuiAppGraph* g, bool show_live, ImVec2 editor_min, ImVec2 editor_size)
   {
     ImVector<int> seq;
     AppScopeSequenceIds(g, &seq);
     if (seq.Size == 0)
       return;
 
-    IM_UNUSED(editor_min);
     ImGuiCanvasState* cv = AppEditorCanvas(g);
     const float  z = AppCanvasScale(g);
     auto geom = [&](int id, ImVec2* p, ImVec2* s)
@@ -5066,7 +5067,8 @@ namespace ImGui
       *s = m * z;
     };
 
-    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImDrawList* dl = ImGui::GetForegroundDrawList();   // above the canvas child: annotations must never hide under their nodes
+    dl->PushClipRect(editor_min, editor_min + editor_size, true);
     const float em = ImGui::GetFontSize() * z;   // post-CanvasEnd: the content font is popped, scale by hand
     const ImU32 accent = AppScopeAccent(g);
     const ImU32 flow = (accent & 0x00FFFFFF) | 0x66000000;
@@ -5079,10 +5081,13 @@ namespace ImGui
 
     // Arrows first (behind the badges): last visible member -> next visible member.
     int prev = -1;
+    int first = -1;
     for (int i = 0; i < seq.Size; i++)
     {
       if (!visible(seq.Data[i]))
         continue;
+      if (first < 0)
+        first = seq.Data[i];
       if (prev >= 0)
       {
         ImVec2 ap, ad, bp, bd;
@@ -5091,6 +5096,20 @@ namespace ImGui
         AppDrawDashedArrow(dl, ImVec2(ap.x + ad.x, ap.y + ad.y * 0.5f), ImVec2(bp.x, bp.y + bd.y * 0.5f), flow, z);
       }
       prev = seq.Data[i];
+    }
+
+    // Rail endpoints: the walls' Begin/End brackets open and close the sequence (published by
+    // AppDrawScopeBrackets earlier this pass; absent outside window/sidebar scopes).
+    const ImGuiAppEditorState* ed = AppGraphEditorState(g);
+    if (first >= 0 && ed->ScopeWallValid && ed->ScopeBeginRect.z > ed->ScopeBeginRect.x)
+    {
+      ImVec2 p, d;
+      geom(first, &p, &d);
+      const ImVec2 b0 = ImGui::CanvasToScreen(cv, ImVec2(ed->ScopeBeginRect.z, (ed->ScopeBeginRect.y + ed->ScopeBeginRect.w) * 0.5f));
+      AppDrawDashedArrow(dl, b0, ImVec2(p.x, p.y + d.y * 0.5f), flow, z);
+      geom(prev, &p, &d);   // prev = last visible member after the loop
+      const ImVec2 e0 = ImGui::CanvasToScreen(cv, ImVec2(ed->ScopeEndRect.x, (ed->ScopeEndRect.y + ed->ScopeEndRect.w) * 0.5f));
+      AppDrawDashedArrow(dl, ImVec2(p.x + d.x, p.y + d.y * 0.5f), e0, flow, z);
     }
 
     const float r = em * 0.62f;
@@ -5110,6 +5129,7 @@ namespace ImGui
       dl->AddText(ImVec2(c.x - ns.x * 0.5f, c.y - ns.y * 0.5f), AppComposerGetStyle()->TextOnAccent, num);
       ImGui::PopFont();
     }
+    dl->PopClipRect();
   }
 
   //-----------------------------------------------------------------------------
@@ -5339,10 +5359,66 @@ namespace ImGui
   }
 
   // Lifecycle bracket plates: grey framework-internal Begin("name") / End() at the interior
-  // top-left / bottom-right of the walls. Post-CanvasEnd, from the published rects. STUB (L1).
-  static void AppDrawScopeBrackets(ImGuiAppGraph* g)
+  // top-left / bottom-right of the walls -- the scope caption's sentence drawn as geometry
+  // (up-next.md lifecycle chart: grey internal rows). Non-selectable furniture: no node id, no
+  // model record, no codegen. Post-CanvasEnd: rects derive from the published wall rect (model
+  // units, this frame) and publish for the rail's endpoint segments.
+  static void AppDrawScopeBrackets(ImGuiAppGraph* g, ImVec2 editor_min, ImVec2 editor_size)
   {
-    IM_UNUSED(g);
+    ImGuiAppEditorState* ed = AppGraphEditorState(g);
+    ed->ScopeBeginRect = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+    ed->ScopeEndRect = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+    if (!ed->ScopeWallValid)
+      return;
+    const ImGuiAppNode* tn = AppGraphFindNodeConst(g, AppScopeCurrent(g));
+    if (tn == nullptr)
+      return;
+
+    ImGuiCanvasState* cv = AppEditorCanvas(g);
+    const float z = AppCanvasScale(g);
+    const float em = ImGui::GetFontSize();      // post-CanvasEnd base font: 1 base px == 1 model unit
+    const float fh = ImGui::GetFrameHeight();
+
+    char begin_txt[IM_LABEL_SIZE + 16];
+    ImFormatString(begin_txt, IM_ARRAYSIZE(begin_txt), "Begin(\"%s\")", tn->Draft.Name[0] ? tn->Draft.Name : AppNodeKindName(tn->Kind));
+    const char* end_txt = "End()";
+
+    const float glyph_w = em * 0.55f;           // small square marker: framework internals, not a pin
+    const float pad_x = em * 0.6f;
+    const float plate_h = fh * 0.95f;
+    const float title_h_m = fh * 1.15f;         // the walls' title band, same derivation
+    const ImVec2 bts = ImGui::CalcTextSize(begin_txt);
+    const ImVec2 ets = ImGui::CalcTextSize(end_txt);
+    const float bw = pad_x * 2.0f + glyph_w + em * 0.3f + bts.x;
+    const float ew = pad_x * 2.0f + glyph_w + em * 0.3f + ets.x;
+
+    const ImVec4 wall = ed->ScopeWallRect;
+    ed->ScopeBeginRect = ImVec4(wall.x + em * 0.75f, wall.y + title_h_m + em * 0.5f,
+                                wall.x + em * 0.75f + bw, wall.y + title_h_m + em * 0.5f + plate_h);
+    ed->ScopeEndRect = ImVec4(wall.z - em * 0.75f - ew, wall.w - em * 0.5f - plate_h,
+                              wall.z - em * 0.75f, wall.w - em * 0.5f);
+
+    ImDrawList* dl = ImGui::GetForegroundDrawList();   // above the canvas child, like the sequence pass
+    dl->PushClipRect(editor_min, editor_min + editor_size, true);
+    auto plate = [&](const ImVec4& r, const char* txt)
+    {
+      const ImVec2 mn = ImGui::CanvasToScreen(cv, ImVec2(r.x, r.y));
+      const ImVec2 mx = ImGui::CanvasToScreen(cv, ImVec2(r.z, r.w));
+      const float line_w = ImMax(1.0f, em * z * 0.07f);
+      dl->AddRectFilled(mn, mx, AppThemeNeutral(0.17f), 2.0f * z);
+      dl->AddRect(mn, mx, AppThemeNeutral(0.38f, 0.75f), 2.0f * z, 0, line_w);
+      const float gw = glyph_w * z;
+      const float cy = (mn.y + mx.y) * 0.5f;
+      const ImVec2 gmn(mn.x + pad_x * z, cy - gw * 0.5f);
+      dl->AddRect(gmn, ImVec2(gmn.x + gw, gmn.y + gw), AppComposerGetStyle()->TextMuted, 1.0f * z, 0, line_w);
+      ImGui::PushFont(nullptr, em * z);
+      const ImVec2 ts = ImGui::CalcTextSize(txt);
+      dl->AddText(ImVec2(gmn.x + gw + em * 0.3f * z, cy - ts.y * 0.5f), AppComposerGetStyle()->TextMuted, txt);
+      ImGui::PopFont();
+    };
+    plate(ed->ScopeBeginRect, begin_txt);
+    plate(ed->ScopeEndRect, end_txt);
+    dl->PopClipRect();
   }
 
   // STUB (L1): implemented in the portals slice.
@@ -6846,8 +6922,8 @@ namespace ImGui
       // the order the framework runs them each frame, dock portal chips for boundary-crossing
       // data edges, and invite the first build step when the scope is empty. The breadcrumb
       // (below) names where we are and what executes here.
-      AppDrawScopeBrackets(g);
-      AppDrawScopeSequence(g, show_live, editor_min);
+      AppDrawScopeBrackets(g, editor_min, editor_size);
+      AppDrawScopeSequence(g, show_live, editor_min, editor_size);
       AppDrawScopePortals(g, selected_node_id);
       AppDrawScopeEmptyCTA(g, show_live, editor_min, editor_size);
     }
