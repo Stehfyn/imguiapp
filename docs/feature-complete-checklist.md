@@ -574,12 +574,21 @@ imguix-headless-verify already writes, AppEventExprCheck's typed expression AST,
 widgets (ImStructTable), and P8.5's op/tween semantics. Placed after P8.5 because the
 interpreter's vocabulary IS F53-F57's semantics.
 
-- [ ] **F61 playback-debugger design doc** — `playback-debugger-design.md`: the run container
+- [x] **F61 playback-debugger design doc** — `playback-debugger-design.md`: the run container
   (unify what headless-verify already emits — WAL + QOI frames + input stream + snapshots +
   digest chain — into ONE openable artifact), index shape (tick → nearest snapshot), transport
   grammar shared with F29 (LIVE ring vs FILE run are the same surface, different source),
   divergence semantics.
   *Accept: doc lands with the container format frozen; no code before it.*
+  DONE (`playback-debugger-design.md`, 307 lines, every rail cited to file:line): a RUN is one openable
+  path (the `.mp4`/QOI recording + basename siblings `.wal`/`.frametimes.csv`), joined by TICK
+  (`ImGuiAppFrameID.FrameIndex`) -- NO new archive/manifest, exactly the harness's existing outputs. The
+  authoritative spine is the embedded meta stream (40-byte `IMAVMETA` header + TLV records Identity/Frame/
+  IoFrame/Input/StateSnapshot/Digest); frozen guarantees = what `AppAVMetaVerify` already recomputes. Index =
+  one walk -> per-tick record + SnapshotTicks; the F29 transport gains a `Source_LiveRing`/`Source_FileRun`
+  switch behind a `Count()/Show()` view; state-at-tick = restore-nearest-snapshot + `AppInputReplay`
+  (contract 7); two divergence layers (chain/digest integrity vs recorded-vs-replayed state_hash) + exact-tick
+  jump. (Flagged: `ComposerTransport` is in imguiapp_demo.cpp, not nodes.cpp.)
 - [ ] **F62 run-file loader + index** — open a recorded run in the Composer: parse container,
   build tick index (inputs, commands, snapshots, digests, frame images).
   *Accept: headless-verify's own output opens; index counts match the recorder's summary line.*
