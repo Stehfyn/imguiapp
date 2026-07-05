@@ -28,9 +28,9 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   ScopePlacements, events, dock/init fields, prefab stamp, paste, explode/collapse (the order
   road joins when F58 lands).
   *Accept: per-road test = mutate → undo → model byte-equal to before.*
-- [ ] **F06 ScopeCams sweep on delete** — AppGraphRemoveNode drops the dead scope's camera
+- [x] **F06 ScopeCams sweep on delete** — AppGraphRemoveNode drops the dead scope's camera
   records (mirrors the ScopePlacements sweep).
-  *Accept: delete-scope-owner test asserts no ScopeCams entry remains.*
+  *Accept: delete-scope-owner test asserts no ScopeCams entry remains (step47).*
 - [ ] **F07 inspector edits reach exploded lists** — field edits/adds route to the Field nodes
   while a Draft list is exploded (today: silent dead writes; collapse destroys them).
   *Accept: edit-while-exploded test; collapse preserves the edit.*

@@ -2835,6 +2835,9 @@ namespace ImGui
     for (int pi = g->ScopePlacements.Size - 1; pi >= 0; pi--)
       if (g->ScopePlacements.Data[pi].NodeId == node_id || g->ScopePlacements.Data[pi].ScopeId == node_id)
         g->ScopePlacements.erase(g->ScopePlacements.Data + pi);
+    for (int ci = g->ScopeCams.Size - 1; ci >= 0; ci--)
+      if (g->ScopeCams.Data[ci].ScopeId == node_id)
+        g->ScopeCams.erase(g->ScopeCams.Data + ci);
 
     g->Nodes.erase(n);   // surviving nodes/ports/links keep their ids; ids are never reused
   }
