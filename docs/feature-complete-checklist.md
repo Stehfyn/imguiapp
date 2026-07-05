@@ -63,10 +63,12 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   *Accept: validator test + codegen grep test (step54: binding invariant (e) added to
   AppGraphValidate — Src on the producer, Dst on the consumer; event-expr dep refs already gated by
   AppExprPrimary; codegen touches `producer->value` only when the binding declares it).*
-- [ ] **F13 canvas input-family tests** — RMB menu, LMB-empty pan, wheel-zoom anchor, node drag
+- [x] **F13 canvas input-family tests** — RMB menu, LMB-empty pan, wheel-zoom anchor, node drag
   at zoom≠1, GridSnap, wire-drop palette, detach-delete, Ctrl+click multi-select, builtin
   palette completeness (Default node) + wireable ports.
-  *Accept: one test per gesture; all green.*
+  *Accept: one test per gesture; all green. (canvas_c4: pan/wheel/drag-at-zoom/GridSnap/Ctrl-multi;
+  canvas_c5: detach-delete; step55: palette completeness + wireable ports; wire-drop = canvas_c2;
+  RMB menu = step42/43.)*
 - [ ] **F14 one feedback slot** — floating canvas link toast removed; ALL transient feedback
   (link/compose refusals, copy/save confirmations) renders in the status-bar slot, single 2.5 s
   expiry (its fade constant is later unified by F38's motion idiom).
