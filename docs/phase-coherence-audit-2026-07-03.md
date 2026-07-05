@@ -129,3 +129,28 @@ one-shot model mutation + an em-scaled widget list). The rest are serialization,
 mutation, AV, or tests — no measured-geometry surface. No phase-coherence defect introduced by any
 completed item. (The open GAP above — group-drag clamp at zoom≠1 — predates these items; it is
 existing editor code the F11 refresh surfaced, not something a completed feature added.)
+
+## Render-phase mutation sweep (2026-07-05) — and a correction to the F11 refresh
+
+The F11 refresh audited the new writers by their READS (all model-unit — correct as far as it went)
+but did not ask WHICH PHASE does the write. The group-drag row was marked "coherent" on that basis.
+It was not: the drag mutated member positions INSIDE the canvas render pass (between `CanvasBegin`
+and `CanvasEnd`), so its slide-to-contact clamp could only read last frame's complete obstacle set
+(`_GroupFramesPrev`) while this frame's (`_GroupFrames`) was mid-publication — the third species
+(phase-coherence.md §1c). Symptom: a group could not reach contact with the layer column and clipped
+past neighbours. Fixed: the drag records `_GroupDragPending` in the pass; the clamp + writes run after
+`CanvasEnd` against this frame's `_GroupFrames` + `_LayerBox`. The F11 GAP (untested clamp) is now a
+real bug the fix closes; step33/34/35 stay green, core 87/0, headless 10/10.
+
+Sweep of every model mutation between `CanvasBegin` and `CanvasEnd` in `ShowAppGraphEditor`:
+
+| Site (nodes.cpp) | Write | Verdict |
+|---|---|---|
+| group-drag clamp (was ~6259) | member `GridPos` / placements / `AppCanvasSetNodePos` | VIOLATION (§1c) — moved to the post-`CanvasEnd` update pass |
+| add / delete / duplicate / reparent / explode / collapse / paste | node & link mutations | OK — recorded as `pending_act` / `c->Act` / `added_id`, applied AFTER `CanvasEnd` |
+| `_NeedsPlace` + `AppCanvasSetNodePos(g, n, AppNodeScopePos(g,n))` (~6612) | engine seat from stored placement | OK — pre-submission SEATING (persistent model → engine, before the node draws; the input-FSM class, not a mutation of a measured fact) |
+| `GroupCollapsed = !GroupCollapsed` (fold-click, ~6269) | transient view toggle | OK-ish — discrete UI state read next frame, feeds no measurement; not the measured-geometry class |
+
+Standing audit rule (now in phase-coherence.md §1c): grep the render pass for model writes; each must
+be a recorded intent applied post-submission, except pre-submission seating and measurement-free view
+toggles.

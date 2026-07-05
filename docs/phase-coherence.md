@@ -54,6 +54,39 @@ visibly animated across frames on every wheel tick. Fix: the width only moves wh
 exceeds it by ~2 model units (deadband) — the loop has a fixed point again, and genuine content
 growth still propagates in one settle.
 
+## 1c. The render-phase mutation (third species)
+
+The first two species are about *reading* a value from the wrong phase. The third is about *writing*
+one. **A model mutation performed during the render pass reads its own inputs mid-publication.** The
+render pass publishes derived facts INCREMENTALLY — group frames, wall rects, column geometry are
+each pushed as their owner draws. Code that mutates the model *while* that publication is in flight
+can only see the facts published SO FAR this frame; for everything not yet drawn it must fall back to
+LAST frame's complete set. So the write is gated on a mix of this-frame and last-frame facts — a
+phase split hidden inside a single function.
+
+```
+render:  for each owner:  publish(owner.fact);  if (dragging) mutate(model, using facts_published_so_far ∪ facts_prev)   // WRONG
+update:  for each owner:  publish(owner.fact);
+         after all published:  if (drag_pending) mutate(model, using facts_this_frame)                                   // coherent
+```
+
+This is why **rule 2 says mutate in the update pass, never in render.** OnRender's only write is the
+edit-INTENT (record "the user is dragging owner X"); OnUpdate applies it once every this-frame fact
+is published. Deferring costs one frame of settle — in model units, imperceptible (rule 4).
+
+Canonical example (2026-07-05): the window-group drag. The slide-to-contact clamp ran inline in the
+canvas render pass, mutating member positions while the group frames were still being drawn. Its
+obstacle set could therefore only be `_GroupFramesPrev` (last frame's complete publication); the
+this-frame frames (`_GroupFrames`) were half-built. So the drag clamped against a one-frame-stale
+neighbour set — a group clipped past a box it should have slid against, and could not reach contact
+with the layer column. Fix: the drag records its owner in `_GroupDragPending` during the pass; the
+clamp + position writes run after `CanvasEnd`, reading this frame's complete `_GroupFrames` + layer
+box. The tell was structural, not visual: *a model write between `CanvasBegin` and `CanvasEnd`.*
+Audit rule: grep the render pass for model mutations (`GridPos =`, `AppCanvasSetNodePos`,
+`…ScopePosStore`, node add/remove, link/reparent). Each must be a recorded intent applied post-submission,
+NOT an inline write — the sole exceptions are pre-submission SEATING (persistent model position →
+engine, before the node draws, like the input FSM) and transient view toggles that feed no measurement.
+
 ## 2. The rules
 
 1. **Cache in invariant units.** When a measurement must cross a frame boundary, divide out every
