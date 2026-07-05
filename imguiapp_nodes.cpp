@@ -7679,6 +7679,10 @@ namespace ImGui
     // placement records -- interior drags never leak into the root layout (or vice versa).
     int moved_layer_id = 0;
     ImVec2 moved_layer_pos(0.0f, 0.0f);
+    // Annotation-frame drag (F48/R1, UE behavior): a Note that moved this frame carries the nodes
+    // it framed. Captured here (old GridPos still readable), applied after the read-back finalizes.
+    struct AppNoteDrag { ImVec2 delta; ImVec2 omin; ImVec2 omax; };
+    ImVector<AppNoteDrag> note_drags;
     for (int i = 0; i < g->Nodes.Size; i++)
     {
       if (!show_live && g->Nodes.Data[i].IsLive) continue;
@@ -7696,11 +7700,44 @@ namespace ImGui
         moved_layer_id = n->Id;
         moved_layer_pos = pos;
       }
+      if (n->Kind == ImGuiAppNodeKind_Note && n->HasGridPos
+          && (ImAbs(pos.x - n->GridPos.x) > 0.01f || ImAbs(pos.y - n->GridPos.y) > 0.01f))
+      {
+        AppNoteDrag nd;
+        nd.delta = ImVec2(pos.x - n->GridPos.x, pos.y - n->GridPos.y);
+        nd.omin = n->GridPos;   // the frame's rect BEFORE this move -- its membership set
+        nd.omax = ImVec2(n->GridPos.x + n->NoteSize.x, n->GridPos.y + n->NoteSize.y);
+        note_drags.push_back(nd);
+      }
       n->GridPos = pos;
       // Don't finalize layer nodes here: the tight-packer (AppGraphConstrainLayerColumn, below) sets
       // HasGridPos once their real heights are known.
       if (n->Kind != ImGuiAppNodeKind_Layer)
         n->HasGridPos = true;
+    }
+    // Carry the framed nodes with each dragged Note: a non-owned node whose center sat inside the
+    // frame's prior rect shifts by the same delta (canvas + GridPos, so it renders and persists moved).
+    for (int m = 0; m < note_drags.Size; m++)
+    {
+      const AppNoteDrag& nd = note_drags.Data[m];
+      for (int i = 0; i < g->Nodes.Size; i++)
+      {
+        ImGuiAppNode* c = &g->Nodes.Data[i];
+        if (c->Kind == ImGuiAppNodeKind_Note || c->Kind == ImGuiAppNodeKind_Layer
+            || c->Kind == ImGuiAppNodeKind_Window || c->Kind == ImGuiAppNodeKind_Sidebar)
+          continue;
+        if ((!show_live && c->IsLive) || AppNodeHiddenByCollapse(g, c->Id))
+          continue;
+        ImVec2 sz;
+        if (!AppNodeModelSize(g, c->Id, &sz))
+          sz = AppLayoutNodeSize(g, c);
+        const ImVec2 ctr(c->GridPos.x + sz.x * 0.5f, c->GridPos.y + sz.y * 0.5f);
+        if (ctr.x >= nd.omin.x && ctr.x <= nd.omax.x && ctr.y >= nd.omin.y && ctr.y <= nd.omax.y)
+        {
+          c->GridPos = ImVec2(c->GridPos.x + nd.delta.x, c->GridPos.y + nd.delta.y);
+          AppCanvasSetNodePos(g, c->Id, c->GridPos);
+        }
+      }
     }
     if (dragged_layer_id != 0)
     {

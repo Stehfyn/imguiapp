@@ -457,9 +457,13 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
     the test reconstructs the wall screen-rect from their inner edges and confirms they run far outward.
   - grow-fast / shrink-deadband: widening a member grows `ScopeWallRect.z` the same frame; a 3px
     contraction holds inside the 1.5-em band; a full contraction shrinks it.
-- [~] **F48 canvas S2 slice** — annotation frames (R1) + align/distribute verbs (R3, registered
+- [x] **F48 canvas S2 slice** — annotation frames (R1) + align/distribute verbs (R3, registered
   in F34).
   *Accept: frame create/label/move test; align test on a selection.*
+  DONE: both gates pass. R3 = `step88_align_distribute`; R1 create/label/round-trip = `step89_note_roundtrip`,
+  move-carries-framed-nodes = `step90_note_drag_contained`. Tracked refinements beyond the gate (like F47's
+  residual): an interactive resize handle, a per-note colour picker (the `NoteColor` field + serialization
+  exist; the translucent frame doesn't yet read it), and outliner dimmed/bottom ordering for notes.
   PROGRESS (multi-turn):
   - R3 align/distribute DONE: six selection verbs on the F34 registry (ids 40-45, Palette|Menu) --
     Align left/right/top/bottom edges + Distribute horizontal/vertical. Geometry (`AppGraphAlignSelection`)
