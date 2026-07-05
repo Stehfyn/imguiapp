@@ -1045,7 +1045,7 @@ namespace ImGui
     // controls' OnRender). Status is intentionally omitted -- it submits a real ImGui window (not headless).
     PushAppLayer<ImGuiAppTaskLayer>(app);
     PushAppLayer<ImGuiAppCommandLayer>(app);
-    PushAppLayer<ImGuiAppWindowLayer>(app);
+    PushAppLayer<ImGuiAppDisplayLayer>(app);
 
     // Push one interpreter control per Control node in topo order. Host (window/sidebar) placement is
     // resolved from containment, but for F67 CORE app-level hosting keeps the render pass headless.
