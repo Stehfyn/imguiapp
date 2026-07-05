@@ -12426,6 +12426,22 @@ namespace ImGui
       }
     }
 
+    // Authored host tag types: a plain window/sidebar compiles to an empty CRTP subclass so SetupApp's
+    // PushAppWindow<Tag> / PushAppSidebar<Tag> names a real type (the framework requires T : ImGuiAppWindow<T>).
+    for (int i = 0; i < g->Nodes.Size; i++)
+    {
+      const ImGuiAppNode* n = &g->Nodes.Data[i];
+      if ((n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar) && !n->IsLive)
+      {
+        const int begin = line_now();
+        char base[IM_LABEL_SIZE];
+        AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
+        const char* tmpl = n->Kind == ImGuiAppNodeKind_Sidebar ? "ImGuiAppSidebar" : "ImGuiAppWindow";
+        out->appendf("struct %s : %s<%s> { };\n\n", base, tmpl, base);
+        span(n->Id, begin);
+      }
+    }
+
     ImGuiStorage mirrored_types;   // schema'd types already mirrored into this document
     for (int i = 0; i < order.Size; i++)
     {
