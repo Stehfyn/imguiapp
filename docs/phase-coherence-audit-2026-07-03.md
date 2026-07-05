@@ -64,3 +64,32 @@ One law throughout: T's measurement is consumed at T+1, in model units, by every
 The framework mechanism (TempData / LastTempData: record raw, compare, mutate once, publish) is
 applied in the editor as `_GroupFrames` / `_GroupFramesPrev` and now `_ModelSize` (+ per-graph
 drag transients). Finding D is the list of facts still outside the mechanism.
+
+## Refresh 2026-07-05 (F11): the new placement writers
+
+Second-order writers landed with the P0 scope-composition push (steps 41-46) and F07's explode
+factoring. Each classified by the same method: does it derive a MODEL fact (GridPos / ScopePlacement)
+using the camera as an input, or read stale-phase pixels? Verdict: all conforming — the camera is an
+input to NONE of them, and the one that reads a T+1 measurement carries the §1b deadband. No new
+violations to fix.
+
+| Writer (nodes.cpp) | Fact written | Geometry inputs | Verdict |
+|---|---|---|---|
+| `AppScopeComposeNewNode` (~5241) | root GridPos + this scope's placement | `owner->GridPos + (280,0)` (model); interior from `interior_pos` or `AppScopeInteriorDropPoint` (`ScopeWallRect`, published model units) | coherent — pure model, camera-free |
+| `AppScopeComposeImported` (~5266) | placements + root GridPos of a pasted/prefab cluster | `mn` of the cluster's model GridPos; `root_shift = owner->GridPos + (280,0) - mn`; anchor model | coherent — pure model |
+| scoped tidy (`AppScopeTidy*` ~4894) | this scope's placements, left→right | `AppLayoutPureSize` (explicitly zoom-idempotent) + tidy DAG; root vs scope by altitude | coherent — already commented "the camera is never an input"; step45 asserts GridPos untouched |
+| nudge (~7589) | canvas pos / GridPos or placement | `d` in MODEL grid units (1 / Shift 10); `AppCanvasNodePos + d` | coherent — "a grid unit is a grid unit at any zoom"; altitude-routed; step46 covers it |
+| group drag (~6259) | member model positions + `_GroupDragApplied` | `CanvasFromScreen(MousePos_now)` (same-frame mouse via current camera) − grab-time model origin; obstacle clamp vs `_GroupFramesPrev.MinM/MaxM` (published MODEL) with `kEps = 1.0` deadband | coherent — same-frame camera on a same-frame input; §1b fixed point present (kEps) |
+| explode anchors (`AppGraphAddExplodedField` ~2166) | field-node GridPos + scope placement | `owner->GridPos + field_off` (fixed MODEL offset per slot); `AppNodeScopePos(owner) + field_off` when drilled | coherent — pure model offsets, camera-free |
+| fit (`fit_all`/`fit_ids` ~7419) | camera pan/zoom (NOT a model fact) | bbox of `AppCanvasNodePos`/`AppNodeScopePos` (model) + `AppNodeModelSize` (the invariant cache) → `CanvasFitRect` | coherent — camera is the OUTPUT, derived from model rects; the inverse of the fact→camera law, never de-phasing a fact |
+
+`AddPopupGrid` (the drop-create anchor threaded into the two compose roads) is captured once as
+`CanvasFromScreen(screen_center_or_click)` at palette-open time and stored/consumed as a MODEL grid
+position — a same-frame screen→model conversion, camera-independent thereafter.
+
+Test backing (per §3's lesson: a "conforming" verdict must be read, not sampled): step45 (tidy →
+placements, GridPos intact), step46 (nudge altitude), step43 (duplicate-in-scope seating), canvas_c1
++ canvas_c4 (node drag at zoom≠1: model delta == px/zoom) exercise these writers at zoom≠1 and drilled
+altitudes — a camera term leaking into any of them would fail those checks. Suggested (not required):
+a multi-node group-drag-at-zoom test to cover the obstacle-clamp path directly (today it rides the
+same `CanvasFromScreen(mouse)` mechanism canvas_c1/c4 prove coherent).

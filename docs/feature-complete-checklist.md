@@ -54,9 +54,12 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
 - [ ] **F10 wire-ops family sweep** — detach re-drag, retarget, binding create/update/delete,
   drilled variants.
   *Accept: same form as F09.*
-- [ ] **F11 phase-coherence audit refresh** — checklist pass over the new writers
+- [x] **F11 phase-coherence audit refresh** — checklist pass over the new writers
   (Compose/ComposeImported, scoped tidy, nudge, group drag, explode anchors, fit).
-  *Accept: phase-coherence-audit doc updated; violations fixed or entered as findings.*
+  *Accept: phase-coherence-audit doc updated; violations fixed or entered as findings.
+  (phase-coherence-audit-2026-07-03.md "Refresh 2026-07-05" classifies all seven writers as
+  conforming — camera is an input to none; group drag carries the §1b kEps deadband; verdict
+  test-backed by step45/46/43 + canvas_c1/c4. No new violations.)*
 - [x] **F12 data-dependency adherence validator** — AppGraphValidate error when an event expr or
   binding references an undeclared dep; codegen test asserts emitted code touches
   data/temp/last_temp/dep params only per declaration.
