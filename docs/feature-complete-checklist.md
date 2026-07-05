@@ -379,8 +379,12 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   - multi-select mixed-value beyond Style: `EditAppNodesInspectorMulti` gained a Placement (all selected)
     X/Y editor -- common value or a "--" mixed marker, editing writes every selected node.
     `step78_inspector_multi_placement` edits multi-X and asserts both nodes' GridPos.x set, Y untouched.
-  Remaining: per-kind section-collapse persistence, section kebab (reset/copy/paste) on every section
-  (Style already has it), unified row grammar + row context actions.
+  - per-kind section-collapse persistence: `AppInspectorSection` gained a `persist_seed` that keys the
+    open/collapsed state by node kind instead of the id stack; the design-node sections pass `kind+1`.
+    `step79_inspector_section_persist` collapses Fields on Struct A and asserts Struct B shows it
+    collapsed too (and re-expand propagates back).
+  Remaining: section kebab (reset/copy/paste) on every section (Style already has it), unified row
+  grammar + row context actions.
 
 ## P7 — scopes + canvas completion
 

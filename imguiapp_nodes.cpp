@@ -430,7 +430,7 @@ namespace ImGui
   // the kebab click with its own popup. Open state lives in the window's state storage (session-lived,
   // shared per panel). The first section submitted in a window each frame defaults open, the rest default
   // collapsed; a user toggle overrides the default either way. Returns true while open.
-  bool AppInspectorSection(const char* str_id, const char* icon, const char* label, bool* enabled, bool* kebab_clicked)
+  bool AppInspectorSection(const char* str_id, const char* icon, const char* label, bool* enabled, bool* kebab_clicked, ImGuiID persist_seed)
   {
     const float h = ImGui::GetFrameHeight();
     const float em = ImGui::GetFontSize();
@@ -439,7 +439,8 @@ namespace ImGui
     const int frame = ImGui::GetFrameCount();
     const bool is_first = st->GetInt(first_id, -1) != frame;
     st->SetInt(first_id, frame);
-    const ImGuiID open_id = ImGui::GetID(str_id);
+    // Open state keyed by persist_seed (per-kind, F41) when given, else by the id stack (per-node).
+    const ImGuiID open_id = persist_seed != 0 ? ImHashStr(str_id, 0, persist_seed) : ImGui::GetID(str_id);
     bool open = st->GetInt(open_id, is_first ? 1 : 0) != 0;
 
     const float avail = ImGui::GetContentRegionAvail().x;
@@ -4310,7 +4311,7 @@ namespace ImGui
 
     bool enable = any_active;
     bool kebab = false;
-    const bool open = AppInspectorSection("##sec_style", ICON_FA_PALETTE, "Style", total > 0 ? &enable : nullptr, &kebab);
+    const bool open = AppInspectorSection("##sec_style", ICON_FA_PALETTE, "Style", total > 0 ? &enable : nullptr, &kebab, (ImGuiID)(n->Kind + 1));
     if (total > 0 && enable != any_active)
     {
       for (int i = 0; i < n->StyleMods.Size; i++) n->StyleMods.Data[i].Active = enable;
@@ -4590,12 +4591,12 @@ namespace ImGui
         ImGui::TextDisabled("Builtin control: %s", n->DataTypeName[0] ? n->DataTypeName : n->TypeName);
       else
       {
-        if (AppInspectorSection("##sec_fields", ICON_FA_TABLE_LIST, "Fields", nullptr, nullptr))
+        if (AppInspectorSection("##sec_fields", ICON_FA_TABLE_LIST, "Fields", nullptr, nullptr, (ImGuiID)(n->Kind + 1)))
         {
           EditAppNodeFieldSection(g, n, 0, "Persist");   // routes to the Field nodes when the list is exploded
           EditAppNodeFieldSection(g, n, 1, "Temp");
         }
-        if (AppInspectorSection("##sec_events", ICON_FA_BOLT, "Events", nullptr, nullptr))
+        if (AppInspectorSection("##sec_events", ICON_FA_BOLT, "Events", nullptr, nullptr, (ImGuiID)(n->Kind + 1)))
           EditAppControlEvents(g, n);          // temp-vs-last-temp reactions (see ImGuiAppEventDesc)
       }
       AppNodeStyleSection(g, n);                  // style-var/color overrides applied around the control's render
@@ -4604,12 +4605,12 @@ namespace ImGui
       AppNodeStyleSection(g, n);                  // style overrides applied around the window's Begin/End
       break;
     case ImGuiAppNodeKind_Sidebar:
-      if (AppInspectorSection("##sec_dock", ICON_FA_THUMBTACK, "Dock", nullptr, nullptr))
+      if (AppInspectorSection("##sec_dock", ICON_FA_THUMBTACK, "Dock", nullptr, nullptr, (ImGuiID)(n->Kind + 1)))
         EditAppWindowNodeProps(n);             // dock direction / size
       AppNodeStyleSection(g, n);
       break;
     case ImGuiAppNodeKind_Struct:
-      if (AppInspectorSection("##sec_fields", ICON_FA_TABLE_LIST, "Fields", nullptr, nullptr))
+      if (AppInspectorSection("##sec_fields", ICON_FA_TABLE_LIST, "Fields", nullptr, nullptr, (ImGuiID)(n->Kind + 1)))
         EditAppNodeFieldSection(g, n, 0, "fields");   // routes to the Field nodes when the list is exploded
       break;
     case ImGuiAppNodeKind_Field:

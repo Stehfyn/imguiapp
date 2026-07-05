@@ -762,7 +762,9 @@ namespace ImGui
   // Inspector section header (workbench §5.1): collapse triangle + icon + label, optional enable
   // checkbox, optional kebab whose click the caller answers with its own popup. Open state is
   // session-lived per window.
-  IMGUI_API bool                AppInspectorSection(const char* str_id, const char* icon, const char* label, bool* enabled, bool* kebab_clicked);
+  // persist_seed != 0 keys the open/collapsed state by that seed (e.g. node kind) instead of the id
+  // stack -- so a collapse persists across every node of the same kind (F41), not per node instance.
+  IMGUI_API bool                AppInspectorSection(const char* str_id, const char* icon, const char* label, bool* enabled, bool* kebab_clicked, ImGuiID persist_seed = 0);
 
   // Origin breadcrumb for a selected node: "sel: MainWindow > Mixer [design]" / "[live]" /
   // "[promoted]" / "sel: -" when id < 0 or unknown.
