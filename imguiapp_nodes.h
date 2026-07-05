@@ -568,6 +568,7 @@ struct ImGuiAppEditorState
   mutable int                          HostCmdPicked = -1;
   mutable bool                         AddPaletteRequest = false;   // one-shot
   mutable bool                         CmdPaletteRequest = false;   // one-shot: open the Space operator palette (F34)
+  mutable bool                         AlignMenuRequest = false;    // one-shot: open the Shift+A align/distribute submenu (F48/R3)
   mutable bool                         FitAllRequest = false;       // one-shot
   int                                  AutoLayoutCountdown = 2;     // launch default is a TIDIED layout: fires once real sizes exist (frame 2)
   float                                UniformCardW = 0.0f;         // one normalized width for every non-layer node (model units; grows to fit the widest need, deadbanded)

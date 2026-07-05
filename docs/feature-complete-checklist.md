@@ -457,9 +457,19 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
     the test reconstructs the wall screen-rect from their inner edges and confirms they run far outward.
   - grow-fast / shrink-deadband: widening a member grows `ScopeWallRect.z` the same frame; a 3px
     contraction holds inside the 1.5-em band; a full contraction shrinks it.
-- [ ] **F48 canvas S2 slice** — annotation frames (R1) + align/distribute verbs (R3, registered
+- [~] **F48 canvas S2 slice** — annotation frames (R1) + align/distribute verbs (R3, registered
   in F34).
   *Accept: frame create/label/move test; align test on a selection.*
+  PROGRESS (multi-turn):
+  - R3 align/distribute DONE: six selection verbs on the F34 registry (ids 40-45, Palette|Menu) --
+    Align left/right/top/bottom edges + Distribute horizontal/vertical. Geometry (`AppGraphAlignSelection`)
+    reads each pick's altitude-correct canvas rect and writes through the nudge idiom (drilled -> scope
+    placements, root -> GridPos); live/collapsed picks skipped. Reachable from the operator palette, a
+    Shift+A submenu, and the selection context menu's "Align" submenu (multi-select). Availability gates
+    align on >=2 picks, distribute on >=3. `step88_align_distribute` drills, scatters three controls, and
+    drives Align-Left + Distribute-H through the palette (edges collapse to min x; middle center = mean).
+  Remaining: R1 annotation frames -- the `Note` node kind (resizable colored titled rect, z-behind,
+  drag moves contained nodes, excluded from codegen/validation, outliner dimmed/bottom/filterable).
 - [ ] **F49 doc + comment hygiene** — refresh scope-interior-design §1 stale diagnoses; delete
   stale bracket comments; resolve the R7-LOD claim (implement or strike); fix the MMB-pan and
   transport claims in composer-workbench-design; sweep remaining narrative comments.

@@ -6231,6 +6231,108 @@ namespace ImGui
     }
   }
 
+  // Selection align/distribute (F48/R3): local-intent geometry over the current pick, complementing L
+  // (global tidy). Reads each member's altitude-correct canvas rect and writes the new position through
+  // the nudge idiom -- the canvas move routes to this scope's placements while drilled; GridPos is the
+  // root read-back's own. Live picks and collapse-hidden nodes are skipped.
+  enum AppAlignMode_ { AppAlign_Left, AppAlign_Right, AppAlign_Top, AppAlign_Bottom, AppAlign_DistribH, AppAlign_DistribV };
+
+  static void AppGraphAlignSelection(ImGuiAppGraph* g, int mode, bool show_live)
+  {
+    struct Rec { int id; ImVec2 pos; ImVec2 size; };
+    ImVector<Rec> recs;
+    for (int i = 0; i < g->Selection.Size; i++)
+    {
+      ImGuiAppNode* sn = AppGraphFindNode(g, g->Selection.Data[i]);
+      if (sn == nullptr || (!show_live && sn->IsLive) || AppNodeHiddenByCollapse(g, sn->Id))
+        continue;
+      Rec r;
+      r.id = sn->Id;
+      r.pos = AppCanvasNodePos(g, sn->Id);
+      if (!AppNodeModelSize(g, sn->Id, &r.size))
+        r.size = AppLayoutNodeSize(g, sn);
+      recs.push_back(r);
+    }
+    const bool distribute = mode == AppAlign_DistribH || mode == AppAlign_DistribV;
+    if (recs.Size < (distribute ? 3 : 2))
+      return;
+    const bool at_root = g->ViewScope.Size == 0;
+
+    if (distribute)
+    {
+      // Space the members' centers evenly between the two extremes along the axis (endpoints fixed).
+      const bool horiz = mode == AppAlign_DistribH;
+      for (int i = 1; i < recs.Size; i++)   // insertion sort by center along the axis (small N)
+      {
+        const Rec key = recs.Data[i];
+        const float kc = horiz ? key.pos.x + key.size.x * 0.5f : key.pos.y + key.size.y * 0.5f;
+        int j = i - 1;
+        while (j >= 0 && (horiz ? recs.Data[j].pos.x + recs.Data[j].size.x * 0.5f
+                                : recs.Data[j].pos.y + recs.Data[j].size.y * 0.5f) > kc)
+        {
+          recs.Data[j + 1] = recs.Data[j];
+          j--;
+        }
+        recs.Data[j + 1] = key;
+      }
+      const Rec& lo = recs.Data[0];
+      const Rec& hi = recs.Data[recs.Size - 1];
+      const float c0 = horiz ? lo.pos.x + lo.size.x * 0.5f : lo.pos.y + lo.size.y * 0.5f;
+      const float cN = horiz ? hi.pos.x + hi.size.x * 0.5f : hi.pos.y + hi.size.y * 0.5f;
+      for (int i = 0; i < recs.Size; i++)
+      {
+        const float c = c0 + (cN - c0) * (float)i / (float)(recs.Size - 1);
+        ImVec2 np = recs.Data[i].pos;
+        if (horiz) np.x = c - recs.Data[i].size.x * 0.5f;
+        else       np.y = c - recs.Data[i].size.y * 0.5f;
+        AppCanvasSetNodePos(g, recs.Data[i].id, np);
+        if (at_root)
+          if (ImGuiAppNode* sn = AppGraphFindNode(g, recs.Data[i].id))
+            sn->GridPos = np;
+      }
+      return;
+    }
+
+    float minx = FLT_MAX, miny = FLT_MAX, maxr = -FLT_MAX, maxb = -FLT_MAX;
+    for (int i = 0; i < recs.Size; i++)
+    {
+      minx = ImMin(minx, recs.Data[i].pos.x);
+      miny = ImMin(miny, recs.Data[i].pos.y);
+      maxr = ImMax(maxr, recs.Data[i].pos.x + recs.Data[i].size.x);
+      maxb = ImMax(maxb, recs.Data[i].pos.y + recs.Data[i].size.y);
+    }
+    for (int i = 0; i < recs.Size; i++)
+    {
+      ImVec2 np = recs.Data[i].pos;
+      switch (mode)
+      {
+      case AppAlign_Left:   np.x = minx; break;
+      case AppAlign_Right:  np.x = maxr - recs.Data[i].size.x; break;
+      case AppAlign_Top:    np.y = miny; break;
+      case AppAlign_Bottom: np.y = maxb - recs.Data[i].size.y; break;
+      default: break;
+      }
+      AppCanvasSetNodePos(g, recs.Data[i].id, np);
+      if (at_root)
+        if (ImGuiAppNode* sn = AppGraphFindNode(g, recs.Data[i].id))
+          sn->GridPos = np;
+    }
+  }
+
+  // The six ops as MenuItems, shared by the selection context submenu and the Shift+A popup.
+  static void AppGraphAlignMenuItems(ImGuiAppGraph* g, bool show_live)
+  {
+    const bool has2 = g->Selection.Size >= 2;
+    const bool has3 = g->Selection.Size >= 3;
+    if (ImGui::MenuItem("Left edges",   nullptr, false, has2)) AppGraphAlignSelection(g, AppAlign_Left,   show_live);
+    if (ImGui::MenuItem("Right edges",  nullptr, false, has2)) AppGraphAlignSelection(g, AppAlign_Right,  show_live);
+    if (ImGui::MenuItem("Top edges",    nullptr, false, has2)) AppGraphAlignSelection(g, AppAlign_Top,    show_live);
+    if (ImGui::MenuItem("Bottom edges", nullptr, false, has2)) AppGraphAlignSelection(g, AppAlign_Bottom, show_live);
+    ImGui::Separator();
+    if (ImGui::MenuItem("Distribute horizontally", nullptr, false, has3)) AppGraphAlignSelection(g, AppAlign_DistribH, show_live);
+    if (ImGui::MenuItem("Distribute vertically",   nullptr, false, has3)) AppGraphAlignSelection(g, AppAlign_DistribV, show_live);
+  }
+
   // Command registry (F34): one table is the single source for the editor's verbs -- id, icon, label,
   // shortcut, key, and which surfaces (palette / context menu / shortcut / gizmo) each declares. The Space
   // palette renders directly from it; the completeness test iterates it and checks each verb is reachable
@@ -6248,6 +6350,12 @@ namespace ImGui
     { 11, "",   "View: Fit all",               "Home",   ImGuiKey_Home,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_COUNT },
     { 12, "",   "View: Frame selection",       "F",      ImGuiKey_F,             0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_COUNT },
     { 13, "",   "Toggle: Snap to grid",        "G",      ImGuiKey_G,             0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_COUNT },
+    { 40, "",   "Align: Left edges",           "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu, ImGuiAppNodeKind_COUNT },
+    { 41, "",   "Align: Right edges",          "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu, ImGuiAppNodeKind_COUNT },
+    { 42, "",   "Align: Top edges",            "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu, ImGuiAppNodeKind_COUNT },
+    { 43, "",   "Align: Bottom edges",         "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu, ImGuiAppNodeKind_COUNT },
+    { 44, "",   "Distribute: Horizontal",      "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu, ImGuiAppNodeKind_COUNT },
+    { 45, "",   "Distribute: Vertical",        "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu, ImGuiAppNodeKind_COUNT },
     { 25, "",   "View: Hide selection",        "H",      ImGuiKey_H,             0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut, ImGuiAppNodeKind_COUNT },
     { 26, "",   "View: Show all hidden",       "Alt+H",  ImGuiKey_H,             ImGuiMod_Alt,   ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut, ImGuiAppNodeKind_COUNT },
     { 27, "",   "Overlays: Grid",              "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_COUNT },
@@ -6299,6 +6407,8 @@ namespace ImGui
     }
     if (c->Id == 14) return AppGraphCanUndo(g);   // Undo
     if (c->Id == 15) return AppGraphCanRedo(g);   // Redo
+    if (c->Id >= 40 && c->Id <= 43) return g->Selection.Size >= 2;   // align: two edges to align
+    if (c->Id == 44 || c->Id == 45) return g->Selection.Size >= 3;   // distribute: three to space evenly
     return true;
   }
 
@@ -7657,6 +7767,11 @@ namespace ImGui
       AppGraphEditorState(g)->CmdPaletteRequest = false;
       ImGui::OpenPopup("##cmdpalette");
     }
+    if (AppGraphEditorState(g)->AlignMenuRequest)   // Shift+A align/distribute submenu (F48/R3)
+    {
+      AppGraphEditorState(g)->AlignMenuRequest = false;
+      ImGui::OpenPopup("##alignmenu");
+    }
 
     // Context menus: the engine's RMB short-click events (a travelled RMB is a pan and never menus).
     {
@@ -7927,6 +8042,10 @@ namespace ImGui
         }
       }
 
+      // Shift+A opens the align/distribute submenu over the selection (F48/R3) -- no new top-level keys.
+      if (ImGui::IsKeyPressed(ImGuiKey_A, false) && ImGui::GetIO().KeyShift && !ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyAlt && g->Selection.Size >= 2)
+        AppGraphEditorState(g)->AlignMenuRequest = true;
+
       // Z-order: '[' sends the selection to the back, ']' brings it to the front. The canvas draws in submission =
       // g->Nodes order, so we restack by rebuilding the vector with the selected nodes moved to one end. Element
       // moves are byte-copies (ImVector never frees element-owned memory), so inner buffers transfer cleanly.
@@ -8048,6 +8167,12 @@ namespace ImGui
       {
         ImGui::TextDisabled("%s", cn->Draft.Name[0] ? cn->Draft.Name : "(unnamed)");
         ImGui::Separator();
+        // Selection align/distribute (F48/R3): the alignment submenu on the selection context menu.
+        if (g->Selection.Size >= 2 && ImGui::BeginMenu("Align"))
+        {
+          AppGraphAlignMenuItems(g, show_live);
+          ImGui::EndMenu();
+        }
         // Struct node: explode/collapse its fields. Control node: explode/collapse its PersistData/TempData structs.
         if (cn->Kind == ImGuiAppNodeKind_Struct && !cn->IsLive && !cn->IsBuiltin)
         {
@@ -8262,6 +8387,11 @@ namespace ImGui
 
     // Command palette (Space): editor verbs with their shortcuts, the host's document verbs (via
     // AppGraphSetHostCommands), and go-to-node over the graph itself.
+    if (ImGui::BeginPopup("##alignmenu"))
+    {
+      AppGraphAlignMenuItems(g, show_live);
+      ImGui::EndPopup();
+    }
     if (ImGui::BeginPopup("##cmdpalette"))
     {
       if (ImGui::IsWindowAppearing())
@@ -8381,6 +8511,12 @@ namespace ImGui
         case 11: fit_all(); break;
         case 12: fit_ids(g->Selection); break;
         case 13: snap_grid = !snap_grid; break;
+        case 40: AppGraphAlignSelection(g, AppAlign_Left,    show_live); break;
+        case 41: AppGraphAlignSelection(g, AppAlign_Right,   show_live); break;
+        case 42: AppGraphAlignSelection(g, AppAlign_Top,     show_live); break;
+        case 43: AppGraphAlignSelection(g, AppAlign_Bottom,  show_live); break;
+        case 44: AppGraphAlignSelection(g, AppAlign_DistribH, show_live); break;
+        case 45: AppGraphAlignSelection(g, AppAlign_DistribV, show_live); break;
         case 14: if (AppGraphCanUndo(g)) { AppGraphUndo(g); ImGui::CanvasClearSelection(cv); } break;
         case 15: if (AppGraphCanRedo(g)) { AppGraphRedo(g); ImGui::CanvasClearSelection(cv); } break;
         case 16: AppGraphCopySelection(g, g->Selection); break;
