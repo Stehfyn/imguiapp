@@ -547,11 +547,20 @@ extends those rails rather than inventing parallel ones.
   `ImGuiAppNodeKind_Layout` giving the Layout layer its first domain (OnLayout() already stubbed at
   imguiapp.h:906), windows reference their region via a NODE FIELD (`Region=`, parallel to `Dock=`), codegen
   emits a once-guarded DockBuilder into OnLayout(); constraint/anchor edges REJECT (no phase, no primitive).
-- [ ] **F54 Op node kind** — `ImGuiAppNodeKind_Op`: AND/OR/XOR/NOT, compare (==,!=,<,<=,>,>=),
+- [x] **F54 Op node kind** — `ImGuiAppNodeKind_Op`: AND/OR/XOR/NOT, compare (==,!=,<,<=,>,>=),
   select/mux, min/max; typed pins checked by the expression type rules; app-level data domain
   (scope-parent Task layer); cycles refused; serialized; palettes offer it only where the scope
   takes it (extends AppScopeKindComposable).
   *Accept: add/wire/type-refusal/serialize/undo tests; F01 covers records.*
+  DONE: `_Op` appended after `_Note` (index 8; serialized as int). Operator rides `TypeName` (IsBuiltin=false),
+  so serialization needs NO new line (ports ride `Port=`); `AppGraphAddOp` stamps N operand DataIn by arity
+  (NOT=1, compare/AND/OR/XOR/min/max=2, select=3) + one result DataOut `DataTypeId=0` (fans out, opts out of
+  one-producer). Type-refusal is a per-pin check in `AppGraphResolveLink` reusing the SHARED
+  `AppExprIsBool/IsNumeric/IsInt` (AppEventExprCheck stays the sole type authority); cycles refused by the
+  shared `AppGraphDataReaches`; Task-layer domain via `AppScopeParentOf` + `AppScopeKindComposable` (root+Task).
+  MANDATED grammar extension landed: `AppExprTernary` (?: at C precedence, right-assoc, cond must be bool) as
+  the new grammar top (pass-through when no `?`, so step21 stays green) + `ImMin/ImMax` as call primaries -- so
+  F55's select/min-max folds re-import. step95_op_node_kind + step21 grammar cases. No standalone emit (F55).
 - [ ] **F55 op codegen fold** — op chains fold into the consumer's emitted expression (no
   runtime object); byte-locked, compiled, RUN: an op chain gating a command dispatches it.
   Import note recorded: folded output re-imports as an expression, not as op nodes — the graph
