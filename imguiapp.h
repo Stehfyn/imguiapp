@@ -457,6 +457,10 @@ namespace ImGui
   // Composer outliner column width (F32): >0 shown, 0 hidden. Exposed for the status-bar zone test.
   IMGUI_API float AppComposerOutlinerWidth(ImGuiApp* host);
 
+  // Composer layout-preset visibilities (F36): bitmask tree(1)|insp(2)|code(4)|live(8). Exposed for the
+  // preset-switch test; a Compose/Review/Observe pick sets a fixed combination.
+  IMGUI_API int AppComposerLayoutFlags(ImGuiApp* host);
+
   // Push every Active (in-range) entry; returns the number pushed -- pop with PopStyleVar/PopStyleColor(count).
   IMGUI_API int PushAppStyleMods(const ImGuiAppStyleModDesc* mods, int count);
   IMGUI_API int PushAppColorMods(const ImGuiAppColorModDesc* mods, int count);

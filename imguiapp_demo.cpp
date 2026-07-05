@@ -463,6 +463,53 @@ namespace
       doc->Log.erase(doc->Log.Data, doc->Log.Data + 64);
   }
 
+  // Layout presets (F36): named workspace configs over the sidebar / bottom-panel / live visibilities.
+  // The active preset is derived, not stored -- it is whichever config the current visibilities match,
+  // so a manual toggle simply un-lights the preset. Visibilities persist through the layout sidecar.
+  enum ComposerLayoutPreset_
+  {
+    ComposerLayoutPreset_None = 0,
+    ComposerLayoutPreset_Compose,   // authoring: both sidebars, no bottom panel, live hidden
+    ComposerLayoutPreset_Review,    // compare design vs generated: sidebars + code panel + live
+    ComposerLayoutPreset_Observe,   // watch the running app: canvas + bottom panel + live, no sidebars
+  };
+  enum ComposerLayoutVis_          // one bit per toggleable surface
+  {
+    ComposerLayoutVis_Tree = 1 << 0,
+    ComposerLayoutVis_Insp = 1 << 1,
+    ComposerLayoutVis_Code = 1 << 2,
+    ComposerLayoutVis_Live = 1 << 3,
+  };
+  static int ComposerLayoutPresetMask(int preset)
+  {
+    switch (preset)
+    {
+    case ComposerLayoutPreset_Compose: return ComposerLayoutVis_Tree | ComposerLayoutVis_Insp;
+    case ComposerLayoutPreset_Review:  return ComposerLayoutVis_Tree | ComposerLayoutVis_Insp | ComposerLayoutVis_Code | ComposerLayoutVis_Live;
+    case ComposerLayoutPreset_Observe: return ComposerLayoutVis_Code | ComposerLayoutVis_Live;
+    default:                           return 0;
+    }
+  }
+  static int ComposerLayoutVisFlags(GraphDocData* doc)
+  {
+    const ImGuiAppGraphViewState* v = ImGui::AppGraphViewState(&doc->Graph);
+    return (v->TreeOpen ? ComposerLayoutVis_Tree : 0)
+         | (v->InspOpen ? ComposerLayoutVis_Insp : 0)
+         | (doc->CodeH > 0.0f ? ComposerLayoutVis_Code : 0)
+         | (doc->ShowLive ? ComposerLayoutVis_Live : 0);
+  }
+  static void ComposerApplyLayoutPreset(GraphDocData* doc, int preset)
+  {
+    if (preset == ComposerLayoutPreset_None)
+      return;
+    const int m = ComposerLayoutPresetMask(preset);
+    ImGuiAppGraphViewState* v = ImGui::AppGraphViewState(&doc->Graph);
+    v->TreeOpen = (m & ComposerLayoutVis_Tree) != 0;
+    v->InspOpen = (m & ComposerLayoutVis_Insp) != 0;
+    doc->CodeH = (m & ComposerLayoutVis_Code) != 0 ? ImGui::GetFontSize() * 12.0f : 0.0f;
+    doc->ShowLive = (m & ComposerLayoutVis_Live) != 0;
+  }
+
   // Generate the whole-graph C++ to the header path + stamp the fresh baseline. Shared by the toolbar
   // Generate button and the status-bar freshness zone (F32) so both take the identical road.
   static void ComposerGenerateHeader(GraphDocData* doc)
@@ -643,6 +690,7 @@ namespace
     bool CopyCode;       // Generate menu: copy the generated C++ to the clipboard
     int  RevealPanel;    // ComposerPanel_* intent from a palette pick (0 = none)
     bool AddNode;        // toolbar "+ Add" -> open the canvas add palette (the loop's entry point)
+    int  ApplyPreset;    // ComposerLayoutPreset_* intent from a preset button (0 = none)
   };
   struct ToolbarControl : ImGuiAppControl<ToolbarData, ToolbarTempData, GraphDocData>
   {
@@ -684,6 +732,10 @@ namespace
       if (temp_data->ToggleInsp)
       {
         ImGui::AppGraphViewState(&doc->Graph)->InspOpen = !ImGui::AppGraphViewState(&doc->Graph)->InspOpen;
+      }
+      if (temp_data->ApplyPreset != ComposerLayoutPreset_None)
+      {
+        ComposerApplyLayoutPreset(doc, temp_data->ApplyPreset);
       }
       if (temp_data->Undo)
       {
@@ -894,6 +946,8 @@ namespace
           }
         }
 
+        temp_data->ApplyPreset = ComposerLayoutPreset_None;
+
         // App-time transport (F29): freeze the running app + scrub its state history. Flow-placed (left of
         // the right-aligned observe cluster) so it stays on the toolbar; only offered with the live mirror.
         if (show_live && doc->Transport != nullptr)
@@ -941,8 +995,22 @@ namespace
         const char* live_lbl = show_live ? ICON_FA_EYE "  Live###live" : ICON_FA_EYE_SLASH "  Live###live";
         const char* tree_lbl = ICON_FA_LAYER_GROUP "###treetoggle";
         const char* insp_lbl = ICON_FA_CIRCLE_INFO "###insptoggle";
+
+        // Layout preset (F36): compact dropdown; its label shows the active preset when the current
+        // visibilities match one. A view control, so it lives in the right cluster and the flow row is left alone.
+        int cur_preset = ComposerLayoutPreset_None;
+        {
+          const int cur = ComposerLayoutVisFlags(doc);
+          for (int p = ComposerLayoutPreset_Compose; p <= ComposerLayoutPreset_Observe; p++)
+            if (cur == ComposerLayoutPresetMask(p))
+              cur_preset = p;
+        }
+        static const char* preset_names[] = { "Layout", "Compose", "Review", "Observe" };
+        const char* layout_lbl = ICON_FA_TABLE_COLUMNS "###layoutmenu";   // icon-only: the toolbar has no room for a label
+
         const float pad2 = style.FramePadding.x * 2.0f;
-        const float cluster_w = ImGui::CalcTextSize(code_lbl).x + pad2
+        const float cluster_w = ImGui::CalcTextSize(layout_lbl, ImGui::FindRenderedTextEnd(layout_lbl)).x + pad2 + style.ItemSpacing.x
+                              + ImGui::CalcTextSize(code_lbl).x + pad2
                               + ImGui::CalcTextSize(live_lbl, ImGui::FindRenderedTextEnd(live_lbl)).x + pad2 + style.ItemSpacing.x
                               + ImGui::CalcTextSize(sync_lbl, ImGui::FindRenderedTextEnd(sync_lbl)).x + pad2 + style.ItemSpacing.x
                               + ImGui::CalcTextSize(tree_lbl, ImGui::FindRenderedTextEnd(tree_lbl)).x + pad2 + style.ItemSpacing.x
@@ -995,6 +1063,29 @@ namespace
         if (show_live)
           ImGui::PopStyleColor();
         ImGui::SetItemTooltip("Show / hide read-only nodes mirrored from the running app");
+        ImGui::SameLine();
+
+        // Layout dropdown (F36): rightmost in the observe cluster; the picked preset is applied in OnUpdate.
+        if (cur_preset != ComposerLayoutPreset_None)
+          ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonActive]);
+        if (ImGui::Button(layout_lbl))
+          ImGui::OpenPopup("##layout_presets");
+        if (cur_preset != ComposerLayoutPreset_None)
+          ImGui::PopStyleColor();
+        if (cur_preset != ComposerLayoutPreset_None)
+          ImGui::SetItemTooltip("Workspace layout: %s", preset_names[cur_preset]);
+        else
+          ImGui::SetItemTooltip("Workspace layout presets (Compose / Review / Observe)");
+        if (ImGui::BeginPopup("##layout_presets"))
+        {
+          if (ImGui::MenuItem("Compose###preset-compose", nullptr, cur_preset == ComposerLayoutPreset_Compose))
+            temp_data->ApplyPreset = ComposerLayoutPreset_Compose;
+          if (ImGui::MenuItem("Review###preset-review", nullptr, cur_preset == ComposerLayoutPreset_Review))
+            temp_data->ApplyPreset = ComposerLayoutPreset_Review;
+          if (ImGui::MenuItem("Observe###preset-observe", nullptr, cur_preset == ComposerLayoutPreset_Observe))
+            temp_data->ApplyPreset = ComposerLayoutPreset_Observe;
+          ImGui::EndPopup();
+        }
 
         // Palette pick from last frame's canvas folds into the same temp flags the buttons set.
         switch (ImGui::AppGraphConsumeHostCommand(&doc->Graph))
@@ -2351,6 +2442,15 @@ namespace ImGui
       return 0.0f;
     GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiType<GraphDocData>::ID);
     return doc != nullptr ? doc->TreeW : 0.0f;
+  }
+
+  // Composer layout-preset visibilities (F36): bitmask tree|insp|code|live for the preset-switch test.
+  IMGUI_API int AppComposerLayoutFlags(ImGuiApp* host)
+  {
+    if (host == nullptr)
+      return 0;
+    GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiType<GraphDocData>::ID);
+    return doc != nullptr ? ComposerLayoutVisFlags(doc) : 0;
   }
 
   //-----------------------------------------------------------------------------

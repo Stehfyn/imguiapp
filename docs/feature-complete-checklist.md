@@ -287,8 +287,15 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   palette click, so the demo's Ctrl+S "Save graph" fires from the keyboard. step73_keyboard_
   completions drives all five key roads through the focused editor (drilled member for the nudge,
   per step46's free-placement idiom). Nodes 82/82, core 87/0, headless 17/17.
-- [ ] **F36 layout presets** — Compose / Review / Observe presets over the panel sidecar state.
+- [x] **F36 layout presets** — Compose / Review / Observe presets over the panel sidecar state.
   *Accept: preset switch test asserts panel visibilities persist.*
+  DONE: `ComposerApplyLayoutPreset` writes a fixed tree/insp/code/live combination per preset;
+  the active preset is DERIVED from current visibilities (`ComposerLayoutVisFlags`), never stored,
+  so a manual toggle simply un-lights it and the visibilities persist through the existing layout
+  sidecar. Icon-only Layout dropdown in the observe cluster (toolbar had no room for a label).
+  `AppComposerLayoutFlags` accessor + headless `composer_layout_presets`: each preset reads back
+  its mask, holds across 40 frames, and a manual tree toggle un-matches. Headless 18/18, nodes
+  82/82, core 87/0.
 - [ ] **F37 origin literacy row** — origin legend micro-row + design→live→promotion HelpMarker
   copy + "Show live mirror" checkbox wording ("Hiding never deletes your design.").
   *Accept: ItemExists tests on the copy.*
