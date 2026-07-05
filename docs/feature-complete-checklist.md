@@ -383,8 +383,10 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
     open/collapsed state by node kind instead of the id stack; the design-node sections pass `kind+1`.
     `step79_inspector_section_persist` collapses Fields on Struct A and asserts Struct B shows it
     collapsed too (and re-expand propagates back).
-  Remaining: section kebab (reset/copy/paste) on every section (Style already has it), unified row
-  grammar + row context actions.
+  - section kebab beyond Style: the Fields section (Struct + Control) gained a kebab menu with
+    "Reset (clear fields)" (collapse-then-clear), the pattern the Style section already had.
+    `step80_inspector_section_kebab` opens the Fields kebab, clicks Reset, asserts the field list empties.
+  Remaining: unified row grammar + row context actions.
 
 ## P7 — scopes + canvas completion
 

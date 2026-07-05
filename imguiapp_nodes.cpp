@@ -4591,10 +4591,27 @@ namespace ImGui
         ImGui::TextDisabled("Builtin control: %s", n->DataTypeName[0] ? n->DataTypeName : n->TypeName);
       else
       {
-        if (AppInspectorSection("##sec_fields", ICON_FA_TABLE_LIST, "Fields", nullptr, nullptr, (ImGuiID)(n->Kind + 1)))
+        bool cfk = false;
+        if (AppInspectorSection("##sec_fields", ICON_FA_TABLE_LIST, "Fields", nullptr, &cfk, (ImGuiID)(n->Kind + 1)))
         {
           EditAppNodeFieldSection(g, n, 0, "Persist");   // routes to the Field nodes when the list is exploded
           EditAppNodeFieldSection(g, n, 1, "Temp");
+        }
+        if (cfk)
+          ImGui::OpenPopup("##cfields_menu");
+        if (ImGui::BeginPopup("##cfields_menu"))
+        {
+          const bool has = n->Draft.PersistFields.Size > 0 || n->Draft.TempFields.Size > 0
+                         || AppGraphFieldNodeCount(g, n->Id, 0) > 0 || AppGraphFieldNodeCount(g, n->Id, 1) > 0;
+          if (ImGui::MenuItem("Reset (clear fields)", nullptr, false, has))
+          {
+            for (int list = 0; list < 2; list++)
+              if (AppGraphFieldNodeCount(g, n->Id, list) > 0)
+                AppGraphCollapseFields(g, n, list);
+            n->Draft.PersistFields.clear();
+            n->Draft.TempFields.clear();
+          }
+          ImGui::EndPopup();
         }
         if (AppInspectorSection("##sec_events", ICON_FA_BOLT, "Events", nullptr, nullptr, (ImGuiID)(n->Kind + 1)))
           EditAppControlEvents(g, n);          // temp-vs-last-temp reactions (see ImGuiAppEventDesc)
@@ -4610,9 +4627,25 @@ namespace ImGui
       AppNodeStyleSection(g, n);
       break;
     case ImGuiAppNodeKind_Struct:
-      if (AppInspectorSection("##sec_fields", ICON_FA_TABLE_LIST, "Fields", nullptr, nullptr, (ImGuiID)(n->Kind + 1)))
+    {
+      bool fk = false;
+      if (AppInspectorSection("##sec_fields", ICON_FA_TABLE_LIST, "Fields", nullptr, &fk, (ImGuiID)(n->Kind + 1)))
         EditAppNodeFieldSection(g, n, 0, "fields");   // routes to the Field nodes when the list is exploded
+      if (fk)
+        ImGui::OpenPopup("##fields_menu");
+      if (ImGui::BeginPopup("##fields_menu"))
+      {
+        const bool has = n->Draft.PersistFields.Size > 0 || AppGraphFieldNodeCount(g, n->Id, 0) > 0;
+        if (ImGui::MenuItem("Reset (clear fields)", nullptr, false, has))
+        {
+          if (AppGraphFieldNodeCount(g, n->Id, 0) > 0)
+            AppGraphCollapseFields(g, n, 0);   // exploded members back inline, then drop them
+          n->Draft.PersistFields.clear();
+        }
+        ImGui::EndPopup();
+      }
       break;
+    }
     case ImGuiAppNodeKind_Field:
     {
       const int sid = AppGraphParentOf(g, n->Id);
