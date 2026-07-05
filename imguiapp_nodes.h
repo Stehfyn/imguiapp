@@ -556,6 +556,11 @@ struct ImGuiAppEditorState
   ImVector<int>                        PrevPoolIds;
   char                                 StatusHint[256] = "";
   int                                  StatusSev = 0;
+  float                                OverlayAlpha = 0.55f;        // F38: animated overlay opacity (rest->hover->gesture, faded per motion table)
+  ImVec2                               GizmoRectMin = ImVec2(0.0f, 0.0f);   // F38: last-drawn gizmo cluster rect (screen), drives the hover ladder + test
+  ImVec2                               GizmoRectMax = ImVec2(0.0f, 0.0f);
+  ImVec2                               EditorRectMin = ImVec2(0.0f, 0.0f);  // F38: last editor canvas rect (screen), for gesture detection + test
+  ImVec2                               EditorRectMax = ImVec2(0.0f, 0.0f);
   mutable const ImGui::ImGuiAppGraphHostCmd* HostCmds = nullptr;  // registered per frame; host-owned
   mutable int                          HostCmdCount = 0;
   mutable int                          HostCmdPicked = -1;
@@ -896,6 +901,23 @@ namespace ImGui
   // Runs lazily on first AppComposerGetStyle; call again after switching themes. Re-deriving the
   // global style also reseeds AppGraphChromeTheme, discarding live inspector edits.
   IMGUI_API void AppComposerStyleFromTheme(ImGuiAppComposerStyle* style);
+
+  // Motion + quietness idiom (F38): the overlay opacity ladder + the single transient-chrome fade.
+  // Scalar constants (not theme-derived); one table, so no overlay hard-codes an alpha of its own.
+  struct ImGuiAppComposerMotion
+  {
+    float OverlayRest    = 0.55f;    // an idle canvas overlay sits quiet
+    float OverlayHover   = 1.00f;    // ... brightens to full when the pointer rests on it
+    float OverlayGesture = 0.20f;    // ... and recedes during a wire-drag / marquee (get out of the way)
+    float FadeMs         = 150.0f;   // single linear alpha fade between those states (and for transient chrome)
+  };
+  IMGUI_API ImGuiAppComposerMotion* AppComposerGetMotion();
+
+  // F38 read-backs: the animated overlay alpha this frame, and the last-drawn gizmo cluster / editor
+  // canvas rects (screen). Exposed so the motion ladder is on-camera verifiable.
+  IMGUI_API float AppGraphEditorOverlayAlpha(const ImGuiAppGraph* g);
+  IMGUI_API void  AppGraphEditorGizmoRect(const ImGuiAppGraph* g, ImVec2* out_min, ImVec2* out_max);
+  IMGUI_API void  AppGraphEditorCanvasRect(const ImGuiAppGraph* g, ImVec2* out_min, ImVec2* out_max);
 
   // The composer chrome's push-stack palette, exposed read-write (stable pointer): the project
   // inspector's Theme section edits it live. Col slots are semantic and fixed; Value/Active are the

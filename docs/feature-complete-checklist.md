@@ -305,9 +305,18 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   deletes your design."). Display-only flat labels (transparent-button so plain text gets a real,
   test-addressable id). headless `composer_origin_legend` ItemExists on all five. Headless 19/19,
   nodes 82/82, core 87/0.
-- [ ] **F38 motion + quietness idiom** — single 150 ms linear alpha fade for transient chrome;
+- [x] **F38 motion + quietness idiom** — single 150 ms linear alpha fade for transient chrome;
   overlay rest-opacity/hover-salience ladder; overlays dim during wire-drag/marquee.
   *Accept: style-table constants only; on-camera captures at rest vs hover vs gesture.*
+  DONE: `AppComposerGetMotion()` motion table (OverlayRest 0.55 / OverlayHover 1.0 / OverlayGesture
+  0.20 / FadeMs 150) is the single source; the gizmo cluster (the canonical always-on overlay) reads
+  it — quiet at rest, brightens when the pointer is on it, recedes during any canvas drag, with one
+  linear FadeMs fade carrying it between the three states (no overlay hard-codes an alpha). Gesture =
+  `IsMouseDragging` inside the published editor rect. `AppGraphEditorOverlayAlpha` + gizmo/canvas rect
+  read-backs make it on-camera verifiable: headless `composer_overlay_motion_ladder` drives the
+  pointer to rest / hover / drag and asserts gesture < rest < hover after the fade settles. Headless
+  20/20, nodes 82/82, core 87/0. (Other overlays can adopt the same table; the ladder idiom + the
+  single fade constant are now established.)
 - [ ] **F39 typography/spacing audit** — enforce 1.0/0.9/0.8 em ladder + 0.25 em quanta from the
   style table (ad-hoc 0.7-0.8 factors normalized).
   *Accept: grep-audit test over the style constants; visual capture reviewed.*

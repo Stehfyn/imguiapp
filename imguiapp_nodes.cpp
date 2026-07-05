@@ -315,6 +315,14 @@ namespace ImGui
     return AppComposerStyleStore();
   }
 
+  // F38 motion table: scalar constants, defaulted in the struct. One process-level table (like the
+  // color style) so every overlay reads the same ladder instead of hard-coding an alpha.
+  ImGuiAppComposerMotion* AppComposerGetMotion()
+  {
+    static ImGuiAppComposerMotion motion;
+    return &motion;
+  }
+
   //-----------------------------------------------------------------------------
   // [SECTION] Blender-style field widgets (node body)
   // Text: click to edit in place. Enum: hover step arrows + dropdown. Int: drag to scrub (Shift = fine),
@@ -3523,6 +3531,22 @@ namespace ImGui
     if (out_severity != nullptr)
       *out_severity = AppGraphEditorState(g)->StatusSev;
     return AppGraphEditorState(g)->StatusHint;
+  }
+
+  // F38 read-backs: the animated overlay alpha this frame + the last-drawn overlay geometry (screen).
+  float AppGraphEditorOverlayAlpha(const ImGuiAppGraph* g)
+  {
+    return AppGraphEditorState(g)->OverlayAlpha;
+  }
+  void AppGraphEditorGizmoRect(const ImGuiAppGraph* g, ImVec2* out_min, ImVec2* out_max)
+  {
+    if (out_min != nullptr) *out_min = AppGraphEditorState(g)->GizmoRectMin;
+    if (out_max != nullptr) *out_max = AppGraphEditorState(g)->GizmoRectMax;
+  }
+  void AppGraphEditorCanvasRect(const ImGuiAppGraph* g, ImVec2* out_min, ImVec2* out_max)
+  {
+    if (out_min != nullptr) *out_min = AppGraphEditorState(g)->EditorRectMin;
+    if (out_max != nullptr) *out_max = AppGraphEditorState(g)->EditorRectMax;
   }
 
   // Draw INSIDE the canvas, between CanvasBegin and the first node, on the engine's background channel:
@@ -7137,6 +7161,8 @@ namespace ImGui
     ImGui::CanvasEnd(cv);
     const ImVec2 editor_size = ImGui::GetItemRectSize();   // captured before later items, for fit-all centering
     const ImVec2 editor_min  = ImGui::GetItemRectMin();    // editor canvas top-left (screen), for overlay extents
+    AppGraphEditorState(g)->EditorRectMin = editor_min;    // F38: publish the canvas rect for gesture detection + tests
+    AppGraphEditorState(g)->EditorRectMax = editor_min + editor_size;
 
     // Deferred group-drag application (docs/phase-coherence.md: mutate the model in the update pass, never
     // mid-render). A group drag detected during the canvas pass recorded its owner in _GroupDragPending;
@@ -8374,19 +8400,36 @@ namespace ImGui
 
       const int   count = 7;
       const ImVec2 col_c(editor_min.x + editor_size.x - em * 1.2f, editor_min.y + em * 1.2f);
-      dl->AddRectFilled(ImVec2(col_c.x - r - em * 0.25f, col_c.y - r - em * 0.25f),
-                        ImVec2(col_c.x + r + em * 0.25f, col_c.y + (count - 1) * step + r + em * 0.25f),
-                        AppThemeNeutral(0.04f, 0.99f), r + em * 0.25f);
+      const ImVec2 giz_min(col_c.x - r - em * 0.25f, col_c.y - r - em * 0.25f);
+      const ImVec2 giz_max(col_c.x + r + em * 0.25f, col_c.y + (count - 1) * step + r + em * 0.25f);
+
+      // F38 motion ladder: the cluster is quiet at rest, brightens when the pointer is on it, and
+      // recedes during a canvas gesture (any drag inside the editor). One linear fade (FadeMs) carries
+      // it between states -- no overlay hard-codes its own alpha; they read the motion table.
+      const ImGuiAppComposerMotion* mo = AppComposerGetMotion();
+      const ImVec2 mp = ImGui::GetIO().MousePos;
+      const bool ov_editor  = mp.x >= editor_min.x && mp.x < editor_min.x + editor_size.x && mp.y >= editor_min.y && mp.y < editor_min.y + editor_size.y;
+      const bool ov_cluster = mp.x >= giz_min.x && mp.x < giz_max.x && mp.y >= giz_min.y && mp.y < giz_max.y;
+      const bool gesturing  = ImGui::IsMouseDragging(ImGuiMouseButton_Left) && ov_editor;
+      const float ov_target = gesturing ? mo->OverlayGesture : (ov_cluster ? mo->OverlayHover : mo->OverlayRest);
+      float& ov_a = AppGraphEditorState(g)->OverlayAlpha;
+      const float ov_stepA = (mo->FadeMs > 0.0f) ? ImGui::GetIO().DeltaTime / (mo->FadeMs * 0.001f) : 1.0f;   // full 0..1 range per FadeMs
+      if      (ov_a < ov_target) ov_a = ImMin(ov_target, ov_a + ov_stepA);
+      else if (ov_a > ov_target) ov_a = ImMax(ov_target, ov_a - ov_stepA);
+      AppGraphEditorState(g)->GizmoRectMin = giz_min;
+      AppGraphEditorState(g)->GizmoRectMax = giz_max;
+
+      dl->AddRectFilled(giz_min, giz_max, AppColWithAlpha(AppThemeNeutral(0.04f, 1.0f), 0.99f * ov_a), r + em * 0.25f);
 
       float gy = col_c.y;
-      const ImU32 dim = ImGui::GetColorU32(ImGuiCol_Text, 0.55f);
-      const ImU32 lit = AppComposerGetStyle()->Gold;
+      const ImU32 dim = ImGui::GetColorU32(ImGuiCol_Text, 0.55f * ov_a);
+      const ImU32 lit = AppColWithAlpha(AppComposerGetStyle()->Gold, ov_a);
       auto gizmo = [&](const char* icon, const char* tip, bool on) -> bool
       {
         const ImVec2 c(col_c.x, gy);
         gy += step;
         if (on)
-          dl->AddCircleFilled(c, r, (lit & 0x00FFFFFF) | 0x38000000);
+          dl->AddCircleFilled(c, r, (lit & 0x00FFFFFF) | ((ImU32)(0x38 * ov_a) << 24));
         const bool clicked = AppTreeRowIcon(icon, c, r, on ? lit : dim, dl);
         const ImVec2 m = ImGui::GetIO().MousePos;
         const float dx = m.x - c.x, dy = m.y - c.y;
