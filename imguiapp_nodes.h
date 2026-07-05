@@ -433,6 +433,17 @@ struct ImGuiAppFieldBinding
   char SrcField[IM_LABEL_SIZE] = "";
 };
 
+// One user keymap override (F74, post-100 horizon): a chord (Key+Mods) rebound to an editor command Id.
+// The keymap is a SPARSE diff -- only verbs the user changed appear here; the factory chord stays the
+// registry Key/Mods. Key == ImGuiKey_None encodes an explicit unbind. Keyed by the stable command Id,
+// never an array index, so reordering the registry never corrupts a saved keymap.
+struct ImGuiAppKeyBinding
+{
+  int      CmdId = -1;
+  ImGuiKey Key   = ImGuiKey_None;
+  int      Mods  = 0;
+};
+
 // Per-branch camera memory: the pan/zoom a drill-down scope was LEFT with, keyed by the scope
 // node's id (-1 = root) -- never by depth, so sibling branches keep independent cameras.
 // Transient editor state carried by the graph (like ViewScope), not serialized.
@@ -571,6 +582,7 @@ struct ImGuiAppEditorState
   mutable int                          HostCmdPicked = -1;
   mutable bool                         AddPaletteRequest = false;   // one-shot
   mutable bool                         CmdPaletteRequest = false;   // one-shot: open the Space operator palette (F34)
+  int                                  KeymapCapture = -1;          // F75: command id whose chord the keymap editor is capturing, or -1
   mutable bool                         AlignMenuRequest = false;    // one-shot: open the Shift+A align/distribute submenu (F48/R3)
   mutable bool                         FitAllRequest = false;       // one-shot
   int                                  AutoLayoutCountdown = 2;     // launch default is a TIDIED layout: fires once real sizes exist (frame 2)
@@ -626,6 +638,7 @@ struct ImGuiAppGraph
   ImVector<ImGuiAppNode>         Nodes;
   ImVector<ImGuiAppNodeLink>     Links;
   ImVector<ImGuiAppFieldBinding> Bindings;
+  ImVector<ImGuiAppKeyBinding>   Keymap;                               // F74: user input->command overrides (serialized; sparse diff from the registry-default chords)
   ImVector<int>                  Selection;                            // multi-selection (node ids); the single selected_node_id is primary
   ImVector<int>                  ViewScope;                            // drill-down scope stack (node ids, outer->inner); empty = whole app; transient, not serialized
   ImVector<ImGuiAppScopeCamera>  ScopeCams;                            // per-branch camera memory (transient, not serialized)
@@ -755,6 +768,22 @@ namespace ImGui
   IMGUI_API int                          AppGraphEditorCommandCount();
   IMGUI_API const ImGuiAppEditorCommand* AppGraphEditorCommandAt(int index);
   IMGUI_API bool                         AppGraphEditorCommandAvailable(const ImGuiAppGraph* g, const ImGuiAppEditorCommand* c);
+
+  // Remappable input->command binding (F74, post-100 horizon). The registry Key/Mods are the factory DEFAULT
+  // chord; the graph's Keymap holds sparse user overrides. Dispatch resolves a pressed chord to a command Id
+  // through the effective (override-or-default) map and runs it through the same path the palette uses --
+  // replacing the hardcoded per-key checks. Delete (wire-aware), Tab/Esc (scope nav) keep dedicated handlers
+  // and are not rebindable this phase; Space / Ctrl+P (the palette openers) are reserved.
+  IMGUI_API void AppKeymapDefaultChord(int cmd_id, ImGuiKey* out_key, int* out_mods);
+  IMGUI_API void AppKeymapEffectiveChord(const ImGuiAppGraph* g, int cmd_id, ImGuiKey* out_key, int* out_mods);
+  IMGUI_API bool AppKeymapCommandRebindable(int cmd_id);
+  IMGUI_API bool AppKeymapChordReserved(ImGuiKey key, int mods);
+  IMGUI_API bool AppKeymapRebind(ImGuiAppGraph* g, int cmd_id, ImGuiKey key, int mods);   // false if not rebindable or the chord is reserved
+  IMGUI_API void AppKeymapReset(ImGuiAppGraph* g, int cmd_id);                            // drop the override (back to the default)
+  IMGUI_API void AppKeymapResetAll(ImGuiAppGraph* g);
+  IMGUI_API int  AppKeymapConflict(const ImGuiAppGraph* g, ImGuiKey key, int mods, int except_cmd_id);   // colliding verb id, or -1
+  IMGUI_API int  AppKeymapResolveChord(const ImGuiAppGraph* g, ImGuiKey key, int mods);   // command id bound to this chord, or -1
+  IMGUI_API void AppGraphShowKeymapEditor(ImGuiAppGraph* g);                              // F75: rebind UI (call inside your own window)
 
   // Render a design Control's effective Persist/Temp fields as a mock panel of real ImGui widgets
   // (values are scratch), or -- for a LIVE node with live_app -- the running control's reflected

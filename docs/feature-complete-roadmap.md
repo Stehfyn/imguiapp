@@ -84,6 +84,8 @@ leaks, refusals state why). These are the acceptance tests of "feature complete"
 
 - Prefabs on disk + starter library.
 - Command payloads; edit-intent bus folds into the command pipeline.
+- Remappable input→command binding (delivered early as checklist F74/F75; extends F34/F35) — the
+  editor's own keymap over the reified command registry; sibling to the edit-intent bus.
 - Module interop (Source/Module node kind, status/command exchange).
 - Status layer as queryable published structure.
 - Sequence-order editing (chip drag + click-nudge) — deferred by decision above.
@@ -214,4 +216,5 @@ Each phase names its exit gate; "green" always means imguix-tests + imguix-headl
   test; roadmap sections 3-5 empty or moved to Horizon.
 
 Post-100% (Horizon, unchanged): command payloads, status-layer queryable model, module interop,
-edit-intent bus fold-in, Lifecycle north-star view.
+edit-intent bus fold-in, remappable input binding (delivered early, checklist F74/F75), Lifecycle
+north-star view.
