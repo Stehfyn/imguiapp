@@ -687,7 +687,7 @@ interpreter's vocabulary IS F53-F57's semantics.
   `ComposerTransport`. scrub->frame: index i -> `Ticks[i].Tick` -> `Ticks[i].FrameImage` -> decoded pixels;
   step is +-1 on i, every landing an exact tick. `VerifyRunTransport` (headless): `[F63] filerun-scrub OK:
   source=mp4 ... shown-tick==slider-tick` at probes 0/mid/last + a +1 step. (Real take is mp4, not QOI.)
-- [ ] **F64 state-at-tick inspection** — restore nearest snapshot + replay inputs to tick N
+- [x] **F64 state-at-tick inspection** — restore nearest snapshot + replay inputs to tick N
   (contract-7 machinery); inspector shows Persist/Temp values AT N; command log lists that
   tick's dispatches.
   *Accept: value-at-tick test matches the recorded digest's state; replay is exact.*
