@@ -507,10 +507,18 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
 
 ## P8 — self round-trip
 
-- [ ] **F51 self round-trip harness** — the Composer demo's own composition file checked into
+- [x] **F51 self round-trip harness** — the Composer demo's own composition file checked into
   tests/data: load → regenerate → compile emitted output → GetAppCompositionID equal; F01
   byte-stability on the same file.
   *Accept: flow-3 test green in suite.*
+  DONE (`tests/imguiapp_flow_tests.cpp` + `RunFlowTests`, the reusable seam F71 grows flow1-8 from;
+  outer-only, no submodule change). `BuildComposerSelfGraph` calls the SAME two public seed primitives
+  the demo's SeedAppGraph uses (`AppGraphEnsureFoundation` + `AppGraphSeedStarterPrefabs`) and PINS the
+  checked-in `tests/data/composer_self.txt`(+`.prefabs`) to them (a seed change fails the pin + writes
+  `.new`). flow3: (1) seed-pin byte-match, (2) F01 stability (load->save+reload byte-identical +
+  model-equal + signature match), (3) codegen drift byte-locks `composer_self_generated.h`, (4) that
+  header is #included/compiled/run and `GetAppCompositionID` equals a hand-pushed foundation reference
+  (and isn't the empty hash). core 87 checks / 0 failures incl. flow3.
 - [ ] **F52 generated-shell bootstrap** — Composer emits the host-app scaffold (layers, windows,
   wiring) that hosts a Composer control; editor guts stay library code; recorded in big-idea.
   *Accept: emitted shell compiles + runs headless-verify.*
