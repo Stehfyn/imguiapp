@@ -673,6 +673,16 @@ interpreter's vocabulary IS F53-F57's semantics.
   rendering composed windows with reflected widgets bound to live storage.
   *Accept: an authored producer/consumer/event/command graph runs; values move; the `^` edge
   fires once per edge.*
+  DONE: `imguiapp_preview.{h,cpp}` -- a SECOND BACKEND (per F66) that builds a real `ImGuiApp` from the graph
+  (inheriting RegisterAppStorage / the four passes / temp^last swap / ImGuiAppStateHistory / GetAppCompositionID,
+  NOT a parallel loop). One `ImGuiAppPreviewControl : ImGuiAppControlBase` per interpreted control carries a
+  dynamic Persist|LastTemp|Temp buffer from an effective-field manifest; the evaluator is a value-returning walk
+  of the AppEventExprCheck grammar. Task pass = bindings -> latch-reset -> events in topo order; Command pass
+  latches/dispatch-once; Window pass has a manifest-bound widget panel (F68). ZERO imguiapp_nodes.cpp edits (new
+  module + a few local graph readers). `Test_interpreter_producer_consumer` (core): values move producer->consumer
+  via a binding, the Changed edge fires EXACTLY once per edge (not per frame), the command dispatches once.
+  Integration fix: the render core layer is `ImGuiAppDisplayLayer` on main (the module's old base called it
+  ImGuiAppWindowLayer). F55/F56 stubs named in OnUpdate (Op-fold + animation dt).
 - [ ] **F68 preview surface** — the Preview tab (or floating viewport): run/pause/reinit,
   direct interaction ("play with it"), graph edits apply next frame under F66's preserve
   policy; selected node's widgets halo in the preview and vice versa.
