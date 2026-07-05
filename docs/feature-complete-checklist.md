@@ -519,9 +519,13 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   model-equal + signature match), (3) codegen drift byte-locks `composer_self_generated.h`, (4) that
   header is #included/compiled/run and `GetAppCompositionID` equals a hand-pushed foundation reference
   (and isn't the empty hash). core 87 checks / 0 failures incl. flow3.
-- [ ] **F52 generated-shell bootstrap** — Composer emits the host-app scaffold (layers, windows,
+- [x] **F52 generated-shell bootstrap** — Composer emits the host-app scaffold (layers, windows,
   wiring) that hosts a Composer control; editor guts stay library code; recorded in big-idea.
   *Accept: emitted shell compiles + runs headless-verify.*
+  DONE: emitter emits the host shell (foundation stack + library Composer control + RegisterAppStorage
+  wiring); the generated `SetupApp` composes in-process under headless-verify (`shell_bootstrap`: 5 layers,
+  1 control, non-zero composition id). Byte-locked `composer_shell_generated.h` + flow-test drift guard.
+  headless 31/31, core 244/0, nodes 107/107. Submodule 9811881 / outer cf64520.
 
 ## P8.5 — vocabulary: logic, animation, layout nodes (decided 2026-07-05)
 
