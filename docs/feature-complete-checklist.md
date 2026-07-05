@@ -394,10 +394,17 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
 
 ## P7 — scopes + canvas completion
 
-- [ ] **F42 layer-scope interiors** — per par.4 table: Display (identity cards + hosted count,
+- [x] **F42 layer-scope interiors** — per par.4 table: Display (identity cards + hosted count,
   walls + rail in render order), Task (walls + rail in topo order), Command (identity cards +
   command chips, push order).
   *Accept: one interior test per layer kind (walls valid, member density, rail order).*
+  DONE: `AppScopeWallsWanted` now grants the room to the sequential layers (Display / Task / Command),
+  and the wall-bounds pass filters to the layer's members (cross-cutting membership, not a subtree).
+  The order strip already sequences per kind (`AppScopeSequenceIds`: windows-then-sidebars / topo /
+  push). `step82_layer_scope_interiors` drills into each layer and asserts walls valid + member
+  density + rail order (Display: 3 windows then the sidebar; Task: C1 before C2 by data dependency;
+  Command: the single command-emitting control). Members render as their node cards inside the walls.
+  Nodes 91/91, headless 28/28, core 87/0.
 - [ ] **F43 scope invariant tests** — validate-on-mutate of ViewScope; breadcrumb chain ==
   scope-parent chain.
   *Accept: dedicated tests, including mutation-under-drill.*

@@ -5562,7 +5562,15 @@ namespace ImGui
   {
     const int top = AppScopeCurrent(g);
     const ImGuiAppNode* tn = top >= 0 ? AppGraphFindNodeConst(g, top) : nullptr;
-    return tn != nullptr && (tn->Kind == ImGuiAppNodeKind_Window || tn->Kind == ImGuiAppNodeKind_Sidebar);
+    if (tn == nullptr)
+      return false;
+    if (tn->Kind == ImGuiAppNodeKind_Window || tn->Kind == ImGuiAppNodeKind_Sidebar)
+      return true;
+    // Layer interiors that host an ordered member sequence get the same room (F42): Display, Task,
+    // Command. Status/Layout host nothing composable, so no walls.
+    return tn->Kind == ImGuiAppNodeKind_Layer
+        && (tn->LayerType == ImGuiAppLayerType_Display || tn->LayerType == ImGuiAppLayerType_Task
+            || tn->LayerType == ImGuiAppLayerType_Command);
   }
 
   // Scope walls: the room drawn as the code block it generates. The face band (top wall) IS the
@@ -5589,6 +5597,7 @@ namespace ImGui
     // Members' model bounds -- the same filters the submission loop applies. Positions follow the
     // group-frame discipline (engine pos when submitted, else this scope's model placement); a
     // still-unseated member (scope-transition frame) makes the bounds unknowable -- skip a frame.
+    const bool layer_scope = tn != nullptr && tn->Kind == ImGuiAppNodeKind_Layer;
     ImVec2 mn(FLT_MAX, FLT_MAX);
     ImVec2 mx(-FLT_MAX, -FLT_MAX);
     for (int i = 0; i < g->Nodes.Size; i++)
@@ -5596,6 +5605,8 @@ namespace ImGui
       const ImGuiAppNode* n = &g->Nodes.Data[i];
       if ((!show_live && n->IsLive) || AppNodeHiddenByCollapse(g, n->Id))
         continue;
+      if (layer_scope && !AppNodeInScope(g, n->Id))
+        continue;   // a layer's walls bound only the layer's members (cross-cutting membership, not a subtree)
       if (n->_NeedsPlace)
         return;
       const ImVec2 p = AppEditorNodeWasSubmitted(g, n->Id) ? AppCanvasNodePos(g, n->Id) : AppNodeScopePos(g, n);
