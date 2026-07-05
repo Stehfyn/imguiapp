@@ -2271,6 +2271,8 @@ namespace ImGui
   // Field nodes instead; the node title is the authoritative member name on collapse.
   static void EditAppNodeFieldSection(ImGuiAppGraph* g, ImGuiAppNode* owner, int list, const char* label)
   {
+    if (owner->IsLive)
+      return;   // live mirror: fields are read-only (defense-in-depth; the inspector already gates this)
     if (AppGraphFieldNodeCount(g, owner->Id, list) == 0)
     {
       EditAppFieldList(label, AppNodeFieldList(owner, list), g);   // inline: edit the draft vector directly
@@ -2733,6 +2735,8 @@ namespace ImGui
   static void EditAppControlEvents(ImGuiAppGraph* g, ImGuiAppNode* n)
   {
     IM_ASSERT(g != nullptr && n != nullptr);
+    if (n->IsLive)
+      return;   // live mirror: events are read-only (defense-in-depth; the inspector already gates this)
 
     ImVector<ImGuiAppFieldDesc> temps;
     ImVector<ImGuiAppFieldDesc> persists;
@@ -4728,6 +4732,13 @@ namespace ImGui
     ImFormatStringV(g->LastLinkErr, IM_ARRAYSIZE(g->LastLinkErr), fmt, args);
     va_end(args);
     g->LastLinkErrSeq++;
+  }
+
+  // Canonical refusal when a mutating verb is attempted on a live-mirror node. One phrasing across every
+  // surface (canvas, outliner, commands, reparent) so the notice reads the same wherever it fires.
+  static void AppNotifyLiveReadOnly(ImGuiAppGraph* g, const ImGuiAppNode* n)
+  {
+    AppGraphNotify(g, "'%s' is a live mirror -- read-only. Promote it to author it.", (n != nullptr && n->Draft.Name[0]) ? n->Draft.Name : "(live)");
   }
 
   // Kinds that compose into a drilled scope: what the interior palettes offer, and what a creation
@@ -7365,6 +7376,8 @@ namespace ImGui
           const ImGuiAppNode* n = AppGraphFindNode(g, picks.Data[i]);
           if (n != nullptr && !n->IsLive)
             AppGraphRemoveNode(g, picks.Data[i]);
+          else if (n != nullptr && n->IsLive)
+            AppNotifyLiveReadOnly(g, n);   // Delete on a live pick: refuse with the notice, not silence
         }
         ImGui::CanvasClearSelection(cv);
       }
@@ -7492,6 +7505,8 @@ namespace ImGui
         const ImGuiAppNode* sel = AppGraphFindNodeConst(g, *selected_node_id);
         if (sel != nullptr && !sel->IsLive && (sel->Kind != ImGuiAppNodeKind_Layer || sel->LayerType == ImGuiAppLayerType_Custom))
           g->EditingNodeId = sel->Id;
+        else if (sel != nullptr && sel->IsLive)
+          AppNotifyLiveReadOnly(g, sel);   // F2 on a live mirror: refuse with the notice
       }
 
       // Drill-down (Blender node-group semantics): Tab enters the selected node's composition scope; Tab with
@@ -8091,6 +8106,8 @@ namespace ImGui
             const ImGuiAppNode* sn = AppGraphFindNode(g, sel.Data[i]);
             if (sn != nullptr && !sn->IsLive)
               AppGraphRemoveNode(g, sel.Data[i]);
+            else if (sn != nullptr && sn->IsLive)
+              AppNotifyLiveReadOnly(g, sn);   // Delete command on a live pick: refuse with the notice
           }
           break;
         }
@@ -8161,6 +8178,8 @@ namespace ImGui
             const ImGuiAppNode* sel = AppGraphFindNodeConst(g, *selected_node_id);
             if (sel != nullptr && !sel->IsLive && (sel->Kind != ImGuiAppNodeKind_Layer || sel->LayerType == ImGuiAppLayerType_Custom))
               g->EditingNodeId = sel->Id;
+            else if (sel != nullptr && sel->IsLive)
+              AppNotifyLiveReadOnly(g, sel);   // Rename command on a live mirror: refuse with the notice
           }
           break;
         case 32: case 33:
@@ -13155,8 +13174,13 @@ namespace ImGui
   {
     ImGuiAppNode* child  = AppGraphFindNode(g, child_id);
     ImGuiAppNode* parent = AppGraphFindNode(g, parent_id);
-    if (child == nullptr || parent == nullptr || child == parent || child->IsLive || parent->IsLive)
+    if (child == nullptr || parent == nullptr || child == parent)
       return false;
+    if (child->IsLive || parent->IsLive)   // a live mirror can be neither reparented nor host a reparent
+    {
+      AppNotifyLiveReadOnly(g, child->IsLive ? child : parent);
+      return false;
+    }
     const bool ok = (child->Kind == ImGuiAppNodeKind_Control && (parent->Kind == ImGuiAppNodeKind_Window || parent->Kind == ImGuiAppNodeKind_Sidebar))
                  || (child->Kind == ImGuiAppNodeKind_Field   && parent->Kind == ImGuiAppNodeKind_Struct);
     if (!ok)
@@ -13817,6 +13841,8 @@ namespace ImGui
             const ImGuiAppNode* vn = AppGraphFindNode(g, victims.Data[v]);
             if (vn != nullptr && !vn->IsLive)
               AppGraphRemoveNode(g, victims.Data[v]);
+            else if (vn != nullptr && vn->IsLive)
+              AppNotifyLiveReadOnly(g, vn);   // outliner delete reaching a live victim: refuse with the notice
           }
           g->Selection.clear();
           if (selected_node_id) *selected_node_id = -1;

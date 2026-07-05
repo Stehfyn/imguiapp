@@ -181,9 +181,16 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
 
 ## P5 — mirror never lies
 
-- [ ] **F25 live gating audit** — every mutating verb on IsLive rows across inspector, outliner,
+- [x] **F25 live gating audit** — every mutating verb on IsLive rows across inspector, outliner,
   canvas (rename, delete, drag-reparent, field edit, event edit) blocked with the notice idiom.
   *Accept: per-surface test; notice text asserted.*
+  DONE: swept all 5 verbs x 3 surfaces (docs/live-gating-audit-2026-07-05.md). Gating was complete but
+  SILENT. Added AppNotifyLiveReadOnly (one phrasing on the LastLinkErr channel) at every user-attemptable
+  live mutation -- canvas Delete key + F2, the Delete/Rename commands, AppGraphReparent, outliner deferred
+  delete. Structurally-unofferable verbs (no glyph/menu/drag on live) need no notice. Defense-in-depth
+  self-guards added to EditAppNodeFieldSection + EditAppControlEvents; AppGraphRemoveNode deliberately
+  keeps NO live guard (the mirror rebuild deletes stale live nodes through it). step68 drives F2 on a live
+  control and asserts the notice fires, rename does not start, name untouched.
 - [ ] **F26 IsPromoted rendered** — promoted mark on canvas card + outliner row (computed flag
   exists, never drawn).
   *Accept: promoted fixture shows the mark; unpromoted twin does not.*
