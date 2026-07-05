@@ -10778,6 +10778,12 @@ namespace ImGui
     buf->appendf("TempStruct=%d\n", n->TempStructId);
     buf->appendf("Body=%d\n", n->BodyAttrId);
     buf->appendf("Pos=%.1f,%.1f\n", n->GridPos.x, n->GridPos.y);
+    if (n->Flags != 0)
+      buf->appendf("Flags=%u\n", (unsigned)n->Flags);
+    if (n->HasInitialPlacement)
+      buf->appendf("Init=%.1f,%.1f,%.1f,%.1f\n", n->InitialPos.x, n->InitialPos.y, n->InitialSize.x, n->InitialSize.y);
+    if (n->DockDir != ImGuiDir_Down || n->DockSize != 0.0f)
+      buf->appendf("Dock=%d,%.1f\n", (int)n->DockDir, n->DockSize);
     for (int p = 0; p < n->Ports.Size; p++)
       buf->appendf("Port=%d,%d,%s,%u\n", n->Ports.Data[p].Id, (int)n->Ports.Data[p].Kind, n->Ports.Data[p].Name, (unsigned)n->Ports.Data[p].DataTypeId);
     for (int f = 0; f < n->Draft.PersistFields.Size; f++)
@@ -10978,6 +10984,9 @@ namespace ImGui
       else if (strncmp(p, "TempStruct=", 11) == 0)   { if (cur) cur->TempStructId = atoi(p + 11); }
       else if (strncmp(p, "Body=", 5) == 0)      { if (cur) { cur->BodyAttrId = atoi(p + 5); if (cur->BodyAttrId > max_id) max_id = cur->BodyAttrId; } }
       else if (strncmp(p, "Pos=", 4) == 0)       { if (cur) { float x = 0, y = 0; if (sscanf(p + 4, "%f,%f", &x, &y) == 2) { cur->GridPos = ImVec2(x, y); cur->HasGridPos = true; cur->_NeedsPlace = true; } } }
+      else if (strncmp(p, "Flags=", 6) == 0)     { if (cur) { unsigned fl = 0; if (sscanf(p + 6, "%u", &fl) == 1) cur->Flags = (ImGuiWindowFlags)fl; } }
+      else if (strncmp(p, "Init=", 5) == 0)      { if (cur) { float px = 0, py = 0, sx = 0, sy = 0; if (sscanf(p + 5, "%f,%f,%f,%f", &px, &py, &sx, &sy) == 4) { cur->HasInitialPlacement = true; cur->InitialPos = ImVec2(px, py); cur->InitialSize = ImVec2(sx, sy); } } }
+      else if (strncmp(p, "Dock=", 5) == 0)      { if (cur) { int d = 0; float sz = 0; if (sscanf(p + 5, "%d,%f", &d, &sz) >= 1) { cur->DockDir = (ImGuiDir)d; cur->DockSize = sz; } } }
       else if (strncmp(p, "Port=", 5) == 0)      { if (cur) { AppGraphParsePort(cur, p + 5); int last = cur->Ports.Size ? cur->Ports.Data[cur->Ports.Size - 1].Id : 0; if (last > max_id) max_id = last; } }
       else if (strncmp(p, "Persist=", 8) == 0)   { if (cur) AppNodeParseField(&cur->Draft.PersistFields, p + 8); }
       else if (strncmp(p, "Temp=", 5) == 0)      { if (cur) AppNodeParseField(&cur->Draft.TempFields, p + 5); }

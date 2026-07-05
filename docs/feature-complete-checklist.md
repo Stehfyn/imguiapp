@@ -15,9 +15,10 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   (field-by-field compare — byte-stability alone cannot see a field nobody serializes)** →
   reserialize → byte-identical.
   *Accept: test red on any lossy OR unserialized record.*
-- [ ] **F02 Init=/Dock= records** — serialize + load HasInitialPlacement / InitialPos /
-  InitialSize / DockDir / DockSize (today inspector-editable, written by no key).
-  *Accept: covered by F01.*
+- [x] **F02 Init=/Dock= records** — serialize + load HasInitialPlacement / InitialPos /
+  InitialSize / DockDir / DockSize (today inspector-editable, written by no key). Also serializes
+  the window/sidebar Flags mask (same class, previously written by no key).
+  *Accept: covered by F01; step15 round-trip extended now.*
 - [ ] **F03 event round-trip tests** — ImGuiAppEventDesc through save/load, undo, copy/paste.
   *Accept: dedicated test.*
 - [ ] **F04 prefabs on disk** — prefab registry serialized beside the graph file, loaded on
