@@ -655,10 +655,19 @@ interpreter's vocabulary IS F53-F57's semantics.
   offset (Frame = tick spine, IoFrame/Input/Snapshot attach by frame_index, chain recomputes from the Identity
   seed). Test (headless): open headless-verify's OWN run -> index counts equal the recorder's summary line
   (`[F62] run-open OK: ticks=1280 io=1280 ... chain=ok digest=ok`).
-- [ ] **F63 playback transport (FILE mode)** — the F29 transport gains a source switch; timeline
+- [x] **F63 playback transport (FILE mode)** — the F29 transport gains a source switch; timeline
   strip with per-tick markers (input ticks, command dispatches, snapshot points); scrub shows
   the decoded QOI frame; step lands on exact ticks.
   *Accept: scrub-to-tick test asserts the shown frame's tick == slider tick.*
+  DONE (ZERO nodes.cpp edits): `ImGuiAppTransportSource_` enum + `ImGuiAppRunTransport` (F62 index + a
+  provider-agnostic single-frame decoder behind `AppRunTransportCount`/`AppRunTransportShow`, reusing F62's
+  meta walk); per-backend on-demand decoders (`ImGuiApp_Impl{Qoi,Libav}_DecodeFrame`, the scrub counterparts
+  of the extractors). Demo: a source switch (icon toggle) + a FILE playback window with the timeline strip
+  (per-tick markers from the F62 index: snapshot/input; command dispatch from the WAL; chain divergence from
+  Stats), step + slider, decoded frame blitted via `ImTextureData`; opens mp4 OR QOI; all FILE state rides
+  `ComposerTransport`. scrub->frame: index i -> `Ticks[i].Tick` -> `Ticks[i].FrameImage` -> decoded pixels;
+  step is +-1 on i, every landing an exact tick. `VerifyRunTransport` (headless): `[F63] filerun-scrub OK:
+  source=mp4 ... shown-tick==slider-tick` at probes 0/mid/last + a +1 step. (Real take is mp4, not QOI.)
 - [ ] **F64 state-at-tick inspection** — restore nearest snapshot + replay inputs to tick N
   (contract-7 machinery); inspector shows Persist/Temp values AT N; command log lists that
   tick's dispatches.
