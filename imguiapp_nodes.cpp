@@ -1423,6 +1423,10 @@ namespace ImGui
       AppGraphPushPort(g, n, ImGuiAppPortKind_DataOut, "result", 0);
       break;
     }
+    case ImGuiAppNodeKind_Layout:
+      AppGraphPushPort(g, n, ImGuiAppPortKind_ChildIn, "regions", 0);   // nested Region/Split/Tabs (Split/Tabs interiors)
+      AppGraphPushPort(g, n, ImGuiAppPortKind_ChildOut, "parent", 0);   // owning Split/Tabs
+      break;
     case ImGuiAppNodeKind_Control:
     default:
       AppGraphPushPort(g, n, ImGuiAppPortKind_DataIn, "deps", 0);       // external dependencies
@@ -1529,6 +1533,7 @@ namespace ImGui
     case ImGuiAppNodeKind_Field:   return ImVec2(250.0f, 85.0f);
     case ImGuiAppNodeKind_Note:    return n->NoteSize;
     case ImGuiAppNodeKind_Op:      return ImVec2(190.0f, 100.0f);
+    case ImGuiAppNodeKind_Layout:  return ImVec2(240.0f, 110.0f);
     default:                       return ImVec2(300.0f, 140.0f);
     }
   }
@@ -3535,6 +3540,21 @@ namespace ImGui
     return severity >= 2 ? AppComposerGetStyle()->SevError : AppComposerGetStyle()->SevWarn;
   }
 
+  // Layout node variant (F57): the Region/Split/Tabs token rides TypeName (serialized Type=); empty defaults to Region.
+  static const char* AppLayoutVariant(const ImGuiAppNode* n)
+  {
+    if (n == nullptr || n->Kind != ImGuiAppNodeKind_Layout || n->TypeName[0] == 0)
+      return "Region";
+    return n->TypeName;
+  }
+
+  // A Split/Tabs subdivides its area among child regions; a Region is a leaf dock target.
+  static bool AppLayoutIsContainer(const ImGuiAppNode* n)
+  {
+    const char* v = AppLayoutVariant(n);
+    return strcmp(v, "Split") == 0 || strcmp(v, "Tabs") == 0;
+  }
+
   //-----------------------------------------------------------------------------
   // [SECTION] Whole-graph editor render
   //-----------------------------------------------------------------------------
@@ -3632,6 +3652,7 @@ namespace ImGui
     case ImGuiAppNodeKind_Struct:  return ICON_FA_CUBE;
     case ImGuiAppNodeKind_Field:   return ICON_FA_TAG;
     case ImGuiAppNodeKind_Op:      return ICON_FA_CODE_MERGE;
+    case ImGuiAppNodeKind_Layout:  return ICON_FA_BORDER_ALL;   // shares the Layout layer domain glyph
     default:                       return ICON_FA_CIRCLE_NODES;
     }
   }
@@ -3657,6 +3678,7 @@ namespace ImGui
     case ImGuiAppNodeKind_Field:   return "Field";
     case ImGuiAppNodeKind_Note:    return "Note";
     case ImGuiAppNodeKind_Op:      return "Op";
+    case ImGuiAppNodeKind_Layout:  return "Layout";
     default:                       return "Node";
     }
   }
@@ -3716,6 +3738,7 @@ namespace ImGui
     case ImGuiAppNodeKind_Field:   return "field";
     case ImGuiAppNodeKind_Note:    return "note";
     case ImGuiAppNodeKind_Op:      return "op";
+    case ImGuiAppNodeKind_Layout:  return "layout";
     default:                       return "";
     }
   }
@@ -4401,6 +4424,71 @@ namespace ImGui
     ImGui::TextDisabled("dock: %s  size: %.0f", kAppDockDirNames[cur], n->DockSize);
   }
 
+  // Editable body/inspector UI for a Layout region (F57): the Region/Split/Tabs variant (rides TypeName),
+  // plus -- when the region is carved from a parent Split -- the side + fraction the split gives it.
+  static void EditAppLayoutNodeProps(ImGuiAppGraph* g, ImGuiAppNode* n)
+  {
+    if (n->Kind != ImGuiAppNodeKind_Layout)
+      return;
+    const float w = ImGui::GetFontSize() * 8.0f;
+    static const char* kVariants[] = { "Region", "Split", "Tabs" };
+    int cur = 0;
+    const char* v = AppLayoutVariant(n);
+    for (int i = 0; i < IM_ARRAYSIZE(kVariants); i++)
+      if (strcmp(v, kVariants[i]) == 0) { cur = i; break; }
+    ImGui::SetNextItemWidth(w);
+    if (ImGui::BeginCombo("kind", kVariants[cur]))
+    {
+      for (int i = 0; i < IM_ARRAYSIZE(kVariants); i++)
+        if (ImGui::Selectable(kVariants[i], cur == i))
+          ImStrncpy(n->TypeName, kVariants[i], IM_ARRAYSIZE(n->TypeName));
+      ImGui::EndCombo();
+    }
+    const int parent = AppGraphParentOf(g, n->Id);
+    const ImGuiAppNode* pn = parent >= 0 ? AppGraphFindNodeConst(g, parent) : nullptr;
+    if (pn != nullptr && pn->Kind == ImGuiAppNodeKind_Layout && strcmp(AppLayoutVariant(pn), "Split") == 0)
+    {
+      int dc = 0;
+      for (int i = 0; i < IM_ARRAYSIZE(kAppDockDirs); i++)
+        if (n->DockDir == kAppDockDirs[i]) { dc = i; break; }
+      ImGui::SetNextItemWidth(w);
+      if (ImGui::BeginCombo("side", kAppDockDirNames[dc]))
+      {
+        for (int i = 0; i < IM_ARRAYSIZE(kAppDockDirs); i++)
+          if (ImGui::Selectable(kAppDockDirNames[i], dc == i))
+            n->DockDir = kAppDockDirs[i];
+        ImGui::EndCombo();
+      }
+      ImGui::SetNextItemWidth(w);
+      ImGui::DragFloat("fraction", &n->DockSize, 0.01f, 0.0f, 1.0f, "%.2f");
+    }
+  }
+
+  // The Layout region a Window/Sidebar docks into: a combo over the graph's Region/Split/Tabs nodes,
+  // by name (F57). "(none)" clears the reference. Serialized as Region= (parallel to Dock=).
+  static void EditAppRegionRef(ImGuiAppGraph* g, ImGuiAppNode* n)
+  {
+    if (n->Kind != ImGuiAppNodeKind_Window && n->Kind != ImGuiAppNodeKind_Sidebar)
+      return;
+    const float w = ImGui::GetFontSize() * 11.0f;
+    ImGui::SetNextItemWidth(w);
+    const char* preview = n->RegionRef[0] ? n->RegionRef : "(none)";
+    if (ImGui::BeginCombo("region", preview))
+    {
+      if (ImGui::Selectable("(none)", n->RegionRef[0] == 0))
+        n->RegionRef[0] = 0;
+      for (int i = 0; i < g->Nodes.Size; i++)
+      {
+        const ImGuiAppNode* r = &g->Nodes.Data[i];
+        if (r->Kind != ImGuiAppNodeKind_Layout || r->Draft.Name[0] == 0)
+          continue;
+        if (ImGui::Selectable(r->Draft.Name, strcmp(n->RegionRef, r->Draft.Name) == 0))
+          ImStrncpy(n->RegionRef, r->Draft.Name, IM_ARRAYSIZE(n->RegionRef));
+      }
+      ImGui::EndCombo();
+    }
+  }
+
   //-----------------------------------------------------------------------------
   // [SECTION] Inspector (component sections, style/color descs, project + multi-select)
   //-----------------------------------------------------------------------------
@@ -4829,11 +4917,15 @@ namespace ImGui
       AppNodeStyleSection(g, n);                  // style-var/color overrides applied around the control's render
       break;
     case ImGuiAppNodeKind_Window:
+      if (!n->IsLive && AppInspectorSection("##sec_region", ICON_FA_BORDER_ALL, "Region", nullptr, nullptr, (ImGuiID)(n->Kind + 1)))
+        EditAppRegionRef(g, n);                // Layout region this window docks into (F57)
       AppNodeStyleSection(g, n);                  // style overrides applied around the window's Begin/End
       break;
     case ImGuiAppNodeKind_Sidebar:
       if (AppInspectorSection("##sec_dock", ICON_FA_THUMBTACK, "Dock", nullptr, nullptr, (ImGuiID)(n->Kind + 1)))
         EditAppWindowNodeProps(n);             // dock direction / size
+      if (!n->IsLive && AppInspectorSection("##sec_region", ICON_FA_BORDER_ALL, "Region", nullptr, nullptr, (ImGuiID)(n->Kind + 2)))
+        EditAppRegionRef(g, n);                // Layout region this sidebar docks into (F57)
       AppNodeStyleSection(g, n);
       break;
     case ImGuiAppNodeKind_Struct:
@@ -4876,6 +4968,10 @@ namespace ImGui
                           AppOpArity(n->TypeName), AppOpArity(n->TypeName) == 1 ? "" : "s");
       ImGui::TextDisabled("pick the operator on the node body");
       break;
+    case ImGuiAppNodeKind_Layout:
+      if (!n->IsLive && AppInspectorSection("##sec_region", ICON_FA_BORDER_ALL, "Region", nullptr, nullptr, (ImGuiID)(n->Kind + 1)))
+        EditAppLayoutNodeProps(g, n);          // Region/Split/Tabs variant + split side/fraction (F57)
+      break;
     default:
       break;
     }
@@ -4896,6 +4992,7 @@ namespace ImGui
     case ImGuiAppNodeKind_Struct:  return AppComposerGetStyle()->KindStruct;
     case ImGuiAppNodeKind_Field:   return AppComposerGetStyle()->KindField;
     case ImGuiAppNodeKind_Op:      return AppComposerGetStyle()->KindOp;
+    case ImGuiAppNodeKind_Layout:  return AppComposerGetStyle()->LayerLayout;   // reads as its Layout-layer domain
     default:                       return AppComposerGetStyle()->KindDefault;
     }
   }
@@ -4975,6 +5072,16 @@ namespace ImGui
       const ImGuiAppNode* task = AppGraphFindLayerOfType(g, ImGuiAppLayerType_Task);
       return task != nullptr ? task->Id : -1;
     }
+    case ImGuiAppNodeKind_Layout:
+    {
+      // Nested Region/Split/Tabs live under their parent Split/Tabs; a top-level region is Layout-layer domain.
+      const int p = AppGraphParentOf(g, id);
+      const ImGuiAppNode* pn = p >= 0 ? AppGraphFindNodeConst(g, p) : nullptr;
+      if (pn != nullptr && pn->Kind == ImGuiAppNodeKind_Layout)
+        return p;
+      const ImGuiAppNode* ll = AppGraphFindLayerOfType(g, ImGuiAppLayerType_Layout);
+      return ll != nullptr ? ll->Id : -1;
+    }
     default:
       return -1;   // layers are root composition slots
     }
@@ -5020,7 +5127,8 @@ namespace ImGui
   static bool AppScopeCanEnter(const ImGuiAppNode* n)
   {
     return n != nullptr && (n->Kind == ImGuiAppNodeKind_Layer || n->Kind == ImGuiAppNodeKind_Window
-        || n->Kind == ImGuiAppNodeKind_Sidebar || n->Kind == ImGuiAppNodeKind_Control || n->Kind == ImGuiAppNodeKind_Struct);
+        || n->Kind == ImGuiAppNodeKind_Sidebar || n->Kind == ImGuiAppNodeKind_Control || n->Kind == ImGuiAppNodeKind_Struct
+        || n->Kind == ImGuiAppNodeKind_Layout);
   }
 
   // True when the node belongs inside the current scope (strict descendant of the scope owner in the scope-parent
@@ -5047,8 +5155,7 @@ namespace ImGui
         return n->Kind == ImGuiAppNodeKind_Control && n->Commands.Size > 0;
       if (tn->LayerType == ImGuiAppLayerType_Status)
         return false;   // nothing composes into the status layer (it renders the app's status bar itself)
-      if (tn->LayerType == ImGuiAppLayerType_Layout)
-        return false;
+      // Layout layer (F57): falls through to the chain walk -- Layout nodes whose scope-parent chain reaches it.
       int cur = id;
       for (int guard = 0; guard < 64; guard++)
       {
@@ -5142,14 +5249,19 @@ namespace ImGui
       return kind == ImGuiAppNodeKind_Control;
     case ImGuiAppNodeKind_Struct:
       return kind == ImGuiAppNodeKind_Field && !s->IsBuiltin;
+    case ImGuiAppNodeKind_Layout:
+      // A Split/Tabs interior takes nested Region/Split/Tabs; a Region is a leaf (composes nothing).
+      return kind == ImGuiAppNodeKind_Layout && AppLayoutIsContainer(s);
     case ImGuiAppNodeKind_Layer:
       // Layer domains are implicit (AppScopeParentOf falls back by kind); a bare add can only ever
-      // land in the Task/Display domains. Command members need commands a new control lacks;
-      // Status/Layout/Custom compose nothing.
+      // land in the Task/Display domains. Command members need commands a new control lacks; the
+      // Layout layer takes Region/Split/Tabs (F57); Status/Custom compose nothing.
       if (s->LayerType == ImGuiAppLayerType_Task)
         return kind == ImGuiAppNodeKind_Control || kind == ImGuiAppNodeKind_Struct || kind == ImGuiAppNodeKind_Op;
       if (s->LayerType == ImGuiAppLayerType_Display)
         return kind == ImGuiAppNodeKind_Window || kind == ImGuiAppNodeKind_Sidebar;
+      if (s->LayerType == ImGuiAppLayerType_Layout)
+        return kind == ImGuiAppNodeKind_Layout;
       return false;
     default:
       return false;   // a control's members arrive via explode, never bare adds
@@ -5535,6 +5647,14 @@ namespace ImGui
         if (g->Nodes.Data[i].Kind == ImGuiAppNodeKind_Control && AppGraphParentOf(g, g->Nodes.Data[i].Id) == top)
           out->push_back(g->Nodes.Data[i].Id);
     }
+    else if ((tn->Kind == ImGuiAppNodeKind_Layer && tn->LayerType == ImGuiAppLayerType_Layout)
+          || tn->Kind == ImGuiAppNodeKind_Layout)
+    {
+      // Layout layer: top-level Region/Split/Tabs. A Split/Tabs node: its direct child regions, in node order.
+      for (int i = 0; i < g->Nodes.Size; i++)
+        if (g->Nodes.Data[i].Kind == ImGuiAppNodeKind_Layout && AppScopeParentOf(g, g->Nodes.Data[i].Id) == top)
+          out->push_back(g->Nodes.Data[i].Id);
+    }
 
     AppScopeApplyAuthoredOrder(g, top, out);   // F58: authored order overrides derivation for this scope
   }
@@ -5752,6 +5872,10 @@ namespace ImGui
       return "data domain:  OnRender records TempData  ->  OnUpdate derives events (temp ^ last_temp) and mutates PersistData";
     if (tn->Kind == ImGuiAppNodeKind_Struct)
       return "data fields -- wire values out to consumers";
+    if (tn->Kind == ImGuiAppNodeKind_Layout)
+      return AppLayoutIsContainer(tn)
+        ? "dock region: child regions subdivide this area -- OnLayout() DockBuilderSplitNode, in order"
+        : "dock region: a leaf dock target -- windows that reference it Begin() docked here";
     return "";
   }
 
@@ -5847,7 +5971,8 @@ namespace ImGui
       return;
     }
     if ((added->Kind == ImGuiAppNodeKind_Control && (owner->Kind == ImGuiAppNodeKind_Window || owner->Kind == ImGuiAppNodeKind_Sidebar))
-     || (added->Kind == ImGuiAppNodeKind_Field && owner->Kind == ImGuiAppNodeKind_Struct))
+     || (added->Kind == ImGuiAppNodeKind_Field && owner->Kind == ImGuiAppNodeKind_Struct)
+     || (added->Kind == ImGuiAppNodeKind_Layout && owner->Kind == ImGuiAppNodeKind_Layout))
       AppGraphReparent(g, added_id, top);
     const ImVec2 root_pref = owner->GridPos + ImVec2(280.0f, 0.0f);
     AppGraphPlaceNode(g, added, &root_pref);
@@ -5885,7 +6010,8 @@ namespace ImGui
         continue;
       }
       if ((kind == ImGuiAppNodeKind_Control && (owner->Kind == ImGuiAppNodeKind_Window || owner->Kind == ImGuiAppNodeKind_Sidebar))
-       || (kind == ImGuiAppNodeKind_Field && owner->Kind == ImGuiAppNodeKind_Struct))
+       || (kind == ImGuiAppNodeKind_Field && owner->Kind == ImGuiAppNodeKind_Struct)
+       || (kind == ImGuiAppNodeKind_Layout && owner->Kind == ImGuiAppNodeKind_Layout))
         AppGraphReparent(g, id, top);
     }
 
@@ -6000,11 +6126,14 @@ namespace ImGui
       return false;
     if (tn->Kind == ImGuiAppNodeKind_Window || tn->Kind == ImGuiAppNodeKind_Sidebar)
       return true;
-    // Layer interiors that host an ordered member sequence get the same room (F42): Display, Task,
-    // Command. Status/Layout host nothing composable, so no walls.
+    // A Split/Tabs interior is a room whose members are its child regions (F57).
+    if (tn->Kind == ImGuiAppNodeKind_Layout)
+      return true;
+    // Layer interiors that host an ordered member sequence get the same room: Display, Task, Command
+    // (F42) and Layout (F57, the dock-builder tree). Status hosts nothing composable, so no walls.
     return tn->Kind == ImGuiAppNodeKind_Layer
         && (tn->LayerType == ImGuiAppLayerType_Display || tn->LayerType == ImGuiAppLayerType_Task
-            || tn->LayerType == ImGuiAppLayerType_Command);
+            || tn->LayerType == ImGuiAppLayerType_Command || tn->LayerType == ImGuiAppLayerType_Layout);
   }
 
   // Scope walls: the room drawn as the code block it generates. The face band (top wall) IS the
@@ -6581,6 +6710,8 @@ namespace ImGui
     else if (kind == ImGuiAppNodeKind_Window || kind == ImGuiAppNodeKind_Sidebar) action = "+ Control";
     else if (kind == ImGuiAppNodeKind_Struct)                                   action = "+ Field";
     else if (kind == ImGuiAppNodeKind_Control)                                  action = "Explode PersistData";
+    else if (kind == ImGuiAppNodeKind_Layer && lt == ImGuiAppLayerType_Layout)  action = "+ Region";
+    else if (kind == ImGuiAppNodeKind_Layout && AppLayoutIsContainer(tn))       action = "+ Region";
 
     const ImVec2 hs = ImGui::CalcTextSize(head);
     const ImVec2 ss = ImGui::CalcTextSize(sub);
@@ -6610,6 +6741,13 @@ namespace ImGui
           added_id = AppGraphAddNode(g, ImGuiAppNodeKind_Control, "NewControl")->Id;
         else if (kind == ImGuiAppNodeKind_Struct)
           added_id = AppScopeAddFieldToStruct(g, top);
+        else if ((kind == ImGuiAppNodeKind_Layer && lt == ImGuiAppLayerType_Layout)
+              || kind == ImGuiAppNodeKind_Layout)
+        {
+          ImGuiAppNode* r = AppGraphAddNode(g, ImGuiAppNodeKind_Layout, "Region");
+          ImStrncpy(r->TypeName, "Region", IM_ARRAYSIZE(r->TypeName));
+          added_id = r->Id;
+        }
         else if (kind == ImGuiAppNodeKind_Control)
           AppGraphExplodeControlData(g, tn, false);   // no add ran in this branch, tn still valid
         if (added_id >= 0)
@@ -6735,6 +6873,9 @@ namespace ImGui
     {  5, "",   "Add: Field",                  "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_Field   },
     { 46, "",   "Add: Note",                   "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_Note    },
     { 47, "",   "Add: Op",                     "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_Op      },
+    { 48, "",   "Add: Region",                 "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_Layout  },
+    { 49, "",   "Add: Split",                  "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_Layout  },
+    { 50, "",   "Add: Tabs",                   "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_Layout  },
     { 10, "",   "Layout: Tidy",                "L",      ImGuiKey_L,             0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_COUNT },
     { 11, "",   "View: Fit all",               "Home",   ImGuiKey_Home,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_COUNT },
     { 12, "",   "View: Frame selection",       "F",      ImGuiKey_F,             0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_COUNT },
@@ -7134,6 +7275,7 @@ namespace ImGui
     // reason: adding a node mid-submission reallocs g->Nodes. pending_build_owner is the layer requesting it.
     ImGuiAppNodeKind pending_build_kind = ImGuiAppNodeKind_COUNT;   // COUNT = none
     int              pending_build_owner = -1;
+    const char*      pending_build_type = nullptr;   // Layout variant (Region/Split/Tabs) for a layout build pill; string literal
 
     // Camera bindings (LMB-drag pan, RMB pan + short-click menu, cursor-anchored wheel zoom) are the
     // engine's IO defaults.
@@ -7714,6 +7856,10 @@ namespace ImGui
       case ImGuiAppNodeKind_Op:
         ImGui::CanvasNextNodeRounding(cv, 12.0f);   // rounded operator plate
         break;
+      case ImGuiAppNodeKind_Layout:
+        ImGui::CanvasNextNodeRounding(cv, 1.0f);   // squared: a dock region reads like a window frame
+        ImGui::CanvasNextNodeHeaderRule(cv, 1, AppKindColor(ImGuiAppNodeKind_Layout));
+        break;
       default:
         break;
       }
@@ -7949,6 +8095,12 @@ namespace ImGui
         else if (lt == ImGuiAppLayerType_Layout)
         {
           ImGui::TextDisabled(ICON_FA_BORDER_ALL "  OnLayout(): dockspaces before windows");
+          // Build the dock tree: Region/Split/Tabs author Layout nodes in this layer's domain (F57).
+          if (AppBlAddPill("##br", "Region")) { pending_build_kind = ImGuiAppNodeKind_Layout; pending_build_owner = n->Id; pending_build_type = "Region"; }
+          ImGui::SameLine();
+          if (AppBlAddPill("##bsp", "Split"))  { pending_build_kind = ImGuiAppNodeKind_Layout; pending_build_owner = n->Id; pending_build_type = "Split"; }
+          ImGui::SameLine();
+          if (AppBlAddPill("##bt", "Tabs"))    { pending_build_kind = ImGuiAppNodeKind_Layout; pending_build_owner = n->Id; pending_build_type = "Tabs"; }
           if (show_live)
           {
             // The running context's active root dockspaces: id + docked window count.
@@ -8050,6 +8202,14 @@ namespace ImGui
           pending_op_node = n->Id;
           ImStrncpy(pending_op, AppOpTokenName(opi), IM_ARRAYSIZE(pending_op));
         }
+      }
+      else if (n->Kind == ImGuiAppNodeKind_Layout)
+      {
+        // Dock region: full variant/split editing when drilled in; an identity line otherwise (non-empty body).
+        if (AppScopeCurrent(g) >= 0 && !n->IsLive)
+          EditAppLayoutNodeProps(g, n);
+        else
+          ImGui::TextDisabled("%s", AppLayoutVariant(n));
       }
       else
       {
@@ -8601,6 +8761,9 @@ namespace ImGui
       }
       case 46: added = AppGraphAddNode(g, ImGuiAppNodeKind_Note, "Note"); break;
       case 47: added = AppGraphAddOp(g, nullptr); break;
+      case 48: added = AppGraphAddNode(g, ImGuiAppNodeKind_Layout, "Region"); ImStrncpy(added->TypeName, "Region", IM_ARRAYSIZE(added->TypeName)); break;
+      case 49: added = AppGraphAddNode(g, ImGuiAppNodeKind_Layout, "Split");  ImStrncpy(added->TypeName, "Split",  IM_ARRAYSIZE(added->TypeName)); break;
+      case 50: added = AppGraphAddNode(g, ImGuiAppNodeKind_Layout, "Tabs");   ImStrncpy(added->TypeName, "Tabs",   IM_ARRAYSIZE(added->TypeName)); break;
       case 10: AppScopeSequenceTidy(g, show_live); fit_all(); break;
       case 11: fit_all(); break;
       case 12:
@@ -8914,7 +9077,11 @@ namespace ImGui
       const ImGuiAppNode* owner = AppGraphFindNodeConst(g, pending_build_owner);
       const ImVec2 base = owner != nullptr ? owner->GridPos : ImVec2(640.0f, 60.0f);
       ImVec2 spot(base.x + 620.0f, base.y);
-      ImGuiAppNode* added = AppGraphAddNode(g, pending_build_kind, pending_build_kind == ImGuiAppNodeKind_Sidebar ? "Sidebar" : "Window");
+      const char* nm = pending_build_type != nullptr ? pending_build_type
+                     : (pending_build_kind == ImGuiAppNodeKind_Sidebar ? "Sidebar" : "Window");
+      ImGuiAppNode* added = AppGraphAddNode(g, pending_build_kind, nm);
+      if (pending_build_type != nullptr)
+        ImStrncpy(added->TypeName, pending_build_type, IM_ARRAYSIZE(added->TypeName));   // Layout variant rides TypeName
       AppGraphPlaceNode(g, added, &spot);
     }
 
@@ -9980,6 +10147,29 @@ namespace ImGui
       {
         if (!AppGraphHostsControl(g, n->Id))
           AppValidatePushIssue(out, n->Id, 1, "%s '%s' hosts no controls", AppNodeKindName(n->Kind), n->Draft.Name);
+
+        // A region reference must name an existing Layout node (F57).
+        if (n->RegionRef[0])
+        {
+          bool found = false;
+          for (int j = 0; j < g->Nodes.Size && !found; j++)
+            found = g->Nodes.Data[j].Kind == ImGuiAppNodeKind_Layout && strcmp(g->Nodes.Data[j].Draft.Name, n->RegionRef) == 0;
+          if (!found)
+            AppValidatePushIssue(out, n->Id, 2, "%s '%s' references missing region '%s'", AppNodeKindName(n->Kind), n->Draft.Name, n->RegionRef);
+        }
+      }
+      else if (n->Kind == ImGuiAppNodeKind_Layout)
+      {
+        // A Split/Tabs with no child regions carves nothing.
+        if (AppLayoutIsContainer(n))
+        {
+          int kids = 0;
+          for (int j = 0; j < g->Nodes.Size; j++)
+            if (g->Nodes.Data[j].Kind == ImGuiAppNodeKind_Layout && AppGraphParentOf(g, g->Nodes.Data[j].Id) == n->Id)
+              kids++;
+          if (kids == 0)
+            AppValidatePushIssue(out, n->Id, 1, "%s '%s' has no child regions", AppLayoutVariant(n), n->Draft.Name);
+        }
       }
     }
 
@@ -10440,29 +10630,155 @@ namespace ImGui
     out->appendf("  AppCommand_COUNT\n};\n\n");
   }
 
-  static void AppEmitCommandEnumAndApp(const ImGuiAppGraph* g, ImGuiTextBuffer* out)
+  // True when the graph carries any authored Layout (Region/Split/Tabs) node -- the trigger to emit OnLayout.
+  static bool AppGraphHasLayoutNode(const ImGuiAppGraph* g)
   {
-    if (AppGraphCommandDefinitionCount(g) == 0)
+    for (int i = 0; i < g->Nodes.Size; i++)
+      if (!g->Nodes.Data[i].IsLive && g->Nodes.Data[i].Kind == ImGuiAppNodeKind_Layout)
+        return true;
+    return false;
+  }
+
+  // The DockBuilder id variable a Layout node maps to. The root region reuses the dockspace id (dock_root);
+  // every other region gets dock_<sanitized name>.
+  static void AppLayoutDockVar(const ImGuiAppNode* n, bool is_root, char* out, size_t out_size)
+  {
+    if (is_root)
+    {
+      ImStrncpy(out, "dock_root", out_size);
+      return;
+    }
+    char base[IM_LABEL_SIZE];
+    AppSanitizeIdentifier(base, IM_ARRAYSIZE(base), n->Draft.Name);
+    ImFormatString(out, out_size, "dock_%s", base);
+  }
+
+  // Recursively subdivide a Split/Tabs node's dock area among its child regions (node order). A Split
+  // carves each child off a running remainder (last child takes it); a Tabs docks every child into the
+  // same node. Leaf Regions emit nothing. self_var is this node's already-declared dock id variable.
+  static void AppEmitLayoutRegion(const ImGuiAppGraph* g, const ImGuiAppNode* n, const char* self_var, ImGuiTextBuffer* out)
+  {
+    ImVector<int> ch;
+    for (int i = 0; i < g->Nodes.Size; i++)
+      if (g->Nodes.Data[i].Kind == ImGuiAppNodeKind_Layout && AppGraphParentOf(g, g->Nodes.Data[i].Id) == n->Id)
+        ch.push_back(g->Nodes.Data[i].Id);
+    if (ch.Size == 0)
+      return;   // leaf region
+
+    const bool tabs = strcmp(AppLayoutVariant(n), "Tabs") == 0;
+    char rem[80];
+    ImFormatString(rem, IM_ARRAYSIZE(rem), "%s_rem", self_var);
+    if (!tabs && ch.Size > 1)
+      out->appendf("    ImGuiID %s = %s;\n", rem, self_var);   // running remainder
+
+    for (int i = 0; i < ch.Size; i++)
+    {
+      const ImGuiAppNode* c = AppGraphFindNodeConst(g, ch.Data[i]);
+      char cvar[80];
+      AppLayoutDockVar(c, false, cvar, IM_ARRAYSIZE(cvar));
+      if (tabs || ch.Size == 1)
+        out->appendf("    ImGuiID %s = %s;\n", cvar, self_var);   // shares the node (tab bar / sole child)
+      else if (i == ch.Size - 1)
+        out->appendf("    ImGuiID %s = %s;\n", cvar, rem);        // last child takes the remainder
+      else
+        out->appendf("    ImGuiID %s;\n    ImGui::DockBuilderSplitNode(%s, %s, %.2ff, &%s, &%s);\n",
+                     cvar, rem, AppDirEnumName(c->DockDir), c->DockSize > 0.0f ? c->DockSize : 0.5f, cvar, rem);
+    }
+    for (int i = 0; i < ch.Size; i++)   // recurse into container children
+    {
+      const ImGuiAppNode* c = AppGraphFindNodeConst(g, ch.Data[i]);
+      if (AppLayoutIsContainer(c))
+      {
+        char cvar[80];
+        AppLayoutDockVar(c, false, cvar, IM_ARRAYSIZE(cvar));
+        AppEmitLayoutRegion(g, c, cvar, out);
+      }
+    }
+  }
+
+  // Emit the ClientApp::OnLayout() override: a once-guarded DockBuilder pass over the Layout node forest,
+  // then a DockWindow line per Window/Sidebar that references a region (F57). Runs before Display windows
+  // Begin (layer order), so no window reads a half-built dock tree.
+  static void AppEmitOnLayout(const ImGuiAppGraph* g, ImGuiTextBuffer* out)
+  {
+    const ImGuiAppNode* root = nullptr;
+    for (int i = 0; i < g->Nodes.Size && root == nullptr; i++)
+    {
+      const ImGuiAppNode* n = &g->Nodes.Data[i];
+      if (n->IsLive || n->Kind != ImGuiAppNodeKind_Layout) continue;
+      const int p = AppGraphParentOf(g, n->Id);
+      const ImGuiAppNode* pn = p >= 0 ? AppGraphFindNodeConst(g, p) : nullptr;
+      if (pn == nullptr || pn->Kind != ImGuiAppNodeKind_Layout)
+        root = n;   // first top-level region == the root dockspace
+    }
+    if (root == nullptr)
       return;
 
-    AppEmitCommandEnum(g, out);
+    out->appendf("  virtual void OnLayout() override\n  {\n");
+    out->appendf("    ImGuiID dock_root = ImGui::GetID(\"AppDockSpace\");\n");
+    out->appendf("    if (ImGui::DockBuilderGetNode(dock_root) != nullptr)\n      return;   // build once\n");
+    out->appendf("    ImGui::DockBuilderRemoveNode(dock_root);\n");
+    out->appendf("    ImGui::DockBuilderAddNode(dock_root, ImGuiDockNodeFlags_DockSpace);\n");
+    out->appendf("    ImGui::DockBuilderSetNodeSize(dock_root, ImGui::GetMainViewport()->WorkSize);\n");
+    AppEmitLayoutRegion(g, root, "dock_root", out);
 
-    out->appendf("struct ClientApp : ImGuiApp\n{\n");
-    out->appendf("  virtual void OnExecuteCommand(ImGuiAppCommand cmd) override\n  {\n");
-    out->appendf("    switch ((AppCommand)cmd)\n    {\n");
     for (int i = 0; i < g->Nodes.Size; i++)
     {
       const ImGuiAppNode* n = &g->Nodes.Data[i];
-      if (!AppNodeIsCommandLayer(n)) continue;
-      for (int c = 0; c < n->Commands.Size; c++)
+      if (n->IsLive || n->RegionRef[0] == 0) continue;
+      if (n->Kind != ImGuiAppNodeKind_Window && n->Kind != ImGuiAppNodeKind_Sidebar) continue;
+      const ImGuiAppNode* r = nullptr;
+      for (int j = 0; j < g->Nodes.Size && r == nullptr; j++)
+        if (g->Nodes.Data[j].Kind == ImGuiAppNodeKind_Layout && strcmp(g->Nodes.Data[j].Draft.Name, n->RegionRef) == 0)
+          r = &g->Nodes.Data[j];
+      if (r == nullptr)
       {
-        char enum_value[IM_LABEL_SIZE];
-        AppCommandEnumValue(&n->Commands.Data[c], enum_value, IM_ARRAYSIZE(enum_value));
-        out->appendf("    case %s:\n      // TODO: handle %s\n      break;\n", enum_value, n->Commands.Data[c].Name);
+        out->appendf("    // WARNING: window '%s' references missing region '%s'\n", n->Draft.Name, n->RegionRef);
+        continue;
       }
+      char rvar[80];
+      AppLayoutDockVar(r, r == root, rvar, IM_ARRAYSIZE(rvar));
+      out->appendf("    ImGui::DockBuilderDockWindow(\"%s\", %s);\n", n->Draft.Name, rvar);
     }
-    out->appendf("    default:\n      ImGuiApp::OnExecuteCommand(cmd);\n      break;\n");
-    out->appendf("    }\n  }\n};\n\n");
+    out->appendf("    ImGui::DockBuilderFinish(dock_root);\n");
+    out->appendf("  }\n");
+  }
+
+  static void AppEmitCommandEnumAndApp(const ImGuiAppGraph* g, ImGuiTextBuffer* out)
+  {
+    const bool has_cmds = AppGraphCommandDefinitionCount(g) > 0;
+    const bool has_layout = AppGraphHasLayoutNode(g);
+    if (!has_cmds && !has_layout)
+      return;
+
+    AppEmitCommandEnum(g, out);   // no-op when there are no command definitions
+
+    out->appendf("struct ClientApp : ImGuiApp\n{\n");
+    if (has_cmds)
+    {
+      out->appendf("  virtual void OnExecuteCommand(ImGuiAppCommand cmd) override\n  {\n");
+      out->appendf("    switch ((AppCommand)cmd)\n    {\n");
+      for (int i = 0; i < g->Nodes.Size; i++)
+      {
+        const ImGuiAppNode* n = &g->Nodes.Data[i];
+        if (!AppNodeIsCommandLayer(n)) continue;
+        for (int c = 0; c < n->Commands.Size; c++)
+        {
+          char enum_value[IM_LABEL_SIZE];
+          AppCommandEnumValue(&n->Commands.Data[c], enum_value, IM_ARRAYSIZE(enum_value));
+          out->appendf("    case %s:\n      // TODO: handle %s\n      break;\n", enum_value, n->Commands.Data[c].Name);
+        }
+      }
+      out->appendf("    default:\n      ImGuiApp::OnExecuteCommand(cmd);\n      break;\n");
+      out->appendf("    }\n  }\n");
+    }
+    if (has_layout)
+    {
+      if (has_cmds)
+        out->appendf("\n");   // separate the two overrides
+      AppEmitOnLayout(g, out);
+    }
+    out->appendf("};\n\n");
   }
 
   static const ImGuiAppNode* AppGraphFindNodeConst(const ImGuiAppGraph* g, int node_id)
@@ -11466,6 +11782,9 @@ namespace ImGui
       h = ImHashStr(n->DataTypeName, 0, h);
       h = ImHashData(&n->IsBuiltin, sizeof(n->IsBuiltin), h);
       h = ImHashData(&n->LayerType, sizeof(n->LayerType), h);
+      h = ImHashStr(n->RegionRef, 0, h);                          // F57: window -> region reference feeds OnLayout codegen
+      h = ImHashData(&n->DockDir, sizeof(n->DockDir), h);         // sidebar dock + Layout split side feed codegen
+      h = ImHashData(&n->DockSize, sizeof(n->DockSize), h);
       for (int f = 0; f < n->Draft.PersistFields.Size; f++)
       {
         const ImGuiAppFieldDesc* fd = &n->Draft.PersistFields.Data[f];
@@ -12223,7 +12542,9 @@ namespace ImGui
     if (n->HasInitialPlacement)
       buf->appendf("Init=%.1f,%.1f,%.1f,%.1f\n", n->InitialPos.x, n->InitialPos.y, n->InitialSize.x, n->InitialSize.y);
     if (n->DockDir != ImGuiDir_Down || n->DockSize != 0.0f)
-      buf->appendf("Dock=%d,%.1f\n", (int)n->DockDir, n->DockSize);
+      buf->appendf("Dock=%d,%g\n", (int)n->DockDir, n->DockSize);   // %g: preserves a Layout split fraction (0.25) and a sidebar pixel size (220)
+    if (n->RegionRef[0])
+      buf->appendf("Region=%s\n", n->RegionRef);   // Window/Sidebar -> its Layout region node, by name (F57)
     if (n->Kind == ImGuiAppNodeKind_Note)
       buf->appendf("Note=%.1f,%.1f,%u\n", n->NoteSize.x, n->NoteSize.y, (unsigned)n->NoteColor);
     for (int p = 0; p < n->Ports.Size; p++)
@@ -12441,6 +12762,7 @@ namespace ImGui
       return false;
     case ImGuiAppNodeKind_Window:
     case ImGuiAppNodeKind_Sidebar:
+    case ImGuiAppNodeKind_Layout:
       return kind == ImGuiAppPortKind_ChildIn || kind == ImGuiAppPortKind_ChildOut;
     case ImGuiAppNodeKind_Struct:
       return kind == ImGuiAppPortKind_ChildIn || kind == ImGuiAppPortKind_DataOut;
@@ -12537,6 +12859,7 @@ namespace ImGui
       else if (strncmp(p, "Flags=", 6) == 0)     { if (cur) { unsigned fl = 0; if (sscanf(p + 6, "%u", &fl) == 1) cur->Flags = (ImGuiWindowFlags)fl; } }
       else if (strncmp(p, "Init=", 5) == 0)      { if (cur) { float px = 0, py = 0, sx = 0, sy = 0; if (sscanf(p + 5, "%f,%f,%f,%f", &px, &py, &sx, &sy) == 4) { cur->HasInitialPlacement = true; cur->InitialPos = ImVec2(px, py); cur->InitialSize = ImVec2(sx, sy); } } }
       else if (strncmp(p, "Dock=", 5) == 0)      { if (cur) { int d = 0; float sz = 0; if (sscanf(p + 5, "%d,%f", &d, &sz) >= 1) { cur->DockDir = (ImGuiDir)d; cur->DockSize = sz; } } }
+      else if (strncmp(p, "Region=", 7) == 0)    { if (cur) ImStrncpy(cur->RegionRef, p + 7, IM_ARRAYSIZE(cur->RegionRef)); }
       else if (strncmp(p, "Note=", 5) == 0)      { if (cur) { float sx = 0, sy = 0; unsigned col = 0; if (sscanf(p + 5, "%f,%f,%u", &sx, &sy, &col) >= 2) { cur->NoteSize = ImVec2(sx, sy); cur->NoteColor = (ImU32)col; } } }
       else if (strncmp(p, "Port=", 5) == 0)      { if (cur) { AppGraphParsePort(cur, p + 5); int last = cur->Ports.Size ? cur->Ports.Data[cur->Ports.Size - 1].Id : 0; if (last > max_id) max_id = last; } }
       else if (strncmp(p, "Persist=", 8) == 0)   { if (cur) AppNodeParseField(&cur->Draft.PersistFields, p + 8); }
@@ -15057,7 +15380,7 @@ namespace ImGui
     {
       ImGuiAppNodeKind_Layer, ImGuiAppNodeKind_Window, ImGuiAppNodeKind_Sidebar,
       ImGuiAppNodeKind_Control, ImGuiAppNodeKind_Struct, ImGuiAppNodeKind_Field,
-      ImGuiAppNodeKind_Note, ImGuiAppNodeKind_Op,
+      ImGuiAppNodeKind_Note, ImGuiAppNodeKind_Op, ImGuiAppNodeKind_Layout,
     };
     for (int i = 0; i < IM_ARRAYSIZE(filter_kinds); i++)
     {
