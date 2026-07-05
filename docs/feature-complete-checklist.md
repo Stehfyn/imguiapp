@@ -376,8 +376,11 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
     the running app's WAL level (combo) + path. `composer_project_logging` forces an empty selection
     (project inspector) and asserts the Document + Logging section headers render. (Section content sits
     behind the collapsed-by-default + combo-addressability combo -- the header is the reliable subject.)
+  - multi-select mixed-value beyond Style: `EditAppNodesInspectorMulti` gained a Placement (all selected)
+    X/Y editor -- common value or a "--" mixed marker, editing writes every selected node.
+    `step78_inspector_multi_placement` edits multi-X and asserts both nodes' GridPos.x set, Y untouched.
   Remaining: per-kind section-collapse persistence, section kebab (reset/copy/paste) on every section
-  (Style already has it), unified row grammar + row context actions, multi-select mixed-value beyond Style.
+  (Style already has it), unified row grammar + row context actions.
 
 ## P7 — scopes + canvas completion
 

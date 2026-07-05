@@ -4363,6 +4363,45 @@ namespace ImGui
     ImGui::TextDisabled("%d nodes selected  (%d design)", g->Selection.Size, design);
     ImGui::Separator();
 
+    // Placement across the selection (F41 multi-edit beyond Style): shared X/Y over the design non-layer
+    // members. A field shows the common value, or a mixed marker ("--") when they differ; editing writes
+    // to all of them.
+    {
+      int placed = 0;
+      float cx = 0.0f, cy = 0.0f;
+      bool mixed_x = false, mixed_y = false, first = true;
+      for (int i = 0; i < g->Selection.Size; i++)
+      {
+        const ImGuiAppNode* n = AppGraphFindNodeConst(g, g->Selection.Data[i]);
+        if (n == nullptr || n->IsLive || n->Kind == ImGuiAppNodeKind_Layer)
+          continue;
+        placed++;
+        if (first) { cx = n->GridPos.x; cy = n->GridPos.y; first = false; }
+        else { mixed_x |= (n->GridPos.x != cx); mixed_y |= (n->GridPos.y != cy); }
+      }
+      if (placed > 0)
+      {
+        auto write_all = [&](bool do_x, float v)
+        {
+          for (int i = 0; i < g->Selection.Size; i++)
+            if (ImGuiAppNode* n = AppGraphFindNode(g, g->Selection.Data[i]))
+              if (!n->IsLive && n->Kind != ImGuiAppNodeKind_Layer)
+                (do_x ? n->GridPos.x : n->GridPos.y) = v;
+        };
+        ImGui::SeparatorText(ICON_FA_UP_DOWN_LEFT_RIGHT "  Placement (all selected)");
+        const float pw = ImGui::GetFontSize() * 5.0f;
+        float vx = cx, vy = cy;
+        ImGui::SetNextItemWidth(pw);
+        if (ImGui::DragFloat("X###multix", &vx, 1.0f, 0.0f, 0.0f, mixed_x ? "--" : "%.0f"))
+          write_all(true, vx);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(pw);
+        if (ImGui::DragFloat("Y###multiy", &vy, 1.0f, 0.0f, 0.0f, mixed_y ? "--" : "%.0f"))
+          write_all(false, vy);
+        ImGui::Separator();
+      }
+    }
+
     bool enable = any_active;
     bool kebab = false;
     const bool open = AppInspectorSection("##sec_style_multi", ICON_FA_PALETTE, "Style (all selected)", styled > 0 ? &enable : nullptr, &kebab);
