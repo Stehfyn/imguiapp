@@ -385,6 +385,12 @@ namespace ImGui
   // per-frame fingerprint AppInputRecord stores. 0 when nothing snapshottable exists.
   IMGUI_API ImGuiID AppStateHash(const ImGuiApp* app);
 
+  // Fingerprint of the snapshottable slot LAYOUT (id + size + temp range per entry, in
+  // StorageEntries order) -- what state hashes and snapshots depend on. The take's Identity
+  // record carries this; F64's reconstruction identity gate requires the reconstruction app's
+  // to equal the recorded one. 0 when nothing snapshottable exists.
+  IMGUI_API ImU32 AppStateSchemaHash(const ImGuiApp* app);
+
   // Advisory frame pacing. Backend run loops call this once per iteration before OnDrawFrame; Off
   // returns immediately (the call is unconditional in the loops). Sleeps until deadline - SleepSlackMs,
   // spins the rest on QPC; Fixed mode also forces io.DeltaTime to exactly 1/TargetHz.

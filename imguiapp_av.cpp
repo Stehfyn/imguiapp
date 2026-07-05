@@ -15,6 +15,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>   // strtoull (WAL command-tick parse)
 #include <thread>
 #include <mutex>
 #include <condition_variable>
@@ -413,17 +414,9 @@ static void AvCollectInputRecords(ImGuiAppRecorder* rec, ImVector<char>* out)
 // schema hash covers exactly the slot layout AppStateHash and snapshots depend on.
 static void AvBuildIdentityRecord(ImVector<char>* out, const ImGuiApp* app, int embed_rows, ImU32* out_schema)
 {
-  ImGuiID schema = 0;
-  for (int i = 0; i < app->StorageEntries.Size; i++)
-  {
-    const ImGuiAppStorageEntry& e = app->StorageEntries[i];
-    if (e.Size <= 0 || e.Ptr == nullptr)
-      continue;
-    const ImU32 fields[4] = { (ImU32)e.ID, (ImU32)e.Size, (ImU32)e.TempOffset, (ImU32)e.TempSize };
-    schema = ImHashData(fields, sizeof(fields), schema);
-  }
+  const ImU32 schema = ImGui::AppStateSchemaHash(app);   // id+size+temp range per snapshottable slot
   if (out_schema != nullptr)
-    *out_schema = (ImU32)schema;
+    *out_schema = schema;
 
   ImVector<char> payload;
   const ImU32 applayer_ver = (ImU32)IMGUI_APPLAYER_VERSION_NUM;
@@ -1742,6 +1735,232 @@ IMGUI_API bool AppRunTransportShow(ImGuiAppRunTransport* view, int i)
   view->Width = w;
   view->Height = h;
   view->ShownImage = t->FrameImage;
+  return true;
+}
+
+//-----------------------------------------------------------------------------
+// [SECTION] State-at-tick (F64)
+//-----------------------------------------------------------------------------
+
+// Greatest SnapshotTicks entry whose tick-array index is <= tick_index (binary search over the
+// ascending list). Returns the SnapshotTicks slot, or -1 when no snapshot lands at/before N.
+static int RunNearestSnapshot(const ImGuiAppRunIndex* run, int tick_index)
+{
+  int lo = 0;
+  int hi = run->SnapshotTicks.Size - 1;
+  int best = -1;
+  while (lo <= hi)
+  {
+    const int mid = (lo + hi) / 2;
+    if (run->SnapshotTicks.Data[mid] <= tick_index)
+    {
+      best = mid;
+      lo = mid + 1;
+    }
+    else
+    {
+      hi = mid - 1;
+    }
+  }
+  return best;
+}
+
+// State bytes of the StateSnapshot record whose PAYLOAD begins at payload_off in run->Meta: skip
+// the {comp, frame_index, slot table} preamble, copy the concatenated slot bytes. The record's TLV
+// size sits at payload_off-4 (AvRecordAppend framing). Layout mirrors AvBuildStateSnapshotRecord.
+static bool RunReadSnapshotBytes(const ImGuiAppRunIndex* run, int payload_off, ImVector<char>* out)
+{
+  if (payload_off < 8 || payload_off + 4 > run->Meta.Size)
+    return false;
+  ImU32 size = 0;
+  memcpy(&size, run->Meta.Data + payload_off - 4, sizeof(ImU32));
+  if (size < 16 || (ImS64)payload_off + (ImS64)size > (ImS64)run->Meta.Size)
+    return false;
+  const char* p = run->Meta.Data + payload_off;
+  ImU32 slots = 0;
+  memcpy(&slots, p + 12, sizeof(ImU32));           // comp(4) + frame_index(8) then slot count
+  const ImS64 table = 16 + (ImS64)slots * 8;       // 64-bit: a corrupted slot count must not wrap
+  if ((ImS64)size < table)
+    return false;
+  const int len = (int)((ImS64)size - table);
+  out->resize(len);
+  if (len > 0)
+    memcpy(out->Data, p + table, (size_t)len);
+  return true;
+}
+
+// Reconstructed input-log frame index of Ticks[k] == count of ticks in [0,k) carrying an InputFrame
+// (records land in tick/emission order, so this is that tick's position in AppAVMetaReadInputLog).
+static int RunInputCountBefore(const ImGuiAppRunIndex* run, int k)
+{
+  int n = 0;
+  const int lim = k < run->Ticks.Size ? k : run->Ticks.Size;
+  for (int i = 0; i < lim; i++)
+    if (run->Ticks.Data[i].InputOffset >= 0)
+      n++;
+  return n;
+}
+
+IMGUI_API bool AppRunStateAtTick(ImGuiApp* recon_app, const ImGuiAppRunIndex* run, int tick_index, ImGuiAppRunState* out)
+{
+  ImGuiAppRunState st;
+  if (out != nullptr)
+    *out = st;
+  IM_ASSERT(recon_app != nullptr && run != nullptr);
+  if (recon_app == nullptr || run == nullptr || tick_index < 0 || tick_index >= run->Ticks.Size)
+    return false;
+
+  const ImGuiAppRunTick& tN = run->Ticks.Data[tick_index];
+  st.TickIndex = tick_index;
+  st.Tick = tN.Tick;
+  st.RecordedStateHash = tN.StateHash;
+  st.CmdFirst = tN.WalFirst;
+  st.CmdCount = tN.WalCount;
+
+  // Identity gate (section 5.1): reconstruction is legal only for the recorded composition + schema.
+  if (ImGui::GetAppCompositionID(recon_app) != run->Identity.CompositionID
+      || ImGui::AppStateSchemaHash(recon_app) != run->Identity.SchemaHash)
+  {
+    if (out != nullptr)
+      *out = st;
+    return false;
+  }
+
+  // Nearest snapshot S <= N (section 5.2). No snapshot at/before N: values unavailable, degrade.
+  const int snap_slot = RunNearestSnapshot(run, tick_index);
+  if (snap_slot < 0)
+  {
+    if (out != nullptr)
+      *out = st;
+    return false;
+  }
+  const int sS = run->SnapshotTicks.Data[snap_slot];
+  const ImGuiAppRunTick& tS = run->Ticks.Data[sS];
+  st.SnapshotTickIndex = sS;
+  st.SnapshotTick = tS.Tick;
+
+  // Restore the recorded snapshot bytes: AppStateSnapshot builds the recon app's slot layout (frame
+  // 0 = its current state), then we overwrite frame 0 with the recorded bytes and restore -- the
+  // mirror image of AppStateRestore. Schema equality above guarantees layout + size agreement.
+  ImGuiAppStateHistory h;
+  ImVector<char> snap_bytes;
+  if (!ImGui::AppStateSnapshot(recon_app, &h)
+      || !RunReadSnapshotBytes(run, tS.SnapshotOffset, &snap_bytes)
+      || snap_bytes.Size != h.FrameSize)
+  {
+    if (out != nullptr)
+      *out = st;
+    return false;
+  }
+  memcpy(h.Frames.Data, snap_bytes.Data, (size_t)h.FrameSize);
+  if (!ImGui::AppStateRestore(recon_app, &h, 0))
+  {
+    if (out != nullptr)
+      *out = st;
+    return false;
+  }
+
+  // Replay ticks (S, N] (section 5.3): a sub-slice of the reconstructed input log through
+  // AppInputReplay -- restore already placed tick S's TempData, which tick S+1's update consumes.
+  int first_div = -1;
+  if (sS < tick_index)
+  {
+    ImGuiAppInputLog full;
+    const int first_lf = RunInputCountBefore(run, sS + 1);      // log frame of tick S+1
+    const int last_lf = RunInputCountBefore(run, tick_index + 1) - 1;   // log frame of tick N (inclusive)
+    if (!ImGui::AppAVMetaReadInputLog(run->Meta.Data, run->Meta.Size, &full)
+        || first_lf < 0 || last_lf < first_lf || last_lf >= full.Count)
+    {
+      if (out != nullptr)
+        *out = st;
+      return false;   // no opt-in input to bridge S -> N: values only at snapshot ticks
+    }
+    ImGuiAppInputLog sub;
+    sub.CompositionID = full.CompositionID;
+    sub.FrameSize = full.FrameSize;
+    sub.SlotIds = full.SlotIds;
+    sub.SlotOffsets = full.SlotOffsets;
+    sub.SlotSizes = full.SlotSizes;
+    sub.Count = last_lf - first_lf + 1;
+    sub.Frames.resize(sub.Count * sub.FrameSize);
+    memcpy(sub.Frames.Data, full.Frames.Data + (ImS64)first_lf * full.FrameSize, (size_t)sub.Count * (size_t)sub.FrameSize);
+    for (int f = first_lf; f <= last_lf; f++)
+      sub.StateHashes.push_back(full.StateHashes.Data[f]);
+    if (!ImGui::AppInputReplay(recon_app, &sub, &first_div))
+    {
+      if (out != nullptr)
+        *out = st;
+      return false;
+    }
+    st.ReplayedFrames = sub.Count;
+  }
+
+  st.FirstDivergence = first_div;
+  st.ReconstructedHash = ImGui::AppStateHash(recon_app);
+  st.Reconstructed = true;
+  if (out != nullptr)
+    *out = st;
+  return true;
+}
+
+IMGUI_API bool AppRunAttachWal(ImGuiAppRunIndex* run, const char* wal_path)
+{
+  IM_ASSERT(run != nullptr);
+  if (run == nullptr)
+    return false;
+
+  // Re-parsing clears the prior annotation (idempotent).
+  run->Commands.clear();
+  for (int i = 0; i < run->Ticks.Size; i++)
+  {
+    run->Ticks.Data[i].WalFirst = -1;
+    run->Ticks.Data[i].WalCount = 0;
+  }
+  if (wal_path == nullptr)
+    return false;
+
+  size_t size = 0;
+  void* bytes = ImFileLoadToMemory(wal_path, "rb", &size, 1);   // +1: null-terminated for line scan
+  if (bytes == nullptr)
+    return false;
+
+  // "[tick:N ...] ... execute command K" (imguiapp.cpp Command layer). Bucket by tick; lines arrive
+  // in tick order (WAL is append-only per frame), so the per-tick slice is contiguous.
+  char* line = (char*)bytes;
+  char* buf_end = (char*)bytes + size;
+  while (line < buf_end)
+  {
+    char* nl = strchr(line, '\n');
+    if (nl != nullptr)
+      *nl = 0;
+    const char* tk = strstr(line, "[tick:");
+    const char* ex = strstr(line, "execute command ");
+    if (tk != nullptr && ex != nullptr)
+    {
+      ImGuiAppRunCommand cmd;
+      cmd.Tick = (ImU64)strtoull(tk + 6, nullptr, 10);
+      cmd.CommandId = (int)strtol(ex + 16, nullptr, 10);   // 16 = strlen("execute command ")
+      run->Commands.push_back(cmd);
+    }
+    if (nl == nullptr)
+      break;
+    line = nl + 1;
+  }
+  IM_FREE(bytes);
+
+  // Fill each tick's contiguous slice into Commands (tick == Ticks[i].Tick).
+  for (int c = 0; c < run->Commands.Size; c++)
+  {
+    for (int i = 0; i < run->Ticks.Size; i++)
+    {
+      if (run->Ticks.Data[i].Tick != run->Commands.Data[c].Tick)
+        continue;
+      if (run->Ticks.Data[i].WalFirst < 0)
+        run->Ticks.Data[i].WalFirst = c;
+      run->Ticks.Data[i].WalCount++;
+      break;
+    }
+  }
   return true;
 }
 
