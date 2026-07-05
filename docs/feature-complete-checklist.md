@@ -607,9 +607,18 @@ extends those rails rather than inventing parallel ones.
 - [ ] **F59 codegen emits authored order** — push order from the order record where topo allows;
   conflict = validation error, not silent reorder.
   *Accept: codegen-proof corpus extended.*
-- [ ] **F60 chip-drag reorder + click-nudge** — drag on ScopeStripRects (published already) +
+- [x] **F60 chip-drag reorder + click-nudge** — drag on ScopeStripRects (published already) +
   nudge fallback; title ordinals update same frame.
   *Accept: drag test + nudge test + save/load + undo + emission.*
+  DONE: `AppHandleScopeStripDrag` runs pre-submission (layer-drag idiom), hit-tests last frame's published
+  `ScopeStripRects`/`ScopeStripNodes`, latches `ed->StripDragNode` on press, and calls `AppScopeOrderMoveMember`
+  (recompute seq -> remove -> re-insert at clamped slot -> `AppScopeOrderStore` find-or-add). Refuses core-layer
+  permutes (`AppScopeOrderPermutesCore`); suppresses the LMB-pan for the drag's life; ordinals update the same
+  frame (writes before the strip/card draw). Nudge fallback: `[`/`]` on the selected drilled member ->
+  `AppScopeOrderNudge` one-slot. Undo rides the per-frame checkpoint. step96_chip_drag_reorder (real mouse over
+  the chips), step97_chip_nudge, step98_order_gesture_roundtrip_undo. FIX during merge: the F58 `Order=` loader
+  had a use-after-free (pushed a populated local -> memcpy'd + freed its NodeIds buffer; flaky step93) -- fixed
+  to fill in place. nodes 107/107 stable x3.
 
 ## P9.5 — run it without a build: playback debugger + previewer (decided 2026-07-05)
 
