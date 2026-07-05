@@ -415,10 +415,15 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   valid chain surviving, a broken chain [W, C2] truncating to [W], mutation-under-drill (deleting a
   member keeps the scope), and validate-on-mutate (deleting the drilled node truncates to root).
   Nodes 92/92, headless 28/28, core 87/0.
-- [ ] **F44 per-scope sequence tidy** — on-demand verb arranging members left→right in execution
+- [x] **F44 per-scope sequence tidy** — on-demand verb arranging members left→right in execution
   order (AppScopeSequenceIds; consumes F58's authored order automatically once it lands),
   writing THIS scope's placements only.
   *Accept: test: tidy in scope → order left→right; GridPos untouched (step45 idiom).*
+  DONE: `AppScopeSequenceTidy` lays the drilled scope's members left→right in `AppScopeSequenceIds`
+  order, writing scope placement records (`AppNodeScopePosStore`) only -- root GridPos untouched; it
+  falls back to `AppGraphAutoLayout` at root / non-sequential scopes. The Tidy verb (L key, gizmo,
+  palette id 10) now calls it. `step84_scope_sequence_tidy` drills into a window with 3 hosted controls,
+  tidies, and asserts left→right on one row with GridPos unchanged. Nodes 93/93, headless 28/28, core 87/0.
 - [ ] **F45 portal completion** — outbound label spec (`field ▸ Consumer`), outbound test, 0.9 em
   chip text slot, border mix toward neutral, inside-pin hover halo.
   *Accept: outbound + hover tests; on-camera chip capture.*

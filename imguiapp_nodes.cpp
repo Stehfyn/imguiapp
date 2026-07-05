@@ -5297,6 +5297,37 @@ namespace ImGui
     }
   }
 
+  // Per-scope sequence tidy (F44): arrange the drilled scope's members left -> right in execution order
+  // (AppScopeSequenceIds), writing THIS scope's placement records only -- root GridPos stays put (the
+  // step45 altitude split). Non-sequential scopes (control/struct interiors) have no order, so fall back
+  // to the classic containment tidy.
+  void AppScopeSequenceTidy(ImGuiAppGraph* g, bool show_live)
+  {
+    IM_ASSERT(g != nullptr);
+    ImVector<int> seq;
+    if (AppScopeCurrent(g) >= 0)
+      AppScopeSequenceIds(g, &seq);
+    if (seq.Size == 0)
+    {
+      AppGraphAutoLayout(g, show_live);   // root, or a scope with no member sequence
+      return;
+    }
+    const float x0 = 80.0f;
+    const float y0 = 60.0f;
+    const float gap = 60.0f;
+    float x = x0;
+    for (int i = 0; i < seq.Size; i++)
+    {
+      ImGuiAppNode* n = AppGraphFindNode(g, seq.Data[i]);
+      if (n == nullptr)
+        continue;
+      const ImVec2 sz = AppLayoutPureSize(g, n);
+      AppNodeScopePosStore(g, seq.Data[i], ImVec2(x, y0));   // interior placement only; GridPos untouched
+      n->_NeedsPlace = true;
+      x += sz.x + gap;
+    }
+  }
+
   // Accent color that identifies the current scope everywhere (badges, arrows, breadcrumb tail).
   static ImU32 AppScopeAccent(const ImGuiAppGraph* g)
   {
@@ -7757,7 +7788,7 @@ namespace ImGui
         fit_all();
       if (ImGui::IsKeyPressed(ImGuiKey_L, false) && !ImGui::GetIO().KeyCtrl)
       {
-        AppGraphAutoLayout(g, show_live);
+        AppScopeSequenceTidy(g, show_live);
         fit_all();
       }
       if (ImGui::IsKeyPressed(ImGuiKey_G, false))
@@ -8330,7 +8361,7 @@ namespace ImGui
           added = fid >= 0 ? AppGraphFindNode(g, fid) : nullptr;
           break;
         }
-        case 10: AppGraphAutoLayout(g, show_live); fit_all(); break;
+        case 10: AppScopeSequenceTidy(g, show_live); fit_all(); break;
         case 11: fit_all(); break;
         case 12: fit_ids(g->Selection); break;
         case 13: snap_grid = !snap_grid; break;
@@ -8631,7 +8662,7 @@ namespace ImGui
       if (gizmo(ICON_FA_EXPAND, "Fit all (Home)", false))
         fit_all();
       if (gizmo(ICON_FA_WAND_MAGIC_SPARKLES, "Tidy layout (L)", false))
-        AppGraphAutoLayout(g, show_live);
+        AppScopeSequenceTidy(g, show_live);
       if (gizmo(ICON_FA_MAGNET, "Snap to grid (G)", snap_grid))
         snap_grid = !snap_grid;
       if (gizmo(ICON_FA_SLIDERS, "Overlays", !(ov_grid && ov_bands && ov_frames && ov_minimap)))

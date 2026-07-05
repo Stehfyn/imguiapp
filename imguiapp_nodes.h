@@ -1079,4 +1079,7 @@ namespace ImGui
   // centered. L key inside the editor; also exposed for a toolbar. Layers keep their own column
   // packing; live-mirror nodes are left in place.
   IMGUI_API void                AppGraphAutoLayout(ImGuiAppGraph* g, bool show_live);
+  // F44: drilled-scope tidy -- members left->right in execution order, this scope's placements only
+  // (root GridPos untouched); falls back to AppGraphAutoLayout at root / non-sequential scopes.
+  IMGUI_API void                AppScopeSequenceTidy(ImGuiAppGraph* g, bool show_live);
 }
