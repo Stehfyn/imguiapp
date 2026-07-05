@@ -372,9 +372,12 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
     the current node as the selection moves on; the node context menu gained "Inspect here"
     (`AppGraphInspectHere`); the X still dismisses. `step77_quick_inspector_pin` inspects-here on A,
     moves the selection to B, asserts the pin holds A, then clicks the pin to release it.
+  - project inspector Logging section: `ShowComposerProjectInspector` gained a Logging section exposing
+    the running app's WAL level (combo) + path. `composer_project_logging` forces an empty selection
+    (project inspector) and asserts the Document + Logging section headers render. (Section content sits
+    behind the collapsed-by-default + combo-addressability combo -- the header is the reliable subject.)
   Remaining: per-kind section-collapse persistence, section kebab (reset/copy/paste) on every section
-  (Style already has it), unified row grammar + row context actions, multi-select mixed-value beyond
-  Style, project inspector logging section.
+  (Style already has it), unified row grammar + row context actions, multi-select mixed-value beyond Style.
 
 ## P7 — scopes + canvas completion
 

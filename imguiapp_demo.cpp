@@ -1615,6 +1615,26 @@ namespace
       ImGui::Spacing();
     }
 
+    // Logging (F41): the running app's write-ahead log -- level (what gets recorded) + the file path.
+    if (ImGui::AppInspectorSection("##psec_log", ICON_FA_FILE_LINES, "Logging", nullptr, nullptr))
+    {
+      ImGuiAppWAL* wal = doc->Mirror != nullptr ? doc->Mirror->WAL : nullptr;
+      static const char* levels[] = { "Off", "Lifecycle", "Frame" };
+      ImGui::TextDisabled("WAL level");
+      ImGui::SameLine(label_w);
+      int lvl = wal != nullptr ? ImClamp((int)wal->Level, 0, IM_ARRAYSIZE(levels) - 1) : 0;
+      ImGui::SetNextItemWidth(em * 9.0f);
+      ImGui::BeginDisabled(wal == nullptr);   // no running WAL -> the control still shows, inert
+      if (ImGui::Combo("##wallevel", &lvl, levels, IM_ARRAYSIZE(levels)) && wal != nullptr)
+        wal->Level = lvl;
+      ImGui::EndDisabled();
+      ImGui::SetItemTooltip("Off = silent; Lifecycle = composition / storage / dispatch; Frame = + per-frame phases");
+      ImGui::TextDisabled("path");
+      ImGui::SameLine(label_w);
+      ImGui::TextUnformatted(wal != nullptr && wal->Path[0] ? wal->Path : "(none)");
+      ImGui::Spacing();
+    }
+
     if (ImGui::AppInspectorSection("##psec_theme", ICON_FA_PALETTE, "Composer theme", nullptr, nullptr))
     {
       ImGui::ImGuiAppChromeTheme* theme = ImGui::AppGraphChromeTheme();
