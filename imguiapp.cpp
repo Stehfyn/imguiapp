@@ -111,6 +111,12 @@ IMGUI_API void ImGuiAppAssertFail(const char* expr, const char* file, int line)
     fprintf(stderr, "ASSERT FAILED: (%s) at %s:%d\n%s", expr, file, line, stack);
     fflush(stderr);
 
+    // Flight recorder (F15): dump every armed ring beside the assert WAL before we exit, so the last
+    // seconds of frames survive the crash the way the WAL log does.
+    char reason[IM_LABEL_SIZE + 128];
+    ImFormatString(reason, IM_ARRAYSIZE(reason), "ASSERT: (%s) at %s:%d", expr, file, line);
+    ImGui::AppDumpAssertRings(reason);
+
 #ifdef _WIN32
     if (IsDebuggerPresent())
     {

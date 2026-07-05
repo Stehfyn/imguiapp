@@ -967,6 +967,11 @@ static void AvDrainCapture(ImGuiAppRecorder* rec)
 namespace ImGui
 {
 
+// Assert forensics (F15): every live ring recorder registers here so ImGuiAppAssertFail can dump them
+// all before the process exits -- the flight recording lands beside the assert WAL. Non-ring recorders
+// (linear takes) do not register; they have no ring to snapshot.
+static ImVector<ImGuiAppRecorder*> g_assert_recorders;
+
 static ImGuiAppRecorder* AvBeginCommon(ImGuiApp* app, ImGuiAppAVEncoder* encoder, const ImGuiAppAVEncodeConfig* config)
 {
   IM_ASSERT(app != nullptr && encoder != nullptr && config != nullptr && config->OutputPath != nullptr);
@@ -1149,6 +1154,9 @@ IMGUI_API void AppRecordEnd(ImGuiAppRecorder* rec)
   rec->Queue.clear();
   if (rec->App != nullptr && rec->App->Recorder == rec)
     rec->App->Recorder = nullptr;   // OnEncodeFrame must never pump a freed recorder
+  for (int i = g_assert_recorders.Size - 1; i >= 0; i--)
+    if (g_assert_recorders.Data[i] == rec)
+      g_assert_recorders.erase(g_assert_recorders.Data + i);   // no dangling recorder in the assert dump list
   IM_DELETE(rec);
 }
 
@@ -1167,6 +1175,7 @@ IMGUI_API ImGuiAppRecorder* AppRecordBeginRing(ImGuiApp* app, ImGuiAppAVEncoder*
   rec->Active = true;
   if (app->Recorder == nullptr)
     app->Recorder = rec;   // OnEncodeFrame pumps it; explicit AppRecordPump remains valid
+  g_assert_recorders.push_back(rec);   // dump-on-assert (F15); removed in AppRecordEnd
   AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "av: flight recorder armed (%.1fs / %dMB @ %.0f fps)",
               rec->Ring.Seconds, rec->Ring.MaxMemoryMB, rec->Ring.Fps);
   return rec;
@@ -1279,6 +1288,17 @@ IMGUI_API bool AppRecordDumpRing(ImGuiAppRecorder* rec, const char* reason)
   if (cursor < stream.Size)
     AppWALWrite(rec->App->WAL, ImGuiAppWALLevel_Lifecycle, "av: ring dump stream truncated (%d of %d bytes carried)", cursor, stream.Size);
   return ok;
+}
+
+// F15: dump every registered ring recorder before the process exits on an assert. Called by
+// ImGuiAppAssertFail after it writes the assert WAL, so the flight recording lands beside it.
+IMGUI_API int AppDumpAssertRings(const char* reason)
+{
+  int dumped = 0;
+  for (int i = 0; i < g_assert_recorders.Size; i++)
+    if (AppRecordDumpRing(g_assert_recorders.Data[i], reason))
+      dumped++;
+  return dumped;
 }
 
 //-----------------------------------------------------------------------------

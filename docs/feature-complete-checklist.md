@@ -75,9 +75,12 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   *Accept: no canvas-corner toast; status-slot test asserts notice text for a refused link AND a
   refused compose (step56; the B1 canvas toast + its ToastSeq/ToastT0 state are gone; status-hint
   expiry unified to 2.5 s).*
-- [ ] **F15 assert → flight-recorder dump** — ImGuiAppAssertFail dumps registered AV record rings
+- [x] **F15 assert → flight-recorder dump** — ImGuiAppAssertFail dumps registered AV record rings
   before exit (wiring exists for WAL only today).
-  *Accept: forced-assert child-process test finds the ring dump beside the assert WAL.*
+  *Accept: forced-assert child-process test finds the ring dump beside the assert WAL. (Ring
+  recorders auto-register in AppRecordBeginRing; AppDumpAssertRings dumps them all; ImGuiAppAssertFail
+  calls it after the WAL write. headless-verify `--forced-assert-ring` child arms a ring, captures
+  frames, asserts; parent `composer_assert_ring_dump` finds the QOI dump dir.)*
 
 ## P3 — one emitter, byte-locked
 

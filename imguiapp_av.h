@@ -221,4 +221,9 @@ namespace ImGui
   // IM_ASSERT sink (ImGuiAppAssertFail) dumps it with the failed expression as reason.
   IMGUI_API bool AppRecordDumpRing(ImGuiAppRecorder* rec, const char* reason);
 
+  // Assert forensics (F15): dump every live ring recorder (each auto-registered by AppRecordBeginRing)
+  // with `reason`. ImGuiAppAssertFail calls this before exit so the flight recording lands beside the
+  // assert WAL. Returns the number of rings successfully dumped.
+  IMGUI_API int AppDumpAssertRings(const char* reason);
+
 } // namespace ImGui
