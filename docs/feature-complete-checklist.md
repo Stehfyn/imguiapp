@@ -20,8 +20,9 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   InitialSize / DockDir / DockSize (today inspector-editable, written by no key). Also serializes
   the window/sidebar Flags mask (same class, previously written by no key).
   *Accept: covered by F01; step15 round-trip extended now.*
-- [ ] **F03 event round-trip tests** — ImGuiAppEventDesc through save/load, undo, copy/paste.
-  *Accept: dedicated test.*
+- [x] **F03 event round-trip tests** — ImGuiAppEventDesc through save/load, undo, copy/paste.
+  *Accept: dedicated test (step50 save/load + undo; step50b Ctrl+C/Ctrl+V; all four edges, both
+  actions, comma-bearing expr).*
 - [ ] **F04 prefabs on disk** — prefab registry serialized beside the graph file, loaded on
   start; starter library: producer/consumer pair, event→command control.
   *Accept: prefab stamped after restart reproduces the saved subtree; F01 covers the records.*
