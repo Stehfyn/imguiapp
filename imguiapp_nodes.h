@@ -583,6 +583,10 @@ struct ImGuiAppEditorState
   ImVector<ImGuiAppPrefab>             Prefabs;                     // saved subtrees (owned strings)
   ImFont*                              CodeFont = nullptr;          // code panels; null -> UI font
   ImGuiAppEditorUndo                   Undo;
+  ImVec4                               ScopeWallRect = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);   // scope-interior walls, model units (min.xy, max.xy); published by the walls pass, consumed same-frame by brackets/rail/portals
+  ImVec4                               ScopeBeginRect = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);  // Begin bracket plate, model units
+  ImVec4                               ScopeEndRect = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);    // End bracket plate, model units
+  bool                                 ScopeWallValid = false;                            // rects above valid this frame (window/sidebar scope only)
 };
 
 // The whole authored graph. One monotonic id allocator shared by every node/port/body-attr/link:
@@ -829,6 +833,25 @@ namespace ImGui
   // The graph's canvas-engine state (see imguiapp_canvas.h): hosts and tests can query geometry
   // or drive the camera. Created on the graph's first editor frame.
   IMGUI_API ::ImGuiCanvasState* AppGraphEditorCanvas(const ImGuiAppGraph* g);
+
+  // Scope interior: a data edge crossing the current drill-down boundary docks on the wall as a
+  // portal chip (inbound producers left, outbound consumers right). Derived per frame from
+  // Links + ViewScope -- no ids, no persistence, no codegen, no validation.
+  struct ImGuiAppScopePortal
+  {
+    int  LinkId;        // the crossing data edge
+    int  InsidePortId;  // the in-scope endpoint's port (the chip wires to this pin)
+    int  OutsideNodeId; // the off-scope node the chip names; click jumps to its scope
+    bool Inbound;       // true: outside producer -> inside consumer (left wall); false: right wall
+
+    ImGuiAppScopePortal() { LinkId = -1; InsidePortId = -1; OutsideNodeId = -1; Inbound = true; }
+  };
+  IMGUI_API void                AppScopeCollectPortals(const ImGuiAppGraph* g, ImVector<ImGuiAppScopePortal>* out);
+
+  // One-line owner readout for the scope wall title bar: a window's placement
+  // ("320x240 @ (64,48) . AlwaysAutoResize"), a sidebar's dock ("dock Down . auto . AutoResize").
+  // Empty for kinds without placement/dock config.
+  IMGUI_API void                AppNodeConfigSummary(const ImGuiAppNode* n, char* buf, int buf_size);
 
   // Cached validation, keyed by AppGraphSignature (+ bindings): cheap enough to query every frame.
   // Worst per-node severity: 0 = clean, 1 = warning, 2 = error.

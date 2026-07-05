@@ -12,6 +12,7 @@
 // [SECTION] Hover sync (brushing across coordinated views) + cached validation
 // [SECTION] Inspector (component sections, style/color descs, project + multi-select)
 // [SECTION] Whole-graph editor render (canvas, decorations, gizmos, palette, keyboard)
+// [SECTION] Scope interior (walls, lifecycle brackets, boundary portals, density altitude)
 // [SECTION] Tidy tree layout (measured-size layered DAG)
 // [SECTION] Topological order + whole-graph codegen
 // [SECTION] Event expression checking (AppEventExprCheck)
@@ -5106,6 +5107,115 @@ namespace ImGui
       dl->AddText(ImVec2(c.x - ns.x * 0.5f, c.y - ns.y * 0.5f), AppComposerGetStyle()->TextOnAccent, num);
       ImGui::PopFont();
     }
+  }
+
+  //-----------------------------------------------------------------------------
+  // [SECTION] Scope interior (walls, lifecycle brackets, boundary portals, density altitude)
+  //
+  // What nodes look like below the composition root (docs/scope-interior-design.md). Inside a
+  // window/sidebar scope: the owner's card silhouette becomes the room (walls with title bar +
+  // config readout), grey Begin/End bracket plates give the execution rail endpoints, data edges
+  // crossing the boundary dock on the wall as portal chips, and member cards carry full authoring
+  // detail while everywhere else they fold to identity cards.
+  //
+  // Geometry phase audit (docs/phase-coherence.md checklist, classified up front):
+  //   * walls           -- bounds from the model-unit geometry cache (AppNodeModelSize via the
+  //                        group_box accumulation) transformed by THIS frame's camera; drawn
+  //                        pre-submission on the background list, same path as group frames.
+  //                        Published to ImGuiAppEditorState::ScopeWallRect in model units.
+  //   * brackets        -- rects derived from the published wall rect (model units, same frame);
+  //                        drawn post-CanvasEnd with this frame's camera. No measured pixels cross
+  //                        a frame boundary.
+  //   * rail endpoints  -- read the published bracket rects in the same post-CanvasEnd pass that
+  //                        already draws badges/arrows from this frame's read-back.
+  //   * portal chips    -- derived every frame from Links + ViewScope (pure model); chip anchors
+  //                        read pin geometry post-CanvasEnd (coherent per rule 5). No caches, no
+  //                        measure->apply loop.
+  //   * density flip    -- pure predicate on model state; the card resize it causes is the
+  //                        framework's documented content-driven T+1 in invariant units.
+  //-----------------------------------------------------------------------------
+
+  // Detail altitude: a node shows its full authoring body only when the current scope is its
+  // scope-parent; everywhere else it folds to an identity card (title, pins, one summary line).
+  // STUB (L1): full body everywhere == today's behavior.
+  static bool AppScopeDetailAltitude(const ImGuiAppGraph* g, const ImGuiAppNode* n)
+  {
+    IM_UNUSED(g);
+    IM_UNUSED(n);
+    return true;
+  }
+
+  // Identity-card summary line: "2 fields . 1 event . emits SetLevel". Empty when there is
+  // nothing to fold. STUB (L1).
+  static void AppNodeSummaryLine(const ImGuiAppGraph* g, const ImGuiAppNode* n, char* buf, int buf_size)
+  {
+    IM_UNUSED(g);
+    IM_UNUSED(n);
+    if (buf_size > 0)
+      buf[0] = '\0';
+  }
+
+  // STUB (L1): implemented in the walls slice.
+  void AppNodeConfigSummary(const ImGuiAppNode* n, char* buf, int buf_size)
+  {
+    IM_UNUSED(n);
+    if (buf_size > 0)
+      buf[0] = '\0';
+  }
+
+  // Walls render only for scopes whose owner has a card silhouette to become the room
+  // (window/sidebar first slice; layer scopes keep their phase bands). STUB (L1).
+  static bool AppScopeWallsWanted(const ImGuiAppGraph* g)
+  {
+    IM_UNUSED(g);
+    return false;
+  }
+
+  // Scope walls: the owner's root silhouette at room size around the members' bounds -- squared
+  // plate, kind-hue header rule, title bar = name + kind word + AppNodeConfigSummary readout.
+  // Pre-submission, background draw list; publishes ScopeWallRect (model units) and computes the
+  // bracket rects. em_base/fh_base are the zoom-free font metrics captured before CanvasBegin
+  // (the group_box idiom). STUB (L1): publishes nothing, draws nothing.
+  static void AppDrawScopeWalls(ImGuiAppGraph* g, ImGuiCanvasState* cv, bool show_live, float em_base, float fh_base)
+  {
+    IM_UNUSED(cv);
+    IM_UNUSED(show_live);
+    IM_UNUSED(em_base);
+    IM_UNUSED(fh_base);
+    AppGraphEditorState(g)->ScopeWallValid = false;
+  }
+
+  // Lifecycle bracket plates: grey framework-internal Begin("name") / End() at the interior
+  // top-left / bottom-right of the walls. Post-CanvasEnd, from the published rects. STUB (L1).
+  static void AppDrawScopeBrackets(ImGuiAppGraph* g)
+  {
+    IM_UNUSED(g);
+  }
+
+  // STUB (L1): implemented in the portals slice.
+  void AppScopeCollectPortals(const ImGuiAppGraph* g, ImVector<ImGuiAppScopePortal>* out)
+  {
+    IM_UNUSED(g);
+    out->resize(0);
+  }
+
+  // Portal chips: wall-docked pills for each crossing data edge (collected by
+  // AppScopeCollectPortals), wired to the in-scope pin; hover brushes both ends, click jumps to
+  // the off-scope node's scope. Overlay hit-test rules apply. STUB (L1).
+  static void AppDrawScopePortals(ImGuiAppGraph* g, int* selected_node_id)
+  {
+    IM_UNUSED(g);
+    IM_UNUSED(selected_node_id);
+  }
+
+  // Jump navigation shared by portal chips (and future deep links): ViewScope becomes the target's
+  // scope-parent chain, the target becomes the selection; the reveal uses minimal pan (the camera
+  // belongs to the user). STUB (L1).
+  static void AppScopeJumpToNode(ImGuiAppGraph* g, int node_id, int* selected_node_id)
+  {
+    IM_UNUSED(g);
+    IM_UNUSED(node_id);
+    IM_UNUSED(selected_node_id);
   }
 
   // Pin color by port kind: data pins blue, containment pins orange (tie pins use AppPinTieColor green).
