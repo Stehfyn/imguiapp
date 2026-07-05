@@ -620,6 +620,10 @@ struct ImGuiAppGraph
   ImVec4                         _GroupDragFrame0           = ImVec4(0.0f, 0.0f, 0.0f, 0.0f); // the dragged group's frame at drag start, model (transient)
   ImVec2                         _GroupDragApplied          = ImVec2(0.0f, 0.0f); // displacement actually granted so far (greedy catch-up; transient)
   bool                           _GroupDragMoved            = false;   // gesture latch: drag vs fold-click (transient)
+  int                            _GroupDragPending          = -1;      // owner whose settled group-drag write defers to the post-CanvasEnd update pass; -1 = none (transient)
+  bool                           _LayerBoxValid             = false;   // this frame's layer-column box, the deferred group-drag clamp's solid obstacle, MODEL units (transient)
+  ImVec2                         _LayerBoxMin               = ImVec2(0.0f, 0.0f);
+  ImVec2                         _LayerBoxMax               = ImVec2(0.0f, 0.0f);
   ImVector<ImGuiAppGroupFrame>   _GroupFrames;                         // THIS frame's published group frames, model units (transient)
   ImVector<ImGuiAppGroupFrame>   _GroupFramesPrev;                     // last frame's publication, what consumers read (transient)
   mutable ImGuiAppEditorState*   _Ed                        = nullptr; // editor session state; opaque to reflection/serialization (created on first editor use, freed with the process)

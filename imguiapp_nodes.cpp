@@ -6133,8 +6133,13 @@ namespace ImGui
 
     // The layer column is solid ground: window-group nodes can never be dragged into it
     // (engine solid-drag clamp; consumed by the next frame's FSM in model units).
+    g->_LayerBoxValid = col_geom.Valid;
     if (col_geom.Valid)
+    {
       ImGui::CanvasAddSolidRect(cv, ImGui::CanvasFromScreen(cv, col_geom.BoxMin), ImGui::CanvasFromScreen(cv, col_geom.BoxMax));
+      g->_LayerBoxMin = ImGui::CanvasFromScreen(cv, col_geom.BoxMin);   // model, for the deferred group-drag clamp (update pass)
+      g->_LayerBoxMax = ImGui::CanvasFromScreen(cv, col_geom.BoxMax);
+    }
 
     // Scope walls (docs/scope-interior-design.md rule A): drilled into a window/sidebar, the
     // owner's silhouette becomes the room. Background channel like the pipeline box; publishes
@@ -6152,6 +6157,7 @@ namespace ImGui
     // Sole producer of _GroupFrames (model units); consumers read _GroupFramesPrev.
     g->_GroupFramesPrev.swap(g->_GroupFrames);
     g->_GroupFrames.resize(0);
+    g->_GroupDragPending = -1;   // a settled group-drag this frame records its owner here; applied post-CanvasEnd
     if (ov_frames)
     {
       auto group_box = [&](int owner_id, ImU32 kind_col, int depth, bool include_owner)
@@ -6248,127 +6254,13 @@ namespace ImGui
           }
           if (act && ImGui::IsMouseDragging(ImGuiMouseButton_Left) && !(owner_seated && owner->GroupCollapsed) && g->_GroupDragOrig.Size > 0)
           {
-            // Greedy catch-up: each frame resolves the REMAINING displacement toward the
-            // mouse-anchored target from the placement actually granted so far, clamped per axis
-            // against the other window groups' FRAMES (title band included) and the layer
-            // group's box. Granted progress accumulates: a diagonal along an obstacle edge
-            // slides now and continues later, and a blocked frame never resets earlier progress
-            // (absolute re-derivation from the drag start snapped the group back whenever both
-            // axis orders clamped). In free space the step equals the full remainder, so the
-            // group stays exactly mouse-anchored.
-            ImVec2 disp = ImGui::CanvasFromScreen(cv, ImGui::GetIO().MousePos) - g->_GroupDragMouse0 - g->_GroupDragApplied;
-
-            // The moving FRAME at its CURRENT placement (drag-start frame + granted displacement).
-            const float mv_x0 = g->_GroupDragFrame0.x + g->_GroupDragApplied.x;
-            const float mv_y0 = g->_GroupDragFrame0.y + g->_GroupDragApplied.y;
-            const float mv_x1 = g->_GroupDragFrame0.z + g->_GroupDragApplied.x;
-            const float mv_y1 = g->_GroupDragFrame0.w + g->_GroupDragApplied.y;
-
-            // kNoise: bound on T+1 measurement variance (font rounding, sub-unit content wobble)
-            // republished into frame extents. Penetration within it clamps -- resolving to the
-            // small opposing displacement that restores contact. Deeper interpenetration cannot be
-            // swept: drop THAT obstacle, keep clamping against the rest (one overlap must not
-            // disable the whole clamp).
-            const float kEps = 1.0f;
-            auto overlap = [](float a0, float a1, float b0, float b1) { return a0 < b1 && a1 > b0; };
-            ImVector<ImVec4> ob;
-            ob.reserve(g->_GroupFramesPrev.Size + 1);
-            if (col_geom.Valid)
-            {
-              const ImVec2 bmn = ImGui::CanvasFromScreen(cv, col_geom.BoxMin);
-              const ImVec2 bmx = ImGui::CanvasFromScreen(cv, col_geom.BoxMax);
-              if (!(overlap(mv_x0, mv_x1, bmn.x + kEps, bmx.x - kEps) && overlap(mv_y0, mv_y1, bmn.y + kEps, bmx.y - kEps)))
-                ob.push_back(ImVec4(bmn.x, bmn.y, bmx.x, bmx.y));
-            }
-            for (int i2 = 0; i2 < g->_GroupFramesPrev.Size; i2++)
-            {
-              const ImGuiAppGroupFrame& gf = g->_GroupFramesPrev.Data[i2];
-              if (gf.OwnerId == owner_id)
-                continue;
-              if (overlap(mv_x0, mv_x1, gf.MinM.x + kEps, gf.MaxM.x - kEps) && overlap(mv_y0, mv_y1, gf.MinM.y + kEps, gf.MaxM.y - kEps))
-                continue;
-              ob.push_back(ImVec4(gf.MinM.x, gf.MinM.y, gf.MaxM.x, gf.MaxM.y));
-            }
-            if (mv_x0 <= mv_x1)
-            {
-              // Slide-to-contact, both axis orders; the order that lands closest to the mouse
-              // wins. A single fixed order clamps the first axis against the drag-START band of
-              // the other, which can pin the group to an obstacle edge for the whole drag even
-              // after it has cleared the obstacle on the other axis.
-              auto slide_x = [&](float dx, float y0, float y1) -> float
-              {
-                for (int oi = 0; oi < ob.Size; oi++)
-                  if (overlap(y0, y1, ob.Data[oi].y, ob.Data[oi].w))
-                  {
-                    if (dx > 0.0f && mv_x1 <= ob.Data[oi].x + kEps && mv_x1 + dx > ob.Data[oi].x)
-                      dx = ob.Data[oi].x - mv_x1;
-                    if (dx < 0.0f && mv_x0 >= ob.Data[oi].z - kEps && mv_x0 + dx < ob.Data[oi].z)
-                      dx = ob.Data[oi].z - mv_x0;
-                  }
-                return dx;
-              };
-              auto slide_y = [&](float dy, float x0, float x1) -> float
-              {
-                for (int oi = 0; oi < ob.Size; oi++)
-                  if (overlap(x0, x1, ob.Data[oi].x, ob.Data[oi].z))
-                  {
-                    if (dy > 0.0f && mv_y1 <= ob.Data[oi].y + kEps && mv_y1 + dy > ob.Data[oi].y)
-                      dy = ob.Data[oi].y - mv_y1;
-                    if (dy < 0.0f && mv_y0 >= ob.Data[oi].w - kEps && mv_y0 + dy < ob.Data[oi].w)
-                      dy = ob.Data[oi].w - mv_y0;
-                  }
-                return dy;
-              };
-              ImVec2 a;
-              a.x = slide_x(disp.x, mv_y0, mv_y1);
-              a.y = slide_y(disp.y, mv_x0 + a.x, mv_x1 + a.x);
-              ImVec2 b;
-              b.y = slide_y(disp.y, mv_x0, mv_x1);
-              b.x = slide_x(disp.x, mv_y0 + b.y, mv_y1 + b.y);
-              const float ea = (a.x - disp.x) * (a.x - disp.x) + (a.y - disp.y) * (a.y - disp.y);
-              const float eb = (b.x - disp.x) * (b.x - disp.x) + (b.y - disp.y) * (b.y - disp.y);
-              disp = ea <= eb ? a : b;
-            }
-            g->_GroupDragApplied += disp;
-            if (g->_GroupDragApplied.x != 0.0f || g->_GroupDragApplied.y != 0.0f)
-              g->_GroupDragMoved = true;
-            for (int m = 0; m < g->_GroupDragOrig.Size; m++)
-            {
-              const int mid = (int)g->_GroupDragOrig.Data[m].x;
-              ImGuiAppNode* mm = AppGraphFindNode(g, mid);
-              if (mm == nullptr)
-                continue;
-              const ImVec2 np(g->_GroupDragOrig.Data[m].y + g->_GroupDragApplied.x, g->_GroupDragOrig.Data[m].z + g->_GroupDragApplied.y);
-              if (AppNodeHiddenByCollapse(g, mid) || !AppEditorNodeWasSubmitted(g, mid))
-              {
-                // Not on the canvas: move its stored model pos only, at the CURRENT altitude.
-                if (at_root)
-                {
-                  mm->GridPos = np;
-                  mm->HasGridPos = true;
-                }
-                else
-                {
-                  AppNodeScopePosStore(g, mid, np);
-                }
-                mm->_NeedsPlace = true;  // re-seat it at this pos when it next submits
-              }
-              else
-              {
-                // The canvas write is the drag; the read-back routes it to GridPos at root or to
-                // this scope's placements while drilled.
-                AppCanvasSetNodePos(g, mid, np);
-                if (at_root)
-                  mm->GridPos = np;
-              }
-            }
-
-            fr_mn_m = ImVec2(g->_GroupDragFrame0.x + g->_GroupDragApplied.x, g->_GroupDragFrame0.y + g->_GroupDragApplied.y);
-            fr_mx_m = ImVec2(g->_GroupDragFrame0.z + g->_GroupDragApplied.x, g->_GroupDragFrame0.w + g->_GroupDragApplied.y);
-            mn = ImGui::CanvasToScreen(cv, fr_mn_m);
-            mx = ImGui::CanvasToScreen(cv, fr_mx_m);
-            bar_mn = ImVec2(mn.x + pad, mn.y);
-            bar_mx = ImVec2(mx.x - pad, mn.y + title_h * 1.15f);
+            // Record the drag intent ONLY; the clamp + model write run in the post-CanvasEnd update pass
+            // (AppGraphApplyGroupDrag, below). Writing here gated the clamp on last frame's obstacle set
+            // (_GroupFramesPrev) because THIS frame's group frames are still mid-publication at this point
+            // in the pass -- the phase break that let a group clip past a neighbour it should slide against.
+            // Deferred, the clamp reads this frame's complete _GroupFrames + layer box; the group + its
+            // nodes move on the next frame (deliberate T+1, model units, docs/phase-coherence.md rule 4).
+            g->_GroupDragPending = owner_id;
           }
           if (ImGui::IsItemDeactivated() && !g->_GroupDragMoved)
           {
@@ -7177,6 +7069,102 @@ namespace ImGui
     ImGui::CanvasEnd(cv);
     const ImVec2 editor_size = ImGui::GetItemRectSize();   // captured before later items, for fit-all centering
     const ImVec2 editor_min  = ImGui::GetItemRectMin();    // editor canvas top-left (screen), for overlay extents
+
+    // Deferred group-drag application (docs/phase-coherence.md: mutate the model in the update pass, never
+    // mid-render). A group drag detected during the canvas pass recorded its owner in _GroupDragPending;
+    // the slide-to-contact clamp + the member position writes run HERE, where THIS frame's group frames
+    // (_GroupFrames) and layer box (_LayerBox) are fully published. The old inline write gated the clamp on
+    // last frame's obstacle set (_GroupFramesPrev, the only complete set available mid-render) -- so a group
+    // clipped past a neighbour it should slide against and could not reach contact with the layer column.
+    // Applied here, the group + its nodes move on the next frame (deliberate T+1 in model units, rule 4).
+    if (g->_GroupDragPending >= 0 && g->_GroupDragOrig.Size > 0)
+    {
+      const int drag_owner = g->_GroupDragPending;
+      ImVec2 disp = ImGui::CanvasFromScreen(cv, ImGui::GetIO().MousePos) - g->_GroupDragMouse0 - g->_GroupDragApplied;
+      const float mv_x0 = g->_GroupDragFrame0.x + g->_GroupDragApplied.x;
+      const float mv_y0 = g->_GroupDragFrame0.y + g->_GroupDragApplied.y;
+      const float mv_x1 = g->_GroupDragFrame0.z + g->_GroupDragApplied.x;
+      const float mv_y1 = g->_GroupDragFrame0.w + g->_GroupDragApplied.y;
+      const float kEps = 1.0f;   // T+1 measurement-variance deadband; penetration within it resolves to contact
+      auto overlap = [](float a0, float a1, float b0, float b1) { return a0 < b1 && a1 > b0; };
+      ImVector<ImVec4> ob;
+      ob.reserve(g->_GroupFrames.Size + 1);
+      if (g->_LayerBoxValid)
+      {
+        const ImVec2 bmn = g->_LayerBoxMin;
+        const ImVec2 bmx = g->_LayerBoxMax;
+        if (!(overlap(mv_x0, mv_x1, bmn.x + kEps, bmx.x - kEps) && overlap(mv_y0, mv_y1, bmn.y + kEps, bmx.y - kEps)))
+          ob.push_back(ImVec4(bmn.x, bmn.y, bmx.x, bmx.y));
+      }
+      for (int i2 = 0; i2 < g->_GroupFrames.Size; i2++)
+      {
+        const ImGuiAppGroupFrame& gf = g->_GroupFrames.Data[i2];
+        if (gf.OwnerId == drag_owner)
+          continue;
+        if (overlap(mv_x0, mv_x1, gf.MinM.x + kEps, gf.MaxM.x - kEps) && overlap(mv_y0, mv_y1, gf.MinM.y + kEps, gf.MaxM.y - kEps))
+          continue;
+        ob.push_back(ImVec4(gf.MinM.x, gf.MinM.y, gf.MaxM.x, gf.MaxM.y));
+      }
+      if (mv_x0 <= mv_x1)
+      {
+        auto slide_x = [&](float dx, float y0, float y1) -> float
+        {
+          for (int oi = 0; oi < ob.Size; oi++)
+            if (overlap(y0, y1, ob.Data[oi].y, ob.Data[oi].w))
+            {
+              if (dx > 0.0f && mv_x1 <= ob.Data[oi].x + kEps && mv_x1 + dx > ob.Data[oi].x)
+                dx = ob.Data[oi].x - mv_x1;
+              if (dx < 0.0f && mv_x0 >= ob.Data[oi].z - kEps && mv_x0 + dx < ob.Data[oi].z)
+                dx = ob.Data[oi].z - mv_x0;
+            }
+          return dx;
+        };
+        auto slide_y = [&](float dy, float x0, float x1) -> float
+        {
+          for (int oi = 0; oi < ob.Size; oi++)
+            if (overlap(x0, x1, ob.Data[oi].x, ob.Data[oi].z))
+            {
+              if (dy > 0.0f && mv_y1 <= ob.Data[oi].y + kEps && mv_y1 + dy > ob.Data[oi].y)
+                dy = ob.Data[oi].y - mv_y1;
+              if (dy < 0.0f && mv_y0 >= ob.Data[oi].w - kEps && mv_y0 + dy < ob.Data[oi].w)
+                dy = ob.Data[oi].w - mv_y0;
+            }
+          return dy;
+        };
+        ImVec2 a;
+        a.x = slide_x(disp.x, mv_y0, mv_y1);
+        a.y = slide_y(disp.y, mv_x0 + a.x, mv_x1 + a.x);
+        ImVec2 b;
+        b.y = slide_y(disp.y, mv_x0, mv_x1);
+        b.x = slide_x(disp.x, mv_y0 + b.y, mv_y1 + b.y);
+        const float ea = (a.x - disp.x) * (a.x - disp.x) + (a.y - disp.y) * (a.y - disp.y);
+        const float eb = (b.x - disp.x) * (b.x - disp.x) + (b.y - disp.y) * (b.y - disp.y);
+        disp = ea <= eb ? a : b;
+      }
+      g->_GroupDragApplied += disp;
+      if (g->_GroupDragApplied.x != 0.0f || g->_GroupDragApplied.y != 0.0f)
+        g->_GroupDragMoved = true;
+      for (int m = 0; m < g->_GroupDragOrig.Size; m++)
+      {
+        const int mid = (int)g->_GroupDragOrig.Data[m].x;
+        ImGuiAppNode* mm = AppGraphFindNode(g, mid);
+        if (mm == nullptr)
+          continue;
+        const ImVec2 np(g->_GroupDragOrig.Data[m].y + g->_GroupDragApplied.x, g->_GroupDragOrig.Data[m].z + g->_GroupDragApplied.y);
+        if (AppNodeHiddenByCollapse(g, mid) || !AppEditorNodeWasSubmitted(g, mid))
+        {
+          if (at_root) { mm->GridPos = np; mm->HasGridPos = true; }
+          else         { AppNodeScopePosStore(g, mid, np); }
+          mm->_NeedsPlace = true;   // re-seat it at this pos when it next submits
+        }
+        else
+        {
+          AppCanvasSetNodePos(g, mid, np);   // the canvas write; the read-back routes it to GridPos / placements
+          if (at_root)
+            mm->GridPos = np;
+        }
+      }
+    }
 
     // Live-mirror diff dots: a small status dot at each node's top-right corner showing how it relates to the
     // running app -- blue = a live mirror node, green = a design node already running (promoted), amber = a
