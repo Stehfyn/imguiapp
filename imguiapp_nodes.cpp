@@ -2032,31 +2032,61 @@ namespace ImGui
 
   // Duplicate a design node (Control / Window / Sidebar / Custom layer): clone its authored props into a fresh
   // node, offset from the source. Core layers (the frame's phases, one each) and live mirrors are not duplicable.
+  static int    AppScopeCurrent(const ImGuiAppGraph* g);   // fwd (scope section)
+  static bool   AppNodeInScope(const ImGuiAppGraph* g, int id);   // fwd
+  static int    AppGraphParentOf(const ImGuiAppGraph* g, int child_node_id);   // fwd
+  static const ImGuiAppNode* AppGraphFindNodeConst(const ImGuiAppGraph* g, int node_id);   // fwd
+  static ImVec2 AppNodeScopePos(const ImGuiAppGraph* g, const ImGuiAppNode* n);   // fwd
+  static void   AppNodeScopePosStore(ImGuiAppGraph* g, int node_id, const ImVec2& pos);   // fwd
+  static bool   AppGraphReparent(ImGuiAppGraph* g, int child_id, int parent_id);   // fwd
+
   static ImGuiAppNode* AppGraphDuplicateNode(ImGuiAppGraph* g, const ImGuiAppNode* src)
   {
     if (src == nullptr || src->IsLive || (src->Kind == ImGuiAppNodeKind_Layer && AppLayerIsCore(src->LayerType)))
       return nullptr;
 
-    ImGuiAppNode* n = src->IsBuiltin
-      ? AppGraphAddBuiltin(g, src->Kind, src->TypeName, src->DataTypeName)
-      : AppGraphAddNode(g, src->Kind, src->Draft.Name);
+    // Capture by value first: the add below grows g->Nodes and dangles `src`.
+    const int src_id = src->Id;
+    const ImGuiAppNodeKind kind = src->Kind;
+    const bool is_builtin = src->IsBuiltin;
+    char type_name[IM_LABEL_SIZE];
+    char data_type[IM_LABEL_SIZE];
+    char draft_name[IM_LABEL_SIZE];
+    ImStrncpy(type_name, src->TypeName, IM_ARRAYSIZE(type_name));
+    ImStrncpy(data_type, src->DataTypeName, IM_ARRAYSIZE(data_type));
+    ImStrncpy(draft_name, src->Draft.Name, IM_ARRAYSIZE(draft_name));
 
-    n->Draft = src->Draft;                 // name + PersistFields/TempFields (ImVector deep-copy)
-    n->LayerType = src->LayerType;
-    n->Flags = src->Flags;
-    n->HasInitialPlacement = src->HasInitialPlacement;
-    n->InitialPos = src->InitialPos;
-    n->InitialSize = src->InitialSize;
-    n->DockDir = src->DockDir;
-    n->DockSize = src->DockSize;
-    n->Commands = src->Commands;           // ImVector deep-copy
-    n->Events = src->Events;               // ImVector deep-copy
-    n->StyleMods = src->StyleMods;         // ImVector deep-copy
-    n->ColorMods = src->ColorMods;         // ImVector deep-copy
-    n->GridPos = src->GridPos + ImVec2(40.0f, 40.0f);
+    ImGuiAppNode* n = is_builtin
+      ? AppGraphAddBuiltin(g, kind, type_name, data_type)
+      : AppGraphAddNode(g, kind, draft_name);
+    const int n_id = n->Id;
+    const ImGuiAppNode* s = AppGraphFindNodeConst(g, src_id);   // re-find after the reallocation
+
+    n->Draft = s->Draft;                 // name + PersistFields/TempFields (ImVector deep-copy)
+    n->LayerType = s->LayerType;
+    n->Flags = s->Flags;
+    n->FieldList = s->FieldList;
+    n->HasInitialPlacement = s->HasInitialPlacement;
+    n->InitialPos = s->InitialPos;
+    n->InitialSize = s->InitialSize;
+    n->DockDir = s->DockDir;
+    n->DockSize = s->DockSize;
+    n->Commands = s->Commands;           // ImVector deep-copy
+    n->Events = s->Events;               // ImVector deep-copy
+    n->StyleMods = s->StyleMods;         // ImVector deep-copy
+    n->ColorMods = s->ColorMods;         // ImVector deep-copy
+    n->GridPos = s->GridPos + ImVec2(40.0f, 40.0f);
     n->HasGridPos = true;
     n->_NeedsPlace = true;
-    return n;
+
+    // The copy keeps the source's containment home (a hosted control's clone stays hosted, a
+    // field's clone stays in its struct) and, in a drilled interior, seats beside the source.
+    const int parent = AppGraphParentOf(g, src_id);
+    if (parent >= 0)
+      AppGraphReparent(g, n_id, parent);
+    if (AppScopeCurrent(g) >= 0 && AppNodeInScope(g, n_id))
+      AppNodeScopePosStore(g, n_id, AppNodeScopePos(g, AppGraphFindNodeConst(g, src_id)) + ImVec2(40.0f, 40.0f));
+    return AppGraphFindNode(g, n_id);
   }
 
   static int AppGraphParentOf(const ImGuiAppGraph* g, int child_node_id);   // fwd
@@ -2152,6 +2182,10 @@ namespace ImGui
     // Snapshot off `owner` before AppGraphAddNode grows g->Nodes and dangles it.
     const int oid = owner->Id;
     const ImVec2 opos = owner->GridPos;
+    // Anchor per altitude: offspring cluster around the owner's ROOT position in GridPos and
+    // around its interior position in the drilled scope's placements.
+    const int exp_scope = AppScopeCurrent(g);
+    const ImVec2 spos = exp_scope >= 0 ? AppNodeScopePos(g, owner) : opos;
     int owner_in = 0;
     for (int p = 0; p < owner->Ports.Size; p++)
     {
@@ -2169,9 +2203,12 @@ namespace ImGui
       fn->Draft.PersistFields.clear();
       fn->Draft.PersistFields.push_back(fd);
       fn->FieldList = list;
-      fn->GridPos = ImVec2(opos.x - 240.0f, opos.y + (list == 1 ? 30.0f : -150.0f) + (float)i * 70.0f);
+      const ImVec2 field_off(-240.0f, (list == 1 ? 30.0f : -150.0f) + (float)i * 70.0f);
+      fn->GridPos = opos + field_off;
       fn->HasGridPos = true;
       fn->_NeedsPlace = true;
+      if (exp_scope >= 0)
+        AppNodeScopePosStore(g, fn->Id, spos + field_off);
       int field_childout = 0;
       for (int p = 0; p < fn->Ports.Size; p++)
       {
@@ -2262,13 +2299,19 @@ namespace ImGui
     ImFormatString(sname, IM_ARRAYSIZE(sname), temp ? "%sTempData" : "%sData", cbase);
     const ImVector<ImGuiAppFieldDesc> fields = temp ? c->Draft.TempFields : c->Draft.PersistFields;
     const ImVec2 cpos = c->GridPos;
+    // Anchor per altitude (root cluster in GridPos, interior cluster in the scope's placements).
+    const int exp_scope = AppScopeCurrent(g);
+    const ImVec2 cspos = exp_scope >= 0 ? AppNodeScopePos(g, c) : cpos;
     const int control_in = AppNodePortByName(c, temp ? "temp" : "persist");   // dedicated tie pin, not "deps"
 
     ImGuiAppNode* s = AppGraphAddNode(g, ImGuiAppNodeKind_Struct, sname);
     s->Draft.PersistFields = fields;
-    s->GridPos = ImVec2(cpos.x - 280.0f, cpos.y + (temp ? 100.0f : -100.0f));
+    const ImVec2 struct_off(-280.0f, temp ? 100.0f : -100.0f);
+    s->GridPos = cpos + struct_off;
     s->HasGridPos = true;
     s->_NeedsPlace = true;
+    if (exp_scope >= 0)
+      AppNodeScopePosStore(g, s->Id, cspos + struct_off);
     const int sid = s->Id;
     int struct_out = 0;
     for (int p = 0; p < s->Ports.Size; p++)
@@ -3012,8 +3055,9 @@ namespace ImGui
       else
       {
         // Drive the toast off the rejection branch, NOT the `changed` return (also true on link destroy);
-        // bump the seq so identical back-to-back rejections still re-fire it.
-        ImStrncpy(g->LastLinkErr, err, IM_ARRAYSIZE(g->LastLinkErr));
+        // bump the seq so identical back-to-back rejections still re-fire it. The channel carries
+        // full sentences (composition notices share it), so the link prefix is stamped here.
+        ImFormatString(g->LastLinkErr, IM_ARRAYSIZE(g->LastLinkErr), "link refused: %s", err);
         g->LastLinkErrSeq++;
       }
     }
@@ -4623,13 +4667,45 @@ namespace ImGui
     }
   }
 
-  // Containment-adopt a just-added node into the current scope so it appears where it was created (a Control
-  // hosted by the scope's window/sidebar, a Field into the scope's struct). Illegal pairs stay app-level.
-  static void AppScopeAdoptNewNode(ImGuiAppGraph* g, ImGuiAppNode* added)
+  // Editor notice toast: shares the graph's LastLinkErr channel (status hint + canvas toast).
+  static void AppGraphNotify(ImGuiAppGraph* g, const char* fmt, ...) IM_FMTARGS(2);
+  static void AppGraphNotify(ImGuiAppGraph* g, const char* fmt, ...)
   {
-    const int top = AppScopeCurrent(g);
-    if (top >= 0 && added != nullptr)
-      AppGraphReparent(g, added->Id, top);
+    va_list args;
+    va_start(args, fmt);
+    ImFormatStringV(g->LastLinkErr, IM_ARRAYSIZE(g->LastLinkErr), fmt, args);
+    va_end(args);
+    g->LastLinkErrSeq++;
+  }
+
+  // Kinds that compose into a drilled scope: what the interior palettes offer, and what a creation
+  // road may adopt. Live non-layer scopes take nothing (the mirror is read-only; Promote authors).
+  static bool AppScopeKindComposable(const ImGuiAppGraph* g, int scope_id, ImGuiAppNodeKind kind)
+  {
+    const ImGuiAppNode* s = AppGraphFindNodeConst(g, scope_id);
+    if (s == nullptr)
+      return false;
+    if (s->IsLive && s->Kind != ImGuiAppNodeKind_Layer)
+      return false;
+    switch (s->Kind)
+    {
+    case ImGuiAppNodeKind_Window:
+    case ImGuiAppNodeKind_Sidebar:
+      return kind == ImGuiAppNodeKind_Control;
+    case ImGuiAppNodeKind_Struct:
+      return kind == ImGuiAppNodeKind_Field && !s->IsBuiltin;
+    case ImGuiAppNodeKind_Layer:
+      // Layer domains are implicit (AppScopeParentOf falls back by kind); a bare add can only ever
+      // land in the Task/Display domains. Command members need commands a new control lacks;
+      // Status/Layout/Custom compose nothing.
+      if (s->LayerType == ImGuiAppLayerType_Task)
+        return kind == ImGuiAppNodeKind_Control || kind == ImGuiAppNodeKind_Struct;
+      if (s->LayerType == ImGuiAppLayerType_Display)
+        return kind == ImGuiAppNodeKind_Window || kind == ImGuiAppNodeKind_Sidebar;
+      return false;
+    default:
+      return false;   // a control's members arrive via explode, never bare adds
+    }
   }
 
   // True if this node should NOT be submitted to the canvas: outside the current drill-down scope,
@@ -4749,11 +4825,19 @@ namespace ImGui
     const float kGapNodeY = 40.0f;
     const float kIndentX = 48.0f;
     const ImVec2 sz = AppLayoutPureSize(g, n);   // pure model size: tidy is zoom-idempotent
-    n->GridPos = ImVec2(x0 + (float)ImMin(depth, kAppLayoutMaxDepth - 1) * kIndentX, *y);
-    n->HasGridPos = true;
+    // Altitude split: a scoped tidy arranges THIS interior (placement records); only the root
+    // tidy owns GridPos (one producer per altitude, scope-interior-design.md par.7).
+    const ImVec2 pos(x0 + (float)ImMin(depth, kAppLayoutMaxDepth - 1) * kIndentX, *y);
+    if (AppScopeCurrent(g) >= 0)
+      AppNodeScopePosStore(g, id, pos);
+    else
+    {
+      n->GridPos = pos;
+      n->HasGridPos = true;
+    }
     n->_NeedsPlace = true;
     if (max_r != nullptr)
-      *max_r = ImMax(*max_r, n->GridPos.x + sz.x);
+      *max_r = ImMax(*max_r, pos.x + sz.x);
     *y += sz.y + kGapNodeY;
     ImVector<int> kids;
     AppLayoutKids(g, n, &kids);
@@ -5070,6 +5154,108 @@ namespace ImGui
     pl.NodeId = node_id;
     pl.Pos = pos;
     g->ScopePlacements.push_back(pl);
+  }
+
+  // Interior seat for a creation road with no pointer position: just below the walls, or the
+  // scoped tidy origin in an empty interior.
+  static ImVec2 AppScopeInteriorDropPoint(const ImGuiAppGraph* g)
+  {
+    const ImGuiAppEditorState* ed = AppGraphEditorState(g);
+    if (ed->ScopeWallValid)
+      return ImVec2(ed->ScopeWallRect.x + 40.0f, ed->ScopeWallRect.w + 60.0f);
+    return ImVec2(80.0f, 60.0f);
+  }
+
+  // Compose a just-created node into the drilled scope: containment link where the pair carries one
+  // (Control->Window/Sidebar, Field->Struct; layer domains are implicit), the creation point into
+  // THIS scope's placement records, and root GridPos re-derived near the owner's root cluster --
+  // one producer per altitude, in both directions. A kind the scope cannot take keeps its default
+  // root placement and states why (the silent-vanish failure this replaces).
+  static void AppScopeComposeNewNode(ImGuiAppGraph* g, int added_id, const ImVec2* interior_pos)
+  {
+    const int top = AppScopeCurrent(g);
+    ImGuiAppNode* added = AppGraphFindNode(g, added_id);
+    const ImGuiAppNode* owner = top >= 0 ? AppGraphFindNodeConst(g, top) : nullptr;
+    if (added == nullptr || owner == nullptr)
+      return;
+    if (!AppScopeKindComposable(g, top, added->Kind))
+    {
+      AppGraphNotify(g, "a %s cannot compose into %s -- created at the composition root",
+                     AppNodeKindName(added->Kind), owner->Draft.Name[0] ? owner->Draft.Name : AppNodeKindName(owner->Kind));
+      return;
+    }
+    if ((added->Kind == ImGuiAppNodeKind_Control && (owner->Kind == ImGuiAppNodeKind_Window || owner->Kind == ImGuiAppNodeKind_Sidebar))
+     || (added->Kind == ImGuiAppNodeKind_Field && owner->Kind == ImGuiAppNodeKind_Struct))
+      AppGraphReparent(g, added_id, top);
+    const ImVec2 root_pref = owner->GridPos + ImVec2(280.0f, 0.0f);
+    AppGraphPlaceNode(g, added, &root_pref);
+    AppNodeScopePosStore(g, added_id, interior_pos != nullptr ? *interior_pos : AppScopeInteriorDropPoint(g));
+  }
+
+  // Compose freshly imported nodes (paste / prefab / struct import appended from first_index on)
+  // into the drilled scope: adopt the subtree roots the scope can take, keep the cluster's shape in
+  // this scope's placements anchored at the drop point, and shift the cluster's root layout next to
+  // the owner's root cluster.
+  static void AppScopeComposeImported(ImGuiAppGraph* g, int first_index, const ImVec2* interior_anchor)
+  {
+    const int top = AppScopeCurrent(g);
+    const ImGuiAppNode* owner = top >= 0 ? AppGraphFindNodeConst(g, top) : nullptr;
+    if (owner == nullptr || first_index < 0 || first_index >= g->Nodes.Size)
+      return;
+
+    ImVec2 mn(FLT_MAX, FLT_MAX);
+    for (int i = first_index; i < g->Nodes.Size; i++)
+    {
+      mn.x = ImMin(mn.x, g->Nodes.Data[i].GridPos.x);
+      mn.y = ImMin(mn.y, g->Nodes.Data[i].GridPos.y);
+    }
+
+    int refused = 0;
+    for (int i = first_index; i < g->Nodes.Size; i++)
+    {
+      const int id = g->Nodes.Data[i].Id;
+      const ImGuiAppNodeKind kind = g->Nodes.Data[i].Kind;
+      if (AppGraphParentOf(g, id) >= 0)
+        continue;   // interior of the imported subtree: containment came with it
+      if (!AppScopeKindComposable(g, top, kind))
+      {
+        refused++;
+        continue;
+      }
+      if ((kind == ImGuiAppNodeKind_Control && (owner->Kind == ImGuiAppNodeKind_Window || owner->Kind == ImGuiAppNodeKind_Sidebar))
+       || (kind == ImGuiAppNodeKind_Field && owner->Kind == ImGuiAppNodeKind_Struct))
+        AppGraphReparent(g, id, top);
+    }
+
+    const ImVec2 anchor = interior_anchor != nullptr ? *interior_anchor : AppScopeInteriorDropPoint(g);
+    const ImVec2 root_shift = owner->GridPos + ImVec2(280.0f, 0.0f) - mn;
+    for (int i = first_index; i < g->Nodes.Size; i++)
+    {
+      ImGuiAppNode* n = &g->Nodes.Data[i];
+      if (AppNodeInScope(g, n->Id))
+        AppNodeScopePosStore(g, n->Id, anchor + (n->GridPos - mn));
+      n->GridPos += root_shift;
+      n->_NeedsPlace = true;
+    }
+    if (refused > 0)
+      AppGraphNotify(g, "%d node%s cannot compose into %s -- left at the composition root",
+                     refused, refused == 1 ? "" : "s", owner->Draft.Name[0] ? owner->Draft.Name : AppNodeKindName(owner->Kind));
+  }
+
+  // Add a Field member to a struct. Inline draft fields explode into Field nodes first: field
+  // nodes shadow the inline list wholesale, so adding one beside a populated inline list would
+  // silently drop every inline field from the effective set.
+  static int AppScopeAddFieldToStruct(ImGuiAppGraph* g, int struct_id)
+  {
+    ImGuiAppNode* sn = AppGraphFindNode(g, struct_id);
+    if (sn == nullptr || sn->Kind != ImGuiAppNodeKind_Struct || sn->IsLive || sn->IsBuiltin)
+      return -1;
+    if (AppGraphFieldNodeCount(g, struct_id, 0) == 0 && sn->Draft.PersistFields.Size > 0)
+      AppGraphExplodeFields(g, sn, 0);
+    ImGuiAppNode* f = AppGraphAddNode(g, ImGuiAppNodeKind_Field, "field");
+    f->FieldList = 0;
+    AppNodeDraftAddField(&f->Draft.PersistFields, "field", ImGuiAppFieldType_Float);
+    return f->Id;
   }
 
   // Detail altitude: a node shows its full authoring body only when the current scope is its
@@ -5691,14 +5877,16 @@ namespace ImGui
     // Capture what we dispatch on BEFORE any add (AppGraphAddNode reallocates g->Nodes and invalidates tn).
     const ImGuiAppNodeKind kind = tn->Kind;
     const ImGuiAppLayerType lt = tn->LayerType;
+    const bool live_owner = tn->IsLive && kind != ImGuiAppNodeKind_Layer;   // read-only mirror: no build step offered
     const float em = ImGui::GetFontSize();
     char head[IM_LABEL_SIZE + 48];
     ImFormatString(head, IM_ARRAYSIZE(head), "%s  %s -- nothing composed here yet", AppNodeIcon(tn),
                    kind == ImGuiAppNodeKind_Layer ? AppLayerNodeName(lt) : tn->Draft.Name);
-    const char* sub = AppScopeCaption(g);
+    const char* sub = live_owner ? "live mirror (read-only) -- promote a member to author against it" : AppScopeCaption(g);
 
     const char* action = nullptr;
-    if (kind == ImGuiAppNodeKind_Layer && lt == ImGuiAppLayerType_Display)       action = "+ Window";
+    if (live_owner)                                                             action = nullptr;
+    else if (kind == ImGuiAppNodeKind_Layer && lt == ImGuiAppLayerType_Display) action = "+ Window";
     else if (kind == ImGuiAppNodeKind_Layer && lt == ImGuiAppLayerType_Task)    action = "+ Control";
     else if (kind == ImGuiAppNodeKind_Window || kind == ImGuiAppNodeKind_Sidebar) action = "+ Control";
     else if (kind == ImGuiAppNodeKind_Struct)                                   action = "+ Field";
@@ -5724,18 +5912,18 @@ namespace ImGui
       ImGui::SetCursorScreenPos(ImVec2(cen.x - bw * 0.5f, mx.y - em * 2.6f));
       if (ImGui::Button(action, ImVec2(bw, em * 1.7f)))
       {
-        ImGuiAppNode* added = nullptr;
+        int added_id = -1;
         if (kind == ImGuiAppNodeKind_Layer && lt == ImGuiAppLayerType_Display)
-          added = AppGraphAddNode(g, ImGuiAppNodeKind_Window, "Window");
+          added_id = AppGraphAddNode(g, ImGuiAppNodeKind_Window, "Window")->Id;
         else if ((kind == ImGuiAppNodeKind_Layer && lt == ImGuiAppLayerType_Task)
               || kind == ImGuiAppNodeKind_Window || kind == ImGuiAppNodeKind_Sidebar)
-          added = AppGraphAddNode(g, ImGuiAppNodeKind_Control, "NewControl");
+          added_id = AppGraphAddNode(g, ImGuiAppNodeKind_Control, "NewControl")->Id;
         else if (kind == ImGuiAppNodeKind_Struct)
-          added = AppGraphAddNode(g, ImGuiAppNodeKind_Field, "field");
+          added_id = AppScopeAddFieldToStruct(g, top);
         else if (kind == ImGuiAppNodeKind_Control)
           AppGraphExplodeControlData(g, tn, false);   // no add ran in this branch, tn still valid
-        if (added != nullptr)
-          AppScopeAdoptNewNode(g, added);   // host it in this scope so it appears where it was created
+        if (added_id >= 0)
+          AppScopeComposeNewNode(g, added_id, nullptr);   // host it in this scope so it appears where it was created
       }
     }
   }
@@ -5985,7 +6173,10 @@ namespace ImGui
               const ImGuiAppNode* mm = AppGraphFindNodeConst(g, members.Data[m]);
               if (mm == nullptr || (!show_live && mm->IsLive))
                 continue;
-              g->_GroupDragOrig.push_back(ImVec4((float)members.Data[m], mm->GridPos.x, mm->GridPos.y, 0.0f));
+              // Drag origin at the altitude being dragged: engine position while seated, else the
+              // scope-effective model position (GridPos alone is stale inside a drilled interior).
+              const ImVec2 op = AppEditorNodeWasSubmitted(g, members.Data[m]) ? AppCanvasNodePos(g, members.Data[m]) : AppNodeScopePos(g, mm);
+              g->_GroupDragOrig.push_back(ImVec4((float)members.Data[m], op.x, op.y, 0.0f));
             }
           }
           if (act && ImGui::IsMouseDragging(ImGuiMouseButton_Left) && !(owner_seated && owner->GroupCollapsed) && g->_GroupDragOrig.Size > 0)
@@ -6083,14 +6274,25 @@ namespace ImGui
               const ImVec2 np(g->_GroupDragOrig.Data[m].y + g->_GroupDragApplied.x, g->_GroupDragOrig.Data[m].z + g->_GroupDragApplied.y);
               if (AppNodeHiddenByCollapse(g, mid) || !AppEditorNodeWasSubmitted(g, mid))
               {
-                mm->GridPos = np;   // not on the canvas: move its stored (model) pos only
-                mm->HasGridPos = true;
+                // Not on the canvas: move its stored model pos only, at the CURRENT altitude.
+                if (at_root)
+                {
+                  mm->GridPos = np;
+                  mm->HasGridPos = true;
+                }
+                else
+                {
+                  AppNodeScopePosStore(g, mid, np);
+                }
                 mm->_NeedsPlace = true;  // re-seat it at this pos when it next submits
               }
               else
               {
+                // The canvas write is the drag; the read-back routes it to GridPos at root or to
+                // this scope's placements while drilled.
                 AppCanvasSetNodePos(g, mid, np);
-                mm->GridPos = np;
+                if (at_root)
+                  mm->GridPos = np;
               }
             }
 
@@ -7159,7 +7361,8 @@ namespace ImGui
           continue;
         if (AppNodeHiddenByCollapse(g, n->Id))
           continue;
-        const ImVec2 p = n->GridPos;
+        // Effective position: a drilled interior renders from its placements, not GridPos.
+        const ImVec2 p = AppEditorNodeWasSubmitted(g, n->Id) ? AppCanvasNodePos(g, n->Id) : AppNodeScopePos(g, n);
         ImVec2 d;
         if (!AppNodeModelSize(g, n->Id, &d))
           d = AppLayoutNodeSize(g, n);
@@ -7183,7 +7386,8 @@ namespace ImGui
         const ImGuiAppNode* sn = AppGraphFindNode(g, ids.Data[i]);
         if (sn == nullptr || (!show_live && sn->IsLive) || AppNodeHiddenByCollapse(g, ids.Data[i]))
           continue;
-        const ImVec2 p = sn->GridPos;
+        // Effective position: a drilled interior renders from its placements, not GridPos.
+        const ImVec2 p = AppEditorNodeWasSubmitted(g, sn->Id) ? AppCanvasNodePos(g, sn->Id) : AppNodeScopePos(g, sn);
         ImVec2 d;
         if (!AppNodeModelSize(g, sn->Id, &d))
           d = AppLayoutNodeSize(g, sn);
@@ -7330,10 +7534,13 @@ namespace ImGui
             ImGuiAppNode* sn = AppGraphFindNode(g, g->Selection.Data[i]);
             if (sn == nullptr || (!show_live && sn->IsLive) || AppNodeHiddenByCollapse(g, sn->Id))
               continue;
-            // Nudge in MODEL units (a grid unit is a grid unit at any zoom).
+            // Nudge in MODEL units (a grid unit is a grid unit at any zoom). The canvas write is
+            // enough while drilled: the interior read-back routes it to this scope's placements;
+            // GridPos belongs to the root read-back alone.
             const ImVec2 np = AppCanvasNodePos(g, sn->Id) + d;
             AppCanvasSetNodePos(g, sn->Id, np);
-            sn->GridPos = np;
+            if (at_root)
+              sn->GridPos = np;
           }
         }
       }
@@ -7443,11 +7650,15 @@ namespace ImGui
             char dt[IM_LABEL_SIZE];
             ImStrncpy(nm, cn->Draft.Name, IM_ARRAYSIZE(nm));
             ImStrncpy(dt, cn->DataTypeName, IM_ARRAYSIZE(dt));
-            const ImVec2 near_pos = cn->GridPos + ImVec2(260.0f, 0.0f);
+            const ImVec2 near_pos = cn->GridPos + ImVec2(260.0f, 0.0f);   // root altitude: GridPos beside GridPos
             ImGuiAppNode* d = AppGraphAddNode(g, ImGuiAppNodeKind_Control, nm[0] ? nm : "NewControl");
             ImStrncpy(d->DataTypeName, dt, IM_ARRAYSIZE(d->DataTypeName));
             AppGraphPlaceNode(g, d, &near_pos);
             AppGraphEditorState(g)->CtxNodeId = d->Id;
+            // The twin lives app-level, invisible from a drilled mirror interior -- jump to its
+            // scope (the portal-chip idiom) instead of appearing to do nothing.
+            if (AppScopeCurrent(g) >= 0 && !AppNodeInScope(g, d->Id))
+              AppScopeJumpToNode(g, d->Id, selected_node_id);
           }
         }
       }
@@ -7521,6 +7732,17 @@ namespace ImGui
     }
     if (ImGui::BeginPopup("##AppGraphAdd"))
     {
+      const int add_scope = AppScopeCurrent(g);
+      const ImGuiAppNode* add_owner = add_scope >= 0 ? AppGraphFindNodeConst(g, add_scope) : nullptr;
+      if (add_owner != nullptr && add_owner->IsLive && add_owner->Kind != ImGuiAppNodeKind_Layer)
+      {
+        // Read-only mirror interior: nothing composes here; Promote (node context menu) authors.
+        ImGui::TextDisabled("live %s (read-only)", AppNodeKindName(add_owner->Kind));
+        ImGui::TextDisabled("promote a member to author against it");
+        ImGui::EndPopup();
+      }
+      else
+      {
       // Type-to-filter add palette: focus the search on open; an active filter flattens to a searchable list.
       if (ImGui::IsWindowAppearing())
       {
@@ -7531,7 +7753,15 @@ namespace ImGui
       AppGraphEditorState(g)->AddFilter.Draw("##addsearch");
       ImGui::Separator();
 
-      ImGuiAppNode* added = nullptr;
+      // A drilled palette offers only what composes into this scope; the root offers every root kind.
+      auto addable = [&](ImGuiAppNodeKind k)
+      {
+        if (k == ImGuiAppNodeKind_Field)
+          return add_scope >= 0 && AppScopeKindComposable(g, add_scope, k);   // fields never live at root
+        return add_scope < 0 || AppScopeKindComposable(g, add_scope, k);
+      };
+
+      int added_id = -1;
       if (AppGraphEditorState(g)->AddFilter.IsActive())
       {
         // The four core layers are guaranteed by the foundation and never added by hand; the only layer you
@@ -7541,68 +7771,104 @@ namespace ImGui
         {
           { "Control",       ImGuiAppNodeKind_Control, ImGuiAppLayerType_Task,    false },
           { "Struct",        ImGuiAppNodeKind_Struct,  ImGuiAppLayerType_Task,    false },
+          { "Field",         ImGuiAppNodeKind_Field,   ImGuiAppLayerType_Task,    false },
           { "Window",        ImGuiAppNodeKind_Window,  ImGuiAppLayerType_Task,    false },
           { "Sidebar",       ImGuiAppNodeKind_Sidebar, ImGuiAppLayerType_Task,    false },
           { "Custom Layer",  ImGuiAppNodeKind_Layer,   ImGuiAppLayerType_Custom,  true  },
         };
         for (int i = 0; i < IM_ARRAYSIZE(items); i++)
         {
-          if (!AppGraphEditorState(g)->AddFilter.PassFilter(items[i].Label))
+          if (!addable(items[i].Kind) || !AppGraphEditorState(g)->AddFilter.PassFilter(items[i].Label))
             continue;
           if (ImGui::Selectable(items[i].Label))
           {
-            const char* nm = items[i].IsLayer ? AppLayerNodeName(items[i].Layer)
-                           : items[i].Kind == ImGuiAppNodeKind_Control ? "NewControl"
-                           : items[i].Kind == ImGuiAppNodeKind_Struct  ? "NewStruct"
-                           : items[i].Kind == ImGuiAppNodeKind_Window   ? "Window" : "Sidebar";
-            added = AppGraphAddNode(g, items[i].Kind, nm);
-            if (items[i].IsLayer)
-              added->LayerType = items[i].Layer;
+            if (items[i].Kind == ImGuiAppNodeKind_Field)
+              added_id = AppScopeAddFieldToStruct(g, add_scope);
+            else
+            {
+              const char* nm = items[i].IsLayer ? AppLayerNodeName(items[i].Layer)
+                             : items[i].Kind == ImGuiAppNodeKind_Control ? "NewControl"
+                             : items[i].Kind == ImGuiAppNodeKind_Struct  ? "NewStruct"
+                             : items[i].Kind == ImGuiAppNodeKind_Window   ? "Window" : "Sidebar";
+              ImGuiAppNode* an = AppGraphAddNode(g, items[i].Kind, nm);
+              if (items[i].IsLayer)
+                an->LayerType = items[i].Layer;
+              added_id = an->Id;
+            }
           }
         }
       }
       else
       {
-        if (ImGui::MenuItem("Control"))   added = AppGraphAddNode(g, ImGuiAppNodeKind_Control, "NewControl");
-        if (ImGui::MenuItem("Struct"))    added = AppGraphAddNode(g, ImGuiAppNodeKind_Struct,  "NewStruct");
+        if (addable(ImGuiAppNodeKind_Control) && ImGui::MenuItem("Control"))
+          added_id = AppGraphAddNode(g, ImGuiAppNodeKind_Control, "NewControl")->Id;
+        if (addable(ImGuiAppNodeKind_Struct) && ImGui::MenuItem("Struct"))
+          added_id = AppGraphAddNode(g, ImGuiAppNodeKind_Struct,  "NewStruct")->Id;
+        if (addable(ImGuiAppNodeKind_Field) && ImGui::MenuItem("Field"))
+          added_id = AppScopeAddFieldToStruct(g, add_scope);
         // The core phases are guaranteed by the foundation -- the only authorable layer is a Custom subclass.
-        if (ImGui::MenuItem("Custom Layer"))
+        if (addable(ImGuiAppNodeKind_Layer) && ImGui::MenuItem("Custom Layer"))
         {
-          added = AppGraphAddNode(g, ImGuiAppNodeKind_Layer, "CustomLayer");
-          added->LayerType = ImGuiAppLayerType_Custom;
+          ImGuiAppNode* an = AppGraphAddNode(g, ImGuiAppNodeKind_Layer, "CustomLayer");
+          an->LayerType = ImGuiAppLayerType_Custom;
+          added_id = an->Id;
         }
-        if (ImGui::MenuItem("Window"))    added = AppGraphAddNode(g, ImGuiAppNodeKind_Window,  "Window");
-        if (ImGui::MenuItem("Sidebar"))   added = AppGraphAddNode(g, ImGuiAppNodeKind_Sidebar, "Sidebar");
-        ImGui::Separator();
-        if (ImGui::BeginMenu("New from template"))
+        if (addable(ImGuiAppNodeKind_Window) && ImGui::MenuItem("Window"))
+          added_id = AppGraphAddNode(g, ImGuiAppNodeKind_Window,  "Window")->Id;
+        if (addable(ImGuiAppNodeKind_Sidebar) && ImGui::MenuItem("Sidebar"))
+          added_id = AppGraphAddNode(g, ImGuiAppNodeKind_Sidebar, "Sidebar")->Id;
+        // Templates rebuild the whole document -- a root verb (drilled, the wipe would take the scope owner).
+        if (add_scope < 0)
         {
-          if (ImGui::MenuItem("Empty app (layers + window)")) AppGraphLoadTemplate(g, 0);
-          if (ImGui::MenuItem("Window + control"))            AppGraphLoadTemplate(g, 1);
-          if (ImGui::MenuItem("Struct producer + consumer"))  AppGraphLoadTemplate(g, 2);
-          ImGui::EndMenu();
+          ImGui::Separator();
+          if (ImGui::BeginMenu("New from template"))
+          {
+            if (ImGui::MenuItem("Empty app (layers + window)")) AppGraphLoadTemplate(g, 0);
+            if (ImGui::MenuItem("Window + control"))            AppGraphLoadTemplate(g, 1);
+            if (ImGui::MenuItem("Struct producer + consumer"))  AppGraphLoadTemplate(g, 2);
+            ImGui::EndMenu();
+          }
         }
         // Round-trip: reconstruct Struct nodes from C++ source on the clipboard (inverse of the struct codegen).
-        if (ImGui::MenuItem("Paste C++ struct(s)"))
+        if (addable(ImGuiAppNodeKind_Struct))
         {
-          if (const char* clip = ImGui::GetClipboardText())
-            AppGraphImportStructsFromCode(g, clip, AppGraphEditorState(g)->AddPopupGrid);
+          if (ImGui::MenuItem("Paste C++ struct(s)"))
+          {
+            if (const char* clip = ImGui::GetClipboardText())
+            {
+              const int first = g->Nodes.Size;
+              AppGraphImportStructsFromCode(g, clip, add_scope >= 0 ? ImVec2(0.0f, 0.0f) : AppGraphEditorState(g)->AddPopupGrid);
+              if (add_scope >= 0)
+                AppScopeComposeImported(g, first, &AppGraphEditorState(g)->AddPopupGrid);
+            }
+          }
+          ImGui::SetItemTooltip("Parse 'struct Name { ... };' blocks from the clipboard into nodes");
         }
-        ImGui::SetItemTooltip("Parse 'struct Name { ... };' blocks from the clipboard into nodes");
         // Prefabs: instantiate a previously saved subtree at the drop point.
         if (AppGraphPrefabCount(g) > 0 && ImGui::BeginMenu("Prefabs"))
         {
           for (int i = 0; i < AppGraphPrefabCount(g); i++)
             if (ImGui::MenuItem(AppGraphPrefabName(g, i)))
-              AppGraphInstantiatePrefab(g, i, AppGraphEditorState(g)->AddPopupGrid);
+            {
+              const int first = g->Nodes.Size;
+              AppGraphInstantiatePrefab(g, i, add_scope >= 0 ? ImVec2(0.0f, 0.0f) : AppGraphEditorState(g)->AddPopupGrid);
+              if (add_scope >= 0)
+                AppScopeComposeImported(g, first, &AppGraphEditorState(g)->AddPopupGrid);
+            }
           ImGui::EndMenu();
         }
       }
-      if (added != nullptr)
+      if (added_id >= 0)
       {
-        AppGraphPlaceNode(g, added, &AppGraphEditorState(g)->AddPopupGrid);
-        AppScopeAdoptNewNode(g, added);   // a node born inside a scope is composed into it (stays visible)
+        // A node born inside a scope is composed into it (stays visible); its root position derives
+        // at root altitude, never from the interior click.
+        if (add_scope >= 0)
+          AppScopeComposeNewNode(g, added_id, &AppGraphEditorState(g)->AddPopupGrid);
+        else if (ImGuiAppNode* an = AppGraphFindNode(g, added_id))
+          AppGraphPlaceNode(g, an, &AppGraphEditorState(g)->AddPopupGrid);
       }
       ImGui::EndPopup();
+      }
     }
 
     // Command palette (Space): editor verbs with their shortcuts, the host's document verbs (via
@@ -7636,7 +7902,7 @@ namespace ImGui
       static const Cmd cmds[] =
       {
         { "Add: Control", "", 0 }, { "Add: Struct", "", 1 }, { "Add: Window", "", 2 }, { "Add: Sidebar", "", 3 },
-        { "Add: Custom Layer", "", 4 },
+        { "Add: Custom Layer", "", 4 }, { "Add: Field", "", 5 },
         { "Layout: Tidy", "L", 10 }, { "View: Fit all", "Home", 11 }, { "View: Frame selection", "F", 12 },
         { "Toggle: Snap to grid", "G", 13 },
         { "View: Hide selection", "H", 25 }, { "View: Show all hidden", "Alt+H", 26 },
@@ -7654,9 +7920,34 @@ namespace ImGui
         { "View: Outliner sidebar", "", 37 }, { "View: Inspector sidebar", "", 38 },
         { "Help: Shortcut card", "F1", 34 },
       };
+      // The add verbs obey the same composability filter as the add palette (a drilled palette
+      // offers only what the scope takes; Field only inside a struct).
+      const int pal_scope = AppScopeCurrent(g);
+      auto pal_add_kind = [](int id) -> ImGuiAppNodeKind
+      {
+        switch (id)
+        {
+        case 0: return ImGuiAppNodeKind_Control;
+        case 1: case 22: return ImGuiAppNodeKind_Struct;
+        case 2: return ImGuiAppNodeKind_Window;
+        case 3: return ImGuiAppNodeKind_Sidebar;
+        case 4: return ImGuiAppNodeKind_Layer;
+        case 5: return ImGuiAppNodeKind_Field;
+        default: return ImGuiAppNodeKind_COUNT;
+        }
+      };
+      auto pal_addable = [&](int id)
+      {
+        const ImGuiAppNodeKind k = pal_add_kind(id);
+        if (k == ImGuiAppNodeKind_COUNT)
+          return true;
+        if (k == ImGuiAppNodeKind_Field)
+          return pal_scope >= 0 && AppScopeKindComposable(g, pal_scope, k);
+        return pal_scope < 0 || AppScopeKindComposable(g, pal_scope, k);
+      };
       int run = -1;
       for (int i = 0; i < IM_ARRAYSIZE(cmds); i++)
-        if (AppGraphEditorState(g)->CmdFilter.PassFilter(cmds[i].Label) && cmd_row(cmds[i].Label, cmds[i].Shortcut))
+        if (pal_addable(cmds[i].Id) && AppGraphEditorState(g)->CmdFilter.PassFilter(cmds[i].Label) && cmd_row(cmds[i].Label, cmds[i].Shortcut))
           run = cmds[i].Id;
 
       // Host document verbs (save/generate/panels...), same rows, host-owned meaning. Picking one is recorded
@@ -7710,6 +8001,8 @@ namespace ImGui
 
       if (run >= 0)
       {
+        // Palette verbs act at the view center (there is no pointer position to honor).
+        const ImVec2 pal_center = ImGui::CanvasFromScreen(cv, editor_min + editor_size * 0.5f);
         ImGuiAppNode* added = nullptr;
         switch (run)
         {
@@ -7721,6 +8014,12 @@ namespace ImGui
           added = AppGraphAddNode(g, ImGuiAppNodeKind_Layer, "CustomLayer");
           added->LayerType = ImGuiAppLayerType_Custom;
           break;
+        case 5:
+        {
+          const int fid = AppScopeAddFieldToStruct(g, pal_scope);
+          added = fid >= 0 ? AppGraphFindNode(g, fid) : nullptr;
+          break;
+        }
         case 10: AppGraphAutoLayout(g, show_live); fit_all(); break;
         case 11: fit_all(); break;
         case 12: fit_ids(g->Selection); break;
@@ -7728,7 +8027,14 @@ namespace ImGui
         case 14: if (AppGraphCanUndo(g)) { AppGraphUndo(g); ImGui::CanvasClearSelection(cv); } break;
         case 15: if (AppGraphCanRedo(g)) { AppGraphRedo(g); ImGui::CanvasClearSelection(cv); } break;
         case 16: AppGraphCopySelection(g, g->Selection); break;
-        case 17: AppGraphPasteClipboard(g); break;
+        case 17:
+        {
+          const int first = g->Nodes.Size;
+          AppGraphPasteClipboard(g);
+          if (pal_scope >= 0)
+            AppScopeComposeImported(g, first, &pal_center);
+          break;
+        }
         case 18:
         {
           ImVector<int> sel = g->Selection;
@@ -7768,7 +8074,12 @@ namespace ImGui
           break;
         case 22:
           if (const char* clip = ImGui::GetClipboardText())
-            AppGraphImportStructsFromCode(g, clip, AppGraphEditorState(g)->AddPopupGrid);
+          {
+            const int first = g->Nodes.Size;
+            AppGraphImportStructsFromCode(g, clip, pal_scope >= 0 ? ImVec2(0.0f, 0.0f) : pal_center);
+            if (pal_scope >= 0)
+              AppScopeComposeImported(g, first, &pal_center);
+          }
           break;
         case 23:
         {
@@ -7841,8 +8152,10 @@ namespace ImGui
         }
         if (added != nullptr)
         {
-          AppGraphPlaceNode(g, added, nullptr);
-          AppScopeAdoptNewNode(g, added);   // compose the new node into the current scope
+          // Compose the new node into the current scope, seated at the view center; at root the
+          // default open placement from AppGraphAddNode stands.
+          if (pal_scope >= 0)
+            AppScopeComposeNewNode(g, added->Id, &pal_center);
         }
         ImGui::CloseCurrentPopup();
       }
@@ -8151,17 +8464,50 @@ namespace ImGui
           break;
         }
 
+        // Drilled: only what stays visible here -- a ChildIn pick is composed by the wire itself;
+        // anything else must be a kind this scope takes.
+        const int drop_scope = AppScopeCurrent(g);
+        const ImGuiAppPortKind sp_kind = sp->Kind;
+        if (drop_scope >= 0)
+        {
+          int keep = 0;
+          for (int c = 0; c < cand_count; c++)
+            if (sp_kind == ImGuiAppPortKind_ChildIn || AppScopeKindComposable(g, drop_scope, cands[c].Kind))
+              cands[keep++] = cands[c];
+          cand_count = keep;
+          if (cand_count == 0)
+            ImGui::TextDisabled("nothing composes here");
+        }
+
+        const ImVec2 sowner_gp = sowner->GridPos;   // by value: the add below dangles sowner
         for (int c = 0; c < cand_count; c++)
         {
           if (!ImGui::Selectable(cands[c].Label))
             continue;
           ImGuiAppNode* nw = AppGraphAddNode(g, cands[c].Kind, cands[c].Name);
-          AppGraphPlaceNode(g, nw, &drop_grid);
+          const int nw_id = nw->Id;
+          if (drop_scope < 0)
+            AppGraphPlaceNode(g, nw, &drop_grid);
           const int comp = AppNodeFirstPortKind(nw, cands[c].Comp);
           if (comp > 0 && AppGraphTryConnect(g, AppGraphEditorState(g)->DropSrcAttr, comp))
           {
             AppInferStructFieldType(g, AppGraphEditorState(g)->DropSrcAttr, comp);   // drop direction is unknown -> try both orderings
             AppInferStructFieldType(g, comp, AppGraphEditorState(g)->DropSrcAttr);
+          }
+          if (drop_scope >= 0)
+          {
+            if (sp_kind == ImGuiAppPortKind_ChildIn)
+            {
+              // The wire carries containment under the drag SOURCE; split the altitudes by hand:
+              // interior seat at the drop point, root seat beside the parent's root cluster.
+              const ImVec2 pref = sowner_gp + ImVec2(280.0f, 0.0f);
+              AppGraphPlaceNode(g, AppGraphFindNode(g, nw_id), &pref);
+              AppNodeScopePosStore(g, nw_id, drop_grid);
+            }
+            else
+            {
+              AppScopeComposeNewNode(g, nw_id, &drop_grid);
+            }
           }
           AppGraphEditorState(g)->DropSrcAttr = -1;
           ImGui::CloseCurrentPopup();
@@ -8182,7 +8528,7 @@ namespace ImGui
         const ImVec2 mn = ImGui::GetItemRectMin();
         const ImVec2 mx = ImGui::GetItemRectMax();
         char msg[IM_LABEL_SIZE + 32];
-        ImFormatString(msg, IM_ARRAYSIZE(msg), "link refused: %s", g->LastLinkErr);
+        ImFormatString(msg, IM_ARRAYSIZE(msg), "%s", g->LastLinkErr);
         const ImVec2 ts = ImGui::CalcTextSize(msg);
         const ImU32 col = AppColWithAlpha(AppComposerGetStyle()->Danger, 1.0f - age / kFade);
         ImGui::GetWindowDrawList()->AddText(ImVec2(mn.x + em * 0.6f, mx.y - em * 0.6f - ts.y), col, msg);
@@ -8294,7 +8640,12 @@ namespace ImGui
           AppGraphCopySelection(g, roots);
       }
       if (ImGui::IsKeyPressed(ImGuiKey_V, false) && AppGraphClipboardHasData(g))
+      {
+        const int first = g->Nodes.Size;
         AppGraphPasteClipboard(g);
+        if (!at_root)
+          AppScopeComposeImported(g, first, nullptr);   // a paste while drilled composes into the scope
+      }
       // Ctrl+D duplicates the selection in place (the palette's Edit: Duplicate, on the keyboard).
       if (ImGui::IsKeyPressed(ImGuiKey_D, false) && g->Selection.Size > 0)
       {

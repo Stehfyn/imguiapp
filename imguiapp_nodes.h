@@ -633,8 +633,8 @@ struct ImGuiAppGraph
   float                          _LayerDragMinY             = 0.0f;
   int                            NextId                     = 1;
   int                            EditingNodeId              = -1;      // node whose title is being renamed inline, or -1
-  char                           LastLinkErr[IM_LABEL_SIZE] = "";      // last refused-link reason; transient, NOT in Save/Load
-  int                            LastLinkErrSeq             = 0;       // bumped on every rejection
+  char                           LastLinkErr[IM_LABEL_SIZE] = "";      // last editor notice (refused link/composition), a full sentence; transient, NOT in Save/Load
+  int                            LastLinkErrSeq             = 0;       // bumped on every notice
   ImGuiApp*                      LiveApp                    = nullptr; // running app this graph mirrors (set by BuildAppLiveGraph, read-only to
                                                                        // codegen); null = no live source; transient, NOT in Save/Load
   int                            _ScopeSig                  = -1;      // editor scope-change detector (transient; -1 = first frame)

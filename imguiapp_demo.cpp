@@ -500,12 +500,13 @@ namespace
           (issues->Data[i].Severity >= 2 ? data->NumErrors : data->NumWarnings)++;
       }
 
-      // Fold refused-link reasons into the document log.
+      // Fold editor notices (refused links, composition refusals) into the document log; the
+      // channel carries full sentences.
       if (data->Graph.LastLinkErrSeq != data->LinkErrSeqSeen)
       {
         data->LinkErrSeqSeen = data->Graph.LastLinkErrSeq;
         if (data->Graph.LastLinkErr[0])
-          DocLog(data, 1, "link refused: %s", data->Graph.LastLinkErr);
+          DocLog(data, 1, "%s", data->Graph.LastLinkErr);
       }
 
       // Bootstrap staleness: an authored node with no live counterpart exists only in the design,
