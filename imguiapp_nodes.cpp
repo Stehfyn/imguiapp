@@ -11639,6 +11639,40 @@ namespace ImGui
     if (code == nullptr)
       return 0;
 
+    // Command selections referenced in a control body appear as `(ImGuiAppCommand)AppCommand_<name>` (real
+    // for event emissions, commented for a bare selection). Collect the distinct names onto the control.
+    auto import_commands = [](ImGuiAppNode* ctrl, const char* b, const char* en)
+    {
+      static const char* needle = "(ImGuiAppCommand)AppCommand_";
+      const int nl = (int)strlen(needle);
+      const char* s = b;
+      while (s < en && (s = strstr(s, needle)) != nullptr && s < en)
+      {
+        const char* id = s + nl;
+        char cmd[IM_LABEL_SIZE];
+        int  ci = 0;
+        while (id < en && AppCImportIsIdent(*id) && ci < IM_LABEL_SIZE - 1) cmd[ci++] = *id++;
+        cmd[ci] = 0;
+        bool dup = cmd[0] == 0;
+        for (int k = 0; k < ctrl->Commands.Size && !dup; k++)
+          dup = strcmp(ctrl->Commands.Data[k].Name, cmd) == 0;
+        if (!dup)
+          AppNodeAddCommand(ctrl, cmd);
+        s = id;
+      }
+    };
+
+    // Per imported control, remember its persist type name and the dep Data types so a second pass can
+    // wire producer->consumer data edges once every control node exists.
+    struct ImportedCtrl
+    {
+      int  NodeId;
+      char PersistType[IM_LABEL_SIZE];
+      int  DepCount;
+      char Deps[8][IM_LABEL_SIZE];
+    };
+    ImVector<ImportedCtrl> ctrls;
+
     int added = 0;
     const char* p = code;
     while ((p = strstr(p, "struct")) != nullptr)
@@ -11694,18 +11728,60 @@ namespace ImGui
       if (arg_count >= 2 && AppImportFindNamedStruct(code, args[1], &body, &end))
         AppImportParseStructMembers(body, end, &c->Draft.TempFields);
 
-      // Skip past this control's body so the scan resumes after it.
+      // Record persist type + dep types for the linking pass.
+      ImportedCtrl rec;
+      rec.NodeId = c->Id;
+      ImStrncpy(rec.PersistType, arg_count >= 1 ? args[0] : "", IM_ARRAYSIZE(rec.PersistType));
+      rec.DepCount = 0;
+      for (int d = 2; d < arg_count && rec.DepCount < 8; d++)
+        ImStrncpy(rec.Deps[rec.DepCount++], args[d], IM_LABEL_SIZE);
+
+      // Skip past this control's body so the scan resumes after it; scan the body for command selections.
       const char* open = strchr(q, '{');
       if (open != nullptr)
       {
         const char* e2 = open + 1;
         int depth = 1;
         while (*e2 != 0 && depth > 0) { if (*e2 == '{') depth++; else if (*e2 == '}') depth--; e2++; }
-        p = (*e2 != 0) ? e2 : e2;
+        import_commands(c, open, e2);
+        p = e2;
       }
       else
         p = q;
+
+      ctrls.push_back(rec);
       added++;
+    }
+
+    // Pass 2: resolve dep Data types to producer controls (by persist type name) and add data edges.
+    auto port_of = [](const ImGuiAppNode* nd, ImGuiAppPortKind k) -> int
+    {
+      for (int i = 0; i < nd->Ports.Size; i++)
+        if (nd->Ports.Data[i].Kind == k) return nd->Ports.Data[i].Id;
+      return -1;
+    };
+    for (int i = 0; i < ctrls.Size; i++)
+    {
+      const ImGuiAppNode* consumer = AppGraphFindNodeConst(g, ctrls.Data[i].NodeId);
+      if (consumer == nullptr) continue;
+      for (int d = 0; d < ctrls.Data[i].DepCount; d++)
+      {
+        int producer_id = -1;
+        for (int j = 0; j < ctrls.Size && producer_id < 0; j++)
+          if (j != i && strcmp(ctrls.Data[j].PersistType, ctrls.Data[i].Deps[d]) == 0)
+            producer_id = ctrls.Data[j].NodeId;
+        const ImGuiAppNode* producer = producer_id >= 0 ? AppGraphFindNodeConst(g, producer_id) : nullptr;
+        if (producer == nullptr) continue;   // unresolved dep (external/builtin) -- skip, no dangling edge
+        const int out_port = port_of(producer, ImGuiAppPortKind_DataOut);
+        const int in_port  = port_of(consumer, ImGuiAppPortKind_DataIn);
+        if (out_port < 0 || in_port < 0) continue;
+        ImGuiAppNodeLink l;
+        l.Id = AppGraphAllocId(g);
+        l.StartAttr = out_port;
+        l.EndAttr = in_port;
+        l.Kind = ImGuiAppEdgeKind_Data;
+        g->Links.push_back(l);
+      }
     }
     return added;
   }
