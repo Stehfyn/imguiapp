@@ -12056,6 +12056,37 @@ namespace ImGui
     // fields, deps, commands and events).
     AppImportCommandEnum(g, code);
     const int controls = AppGraphImportControlsFromCode(g, code, ImVec2(0.0f, 0.0f));
+
+    // Standalone structs: the plain-struct importer also grabs each control's inline `<X>Data`/
+    // `<X>TempData` (those are carried as inline control fields, not nodes), so drop them afterward and
+    // keep only true standalone structs.
+    AppGraphImportStructsFromCode(g, code, ImVec2(0.0f, 0.0f));
+    ImVector<int> spurious;
+    for (int i = 0; i < g->Nodes.Size; i++)
+    {
+      const ImGuiAppNode* s = &g->Nodes.Data[i];
+      if (s->Kind != ImGuiAppNodeKind_Struct)
+        continue;
+      bool is_ctrl_data = false;
+      for (int j = 0; j < g->Nodes.Size && !is_ctrl_data; j++)
+      {
+        const ImGuiAppNode* n = &g->Nodes.Data[j];
+        if (n->Kind != ImGuiAppNodeKind_Control)
+          continue;
+        char base[IM_LABEL_SIZE];
+        AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
+        char dn[IM_LABEL_SIZE + 12];
+        char tn[IM_LABEL_SIZE + 12];
+        ImFormatString(dn, IM_ARRAYSIZE(dn), "%sData", base);
+        ImFormatString(tn, IM_ARRAYSIZE(tn), "%sTempData", base);
+        is_ctrl_data = strcmp(s->Draft.Name, dn) == 0 || strcmp(s->Draft.Name, tn) == 0;
+      }
+      if (is_ctrl_data)
+        spurious.push_back(s->Id);
+    }
+    for (int i = 0; i < spurious.Size; i++)
+      AppGraphRemoveNode(g, spurious.Data[i]);
+
     return controls;
   }
 
