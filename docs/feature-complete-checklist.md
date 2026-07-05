@@ -356,11 +356,13 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   - Output severity filter: `composer_output_severity_filter` drives a dependency-cycle fixture into the
     Output tab, then toggles OutputShowErr and asserts the red error-row geometry vanishes (the row
     buttons resist ItemExists, so the filter EFFECT is asserted via a draw-scan).
-- [ ] **F41 inspector completion** — Identity/Placement sections; per-kind section-collapse
+- [x] **F41 inspector completion** — Identity/Placement sections; per-kind section-collapse
   persistence; section kebab (reset-to-defaults/copy/paste) on every section; unified row
   grammar with row context actions; multi-select mixed-value editing beyond Style; project
   inspector logging section; quick-inspector pin/dismiss/"Inspect here".
   *Accept: one test per subsystem; audit rows flip to shipped-tested.*
+  DONE: all eight subsystems shipped + tested (steps 75-81 + composer_project_logging). See the
+  per-subsystem notes below.
   PROGRESS (multi-turn):
   - Placement section: every design non-layer node gets an always-visible Placement group (X/Y drag
     fields wired to GridPos), above the collapsible sections. `step75_inspector_placement` asserts the
@@ -386,7 +388,9 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   - section kebab beyond Style: the Fields section (Struct + Control) gained a kebab menu with
     "Reset (clear fields)" (collapse-then-clear), the pattern the Style section already had.
     `step80_inspector_section_kebab` opens the Fields kebab, clicks Reset, asserts the field list empties.
-  Remaining: unified row grammar + row context actions.
+  - unified row grammar + row context actions: field rows share the name / type / reorder / delete
+    grammar AND now a right-click context menu ("Remove field"), on both the inline and exploded rows.
+    `step81_inspector_row_context` right-clicks a field row, picks Remove, asserts the field drops.
 
 ## P7 — scopes + canvas completion
 

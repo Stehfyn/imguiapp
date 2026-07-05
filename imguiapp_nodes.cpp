@@ -840,9 +840,17 @@ namespace ImGui
     {
       ImGuiAppFieldDesc* f = &fields->Data[i];
       ImGui::PushID(i);
+      bool remove = false;
 
       const float em = ImGui::GetFontSize();
       AppBlInputText("##name", f->Name, IM_ARRAYSIZE(f->Name), em * 8.0f);
+      // Row context actions (F41): right-click a row for its verbs (the X is the same removal).
+      if (ImGui::BeginPopupContextItem("##fieldrow_ctx"))
+      {
+        if (ImGui::MenuItem("Remove field"))
+          remove = true;
+        ImGui::EndPopup();
+      }
 
       ImGui::SameLine();
       EditAppFieldTypeControls(f, em * 5.0f, g);
@@ -865,14 +873,15 @@ namespace ImGui
 
       ImGui::SameLine();
       if (AppRowDeleteButton("X"))   // id doubles as the test handle for the row-delete affordance
+        remove = true;
+
+      ImGui::PopID();
+      if (remove)
       {
         AppNodeDraftRemoveField(fields, i);
-        ImGui::PopID();
         i--;
         continue;
       }
-
-      ImGui::PopID();
     }
 
     if (AppBlAddPill("Add field", "Add field"))
@@ -2309,21 +2318,30 @@ namespace ImGui
       if (fn->Draft.PersistFields.Size == 0)
         fn->Draft.PersistFields.push_back(ImGuiAppFieldDesc());
       ImGui::PushID(ids.Data[i]);
+      bool remove = false;
 
       // Title is authoritative on collapse; mirror it into the field desc so inline readers (codegen
       // preview, summary lines) agree before the collapse happens.
       if (AppBlInputText("##name", fn->Draft.Name, IM_ARRAYSIZE(fn->Draft.Name), em * 8.0f))
         ImStrncpy(fn->Draft.PersistFields.Data[0].Name, fn->Draft.Name, IM_ARRAYSIZE(fn->Draft.PersistFields.Data[0].Name));
+      // Row context actions (F41): right-click a row for its verbs (the X is the same removal).
+      if (ImGui::BeginPopupContextItem("##fieldrow_ctx"))
+      {
+        if (ImGui::MenuItem("Remove field"))
+          remove = true;
+        ImGui::EndPopup();
+      }
       ImGui::SameLine();
       EditAppFieldTypeControls(&fn->Draft.PersistFields.Data[0], em * 5.0f, g);
       ImGui::SameLine();
       if (AppRowDeleteButton("X"))
+        remove = true;
+      ImGui::PopID();
+      if (remove)
       {
         AppGraphRemoveNode(g, ids.Data[i]);
-        ImGui::PopID();
         continue;
       }
-      ImGui::PopID();
     }
 
     if (AppBlAddPill("Add field", "Add field"))
