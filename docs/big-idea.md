@@ -71,3 +71,20 @@ the app — it **is** the app, stated in its own algebra:
 
 The graph round-trips to C++ and back. Generation is flexible precisely because the model's
 soundness is a checked relation, not a UI habit.
+
+## The self-hosting shell
+
+If the composition is executable data, the Composer can emit the host that runs *itself*. The
+single graph emitter already produces the composition body — data structs, the command dispatch,
+and the `SetupApp` that pushes the layers/windows/controls. A **shell** emission wraps that body in
+the host scaffold a standalone program needs: a concrete `ImGuiApp` that composes via the emitted
+`SetupApp` on its first initialized frame, and the `main()` that runs it. Nothing new is generated
+for the app's guts — the scaffold is pure wiring.
+
+The payoff is the Composer hosting a Composer. The editor ships as a library control
+(`ImGuiAppComposerControl`) an app can `PushAppControl<>` like any other: it owns the graph it edits
+and drives `ShowAppGraphEditor`, so the **editor implementation stays library code**. A composition
+whose one control is that Composer therefore emits a complete host shell that, compiled and run,
+*is* a Composer — the tool's output can be the tool. The emitted shell only `#include`s and pushes
+the library; it never re-emits the editor. That the shell compiles and runs headless is the proof
+that the round-trip closes on itself: model → C++ → a program that edits the model.

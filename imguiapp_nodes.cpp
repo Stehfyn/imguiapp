@@ -11138,6 +11138,32 @@ namespace ImGui
     GenerateAppGraphCodeEx(g, out, nullptr);
   }
 
+  void GenerateAppShellCode(const ImGuiAppGraph* g, ImGuiTextBuffer* out)
+  {
+    IM_ASSERT(g != nullptr && out != nullptr);
+
+    // Composition body (data structs, optional ClientApp, SetupApp) from the single graph emitter;
+    // the shell only ADDS the host that runs it -- no parallel codegen path.
+    GenerateAppGraphCode(g, out);
+
+    // Host scaffold: a concrete ImGuiApp that composes via the emitted SetupApp on its first
+    // initialized frame, then main() runs it. The composition it pushes (incl. any Composer control)
+    // is library code the shell links against; the editor is never re-emitted here.
+    const char* base = AppGraphCommandDefinitionCount(g) > 0 ? "ClientApp" : "ImGuiApp";
+    out->appendf("\nstruct AppShell : %s\n{\n", base);
+    out->appendf("  bool Composed = false;\n");
+    out->appendf("  virtual void OnDrawFrame() override\n  {\n");
+    out->appendf("    if (!Composed && IsInitialized())\n    {\n");
+    out->appendf("      SetupApp(this, ImGui::GetMainViewport());\n");
+    out->appendf("      Composed = true;\n");
+    out->appendf("    }\n");
+    out->appendf("    %s::OnDrawFrame();\n", base);
+    out->appendf("  }\n};\n\n");
+    out->appendf("int main(int argc, char** argv)\n{\n");
+    out->appendf("  AppShell app;\n");
+    out->appendf("  return app.Run(argc, argv);\n}\n");
+  }
+
   // Format a float as a C++ literal: %g alone drops the decimal point from whole values, and "8f" won't compile.
   static void AppFloatLit(char* out, size_t out_size, float v)
   {
@@ -14677,4 +14703,26 @@ namespace ImGui
       }
     }
   }
+}
+
+//-----------------------------------------------------------------------------
+// [SECTION] Embeddable Composer control (definitions; type in imguiapp_nodes.h)
+//-----------------------------------------------------------------------------
+
+void ImGuiAppComposerControl::OnInitialize(ImGuiApp* app, ImGuiAppComposerControlData* data) const
+{
+  data->Host = app;                                  // handed to the editor; enables the live self-mirror
+  data->Selected = -1;
+  ImGui::AppGraphEnsureFoundation(&data->Graph);     // an empty composition still shows its foundation stack
+}
+
+void ImGuiAppComposerControl::OnRender(const ImGuiAppComposerControlData* data, ImGuiAppComposerControlTempData* temp_data) const
+{
+  IM_UNUSED(temp_data);
+  // The editor edits the owned graph in place; render is where the Composer authors, mirroring the
+  // demo's own composer controls.
+  ImGuiAppComposerControlData* d = const_cast<ImGuiAppComposerControlData*>(data);
+  if (ImGui::Begin("Composer###imguiapp_composer_control"))
+    ImGui::ShowAppGraphEditor(d->Host, &d->Graph, &d->Selected, false);
+  ImGui::End();
 }
