@@ -5307,7 +5307,7 @@ namespace ImGui
   // them in: windows/sidebars in push (render) order, controls in dependency (update) order, command emitters in
   // push order. Non-sequential scopes (control/struct/status) produce an empty list. An authored order for the
   // scope (F58) overrides the derivation.
-  static void AppScopeSequenceIds(const ImGuiAppGraph* g, ImVector<int>* out)
+  void AppScopeSequenceIds(const ImGuiAppGraph* g, ImVector<int>* out)
   {
     out->clear();
     const int top = AppScopeCurrent(g);
@@ -5352,6 +5352,151 @@ namespace ImGui
     }
 
     AppScopeApplyAuthoredOrder(g, top, out);   // F58: authored order overrides derivation for this scope
+  }
+
+  // F60: does this member id list place the core phase layers out of their fixed enum order? Same rule the
+  // load-time validation (f) enforces -- the write gestures refuse a move that would trip it.
+  static bool AppScopeOrderPermutesCore(const ImGuiAppGraph* g, const ImVector<int>& ids)
+  {
+    int prev_rank = -1;
+    for (int k = 0; k < ids.Size; k++)
+    {
+      const ImGuiAppNode* ln = AppGraphFindNodeConst(g, ids.Data[k]);
+      if (ln == nullptr || ln->IsLive || ln->Kind != ImGuiAppNodeKind_Layer || !AppLayerIsCore(ln->LayerType))
+        continue;
+      const int rank = (int)ln->LayerType;
+      if (rank < prev_rank)
+        return true;
+      prev_rank = rank;
+    }
+    return false;
+  }
+
+  // F60 write side: author (or replace) a scope's order record with the COMPLETE member sequence -- a total
+  // order the read side ranks directly. Find-or-add mirrors AppNodeScopePosStore. The stored record is
+  // default-constructed before its list is deep-copied in, so no dangling buffer rides the vector growth.
+  static void AppScopeOrderStore(ImGuiAppGraph* g, int scope_id, const ImVector<int>& ids)
+  {
+    int idx = -1;
+    for (int i = 0; i < g->ScopeOrders.Size; i++)
+      if (g->ScopeOrders.Data[i].ScopeId == scope_id) { idx = i; break; }
+    if (idx < 0)
+    {
+      g->ScopeOrders.push_back(ImGuiAppScopeOrder());
+      idx = g->ScopeOrders.Size - 1;
+      g->ScopeOrders.Data[idx].ScopeId = scope_id;
+    }
+    g->ScopeOrders.Data[idx].NodeIds = ids;
+  }
+
+  // F60: move `node_id` to `new_slot` within the CURRENT scope's member sequence, authoring the F58 order
+  // record. new_slot clamps to the sequence bounds. Refuses a move that would reorder the core phase layers
+  // (the foundation runs in a fixed sequence). Returns true when the record changed.
+  bool AppScopeOrderMoveMember(ImGuiAppGraph* g, int node_id, int new_slot)
+  {
+    IM_ASSERT(g != nullptr);
+    const int scope = AppScopeCurrent(g);
+    if (scope < 0)
+      return false;   // the root uses the layer column, not the strip: never author its phase order here
+    ImVector<int> seq;
+    AppScopeSequenceIds(g, &seq);
+    int cur = -1;
+    for (int i = 0; i < seq.Size; i++)
+      if (seq.Data[i] == node_id) { cur = i; break; }
+    if (cur < 0)
+      return false;
+    if (new_slot < 0) new_slot = 0;
+    if (new_slot > seq.Size - 1) new_slot = seq.Size - 1;
+    if (new_slot == cur)
+      return false;
+    const int id = seq.Data[cur];
+    seq.erase(seq.Data + cur);
+    seq.insert(seq.Data + new_slot, id);
+    if (AppScopeOrderPermutesCore(g, seq))
+      return false;   // core-layer invariant: refuse, leave the record untouched
+    AppScopeOrderStore(g, scope, seq);
+    return true;
+  }
+
+  // F60 nudge fallback: shift `node_id` one slot earlier (dir<0) or later (dir>0) in the current scope order.
+  bool AppScopeOrderNudge(ImGuiAppGraph* g, int node_id, int dir)
+  {
+    IM_ASSERT(g != nullptr);
+    if (dir == 0 || AppScopeCurrent(g) < 0)
+      return false;
+    ImVector<int> seq;
+    AppScopeSequenceIds(g, &seq);
+    int cur = -1;
+    for (int i = 0; i < seq.Size; i++)
+      if (seq.Data[i] == node_id) { cur = i; break; }
+    if (cur < 0)
+      return false;
+    return AppScopeOrderMoveMember(g, node_id, cur + (dir < 0 ? -1 : 1));
+  }
+
+  // F60: chip-drag reorder on the order strip. Runs BEFORE submission (mirrors the layer drag) so the write
+  // lands in THIS frame's ordinals -- the member card badges and the strip both read the new sequence the
+  // same frame. Hit-tests LAST frame's published chip rects (screen space; the camera does not move during a
+  // strip drag). While a drag is live the canvas LMB-pan is suppressed so the reorder never scrolls the view.
+  static void AppHandleScopeStripDrag(ImGuiAppGraph* g)
+  {
+    ImGuiAppEditorState* ed = AppGraphEditorState(g);
+    ImGuiCanvasState* cv = AppEditorCanvas(g);
+
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+      ed->StripDragNode = -1;
+
+    const int scope = AppScopeCurrent(g);
+    const int nchips = ed->ScopeStripNodes.Size;
+    const bool have_strip = scope >= 0 && nchips > 0 && ed->ScopeStripRects.Size == nchips;
+
+    // Which last-frame chip is the cursor over -- or, once a drag is live, the nearest chip by x so a drag
+    // past either end still lands the member at the outermost slot.
+    int over = -1;
+    if (have_strip)
+    {
+      const ImVec2 m = ImGui::GetIO().MousePos;
+      for (int i = 0; i < nchips; i++)
+      {
+        const ImVec4 r = ed->ScopeStripRects.Data[i];
+        if (m.x >= r.x && m.x <= r.z && m.y >= r.y && m.y <= r.w) { over = i; break; }
+      }
+      if (over < 0 && ed->StripDragNode >= 0)
+      {
+        float best = FLT_MAX;
+        for (int i = 0; i < nchips; i++)
+        {
+          const ImVec4 r = ed->ScopeStripRects.Data[i];
+          const float d = ImFabs(m.x - (r.x + r.z) * 0.5f);
+          if (d < best) { best = d; over = i; }
+        }
+      }
+    }
+
+    // Overlay hit-test rule: AllowWhenBlockedByActiveItem so the press frame (an item may activate under the
+    // cursor) still registers.
+    const bool win_hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+
+    // Grab: press on a chip latches the dragged member (last-frame hover is enough, like the layer drag).
+    if (have_strip && ed->StripDragNode < 0 && win_hovered && over >= 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+      ed->StripDragNode = ed->ScopeStripNodes.Data[over];
+
+    // Reorder: while held, retarget the dragged chip to the slot under the cursor. MoveMember is a no-op when
+    // the slot is unchanged or a core-layer move is refused.
+    if (ed->StripDragNode >= 0 && over >= 0 && ImGui::IsMouseDown(ImGuiMouseButton_Left))
+    {
+      const int target_node = ed->ScopeStripNodes.Data[over];
+      if (target_node != ed->StripDragNode)
+      {
+        ImVector<int> seq;
+        AppScopeSequenceIds(g, &seq);
+        for (int i = 0; i < seq.Size; i++)
+          if (seq.Data[i] == target_node) { AppScopeOrderMoveMember(g, ed->StripDragNode, i); break; }
+      }
+    }
+
+    // Suppress the canvas LMB-pan for the life of the drag (this frame's CanvasEnd FSM reads the flag).
+    ImGui::CanvasGetIO(cv)->LmbPansEmptyCanvas = (ed->StripDragNode < 0);
   }
 
   // Per-scope sequence tidy (F44): arrange the drilled scope's members left -> right in execution order
@@ -5874,7 +6019,7 @@ namespace ImGui
   // The runs order strip: the face band's second row. One chip per member in execution order --
   // ordinal in the scope accent + name -- hover halos the member (brushing bus), click selects.
   // Post-CanvasEnd on the annotation list (chips are interactive; overlay hit-test rule).
-  // Publishes chip rects (screen space, this frame); the coming sequence-reorder drag rides them.
+  // Publishes chip rects (screen space, this frame); the F60 chip-drag reorder rides them (AppHandleScopeStripDrag).
   static void AppDrawScopeOrderStrip(ImGuiAppGraph* g, ImVec2 editor_min, ImVec2 editor_size, int* selected_node_id)
   {
     ImGuiAppEditorState* ed = AppGraphEditorState(g);
@@ -6780,7 +6925,12 @@ namespace ImGui
     int dragged_layer_id = 0;
     ImVec2 dragged_layer_pos(0.0f, 0.0f);
     if (at_root)
+    {
+      ImGui::CanvasGetIO(cv)->LmbPansEmptyCanvas = true;   // F60: strip drag owns this flag while drilled; keep the root default
       AppHandleLayerVerticalDrag(g, show_live, &dragged_layer_id, &dragged_layer_pos);
+    }
+    else
+      AppHandleScopeStripDrag(g);   // F60: chip-drag reorder, pre-submission so the ordinals update this same frame
 
     // Node-body buttons (explode/collapse) mutate g->Nodes, which is unsafe mid-submission -- record the request
     // here and apply it once after EndNodeEditor. 0 = none.
@@ -8511,6 +8661,16 @@ namespace ImGui
       // Shift+A opens the align/distribute submenu over the selection (F48/R3) -- no new top-level keys.
       if (ImGui::IsKeyPressed(ImGuiKey_A, false) && ImGui::GetIO().KeyShift && !ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyAlt && g->Selection.Size >= 2)
         AppGraphEditorState(g)->AlignMenuRequest = true;
+
+      // F60 nudge fallback: with a scope member selected while drilled, [ / ] shift it one execution slot
+      // earlier / later -- the chip-drag's keyboard equivalent, writing the same F58 order record.
+      if (g->ViewScope.Size > 0 && selected_node_id != nullptr && *selected_node_id >= 0)
+      {
+        if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket, false))
+          AppScopeOrderNudge(g, *selected_node_id, -1);
+        else if (ImGui::IsKeyPressed(ImGuiKey_RightBracket, false))
+          AppScopeOrderNudge(g, *selected_node_id, +1);
+      }
 
     }
 

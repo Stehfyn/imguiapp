@@ -642,6 +642,7 @@ struct ImGuiAppEditorState
   bool                                 ScopeVoidValid = false;                            // ScopeVoid valid this frame (drawn with the walls)
   int                                  TelegraphPin = -1;                                 // F50: pin hovered as a wire-drag target this frame (-1 = none)
   bool                                 TelegraphOk = false;                               // F50: would the hovered target connect legally to the drag source
+  int                                  StripDragNode = -1;                                // F60: order-strip chip being drag-reordered (node id; -1 = idle). Latched pre-submission, hit-tested against last frame's ScopeStripRects
 };
 
 // The whole authored graph. One monotonic id allocator shared by every node/port/body-attr/link:
@@ -1133,4 +1134,11 @@ namespace ImGui
   // F44: drilled-scope tidy -- members left->right in execution order, this scope's placements only
   // (root GridPos untouched); falls back to AppGraphAutoLayout at root / non-sequential scopes.
   IMGUI_API void                AppScopeSequenceTidy(ImGuiAppGraph* g, bool show_live);
+  // Direct members of the current scope in execution order; an authored F58 order overrides the derivation.
+  IMGUI_API void                AppScopeSequenceIds(const ImGuiAppGraph* g, ImVector<int>* out);
+  // F60 write gestures: reorder a scope member by authoring the F58 order record. MoveMember drops node_id at
+  // new_slot; Nudge shifts it one slot (dir<0 earlier, dir>0 later). Both act on the CURRENT drilled scope,
+  // refuse a move that permutes the core phase layers, and return true when the record changed.
+  IMGUI_API bool                AppScopeOrderMoveMember(ImGuiAppGraph* g, int node_id, int new_slot);
+  IMGUI_API bool                AppScopeOrderNudge(ImGuiAppGraph* g, int node_id, int dir);
 }
