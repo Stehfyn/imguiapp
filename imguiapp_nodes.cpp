@@ -5173,34 +5173,119 @@ namespace ImGui
     }
   }
 
-  // STUB (L1): implemented in the walls slice.
   void AppNodeConfigSummary(const ImGuiAppNode* n, char* buf, int buf_size)
   {
-    IM_UNUSED(n);
     if (buf_size > 0)
       buf[0] = '\0';
+    if (n == nullptr || buf_size <= 0)
+      return;
+    int len = 0;
+    if (n->Kind == ImGuiAppNodeKind_Window)
+    {
+      if (n->HasInitialPlacement)
+        len += ImFormatString(buf, (size_t)buf_size, "%.0fx%.0f @ (%.0f,%.0f)",
+                              n->InitialSize.x, n->InitialSize.y, n->InitialPos.x, n->InitialPos.y);
+    }
+    else if (n->Kind == ImGuiAppNodeKind_Sidebar)
+    {
+      int cur = 0;
+      for (int i = 0; i < IM_ARRAYSIZE(kAppDockDirs); i++)
+        if (n->DockDir == kAppDockDirs[i])
+          cur = i;
+      if (n->DockSize > 0.0f)
+        len += ImFormatString(buf, (size_t)buf_size, "dock %s \xc2\xb7 %.0f px", kAppDockDirNames[cur], n->DockSize);
+      else
+        len += ImFormatString(buf, (size_t)buf_size, "dock %s \xc2\xb7 auto", kAppDockDirNames[cur]);
+    }
+    else
+    {
+      return;   // only placement/dock kinds carry a readout
+    }
+    if ((n->Flags & ImGuiWindowFlags_AlwaysAutoResize) && len < buf_size - 1)
+      ImFormatString(buf + len, (size_t)(buf_size - len), "%sAlwaysAutoResize", len > 0 ? " \xc2\xb7 " : "");
   }
 
   // Walls render only for scopes whose owner has a card silhouette to become the room
-  // (window/sidebar first slice; layer scopes keep their phase bands). STUB (L1).
+  // (window/sidebar first slice; layer scopes keep their phase bands).
   static bool AppScopeWallsWanted(const ImGuiAppGraph* g)
   {
-    IM_UNUSED(g);
-    return false;
+    const int top = AppScopeCurrent(g);
+    const ImGuiAppNode* tn = top >= 0 ? AppGraphFindNodeConst(g, top) : nullptr;
+    return tn != nullptr && (tn->Kind == ImGuiAppNodeKind_Window || tn->Kind == ImGuiAppNodeKind_Sidebar);
   }
 
   // Scope walls: the owner's root silhouette at room size around the members' bounds -- squared
-  // plate, kind-hue header rule, title bar = name + kind word + AppNodeConfigSummary readout.
-  // Pre-submission, background draw list; publishes ScopeWallRect (model units) and computes the
-  // bracket rects. em_base/fh_base are the zoom-free font metrics captured before CanvasBegin
-  // (the group_box idiom). STUB (L1): publishes nothing, draws nothing.
+  // plate, kind-hue header rule, opaque title band = name + kind word + AppNodeConfigSummary
+  // readout (read-only; the inspector owns editing). Pre-submission on the background channel
+  // (nodes and in-scope group frames draw over the fill), model bounds + THIS frame's camera --
+  // the group_box transform discipline. Publishes ScopeWallRect (model units) for the
+  // post-CanvasEnd brackets/rail/portal passes. em_base/fh_base are the zoom-free font metrics
+  // captured before CanvasBegin. An empty scope publishes nothing (the empty CTA owns that state).
   static void AppDrawScopeWalls(ImGuiAppGraph* g, ImGuiCanvasState* cv, bool show_live, float em_base, float fh_base)
   {
-    IM_UNUSED(cv);
-    IM_UNUSED(show_live);
-    IM_UNUSED(em_base);
-    IM_UNUSED(fh_base);
-    AppGraphEditorState(g)->ScopeWallValid = false;
+    ImGuiAppEditorState* ed = AppGraphEditorState(g);
+    ed->ScopeWallValid = false;
+    if (!AppScopeWallsWanted(g))
+      return;
+    const ImGuiAppNode* tn = AppGraphFindNodeConst(g, AppScopeCurrent(g));
+
+    // Members' model bounds -- the same filters the submission loop applies.
+    ImVec2 mn(FLT_MAX, FLT_MAX);
+    ImVec2 mx(-FLT_MAX, -FLT_MAX);
+    for (int i = 0; i < g->Nodes.Size; i++)
+    {
+      const ImGuiAppNode* n = &g->Nodes.Data[i];
+      if ((!show_live && n->IsLive) || AppNodeHiddenByCollapse(g, n->Id))
+        continue;
+      ImVec2 m;
+      if (!AppNodeModelSize(g, n->Id, &m))
+        m = AppLayoutNodeSize(g, n);
+      mn = ImMin(mn, n->GridPos);
+      mx = ImMax(mx, n->GridPos + m);
+    }
+    if (mn.x > mx.x)
+      return;
+
+    // Chrome in MODEL units, zoom-free bases (the group_box idiom).
+    const float em = ImGui::GetFontSize();   // zoomed content font: screen-space text metrics
+    const float sc = AppCanvasScale(g);
+    const float em_m = em_base * ImGui::CanvasGetZoom(cv) / sc;
+    const float pad_m = em_m * 0.75f;
+    const float title_h_m = fh_base * em_m / em_base * 1.15f;
+    const ImVec2 wall_mn_m(mn.x - pad_m, mn.y - (title_h_m + pad_m * 0.6f));
+    const ImVec2 wall_mx_m(mx.x + pad_m, mx.y + pad_m);
+    ed->ScopeWallRect = ImVec4(wall_mn_m.x, wall_mn_m.y, wall_mx_m.x, wall_mx_m.y);
+    ed->ScopeWallValid = true;
+
+    const ImVec2 smn = ImGui::CanvasToScreen(cv, wall_mn_m);
+    const ImVec2 smx = ImGui::CanvasToScreen(cv, wall_mx_m);
+    const float title_h = title_h_m * sc;
+    const float rounding = 2.0f * sc;   // the owner card's squared silhouette, at wall size
+    const ImU32 kind_col = AppKindColor(tn->Kind);
+    ImDrawList* dl = ImGui::CanvasBackgroundDrawList(cv);
+    dl->AddRectFilled(smn, smx, AppColWithAlpha(kind_col, 0.055f), rounding);
+    dl->AddRectFilled(smn, ImVec2(smx.x, smn.y + title_h), AppComposerGetStyle()->GroupTitleBg, rounding, ImDrawFlags_RoundCornersTop);
+    dl->AddRect(smn, smx, AppComposerGetStyle()->GroupOutline, rounding, 0, ImMax(1.0f, em * 0.09375f));
+    dl->AddLine(ImVec2(smn.x, smn.y + title_h), ImVec2(smx.x, smn.y + title_h), kind_col, ImMax(1.0f, em * 0.0625f));   // the kind-hue header rule
+
+    // Title band: name (kind hue) + kind word (muted) left, config readout (muted) right.
+    const char* name = tn->Draft.Name[0] ? tn->Draft.Name : AppNodeKindName(tn->Kind);
+    const float ty = smn.y + (title_h - ImGui::GetTextLineHeight()) * 0.5f;
+    float tx = smn.x + em * 0.6f;
+    dl->AddText(ImVec2(tx, ty), kind_col, name);
+    tx += ImGui::CalcTextSize(name).x + em * 0.5f;
+    const char* kind_word = AppNodeKindTag(tn->Kind);
+    dl->AddText(ImVec2(tx, ty), AppComposerGetStyle()->TextMuted, kind_word);
+    tx += ImGui::CalcTextSize(kind_word).x;
+    char cfg[96];
+    AppNodeConfigSummary(tn, cfg, IM_ARRAYSIZE(cfg));
+    if (cfg[0])
+    {
+      const ImVec2 cs = ImGui::CalcTextSize(cfg);
+      const float cx = smx.x - em * 0.6f - cs.x;
+      if (cx > tx + em)   // drop the readout before it collides with the identity (never truncate mid-fact)
+        dl->AddText(ImVec2(cx, ty), AppComposerGetStyle()->TextMuted, cfg);
+    }
   }
 
   // Lifecycle bracket plates: grey framework-internal Begin("name") / End() at the interior
