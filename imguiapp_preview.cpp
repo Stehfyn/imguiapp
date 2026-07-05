@@ -82,6 +82,20 @@ namespace
     int  Value;
   };
 
+  // The on-camera surface + selection-brushing channel (design 8), bundled off the session. All transient;
+  // never snapshotted. Composer -> preview: Brush* name the node whose widget group haloes. Preview ->
+  // composer: HoverNode/ClickNode report the node the mouse is over / clicked, latched until taken.
+  struct AppPvSurface
+  {
+    bool Enabled;        // OnRender submits real widgets into the current window (else headless CORE)
+    int  BrushSelected;  // composer -> preview halo target (primary selection node id, -1 none)
+    int  BrushHover;     // composer -> preview halo target (hovered node id, -1 none)
+    int  HoverNode;      // preview -> composer: node under the mouse this frame (-1 none)
+    int  ClickNode;      // preview -> composer: node whose panel was clicked (latched, -1 none)
+
+    AppPvSurface() { Enabled = false; BrushSelected = -1; BrushHover = -1; HoverNode = -1; ClickNode = -1; }
+  };
+
   // Per interpreter control instance. The value store is a flat byte buffer laid out Persist|LastTemp|Temp
   // (InstanceData order) and registered through RegisterAppStorage, so snapshot/restore/replay/state-hash
   // apply verbatim. Records are heap-allocated and held by pointer so their addresses stay stable.
@@ -112,6 +126,7 @@ struct ImGuiAppPreview
   ImVector<AppPvDispatch>     Dispatches;
   ImVector<AppPvCommandName>  Commands;
   int                         Tick;
+  AppPvSurface                Surface;      // F68 surface + brushing channel (design 8)
 
   ImGuiAppPreview() { Graph = nullptr; App = nullptr; Tick = 0; }
 };
@@ -835,46 +850,68 @@ namespace
 
   void AppPvDestroyBuffer(void* p) { IM_FREE(p); }
 
-  // Manifest-bound widget panel (design 8.1): the field switch of AppMockRenderFields, rewritten to read/
-  // write manifest offsets in live storage. Runs only for a hosted control inside its window's Begin/End,
-  // so app-level controls (the headless CORE path) issue no ImGui calls. F68 drives this on-camera.
-  void AppPvRenderFields(const AppPvInstance* inst, char* buffer)
+  void AppPvFieldWidget(const AppPvSlot* sl, char* p)
+  {
+    switch (sl->Type)
+    {
+    case ImGuiAppFieldType_Bool:   { bool v; memcpy(&v, p, 1); if (ImGui::Checkbox(sl->Name, &v)) memcpy(p, &v, 1); break; }
+    case ImGuiAppFieldType_Int:    { ImGui::DragInt(sl->Name, (int*)p); break; }
+    case ImGuiAppFieldType_Float:  { ImGui::DragFloat(sl->Name, (float*)p, 0.01f); break; }
+    case ImGuiAppFieldType_Double: { float v = (float)(*(double*)p); if (ImGui::DragFloat(sl->Name, &v, 0.01f)) *(double*)p = v; break; }
+    default: ImGui::TextDisabled("%s", sl->Name); break;
+    }
+  }
+
+  // Manifest-bound widget panel (design 8.1) with selection brushing (design 8.2): the field switch of
+  // AppMockRenderFields, rewritten to read/write manifest offsets in live storage, wrapped in one titled
+  // group so the panel is a single hit-target. The surface reports the hovered/clicked node back to the
+  // composer, and haloes the group when the composer's selection/hover names this node. Runs for a hosted or
+  // surface control inside the current window; app-level headless controls (the CORE path) issue no ImGui.
+  void AppPvRenderFields(ImGuiAppPreview* s, const AppPvInstance* inst, char* buffer, const char* label)
   {
     ImGui::PushID(inst->NodeId);
+    ImGui::BeginGroup();
+
+    ImGui::TextUnformatted((label != nullptr && label[0] != 0) ? label : "Control");
+    ImGui::Separator();
+
     // Temp fields are the input surface (write the Temp sub-buffer -> next frame's edge test consumes it).
     char* temp = buffer + inst->PersistBytes + inst->TempBytes;
     for (int i = 0; i < inst->Temp.Size; i++)
     {
-      const AppPvSlot* s = &inst->Temp.Data[i];
-      char* p = temp + s->Offset;
       ImGui::PushID(i);
-      switch (s->Type)
-      {
-      case ImGuiAppFieldType_Bool:   { bool v; memcpy(&v, p, 1); if (ImGui::Checkbox(s->Name, &v)) memcpy(p, &v, 1); break; }
-      case ImGuiAppFieldType_Int:    { ImGui::DragInt(s->Name, (int*)p); break; }
-      case ImGuiAppFieldType_Float:  { ImGui::DragFloat(s->Name, (float*)p, 0.01f); break; }
-      case ImGuiAppFieldType_Double: { float v = (float)(*(double*)p); if (ImGui::DragFloat(s->Name, &v, 0.01f)) *(double*)p = v; break; }
-      default: ImGui::TextDisabled("%s", s->Name); break;
-      }
+      AppPvFieldWidget(&inst->Temp.Data[i], temp + inst->Temp.Data[i].Offset);
       ImGui::PopID();
     }
     // Persist fields shown bound to live storage (state; poke-able, design 5).
     char* persist = buffer;
     for (int i = 0; i < inst->Persist.Size; i++)
     {
-      const AppPvSlot* s = &inst->Persist.Data[i];
-      char* p = persist + s->Offset;
       ImGui::PushID(1000 + i);
-      switch (s->Type)
-      {
-      case ImGuiAppFieldType_Bool:   { bool v; memcpy(&v, p, 1); if (ImGui::Checkbox(s->Name, &v)) memcpy(p, &v, 1); break; }
-      case ImGuiAppFieldType_Int:    { ImGui::DragInt(s->Name, (int*)p); break; }
-      case ImGuiAppFieldType_Float:  { ImGui::DragFloat(s->Name, (float*)p, 0.01f); break; }
-      case ImGuiAppFieldType_Double: { float v = (float)(*(double*)p); if (ImGui::DragFloat(s->Name, &v, 0.01f)) *(double*)p = v; break; }
-      default: ImGui::TextDisabled("%s", s->Name); break;
-      }
+      AppPvFieldWidget(&inst->Persist.Data[i], persist + inst->Persist.Data[i].Offset);
       ImGui::PopID();
     }
+    ImGui::EndGroup();
+
+    // Brushing (design 8.2). Preview -> composer: the group's hover/click publish this node. Composer ->
+    // preview: halo the group when the selection (primary) or hover names it -- theme-derived, em-padded.
+    const ImVec2 gmin = ImGui::GetItemRectMin();
+    const ImVec2 gmax = ImGui::GetItemRectMax();
+    const float  em   = ImGui::GetFontSize();
+    const float  pad  = em * 0.25f;
+    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseHoveringRect(gmin, gmax))
+    {
+      s->Surface.HoverNode = inst->NodeId;
+      if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) s->Surface.ClickNode = inst->NodeId;
+    }
+    if (inst->NodeId == s->Surface.BrushSelected || inst->NodeId == s->Surface.BrushHover)
+    {
+      const bool  primary = (inst->NodeId == s->Surface.BrushSelected);
+      const ImU32 col = ImGui::GetColorU32(primary ? ImGuiCol_NavHighlight : ImGuiCol_Border);
+      ImGui::GetWindowDrawList()->AddRect(gmin - ImVec2(pad, pad), gmax + ImVec2(pad, pad), col, em * 0.35f, 0, primary ? 2.0f : 1.0f);
+    }
+
+    ImGui::Spacing();
     ImGui::PopID();
   }
 }
@@ -901,10 +938,10 @@ void ImGuiAppPreviewControl::OnRender(const ImGuiApp* app) const
     if (slot != nullptr) AppPvWriteSlot(temp, slot, Session->Scripts.Data[i].Value);
   }
 
-  // Real widget input on the composed window surface (design 8.1). Guarded to hosted controls so the
+  // Real widget input on the composed window surface (design 8.1). Guarded to hosted/surface controls so the
   // headless CORE (app-level controls, no window/NewFrame) makes no ImGui calls.
-  if (Hosted)
-    AppPvRenderFields(Inst, buffer);
+  if (Hosted || Session->Surface.Enabled)
+    AppPvRenderFields(Session, Inst, buffer, Label);
 }
 
 //-----------------------------------------------------------------------------
@@ -1014,6 +1051,96 @@ namespace
 
     s->Instances.push_back(inst);
   }
+
+  // Build the interpreter app for a session: the framework core layers plus one interpreter control per
+  // Control node in the given topo order (design 2). Shared by AppPreviewCreate and AppPreviewReconcile so
+  // both stand up ONE identical population; the caller owns topo (reconcile must test it before teardown).
+  void AppPvBuildPopulation(ImGuiAppPreview* s, const ImVector<int>& order)
+  {
+    ImGuiAppPreviewApp* app = IM_NEW(ImGuiAppPreviewApp)();
+    app->Session = s;
+    s->App = app;
+
+    // Task (mutate), Command (dispatch), Display (render app-level + hosted controls' OnRender). Status is
+    // omitted -- it submits a real ImGui window; the surface hosts controls in the composer's own window.
+    ImGui::PushAppLayer<ImGuiAppTaskLayer>(app);
+    ImGui::PushAppLayer<ImGuiAppCommandLayer>(app);
+    ImGui::PushAppLayer<ImGuiAppDisplayLayer>(app);
+
+    for (int i = 0; i < order.Size; i++)
+    {
+      const ImGuiAppNode* n = AppPvFindNode(s->Graph, order.Data[i]);
+      if (n == nullptr) continue;
+      AppPvPushControl(s, n, nullptr);
+    }
+  }
+
+  // A captured control's snapshottable bytes (design 7): the Persist + LastTemp regions with their manifests,
+  // kept across a reconcile so surviving (sanitized name, type) slots carry their values into the rebuild.
+  // Held by HEAP POINTER (like AppPvInstance): its nested ImVectors are not bitwise-copyable, so it must never
+  // live as a value element of an ImVector (ImVector copies bitwise and would dangle the inner buffers).
+  struct AppPvCapture
+  {
+    int                 NodeId;
+    ImVector<AppPvSlot> Persist;
+    ImVector<AppPvSlot> Temp;
+    ImVector<char>      PersistData;    // copy of the Persist sub-buffer ([0, PersistBytes))
+    ImVector<char>      LastTempData;   // copy of the LastTemp sub-buffer ([PersistBytes, +TempBytes))
+  };
+
+  void AppPvCaptureInstances(ImGuiAppPreview* s, ImVector<AppPvCapture*>* out)
+  {
+    out->clear();
+    for (int i = 0; i < s->Instances.Size; i++)
+    {
+      const AppPvInstance* inst = s->Instances.Data[i];
+      const char* buffer = (const char*)s->App->Data.GetVoidPtr(inst->DataTypeId);
+      if (buffer == nullptr) continue;
+      AppPvCapture* cap = IM_NEW(AppPvCapture)();
+      cap->NodeId = inst->NodeId;
+      cap->Persist = inst->Persist;   // POD element copy (ImVector operator= memcpy is correct for AppPvSlot)
+      cap->Temp = inst->Temp;
+      cap->PersistData.resize(inst->PersistBytes);
+      if (inst->PersistBytes > 0) memcpy(cap->PersistData.Data, buffer, (size_t)inst->PersistBytes);
+      cap->LastTempData.resize(inst->TempBytes);
+      if (inst->TempBytes > 0) memcpy(cap->LastTempData.Data, buffer + inst->PersistBytes, (size_t)inst->TempBytes);
+      out->push_back(cap);
+    }
+  }
+
+  // Copy every surviving (sanitized name, type) slot from the capture into a freshly-built instance; new and
+  // retyped slots keep their zero default (design 7). Preserves Persist + LastTemp -- Temp is re-recorded input.
+  void AppPvRestoreInstance(ImGuiAppPreview* s, const AppPvInstance* inst, const ImVector<AppPvCapture*>& caps)
+  {
+    const AppPvCapture* cap = nullptr;
+    for (int i = 0; i < caps.Size; i++) if (caps.Data[i]->NodeId == inst->NodeId) { cap = caps.Data[i]; break; }
+    if (cap == nullptr) return;   // a new node -> default-initialised
+
+    char* buffer = (char*)s->App->Data.GetVoidPtr(inst->DataTypeId);
+    if (buffer == nullptr) return;
+
+    for (int i = 0; i < inst->Persist.Size; i++)
+    {
+      const AppPvSlot* ns = &inst->Persist.Data[i];
+      for (int j = 0; j < cap->Persist.Size; j++)
+      {
+        const AppPvSlot* os = &cap->Persist.Data[j];
+        if (os->Type == ns->Type && os->Size == ns->Size && strcmp(os->Name, ns->Name) == 0)
+        { memcpy(buffer + ns->Offset, cap->PersistData.Data + os->Offset, (size_t)ns->Size); break; }
+      }
+    }
+    char* last_temp = buffer + inst->PersistBytes;
+    for (int i = 0; i < inst->Temp.Size; i++)
+    {
+      const AppPvSlot* ns = &inst->Temp.Data[i];
+      for (int j = 0; j < cap->Temp.Size; j++)
+      {
+        const AppPvSlot* os = &cap->Temp.Data[j];
+        if (os->Type == ns->Type && os->Size == ns->Size && strcmp(os->Name, ns->Name) == 0)
+        { memcpy(last_temp + ns->Offset, cap->LastTempData.Data + os->Offset, (size_t)ns->Size); break; }
+      }
+    }
+  }
 }
 
 namespace ImGui
@@ -1036,27 +1163,49 @@ namespace ImGui
 
     ImGuiAppPreview* s = IM_NEW(ImGuiAppPreview)();
     s->Graph = graph;
+    AppPvBuildPopulation(s, order);
+    return s;
+  }
 
-    ImGuiAppPreviewApp* app = IM_NEW(ImGuiAppPreviewApp)();
-    app->Session = s;
-    s->App = app;
+  bool AppPreviewReconcile(ImGuiAppPreview* session, char* err, int err_size)
+  {
+    if (err != nullptr && err_size > 0) err[0] = 0;
+    if (session == nullptr || session->Graph == nullptr) return false;
 
-    // Framework core layers (design 2): Task (mutate), Command (dispatch), Window (render app-level + hosted
-    // controls' OnRender). Status is intentionally omitted -- it submits a real ImGui window (not headless).
-    PushAppLayer<ImGuiAppTaskLayer>(app);
-    PushAppLayer<ImGuiAppCommandLayer>(app);
-    PushAppLayer<ImGuiAppDisplayLayer>(app);
-
-    // Push one interpreter control per Control node in topo order. Host (window/sidebar) placement is
-    // resolved from containment, but for F67 CORE app-level hosting keeps the render pass headless.
-    for (int i = 0; i < order.Size; i++)
+    // Refuse on a dependency cycle BEFORE tearing anything down: the running population survives an invalid
+    // intermediate edit (design 7 -- a rewire applies next frame; a cycle keeps the last-good run intact).
+    ImVector<int> order;
+    char toperr[160];
+    if (!AppGraphTopoOrder(session->Graph, &order, toperr, IM_ARRAYSIZE(toperr)))
     {
-      const ImGuiAppNode* n = AppPvFindNode(graph, order.Data[i]);
-      if (n == nullptr) continue;
-      AppPvPushControl(s, n, nullptr);
+      if (err != nullptr && err_size > 0) ImStrncpy(err, toperr, (size_t)err_size);
+      return false;
     }
 
-    return s;
+    // Capture surviving state, rebuild the population, restore by (name, type). Scripts / dispatch log /
+    // command table are session-scoped and carry across unchanged.
+    ImVector<AppPvCapture*> caps;
+    AppPvCaptureInstances(session, &caps);
+
+    if (session->App != nullptr)
+    {
+      ShutdownApp(session->App);   // unregisters storage -> frees the old value buffers
+      IM_DELETE(session->App);
+      session->App = nullptr;
+    }
+    for (int i = 0; i < session->Instances.Size; i++)
+      IM_DELETE(session->Instances.Data[i]);
+    session->Instances.clear();
+
+    AppPvBuildPopulation(session, order);
+
+    for (int i = 0; i < session->Instances.Size; i++)
+      AppPvRestoreInstance(session, session->Instances.Data[i], caps);
+
+    for (int i = 0; i < caps.Size; i++)
+      IM_DELETE(caps.Data[i]);
+
+    return true;
   }
 
   void AppPreviewDestroy(ImGuiAppPreview* session)
@@ -1080,9 +1229,42 @@ namespace ImGui
   void AppPreviewFrame(ImGuiAppPreview* session, float dt)
   {
     if (session == nullptr || session->App == nullptr) return;
+    session->Surface.HoverNode = -1;   // recomputed this frame while the controls render (design 8.2)
     session->Tick++;
     UpdateApp(session->App, dt);
     RenderApp(session->App);
+  }
+
+  void AppPreviewRender(ImGuiAppPreview* session)
+  {
+    if (session == nullptr || session->App == nullptr) return;
+    session->Surface.HoverNode = -1;   // paused: render (and brush) the frozen state without a Task pass
+    RenderApp(session->App);
+  }
+
+  void AppPreviewSetSurface(ImGuiAppPreview* session, bool on)
+  {
+    if (session != nullptr) session->Surface.Enabled = on;
+  }
+
+  void AppPreviewSetBrush(ImGuiAppPreview* session, int selected_node_id, int hover_node_id)
+  {
+    if (session == nullptr) return;
+    session->Surface.BrushSelected = selected_node_id;
+    session->Surface.BrushHover = hover_node_id;
+  }
+
+  int AppPreviewHoveredNode(const ImGuiAppPreview* session)
+  {
+    return session != nullptr ? session->Surface.HoverNode : -1;
+  }
+
+  int AppPreviewTakeClickedNode(ImGuiAppPreview* session)
+  {
+    if (session == nullptr) return -1;
+    const int n = session->Surface.ClickNode;
+    session->Surface.ClickNode = -1;   // consumed
+    return n;
   }
 
   bool AppPreviewSetInput(ImGuiAppPreview* session, int node_id, const char* temp_field, double value)

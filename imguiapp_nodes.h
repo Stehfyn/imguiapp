@@ -572,6 +572,8 @@ struct ImGuiAppEditorUndo
   ImGuiID                      LiveHash = 0;     // hash of Snaps[Cursor], for cheap change detection
 };
 
+struct ImGuiAppPreview;   // F68 live preview session (imguiapp_preview.h); opaque, held by pointer here
+
 // Editor session state, one per graph (the document): the editor's cross-frame values ride the
 // model object they describe, like Selection/ViewScope/ScopeCams. All transient, not serialized.
 struct ImGuiAppEditorState
@@ -656,6 +658,9 @@ struct ImGuiAppEditorState
   int                                  TelegraphPin = -1;                                 // F50: pin hovered as a wire-drag target this frame (-1 = none)
   bool                                 TelegraphOk = false;                               // F50: would the hovered target connect legally to the drag source
   int                                  StripDragNode = -1;                                // F60: order-strip chip being drag-reordered (node id; -1 = idle). Latched pre-submission, hit-tested against last frame's ScopeStripRects
+  mutable ImGuiAppPreview*             Preview = nullptr;                                 // F68: live preview interpreter session for this document (heap; opaque; freed with the process / rebuilt on Reinit)
+  bool                                 PreviewRun = true;                                 // F68: run vs pause the previewed model (widgets stay interactive while paused)
+  mutable ImGuiID                      PreviewSig = 0;                                    // F68: AppGraphSignature the preview was last reconciled at; a change reconciles (preserve-by-field) next frame
 };
 
 // The whole authored graph. One monotonic id allocator shared by every node/port/body-attr/link:
