@@ -694,6 +694,31 @@ struct ImGuiAppGraph
   ImGuiID                        GenSignature               = 0;       // AppGraphSignature captured at the last codegen; 0 = never generated this session. Code is STALE when the live signature differs (transient, NOT serialized)
 };
 
+//-----------------------------------------------------------------------------
+// [SECTION] Embeddable Composer control (generated-shell bootstrap)
+//-----------------------------------------------------------------------------
+// The Composer packaged as a library ImGuiAppControl: an app PushAppControl<>s it to host the node
+// editor in its own composition. It owns the graph it edits and drives ShowAppGraphEditor, so the
+// editor implementation stays library code -- a generated host shell hosts the Composer by pushing
+// this type, never by re-emitting the editor. Host is the app running the control (handed to the
+// editor for its live mirror); null = design-only.
+struct ImGuiAppComposerControlData
+{
+  ImGuiApp*     Host     = nullptr;
+  ImGuiAppGraph Graph;
+  int           Selected = -1;
+};
+
+struct ImGuiAppComposerControlTempData
+{
+};
+
+struct ImGuiAppComposerControl : ImGuiAppControl<ImGuiAppComposerControlData, ImGuiAppComposerControlTempData>
+{
+  virtual void OnInitialize(ImGuiApp* app, ImGuiAppComposerControlData* data) const override;
+  virtual void OnRender(const ImGuiAppComposerControlData* data, ImGuiAppComposerControlTempData* temp_data) const override;
+};
+
 namespace ImGui
 {
   // AddNode/AddBuiltin stamp the kind's mandatory ports and a body-attr id; the returned pointer is
@@ -1070,6 +1095,12 @@ namespace ImGui
   // variant also records the per-node source map (out_spans may be null; cleared first).
   IMGUI_API void                GenerateAppGraphCode(const ImGuiAppGraph* g, ImGuiTextBuffer* out);
   IMGUI_API void                GenerateAppGraphCodeEx(const ImGuiAppGraph* g, ImGuiTextBuffer* out, ImVector<ImGuiAppCodeSpan>* out_spans);
+
+  // Generated-shell bootstrap: the composition body from GenerateAppGraphCode (the SINGLE emitter),
+  // wrapped in the host scaffold a standalone program needs -- a concrete ImGuiApp that composes via
+  // the emitted SetupApp on its first initialized frame, plus main() running it. A composition that
+  // hosts an ImGuiAppComposerControl thus emits a shell that runs the Composer against the library.
+  IMGUI_API void                GenerateAppShellCode(const ImGuiAppGraph* g, ImGuiTextBuffer* out);
 
   // Per-node codegen: emits only the code one node produces -- a Control's struct(s) with derived
   // deps, the CommandLayer's AppCommand enum + dispatch, a bring-up line, or (App node) the whole
