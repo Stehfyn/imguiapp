@@ -5137,22 +5137,40 @@ namespace ImGui
 
   // Detail altitude: a node shows its full authoring body only when the current scope is its
   // scope-parent; everywhere else it folds to an identity card (title, pins, one summary line).
-  // STUB (L1): full body everywhere == today's behavior.
   static bool AppScopeDetailAltitude(const ImGuiAppGraph* g, const ImGuiAppNode* n)
   {
-    IM_UNUSED(g);
-    IM_UNUSED(n);
-    return true;
+    // Altitude-law guard (same as altitude_root): graphs without a composed Display foundation
+    // (raw canvases, unit scaffolds) keep every node at full detail at every level.
+    if (AppGraphLayerOfType(g, ImGuiAppLayerType_Display) == nullptr)
+      return true;
+    return AppScopeCurrent(g) == AppScopeParentOf(g, n->Id);
   }
 
-  // Identity-card summary line: "2 fields . 1 event . emits SetLevel". Empty when there is
-  // nothing to fold. STUB (L1).
+  // Identity-card summary line: "2 fields \xc2\xb7 1 event \xc2\xb7 emits SetLevel". Empty when
+  // there is nothing to fold (the deps/data pin rows still identify the node).
   static void AppNodeSummaryLine(const ImGuiAppGraph* g, const ImGuiAppNode* n, char* buf, int buf_size)
   {
-    IM_UNUSED(g);
-    IM_UNUSED(n);
     if (buf_size > 0)
       buf[0] = '\0';
+    if (n->Kind != ImGuiAppNodeKind_Control || buf_size <= 0)
+      return;
+    ImVector<ImGuiAppFieldDesc> persists;
+    ImVector<ImGuiAppFieldDesc> temps;
+    AppNodeEffectiveFields(g, n, 0, &persists);
+    AppNodeEffectiveFields(g, n, 1, &temps);
+    const int fields = persists.Size + temps.Size;
+    int len = 0;
+    if (fields > 0)
+      len += ImFormatString(buf + len, (size_t)(buf_size - len), "%d field%s", fields, fields == 1 ? "" : "s");
+    if (n->Events.Size > 0 && len < buf_size - 1)
+      len += ImFormatString(buf + len, (size_t)(buf_size - len), "%s%d event%s", len > 0 ? " \xc2\xb7 " : "", n->Events.Size, n->Events.Size == 1 ? "" : "s");
+    if (n->Commands.Size > 0 && len < buf_size - 1)
+    {
+      if (n->Commands.Size == 1)
+        ImFormatString(buf + len, (size_t)(buf_size - len), "%semits %s", len > 0 ? " \xc2\xb7 " : "", n->Commands.Data[0].Name);
+      else
+        ImFormatString(buf + len, (size_t)(buf_size - len), "%semits %d commands", len > 0 ? " \xc2\xb7 " : "", n->Commands.Size);
+    }
   }
 
   // STUB (L1): implemented in the walls slice.
