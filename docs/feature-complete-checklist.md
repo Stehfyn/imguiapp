@@ -528,6 +528,17 @@ extends those rails rather than inventing parallel ones.
   constraint/anchor edges (explicit build-or-reject verdict in a rejected-alternatives section).
   Palette legality rows, scope domains, validation, and codegen shape stated for each kind.
   *Accept: doc lands with verdicts; no code before it.*
+  DONE (`vocabulary-nodes-design.md`, every mechanism cited). Verdicts: (1) Op nodes BUILD -- one appended
+  `ImGuiAppNodeKind_Op`, result DataOut `DataTypeId=0` (opts out of one-producer, fans out; cycles still
+  refused by AppGraphDataReaches); type authority is AppEventExprCheck alone; the subtree FOLDS to an
+  expression string (re-imports as an Expr, not op nodes -- the .graph is the only home). MANDATE for F54:
+  extend the grammar with `?:` + ImMin/ImMax or select/min/max folds break round-trip. (2) Animation builtins
+  BUILD -- Tween/Timer/Spring/Pulse as builtin Controls (AppGraphAddBuiltin, RandomTime precedent), dt-driven
+  Task-phase, accumulator in registered PersistData (no-TU-globals is load-bearing for Fixed-dt scrub). (3)
+  Layout: window placement facts KEEP (baseline, fields); Region/Split/Tabs BUILD-primary -- one appended
+  `ImGuiAppNodeKind_Layout` giving the Layout layer its first domain (OnLayout() already stubbed at
+  imguiapp.h:906), windows reference their region via a NODE FIELD (`Region=`, parallel to `Dock=`), codegen
+  emits a once-guarded DockBuilder into OnLayout(); constraint/anchor edges REJECT (no phase, no primitive).
 - [ ] **F54 Op node kind** — `ImGuiAppNodeKind_Op`: AND/OR/XOR/NOT, compare (==,!=,<,<=,>,>=),
   select/mux, min/max; typed pins checked by the expression type rules; app-level data domain
   (scope-parent Task layer); cycles refused; serialized; palettes offer it only where the scope
