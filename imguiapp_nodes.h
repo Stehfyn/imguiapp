@@ -615,6 +615,8 @@ struct ImGuiAppEditorState
   ImVector<int>                        ScopeStripNodes;                                   // node id per chip, parallel to ScopeStripRects
   ImVec4                               ScopeVoid[4] = {};                                 // figure-ground carve: the four dim bands outside the walls, screen space (top/bottom/left/right); published per frame for tests
   bool                                 ScopeVoidValid = false;                            // ScopeVoid valid this frame (drawn with the walls)
+  int                                  TelegraphPin = -1;                                 // F50: pin hovered as a wire-drag target this frame (-1 = none)
+  bool                                 TelegraphOk = false;                               // F50: would the hovered target connect legally to the drag source
 };
 
 // The whole authored graph. One monotonic id allocator shared by every node/port/body-attr/link:

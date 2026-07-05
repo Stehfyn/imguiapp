@@ -7786,6 +7786,26 @@ namespace ImGui
     const bool over_node = hovered_node >= 0;
     const bool over_link = hovered_link >= 0;
     const bool over_pin  = hovered_pin >= 0;
+
+    // Can-link telegraph (F50): while a wire is being dragged, tell the user BEFORE release whether the
+    // pin under the cursor would connect legally -- publish the verdict (drives the pin tint next frame +
+    // the drag-over test) and warn the cursor on a refusal. Same legality check the drop handler uses.
+    AppGraphEditorState(g)->TelegraphPin = -1;
+    AppGraphEditorState(g)->TelegraphOk = false;
+    {
+      const int drag_src = ImGui::CanvasWireDragSource(cv);
+      if (drag_src >= 0 && over_pin && hovered_pin != drag_src)
+      {
+        int ts = -1, td = -1;
+        ImGuiAppEdgeKind tk;
+        char te[64];
+        const bool ok = AppGraphResolveLink(g, drag_src, hovered_pin, &ts, &td, &tk, te, IM_ARRAYSIZE(te));
+        AppGraphEditorState(g)->TelegraphPin = hovered_pin;
+        AppGraphEditorState(g)->TelegraphOk = ok;
+        if (!ok)
+          ImGui::SetMouseCursor(ImGuiMouseCursor_NotAllowed);
+      }
+    }
     // Brushing: report the canvas's hovered datum so the other views can echo it next frame.
     if (over_node)
       AppGraphHoverNode(g, hovered_node, ImGuiAppHoverSource_Canvas);

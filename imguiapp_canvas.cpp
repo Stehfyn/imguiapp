@@ -1809,6 +1809,7 @@ namespace ImGui
   int CanvasHoveredNode(const ImGuiCanvasState* c) { return c->HoveredNode; }
   int CanvasHoveredWire(const ImGuiCanvasState* c) { return c->HoveredWire; }
   int CanvasHoveredPin(const ImGuiCanvasState* c)  { return c->HoveredPin; }
+  int CanvasWireDragSource(const ImGuiCanvasState* c) { return c->Interaction == ImGuiCanvasInteraction_DragWire ? c->DragWireFromPin : -1; }
   int CanvasSelectedWire(const ImGuiCanvasState* c) { return c->SelectedWire; }
   void CanvasClearWireSelection(ImGuiCanvasState* c) { c->SelectedWire = -1; }
 

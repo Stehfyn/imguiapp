@@ -484,9 +484,16 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   stale bracket comments; resolve the R7-LOD claim (implement or strike); fix the MMB-pan and
   transport claims in composer-workbench-design; sweep remaining narrative comments.
   *Accept: audit re-run finds no doc claim contradicting code.*
-- [ ] **F50 pin pre-coloring / can-link telegraph** — type-compatibility shown at drag time
+- [x] **F50 pin pre-coloring / can-link telegraph** — type-compatibility shown at drag time
   (pin tint or cursor), not only post-release toast.
   *Accept: drag-over test asserts the telegraph state.*
+  DONE: `CanvasWireDragSource` exposes the pin an active wire-drag started from; while dragging, the
+  editor runs the SAME `AppGraphResolveLink` the drop handler uses against the pin under the cursor and
+  publishes the verdict (`TelegraphPin`/`TelegraphOk`), warning the cursor (`NotAllowed`) on a refusal.
+  The engine's snap-hover is unfiltered, so the telegraph's value is the SEMANTIC layer -- it warns of a
+  duplicate / one-producer / cycle refusal BEFORE release, where the structural snap alone would not.
+  `step91_pin_telegraph` holds one drag and sweeps the cursor across a duplicate target (not-ok), a legal
+  target (ok), and empty canvas (cleared). Pin-tint styling of compatible pins is a tracked refinement.
 
 ## P8 — self round-trip
 

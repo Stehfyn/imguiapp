@@ -172,6 +172,7 @@ namespace ImGui
   IMGUI_API int    CanvasHoveredNode(const ImGuiCanvasState* c);                  // -1 = none (valid after CanvasEnd)
   IMGUI_API int    CanvasHoveredWire(const ImGuiCanvasState* c);
   IMGUI_API int    CanvasHoveredPin(const ImGuiCanvasState* c);
+  IMGUI_API int    CanvasWireDragSource(const ImGuiCanvasState* c);               // pin an active wire-drag started from, else -1 (for drag-time can-link telegraph)
   IMGUI_API int    CanvasSelectedWire(const ImGuiCanvasState* c);                 // single click-selected wire; -1 = none
   IMGUI_API void   CanvasClearWireSelection(ImGuiCanvasState* c);
 
