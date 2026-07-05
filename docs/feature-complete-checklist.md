@@ -51,9 +51,12 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
 - [ ] **F09 outliner family sweep** — drag-reparent (control↔windows, field↔structs, drilled
   variants), eye/hide, clone icon; fix + test what falls out.
   *Accept: family sweep doc with empty OPEN list; tests per verb.*
-- [ ] **F10 wire-ops family sweep** — detach re-drag, retarget, binding create/update/delete,
+- [x] **F10 wire-ops family sweep** — detach re-drag, retarget, binding create/update/delete,
   drilled variants.
-  *Accept: same form as F09.*
+  *Accept: same form as F09. (wire-ops-sweep-2026-07-05.md: OPEN empty; canvas_c6 retarget/detach
+  re-drag, step57 binding create/update/delete, canvas_c5 detach-delete, canvas_c2 create. Adversarial
+  invariants — no orphan bindings on any edge-removal road — hold. Drilled variants resolve identically
+  (engine gestures + link-keyed bindings, scope-blind).)*
 - [x] **F11 phase-coherence audit refresh** — checklist pass over the new writers
   (Compose/ComposeImported, scoped tidy, nudge, group drag, explode anchors, fit).
   *Accept: phase-coherence-audit doc updated; violations fixed or entered as findings.
