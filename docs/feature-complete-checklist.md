@@ -468,8 +468,14 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
     Shift+A submenu, and the selection context menu's "Align" submenu (multi-select). Availability gates
     align on >=2 picks, distribute on >=3. `step88_align_distribute` drills, scatters three controls, and
     drives Align-Left + Distribute-H through the palette (edges collapse to min x; middle center = mean).
-  Remaining: R1 annotation frames -- the `Note` node kind (resizable colored titled rect, z-behind,
-  drag moves contained nodes, excluded from codegen/validation, outliner dimmed/bottom/filterable).
+  - R1 Note kind STEP 1 DONE: `ImGuiAppNodeKind_Note` (appended -- serialized as int), a non-semantic
+    annotation frame. No ports; sized by an authored `NoteSize` (excluded from the uniform card width);
+    renders as a translucent titled frame; excluded from validation (and codegen, which only emits
+    Controls). Serializes `Note=<w>,<h>,<color>`; addable via the "Add: Note" registry verb (id 46);
+    appears + filters in the outliner. `step89_note_roundtrip` renders it (no empty-body assert; sized
+    to NoteSize) and round-trips kind/footprint/name/position.
+  Remaining (R1 step 2): drag-moves-contained-nodes (UE behavior), interactive resize handle,
+  per-note color, outliner dimmed/bottom ordering; a create/move acceptance test.
 - [ ] **F49 doc + comment hygiene** — refresh scope-interior-design §1 stale diagnoses; delete
   stale bracket comments; resolve the R7-LOD claim (implement or strike); fix the MMB-pan and
   transport claims in composer-workbench-design; sweep remaining narrative comments.

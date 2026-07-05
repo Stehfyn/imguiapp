@@ -1306,6 +1306,8 @@ namespace ImGui
       AppGraphPushPort(g, n, ImGuiAppPortKind_DataOut,  "value", self_data); // wire the field into a consumer
       AppGraphPushPort(g, n, ImGuiAppPortKind_ChildOut, "parent", 0);        // owning struct
       break;
+    case ImGuiAppNodeKind_Note:
+      break;   // annotation frame: no pins, wires into nothing
     case ImGuiAppNodeKind_Control:
     default:
       AppGraphPushPort(g, n, ImGuiAppPortKind_DataIn, "deps", 0);       // external dependencies
@@ -1410,6 +1412,7 @@ namespace ImGui
     case ImGuiAppNodeKind_Control: return ImVec2(400.0f, 320.0f);
     case ImGuiAppNodeKind_Struct:  return ImVec2(300.0f, 150.0f);
     case ImGuiAppNodeKind_Field:   return ImVec2(250.0f, 85.0f);
+    case ImGuiAppNodeKind_Note:    return n->NoteSize;
     default:                       return ImVec2(300.0f, 140.0f);
     }
   }
@@ -3467,6 +3470,7 @@ namespace ImGui
     case ImGuiAppNodeKind_Control: return "Control";
     case ImGuiAppNodeKind_Struct:  return "Struct";
     case ImGuiAppNodeKind_Field:   return "Field";
+    case ImGuiAppNodeKind_Note:    return "Note";
     default:                       return "Node";
     }
   }
@@ -3524,6 +3528,7 @@ namespace ImGui
     case ImGuiAppNodeKind_Control: return "control";
     case ImGuiAppNodeKind_Struct:  return "struct";
     case ImGuiAppNodeKind_Field:   return "field";
+    case ImGuiAppNodeKind_Note:    return "note";
     default:                       return "";
     }
   }
@@ -6346,6 +6351,7 @@ namespace ImGui
     {  3, "",   "Add: Sidebar",                "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_Sidebar },
     {  4, "",   "Add: Custom Layer",           "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_Layer   },
     {  5, "",   "Add: Field",                  "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_Field   },
+    { 46, "",   "Add: Note",                   "",       ImGuiKey_None,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Menu | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_Note    },
     { 10, "",   "Layout: Tidy",                "L",      ImGuiKey_L,             0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_COUNT },
     { 11, "",   "View: Fit all",               "Home",   ImGuiKey_Home,          0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_COUNT },
     { 12, "",   "View: Frame selection",       "F",      ImGuiKey_F,             0,              ImGuiAppCmdSurface_Palette | ImGuiAppCmdSurface_Shortcut | ImGuiAppCmdSurface_Gizmo, ImGuiAppNodeKind_COUNT },
@@ -7050,8 +7056,8 @@ namespace ImGui
       // Kind silhouette (design page: rounded acts, squared hosts, rail is a phase, pill is an
       // atom). Model-unit constants; the engine scales. Every non-layer plate takes the ONE
       // normalized width.
-      if (n->Kind != ImGuiAppNodeKind_Layer && AppGraphEditorState(g)->UniformCardW > 0.0f)
-        ImGui::CanvasNextNodeWidth(cv, AppGraphEditorState(g)->UniformCardW);
+      if (n->Kind != ImGuiAppNodeKind_Layer && n->Kind != ImGuiAppNodeKind_Note && AppGraphEditorState(g)->UniformCardW > 0.0f)
+        ImGui::CanvasNextNodeWidth(cv, AppGraphEditorState(g)->UniformCardW);   // notes own their authored width (NoteSize)
       switch (n->Kind)
       {
       case ImGuiAppNodeKind_Control:
@@ -7097,6 +7103,10 @@ namespace ImGui
       case ImGuiAppNodeKind_Field:
         ImGui::CanvasNextNodeRounding(cv, 999.0f);
         break;
+      case ImGuiAppNodeKind_Note:
+        ImGui::CanvasNextNodeRounding(cv, 3.0f);
+        ImGui::CanvasNextNodeAlpha(cv, 0.5f);   // translucent frame -- nodes read through it (F48/R1)
+        break;
       default:
         break;
       }
@@ -7121,6 +7131,11 @@ namespace ImGui
       if (AppNodeCanvasOff(g, n->Id))
         ImGui::CanvasNextNodeAlpha(cv, 0.35f);
       ImGui::CanvasBeginNode(cv, n->Id);
+
+      // Annotation frame (F48/R1): its authored footprint IS the body (also the required non-empty item;
+      // Dummy is in the node's scaled content space, so model NoteSize is multiplied by the canvas scale).
+      if (n->Kind == ImGuiAppNodeKind_Note)
+        ImGui::Dummy(ImVec2(n->NoteSize.x * AppCanvasScale(g), n->NoteSize.y * AppCanvasScale(g)));
 
       // Containment reads vertically, owner over child: the child's "parent" pin (ChildOut) sits on its TOP
       // edge and RECEIVES from above; the owner's "children" pin (ChildIn) sits on its BOTTOM edge and EMITS
@@ -8507,6 +8522,7 @@ namespace ImGui
           added = fid >= 0 ? AppGraphFindNode(g, fid) : nullptr;
           break;
         }
+        case 46: added = AppGraphAddNode(g, ImGuiAppNodeKind_Note, "Note"); break;
         case 10: AppScopeSequenceTidy(g, show_live); fit_all(); break;
         case 11: fit_all(); break;
         case 12: fit_ids(g->Selection); break;
@@ -9246,6 +9262,8 @@ namespace ImGui
       const ImGuiAppNode* n = &g->Nodes.Data[i];
       if (n->IsLive)
         continue;
+      if (n->Kind == ImGuiAppNodeKind_Note)
+        continue;   // annotation frames are non-semantic: excluded from validation (and codegen)
 
       // Core layers have fixed identities; a CUSTOM layer's name is its generated class name and must exist.
       if (n->Draft.Name[0] == 0 && (n->Kind != ImGuiAppNodeKind_Layer || n->LayerType == ImGuiAppLayerType_Custom))
@@ -11425,6 +11443,8 @@ namespace ImGui
       buf->appendf("Init=%.1f,%.1f,%.1f,%.1f\n", n->InitialPos.x, n->InitialPos.y, n->InitialSize.x, n->InitialSize.y);
     if (n->DockDir != ImGuiDir_Down || n->DockSize != 0.0f)
       buf->appendf("Dock=%d,%.1f\n", (int)n->DockDir, n->DockSize);
+    if (n->Kind == ImGuiAppNodeKind_Note)
+      buf->appendf("Note=%.1f,%.1f,%u\n", n->NoteSize.x, n->NoteSize.y, (unsigned)n->NoteColor);
     for (int p = 0; p < n->Ports.Size; p++)
       buf->appendf("Port=%d,%d,%s,%u\n", n->Ports.Data[p].Id, (int)n->Ports.Data[p].Kind, n->Ports.Data[p].Name, (unsigned)n->Ports.Data[p].DataTypeId);
     for (int f = 0; f < n->Draft.PersistFields.Size; f++)
@@ -11720,6 +11740,7 @@ namespace ImGui
       else if (strncmp(p, "Flags=", 6) == 0)     { if (cur) { unsigned fl = 0; if (sscanf(p + 6, "%u", &fl) == 1) cur->Flags = (ImGuiWindowFlags)fl; } }
       else if (strncmp(p, "Init=", 5) == 0)      { if (cur) { float px = 0, py = 0, sx = 0, sy = 0; if (sscanf(p + 5, "%f,%f,%f,%f", &px, &py, &sx, &sy) == 4) { cur->HasInitialPlacement = true; cur->InitialPos = ImVec2(px, py); cur->InitialSize = ImVec2(sx, sy); } } }
       else if (strncmp(p, "Dock=", 5) == 0)      { if (cur) { int d = 0; float sz = 0; if (sscanf(p + 5, "%d,%f", &d, &sz) >= 1) { cur->DockDir = (ImGuiDir)d; cur->DockSize = sz; } } }
+      else if (strncmp(p, "Note=", 5) == 0)      { if (cur) { float sx = 0, sy = 0; unsigned col = 0; if (sscanf(p + 5, "%f,%f,%u", &sx, &sy, &col) >= 2) { cur->NoteSize = ImVec2(sx, sy); cur->NoteColor = (ImU32)col; } } }
       else if (strncmp(p, "Port=", 5) == 0)      { if (cur) { AppGraphParsePort(cur, p + 5); int last = cur->Ports.Size ? cur->Ports.Data[cur->Ports.Size - 1].Id : 0; if (last > max_id) max_id = last; } }
       else if (strncmp(p, "Persist=", 8) == 0)   { if (cur) AppNodeParseField(&cur->Draft.PersistFields, p + 8); }
       else if (strncmp(p, "Temp=", 5) == 0)      { if (cur) AppNodeParseField(&cur->Draft.TempFields, p + 5); }
@@ -14213,6 +14234,7 @@ namespace ImGui
     {
       ImGuiAppNodeKind_Layer, ImGuiAppNodeKind_Window, ImGuiAppNodeKind_Sidebar,
       ImGuiAppNodeKind_Control, ImGuiAppNodeKind_Struct, ImGuiAppNodeKind_Field,
+      ImGuiAppNodeKind_Note,
     };
     for (int i = 0; i < IM_ARRAYSIZE(filter_kinds); i++)
     {

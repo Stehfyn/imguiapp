@@ -244,6 +244,7 @@ enum ImGuiAppNodeKind_
   ImGuiAppNodeKind_Control,
   ImGuiAppNodeKind_Struct,    // a standalone data struct (PersistData/TempData), wired into a control's DataIn
   ImGuiAppNodeKind_Field,     // one field of a struct, "exploded" out for per-field wiring (drives bindings)
+  ImGuiAppNodeKind_Note,      // non-semantic annotation frame (F48/R1): titled rect, excluded from codegen/validation. APPEND ONLY -- serialized as int
   ImGuiAppNodeKind_COUNT,
 };
 
@@ -419,6 +420,8 @@ struct ImGuiAppNode
   int                            TempStructId                = -1;                     // Control: Struct node its TempData was exploded into (-1 = inline)
   bool                           GroupCollapsed              = false;                  // descendants hidden behind the group title bar (transient, not serialized)
   bool                           Hidden                      = false;                  // not submitted to the canvas (transient, not serialized)
+  ImVec2                         NoteSize                    = ImVec2(320.0f, 180.0f); // Note kind: annotation-frame footprint (model units)
+  ImU32                          NoteColor                   = 0;                      // Note kind: frame tint (0 = default kind hue)
 };
 
 // Per-data-edge field assignment: emits one "data->Dst = dep->Src;" line in OnUpdate. Keyed by LinkId,
@@ -590,7 +593,7 @@ struct ImGuiAppEditorState
   int                                  AppliedSel = -1;
   int                                  OutlinerRename = -1;         // node id being renamed in the tree, -1 = none
   bool                                 OutlinerRenameFocus = false;
-  bool                                 OutlinerKindVis[ImGuiAppNodeKind_COUNT] = { true, true, true, true, true, true, true };
+  bool                                 OutlinerKindVis[ImGuiAppNodeKind_COUNT] = { true, true, true, true, true, true, true, true };
   ImGuiTextFilter                      OutlinerFilter;
   bool                                 OutputShowErr = true;        // Output panel severity filters
   bool                                 OutputShowWarn = true;
