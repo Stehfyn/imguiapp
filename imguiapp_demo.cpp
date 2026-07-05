@@ -1033,6 +1033,40 @@ namespace
   // [SECTION] Composer status strip (keymap hints + document counts)
   //-----------------------------------------------------------------------------
 
+  // Status-pill grammar (F33): one shared primitive with one colour source, so no call site repeats a
+  // status colour triple. ok = green, warn = amber, err = red, neutral = disabled ink.
+  enum ComposerPillState { ComposerPill_Neutral, ComposerPill_Ok, ComposerPill_Warn, ComposerPill_Err };
+
+  static ImVec4 ComposerPillColor(ComposerPillState s)
+  {
+    switch (s)
+    {
+    case ComposerPill_Ok:   return ImVec4(0.42f, 0.74f, 0.47f, 1.0f);
+    case ComposerPill_Warn: return ImVec4(0.85f, 0.68f, 0.35f, 1.0f);
+    case ComposerPill_Err:  return ImVec4(0.90f, 0.42f, 0.38f, 1.0f);
+    default:                return ImGui::GetStyle().Colors[ImGuiCol_TextDisabled];
+    }
+  }
+
+  // A small rounded pill: tinted background + state-coloured label. `id` keeps a stable widget identity
+  // while the label swings. Returns true on click.
+  static bool ComposerStatusPill(const char* id, ComposerPillState s, const char* label)
+  {
+    const ImVec4 col = ComposerPillColor(s);
+    const float  em  = ImGui::GetFontSize();
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, em * 0.9f);
+    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(col.x, col.y, col.z, 0.16f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(col.x, col.y, col.z, 0.28f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(col.x, col.y, col.z, 0.40f));
+    ImGui::PushStyleColor(ImGuiCol_Text, col);
+    char buf[144];
+    ImFormatString(buf, IM_ARRAYSIZE(buf), "%s###%s", label, id);
+    const bool clicked = ImGui::SmallButton(buf);
+    ImGui::PopStyleColor(4);
+    ImGui::PopStyleVar();
+    return clicked;
+  }
+
   // Rendered last -> window bottom. Keymap hints left, document counts right; all right-side text is
   // derived in OnUpdate, OnRender only lays out text.
   struct StatusStripData
@@ -1175,10 +1209,10 @@ namespace
       {
         // Fixed x anchors (em from content-left): the zones never shift as their own text changes width,
         // so each topic stays where the eye learned it. keymap | breadcrumb | counts | mirror | freshness.
-        const float A_bread  = em * 11.0f;
-        const float A_count  = em * 20.0f;
-        const float A_mirror = em * 29.0f;
-        const float A_fresh  = em * 38.0f;
+        const float A_bread  = em * 15.0f;   // left zone (HEALTH + PERF pills) occupies 0..15em
+        const float A_count  = em * 23.0f;
+        const float A_mirror = em * 30.0f;
+        const float A_fresh  = em * 37.0f;
 
         // A clickable zone at a fixed anchor: an invisible button (### id -> test-addressable) with the
         // label drawn over it; brightens on hover. The button is clamped to its slot (up to the next
@@ -1196,24 +1230,54 @@ namespace
                                               ImGui::GetColorU32(hov ? style.Colors[ImGuiCol_Text] : col), txt);
           return clicked;
         };
-        const float slot = em * 8.5f;   // each zone owns ~8.5em before the next anchor (9em apart)
+        const float slot = em * 6.5f;   // each right zone owns ~6.5em before the next anchor (7em apart)
 
-        // keymap (left, informational): live hint; refused links show red.
-        int sev = 0;
-        const char* hint = ImGui::AppGraphStatusHint(&doc_dep->Graph, &sev);
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextColored(sev >= 2 ? ImVec4(0.90f, 0.42f, 0.38f, 1.0f) : dim, "%s", hint);
-
-        // Cycle readout + Select verb (F21) rides in the keymap zone when a cycle blocks codegen.
+        // HEALTH pill (F33): the whole graph's state in the shared pill grammar. Cycle -> err + name and a
+        // click selects the cycle (folds in F21's Select verb); errors -> err "codegen blocked"; warnings
+        // -> warn; else ok "graph ok". The transient keymap notice rides the feedback slot, not here.
+        ComposerPillState hstate = ComposerPill_Ok;
+        char hlabel[96] = "graph ok";
         if (data->CycleCount > 0)
         {
-          ImGui::SameLine(0.0f, em);
-          ImGui::AlignTextToFramePadding();
-          ImGui::TextColored(ImVec4(0.90f, 0.42f, 0.38f, 1.0f), ICON_FA_TRIANGLE_EXCLAMATION "  %s", data->CycleMsg);
-          ImGui::SameLine(0.0f, em * 0.4f);
-          if (ImGui::SmallButton("Select###selectcycle"))
-            temp_data->SelectCycle = true;
-          ImGui::SetItemTooltip("Select the %d node(s) in the dependency cycle", data->CycleCount);
+          hstate = ComposerPill_Err;
+          ImFormatString(hlabel, IM_ARRAYSIZE(hlabel), ICON_FA_TRIANGLE_EXCLAMATION " %s", data->CycleMsg);
+        }
+        else if (doc_dep->NumErrors > 0)
+        {
+          hstate = ComposerPill_Err;
+          ImFormatString(hlabel, IM_ARRAYSIZE(hlabel), ICON_FA_TRIANGLE_EXCLAMATION " codegen blocked");
+        }
+        else if (doc_dep->NumWarnings > 0)
+        {
+          hstate = ComposerPill_Warn;
+          ImFormatString(hlabel, IM_ARRAYSIZE(hlabel), "%d warning%s", doc_dep->NumWarnings, doc_dep->NumWarnings == 1 ? "" : "s");
+        }
+        ImGui::AlignTextToFramePadding();
+        // Id encodes the state so the state is externally observable (test) and the pill re-identifies when
+        // it changes class.
+        const char* hid = hstate == ComposerPill_Err ? "health-err" : hstate == ComposerPill_Warn ? "health-warn" : "health-ok";
+        if (ComposerStatusPill(hid, hstate, hlabel) && data->CycleCount > 0)
+          temp_data->SelectCycle = true;
+        if (data->CycleCount > 0)
+          ImGui::SetItemTooltip("Dependency cycle blocks codegen -- click to select the %d node(s)", data->CycleCount);
+        else if (hstate == ComposerPill_Err)
+          ImGui::SetItemTooltip("%d error(s) in the graph -- see Output", doc_dep->NumErrors);
+        else if (hstate == ComposerPill_Warn)
+          ImGui::SetItemTooltip("%d warning(s) in the graph", doc_dep->NumWarnings);
+        else
+          ImGui::SetItemTooltip("Graph validates clean");
+
+        // PERF pill (F33): FPS + frame ms; tooltip carries the backend + draw counts.
+        ImGui::SameLine(0.0f, em * 0.4f);
+        const ImGuiIO& io = ImGui::GetIO();
+        char plabel[48];
+        ImFormatString(plabel, IM_ARRAYSIZE(plabel), "%.0f fps  %.1f ms", io.Framerate, io.Framerate > 0.0f ? 1000.0f / io.Framerate : 0.0f);
+        ComposerStatusPill("perf", ComposerPill_Neutral, plabel);
+        if (ImGui::IsItemHovered())
+        {
+          const ImDrawData* dd = ImGui::GetDrawData();
+          ImGui::SetTooltip("backend: %s\nvtx %d  idx %d", io.BackendRendererName ? io.BackendRendererName : "?",
+                            dd != nullptr ? dd->TotalVtxCount : 0, dd != nullptr ? dd->TotalIdxCount : 0);
         }
 
         // breadcrumb -> select the scope owner.
@@ -1237,7 +1301,7 @@ namespace
         const bool fresh = ImGui::AppGraphCodeFresh(&doc_dep->Graph);
         char frz[48];
         ImFormatString(frz, IM_ARRAYSIZE(frz), "%s  %s", fresh ? ICON_FA_CIRCLE_CHECK : ICON_FA_FILE_EXPORT, fresh ? "fresh" : "generate");
-        if (zone(A_fresh, slot, "###zfresh", frz, fresh ? ImVec4(0.45f, 0.75f, 0.50f, 1.0f) : ImVec4(0.80f, 0.66f, 0.36f, 1.0f)))
+        if (zone(A_fresh, slot, "###zfresh", frz, ComposerPillColor(fresh ? ComposerPill_Ok : ComposerPill_Warn)))
           temp_data->Generate = true;
         ImGui::SetItemTooltip(fresh ? "Header matches the graph" : "Generate the whole-graph header");
       }

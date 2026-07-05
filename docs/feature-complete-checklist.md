@@ -258,9 +258,16 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   outliner, mirror toggles ShowLive, freshness generates the header (shared ComposerGenerateHeader with
   the toolbar). composer_status_zones clicks each zone and asserts its effect, then toggles the inspector
   (width change from the right) and confirms the freshness zone parks at the same screen x.
-- [ ] **F33 StatusPill grammar + HEALTH/PERF segments** — shared pill primitive (ok/warn/err);
+- [x] **F33 StatusPill grammar + HEALTH/PERF segments** — shared pill primitive (ok/warn/err);
   HEALTH: "graph ok" / cycle name / "codegen blocked"; PERF: FPS + ms, tooltip backend/vtx/idx.
   *Accept: pill states driven by fixtures; no inline color triples left at call sites.*
+  DONE: ComposerStatusPill is the one pill primitive with one colour source (ComposerPillColor:
+  ok/warn/err/neutral) -- call sites pass a state, never a triple; the strip's freshness zone and the
+  folded cycle readout now draw from it too. HEALTH pill leads the strip: "graph ok" (ok) / cycle name
+  (err, click folds in F21's cycle-select) / "codegen blocked" (err) / "N warnings" (warn); its id encodes
+  the state. PERF pill: FPS + ms, tooltip = backend + vtx/idx. composer_status_pills asserts both pills
+  render and a cycle fixture flips HEALTH to the err state (###health-err), cleared when the cycle is
+  removed.
 - [ ] **F34 command registry** — id/icon/label/shortcut/availability-predicate/run() table; the
   Space palette, context menus, gizmo tooltips, status keymap hints, and shortcut dispatch all
   render from it.
