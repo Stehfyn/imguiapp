@@ -37,8 +37,9 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
   while a Draft list is exploded (today: silent dead writes; collapse destroys them).
   *Accept: edit-while-exploded test; collapse preserves the edit (step48: inspector Add lands as a
   containment-linked Field node, the exact shape collapse folds back; inline vector stays empty).*
-- [ ] **F08 history jump test** — HistoryGoto path (undo popup list) exercised.
-  *Accept: jump N back → model equals snapshot N.*
+- [x] **F08 history jump test** — HistoryGoto path (undo popup list) exercised.
+  *Accept: jump N back → model equals snapshot N (step51: goto(1) → AppGraphModelEqual to a captured
+  snapshot-1 reference).*
 
 ## P2 — behavior-class sweeps + feedback infrastructure
 
