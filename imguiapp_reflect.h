@@ -880,3 +880,21 @@ inline int ImGuiAppReflectFields(ImGuiAppLiveFieldDesc* out, int cap)
     return 0;
   }
 }
+
+// imgui-namespace sugar over ImAppReflect::for_each (the reflect-driven field UI in
+// imguiapp_internal.h builds on it). Visit each reflected field of an aggregate:
+// visitor(int index, std::string_view name, auto& value). The value is passed by reference;
+// pass a const T* to visit read-only.
+namespace ImGui
+{
+  template <typename T, typename Visitor>
+  inline void VisitAppFields(T* obj, Visitor visitor)
+  {
+    IM_ASSERT(obj != nullptr);
+
+    ImAppReflect::for_each([&](auto I)
+    {
+      visitor((int)I, ImAppReflect::member_name<I>(*obj), ImAppReflect::get<I>(*obj));
+    }, *obj);
+  }
+} // namespace ImGui

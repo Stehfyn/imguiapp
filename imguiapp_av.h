@@ -6,9 +6,9 @@
 // (wired like imgui_impl_* backends). The rest of the AV seam (decoder, meta-stream verify, AppRecord* API)
 // is in imguiapp_internal.h. See docs/av-design.md.
 //
-// INCLUDE CONTRACT: pulled in by imguiapp.h AFTER ImGuiAppFrameID is defined (ImGuiAppAVFrame holds one by
-// value). Do not include directly -- include imguiapp.h. ImGuiApp / ImGuiAppInputLog are held by pointer
-// (forward-declared below); imguiapp.h defines them.
+// SELF-CONTAINED for AV-only consumers: ImGuiAppFrameID is defined below (ImGuiAppAVFrame holds one by
+// value), so this header needs no include-order contract. ImGuiApp / ImGuiAppInputLog are held by pointer
+// (forward-declared below); include imguiapp.h if you need their definitions.
 
 #include "imgui.h"                        // ImVector, ImU32/ImU64, ImGuiID, ImGuiKey_NamedKey_COUNT
 #include <thread>                         // ImGuiAppRecorder encoder thread
@@ -18,7 +18,18 @@
 
 struct ImGuiApp;          // defined in imguiapp.h (held by pointer)
 struct ImGuiAppInputLog;  // defined in imguiapp.h (held by pointer)
-struct ImGuiAppFrameID;   // defined in imguiapp.h before this header is included (held by value below)
+
+// Frame identity: one id per frame, taken at the top of OnDrawFrame. The correlation key across video
+// frames, sidecar records, WAL lines, and test logs (docs/av-design.md). Defined HERE (not imguiapp.h)
+// so this header is self-contained -- ImGuiAppAVFrame holds one by value.
+struct ImGuiAppFrameID
+{
+  ImU64  FrameIndex; // monotonic from run start (not ImGui's frame count: survives context recreation)
+  ImU64  Tsc;        // __rdtsc / platform equivalent at frame begin
+  double TimeSec;    // QPC seconds since run start
+
+  ImGuiAppFrameID() { FrameIndex = 0; Tsc = 0; TimeSec = 0.0; }
+};
 
 // One captured frame. Produced by the platform backend's CaptureFrame; consumed by an
 // encoder's WriteFrame. Pixels are valid only during the WriteFrame call.

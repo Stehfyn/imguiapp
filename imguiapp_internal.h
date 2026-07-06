@@ -8,6 +8,7 @@
 Index of this file:
 
 // [SECTION] Header mess
+// [SECTION] Macros
 // [SECTION] Forward declarations
 // [SECTION] AV meta stream + recorder + run artifacts (was imguiapp_av.h)
 // [SECTION] Meta stream (embedded in the video)
@@ -15,7 +16,6 @@ Index of this file:
 // [SECTION] Run index (F62): tick-keyed landing over a reconstructed meta stream
 // [SECTION] State-at-tick (F64): restore nearest snapshot + replay inputs to tick N
 // [SECTION] Transport source (F63): the App-time transport's two frame sources
-// [SECTION] Graph model + codegen + editor-UI decls (was imguiapp_nodes.h)
 // [SECTION] Design-phase node drafts (ImGuiAppFieldType, ImGuiAppFieldDesc, ImGuiAppNodeDraft)
 // [SECTION] Typed graph kinds (node/layer/port/edge discriminators)
 // [SECTION] Graph topology and persistence (ImGuiAppNodeLink, link capture, save/load)
@@ -46,6 +46,16 @@ Index of this file:
 #include <string>
 #include <string_view>
 #include <type_traits>
+
+//-----------------------------------------------------------------------------
+// [SECTION] Macros
+//-----------------------------------------------------------------------------
+
+#define IMGUIAPP_CONTROL_BODY_MAX 2048   // ImGuiAppNodeDraft per-method custom C++ body cap (fixed buffer -> draft stays memcpy-safe)
+
+#ifndef IMGUIAPP_PREVIEW_ABI
+#define IMGUIAPP_PREVIEW_ABI 20260706u   // host<->DLL preview ABI tag (F78); bump on any layout/vtable/signature change
+#endif
 
 //-----------------------------------------------------------------------------
 // [SECTION] Forward declarations
@@ -144,7 +154,6 @@ typedef int ImGuiAppHoverSource;
 
 // Typed-record stream written by the recorder (uniform across providers): fixed header
 // (magic "IMAVMETA", version, fps, start TSC + QPC Hz), then {u32 type, u32 size, payload}.
-typedef int ImGuiAppAVMetaRecordType;
 enum ImGuiAppAVMetaRecordType_
 {
   ImGuiAppAVMetaRecordType_Frame = 1,      // frame_index, tsc, time_sec, user blob
@@ -316,7 +325,6 @@ struct ImGuiAppRunState
 // Count()/Show(int) view (docs/playback-debugger-design.md section 4). LiveRing restores
 // snapshotted bytes into the running app; FileRun decodes the recorded frame image at a
 // tick and blits its pixels -- no app is driven.
-typedef int ImGuiAppTransportSource;
 enum ImGuiAppTransportSource_
 {
   ImGuiAppTransportSource_LiveRing = 0,   // the ComposerTransport state ring + the live mirror
@@ -348,22 +356,17 @@ struct ImGuiAppRunTransport
 };
 
 //-----------------------------------------------------------------------------
-// [SECTION] Graph model + codegen + editor-UI decls (was imguiapp_nodes.h)
-//-----------------------------------------------------------------------------
-
-// Reflection-driven node tooling. Uses the applayer's reflection port (imguiapp_reflect.h, via
-// imguiapp.h) and some STL kept out of imguiapp.h. Public entry points stay imgui-shaped: pointer
-// params, char[] buffers, ImGuiID, ImVector. Reflection subset: aggregates only (no user ctors); the
-// port's patched member count handles raw array members (e.g. char Label[128]) correctly (one each).
-// The field-helper / node-rendering / codegen function decls live in the consolidated ImGui API below.
-
-//-----------------------------------------------------------------------------
 // [SECTION] Design-phase node drafts (ImGuiAppFieldType, ImGuiAppFieldDesc, ImGuiAppNodeDraft)
 //-----------------------------------------------------------------------------
+// Reflection-driven node tooling (the graph model + codegen + editor-UI decls; was imguiapp_nodes.h).
+// Uses the applayer's reflection port (imguiapp_reflect.h, via imguiapp.h) and some STL kept out of
+// imguiapp.h. Public entry points stay imgui-shaped: pointer params, char[] buffers, ImGuiID, ImVector.
+// Reflection subset: aggregates only (no user ctors); the port's patched member count handles raw array
+// members (e.g. char Label[128]) correctly (one each). The field-helper / node-rendering / codegen
+// function decls live in the consolidated ImGui API below.
 
 // A draft describes a node whose backing C++ type does not exist yet; codegen emits a
 // reflection-capable aggregate from it. Fields use the plain-scalar vocabulary codegen can emit.
-typedef int ImGuiAppFieldType;
 enum ImGuiAppFieldType_
 {
   ImGuiAppFieldType_Float = 0,
@@ -397,7 +400,6 @@ enum ImGuiAppControlMethod_
   ImGuiAppControlMethod_OnRender,
   ImGuiAppControlMethod_COUNT
 };
-#define IMGUIAPP_CONTROL_BODY_MAX 2048   // per-method custom C++ body cap (fixed buffer -> draft stays memcpy-safe)
 
 // One drafted control: a name, its persisted and per-frame field sets, and optional hand-written method bodies.
 struct ImGuiAppNodeDraft
@@ -419,7 +421,6 @@ struct ImGuiAppNodeDraft
 // A node mirrors one slot of the live ImGuiApp object model (imguiapp.h). App is the singleton
 // root; Layers push via PushAppLayer<T>, Windows/Sidebars via PushAppWindow/Sidebar<T>, Controls (the
 // only draftable kind) via PushAppControl<T>.
-typedef int ImGuiAppNodeKind;
 enum ImGuiAppNodeKind_
 {
   ImGuiAppNodeKind_App = 0,
@@ -438,7 +439,6 @@ enum ImGuiAppNodeKind_
 // The five CORE layer classes are permanent, one each, immutable type -- codegen emits
 // PushAppLayer<ImGuiAppXxxLayer>. Custom is a user-authored ImGuiAppLayer subclass: the NODE'S NAME is
 // its class name, any number may exist, codegen emits the subclass skeleton plus PushAppLayer<Name>.
-typedef int ImGuiAppLayerType;
 enum ImGuiAppLayerType_
 {
   ImGuiAppLayerType_Task = 0,
@@ -453,7 +453,6 @@ enum ImGuiAppLayerType_
 // DataOut/DataIn carry the runtime data flow; ChildOut/ChildIn carry containment. Layers are root
 // composition slots with no containment sockets. A Control has one DataOut (its PersistData), one
 // multi-link DataIn (the runtime keys app->Data by PersistData TYPE), and one ChildOut.
-typedef int ImGuiAppPortKind;
 enum ImGuiAppPortKind_
 {
   ImGuiAppPortKind_DataOut = 0,
@@ -465,7 +464,6 @@ enum ImGuiAppPortKind_
 
 // Data dependency (producer -> consumer) or containment (child -> parent); derived from the linked
 // ports' kinds at capture time.
-typedef int ImGuiAppEdgeKind;
 enum ImGuiAppEdgeKind_
 {
   ImGuiAppEdgeKind_Data = 0,
@@ -519,7 +517,6 @@ struct ImGuiAppOpOperand
 // OnRender records raw input into TempData (zeroed every frame); OnUpdate receives BOTH this frame's
 // TempData and last frame's, deriving events by comparing them. An edge names which comparison the
 // generated OnUpdate guards with.
-typedef int ImGuiAppEventEdge;
 enum ImGuiAppEventEdge_
 {
   ImGuiAppEventEdge_Rising = 0,   // temp && !last   -- became true this frame
@@ -531,7 +528,6 @@ enum ImGuiAppEventEdge_
 
 // SetField mutates PersistData (OnUpdate is the sole mutator); EmitCommand latches a persist bool in
 // OnUpdate that OnGetCommand emits.
-typedef int ImGuiAppEventAction;
 enum ImGuiAppEventAction_
 {
   ImGuiAppEventAction_SetField = 0,
@@ -1107,31 +1103,8 @@ struct ImAppTweenTempData
 };
 struct ImAppTween : ImGuiAppControl<ImAppTweenData, ImAppTweenTempData>
 {
-  virtual void OnInitialize(ImGuiApp* app, ImAppTweenData* data) const override final
-  {
-    IM_UNUSED(app);
-    data->a = 0.0f;
-    data->b = 1.0f;
-    data->duration = 1.0f;
-    data->ease = ImAppEase_Linear;
-    data->t = 0.0f;
-    data->value = data->a;
-    data->done = false;
-  }
-
-  virtual void OnUpdate(float dt, ImAppTweenData* data, const ImAppTweenTempData* temp_data, const ImAppTweenTempData* last_temp_data) const override final
-  {
-    if (temp_data->trigger && !last_temp_data->trigger)   // rising: restart
-    {
-      data->t = 0.0f;
-      data->done = false;
-    }
-    data->t += data->duration > 0.0f ? dt / data->duration : 1.0f;
-    if (data->t > 1.0f)
-      data->t = 1.0f;
-    data->value = data->a + (data->b - data->a) * ImAppEase(data->ease, data->t);
-    data->done = data->t >= 1.0f;
-  }
+  virtual void OnInitialize(ImGuiApp* app, ImAppTweenData* data) const override final;
+  virtual void OnUpdate(float dt, ImAppTweenData* data, const ImAppTweenTempData* temp_data, const ImAppTweenTempData* last_temp_data) const override final;
 };
 
 //-----------------------------------------------------------------------------
@@ -1149,24 +1122,8 @@ struct ImAppTimerTempData
 };
 struct ImAppTimer : ImGuiAppControl<ImAppTimerData, ImAppTimerTempData>
 {
-  virtual void OnInitialize(ImGuiApp* app, ImAppTimerData* data) const override final
-  {
-    IM_UNUSED(app);
-    data->duration = 1.0f;
-    data->elapsed = 0.0f;
-    data->done = false;
-  }
-
-  virtual void OnUpdate(float dt, ImAppTimerData* data, const ImAppTimerTempData* temp_data, const ImAppTimerTempData* last_temp_data) const override final
-  {
-    if (temp_data->trigger && !last_temp_data->trigger)   // rising: restart
-    {
-      data->elapsed = 0.0f;
-      data->done = false;
-    }
-    data->elapsed += dt;
-    data->done = data->elapsed >= data->duration;
-  }
+  virtual void OnInitialize(ImGuiApp* app, ImAppTimerData* data) const override final;
+  virtual void OnUpdate(float dt, ImAppTimerData* data, const ImAppTimerTempData* temp_data, const ImAppTimerTempData* last_temp_data) const override final;
 };
 
 //-----------------------------------------------------------------------------
@@ -1185,23 +1142,8 @@ struct ImAppSpringTempData
 };
 struct ImAppSpring : ImGuiAppControl<ImAppSpringData, ImAppSpringTempData>
 {
-  virtual void OnInitialize(ImGuiApp* app, ImAppSpringData* data) const override final
-  {
-    IM_UNUSED(app);
-    data->target = 1.0f;
-    data->stiffness = 8.0f;
-    data->damping = 2.0f;
-    data->value = 0.0f;
-    data->velocity = 0.0f;
-  }
-
-  virtual void OnUpdate(float dt, ImAppSpringData* data, const ImAppSpringTempData* temp_data, const ImAppSpringTempData* last_temp_data) const override final
-  {
-    IM_UNUSED(temp_data);
-    IM_UNUSED(last_temp_data);
-    data->velocity += (data->stiffness * (data->target - data->value) - data->damping * data->velocity) * dt;
-    data->value += data->velocity * dt;
-  }
+  virtual void OnInitialize(ImGuiApp* app, ImAppSpringData* data) const override final;
+  virtual void OnUpdate(float dt, ImAppSpringData* data, const ImAppSpringTempData* temp_data, const ImAppSpringTempData* last_temp_data) const override final;
 };
 
 //-----------------------------------------------------------------------------
@@ -1218,29 +1160,8 @@ struct ImAppPulseTempData
 };
 struct ImAppPulse : ImGuiAppControl<ImAppPulseData, ImAppPulseTempData>
 {
-  virtual void OnInitialize(ImGuiApp* app, ImAppPulseData* data) const override final
-  {
-    IM_UNUSED(app);
-    data->period = 1.0f;
-    data->phase = 0.0f;
-    data->pulse = false;
-  }
-
-  virtual void OnUpdate(float dt, ImAppPulseData* data, const ImAppPulseTempData* temp_data, const ImAppPulseTempData* last_temp_data) const override final
-  {
-    IM_UNUSED(temp_data);
-    IM_UNUSED(last_temp_data);
-    data->phase += data->period > 0.0f ? dt / data->period : 0.0f;
-    if (data->phase >= 1.0f)
-    {
-      data->phase -= 1.0f;
-      data->pulse = true;
-    }
-    else
-    {
-      data->pulse = false;
-    }
-  }
+  virtual void OnInitialize(ImGuiApp* app, ImAppPulseData* data) const override final;
+  virtual void OnUpdate(float dt, ImAppPulseData* data, const ImAppPulseTempData* temp_data, const ImAppPulseTempData* last_temp_data) const override final;
 };
 
 //-----------------------------------------------------------------------------
@@ -1409,19 +1330,11 @@ namespace ImGui
   // buffer to out_meta (opens directly via AppRunOpen), and free the recorder. Null-safe.
   IMGUI_API void                  AppMetaRecordEnd(ImGuiAppMetaRecorder* mr, ImVector<char>* out_meta);
 
-  // True when std::format can stringify U with "{}": the disabled primary std::formatter
-  // is not default-constructible; enabled specializations are.
-  template <typename U>
-  inline constexpr bool ImIsFormattable = std::is_default_constructible_v<std::formatter<std::remove_cvref_t<U>, char>>;
-
-  // True for a fixed-size char buffer member (e.g. char Label[128]) -> edited as text.
-  template <typename U>
-  inline constexpr bool ImIsCharArray = std::is_array_v<U> && std::is_same_v<std::remove_cv_t<std::remove_extent_t<U>>, char>;
-
+  // Reflection field UI: read-only render + type-dispatched editor for one reflected field. Dispatches
+  // on the ImIsCharArray / ImIsFormattable traits (imguiapp_static.h) and enumerates members through
+  // ImGui::VisitAppFields (imguiapp_reflect.h).
   // Read-only render of one reflected field value.
   template <typename T>
-
-  // Reflection field helpers
   inline void DrawAppField(const char* label, const T* value)
   {
     IM_ASSERT(value != nullptr);
@@ -1477,20 +1390,6 @@ namespace ImGui
       return false;
     }
   }
-
-  // Visit each reflected field of an aggregate: visitor(int index, std::string_view name, auto& value).
-  // The value is passed by reference; pass a const T* to visit read-only.
-  template <typename T, typename Visitor>
-  inline void VisitAppFields(T* obj, Visitor visitor)
-  {
-    IM_ASSERT(obj != nullptr);
-
-    ImAppReflect::for_each([&](auto I)
-    {
-      visitor((int)I, ImAppReflect::member_name<I>(*obj), ImAppReflect::get<I>(*obj));
-    }, *obj);
-  }
-
 
   // Node rendering (canvas)
   // Canvas-engine node scaffold (see imguiapp_canvas.h): titled node between CanvasBegin/End.
@@ -1804,10 +1703,6 @@ namespace ImGui
   // the emitted SetupApp on its first initialized frame, plus main() running it. A composition that
   // hosts an ImGuiAppComposerControl thus emits a shell that runs the Composer against the library.
   IMGUI_API void                                GenerateAppShellCode(const ImGuiAppGraph* g, ImGuiTextBuffer* out);
-
-#ifndef IMGUIAPP_PREVIEW_ABI
-#define IMGUIAPP_PREVIEW_ABI 20260706u   // host<->DLL preview ABI tag (F78); bump on any layout/vtable/signature change
-#endif
 
   // Interpreter (F66/F67): module codegen + session
   // DLL preview module (F78): the shell composition body + host scaffold, but the entry point is a C-ABI

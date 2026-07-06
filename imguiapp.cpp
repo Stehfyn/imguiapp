@@ -23098,6 +23098,99 @@ void ImGuiAppComposerControl::OnRender(const ImGuiAppComposerControlData* data, 
 
 #endif // IMGUIX_DISABLE_TOOLS   -- end U26 composer control methods
 
+//-----------------------------------------------------------------------------
+// [SECTION] Animation builtins (definitions; types in imguiapp_internal.h)
+//-----------------------------------------------------------------------------
+// dt-driven Task-phase animators; each a compiled ImGuiAppControl with its accumulator in PersistData
+// (so snapshot/replay reproduces it). Registered via AppGraphAddBuiltin (kAnimBuiltins).
+
+void ImAppTween::OnInitialize(ImGuiApp* app, ImAppTweenData* data) const
+{
+  IM_UNUSED(app);
+  data->a = 0.0f;
+  data->b = 1.0f;
+  data->duration = 1.0f;
+  data->ease = ImAppEase_Linear;
+  data->t = 0.0f;
+  data->value = data->a;
+  data->done = false;
+}
+
+void ImAppTween::OnUpdate(float dt, ImAppTweenData* data, const ImAppTweenTempData* temp_data, const ImAppTweenTempData* last_temp_data) const
+{
+  if (temp_data->trigger && !last_temp_data->trigger)   // rising: restart
+  {
+    data->t = 0.0f;
+    data->done = false;
+  }
+  data->t += data->duration > 0.0f ? dt / data->duration : 1.0f;
+  if (data->t > 1.0f)
+    data->t = 1.0f;
+  data->value = data->a + (data->b - data->a) * ImAppEase(data->ease, data->t);
+  data->done = data->t >= 1.0f;
+}
+
+void ImAppTimer::OnInitialize(ImGuiApp* app, ImAppTimerData* data) const
+{
+  IM_UNUSED(app);
+  data->duration = 1.0f;
+  data->elapsed = 0.0f;
+  data->done = false;
+}
+
+void ImAppTimer::OnUpdate(float dt, ImAppTimerData* data, const ImAppTimerTempData* temp_data, const ImAppTimerTempData* last_temp_data) const
+{
+  if (temp_data->trigger && !last_temp_data->trigger)   // rising: restart
+  {
+    data->elapsed = 0.0f;
+    data->done = false;
+  }
+  data->elapsed += dt;
+  data->done = data->elapsed >= data->duration;
+}
+
+void ImAppSpring::OnInitialize(ImGuiApp* app, ImAppSpringData* data) const
+{
+  IM_UNUSED(app);
+  data->target = 1.0f;
+  data->stiffness = 8.0f;
+  data->damping = 2.0f;
+  data->value = 0.0f;
+  data->velocity = 0.0f;
+}
+
+void ImAppSpring::OnUpdate(float dt, ImAppSpringData* data, const ImAppSpringTempData* temp_data, const ImAppSpringTempData* last_temp_data) const
+{
+  IM_UNUSED(temp_data);
+  IM_UNUSED(last_temp_data);
+  data->velocity += (data->stiffness * (data->target - data->value) - data->damping * data->velocity) * dt;
+  data->value += data->velocity * dt;
+}
+
+void ImAppPulse::OnInitialize(ImGuiApp* app, ImAppPulseData* data) const
+{
+  IM_UNUSED(app);
+  data->period = 1.0f;
+  data->phase = 0.0f;
+  data->pulse = false;
+}
+
+void ImAppPulse::OnUpdate(float dt, ImAppPulseData* data, const ImAppPulseTempData* temp_data, const ImAppPulseTempData* last_temp_data) const
+{
+  IM_UNUSED(temp_data);
+  IM_UNUSED(last_temp_data);
+  data->phase += data->period > 0.0f ? dt / data->period : 0.0f;
+  if (data->phase >= 1.0f)
+  {
+    data->phase -= 1.0f;
+    data->pulse = true;
+  }
+  else
+  {
+    data->pulse = false;
+  }
+}
+
 //################### interpreter core + preview surface (folded from imguiapp_preview.cpp) ###################
 // Previewer interpreter core (F67). Freezes to docs/previewer-design.md (F66). The interpreter is a
 // SECOND backend beside codegen: it builds a real ImGuiApp from the authored graph and evaluates the same

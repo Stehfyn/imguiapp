@@ -157,16 +157,11 @@ enum ImGuiAppCommandPrivate
   ImGuiAppCommandPrivate_ = ImGuiAppCommand_COUNT,
 };
 
-// Frame identity: one id per frame, taken at the top of OnDrawFrame. The correlation key across
-// video frames, sidecar records, WAL lines, and test logs (docs/av-design.md).
-struct ImGuiAppFrameID
-{
-  ImU64  FrameIndex; // monotonic from run start (not ImGui's frame count: survives context recreation)
-  ImU64  Tsc;        // __rdtsc / platform equivalent at frame begin
-  double TimeSec;    // QPC seconds since run start
-
-  ImGuiAppFrameID() { FrameIndex = 0; Tsc = 0; TimeSec = 0.0; }
-};
+// Frame identity: one id per frame, taken at the top of OnDrawFrame. The correlation key across video
+// frames, sidecar records, WAL lines, and test logs (docs/av-design.md). DEFINED in imguiapp_av.h (held
+// there by value in ImGuiAppAVFrame; that header is included below); forward-declared here for the
+// by-pointer use just above.
+struct ImGuiAppFrameID;
 
 // Advisory frame pacer. Backend run loops call AppPacerWait once per iteration, before OnDrawFrame;
 // Off returns immediately. The pacer decides what time the app SIMULATES; video timing is separate
@@ -214,7 +209,7 @@ struct ImGuiAppWAL
 };
 
 // AV recording types + interface (ImGuiAppAVFrame, encode/ring config, encoder vtable, recorder).
-// Included here (not at the top) because ImGuiAppAVFrame holds an ImGuiAppFrameID by value.
+// Provides ImGuiAppFrameID (defined there) + the AV recording types; ImGuiApp below holds both by value.
 #include "imguiapp_av.h"
 
 
@@ -455,11 +450,11 @@ struct ImGuiAppItemBase : ImGuiInterface
 
 struct ImGuiAppWindowBase : ImGuiAppItemBase
 {
-	bool                           Open     = true;
-	ImGuiWindow*                   Window   = nullptr;
-	ImGuiViewport*                 Viewport = nullptr;
-	ImGuiWindowFlags               Flags    = ImGuiWindowFlags_None;
-	ImVector<ImGuiAppControlBase*> Controls;
+  bool                           Open     = true;
+  ImGuiWindow*                   Window   = nullptr;
+  ImGuiViewport*                 Viewport = nullptr;
+  ImGuiWindowFlags               Flags    = ImGuiWindowFlags_None;
+  ImVector<ImGuiAppControlBase*> Controls;
 
   // Optional first-use placement (applied with ImGuiCond_FirstUseEver, so saved .ini wins).
   bool   HasInitialPlacement = false;

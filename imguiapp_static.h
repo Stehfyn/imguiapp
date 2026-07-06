@@ -8,6 +8,7 @@
 // without the whole runtime. Behavior-neutral extraction from imguiapp.h.
 
 #include "imgui.h"                        // ImGuiID, ImFormatString
+#include <format>                         // std::formatter (ImIsFormattable)
 #include <mutex>                          // std::call_once
 #include <string_view>
 #include <type_traits>                    // std::remove_cvref_t (ImGuiType alias)
@@ -113,3 +114,13 @@ using ImGuiType = ImGuiStatic<std::remove_cvref_t<std::remove_pointer_t<T>>>;
 
 template <typename T>
 inline static void GenerateLabel(char* label, size_t size) { std::string_view sv = ImGuiType<T>::Name; ImFormatString(label, size, "%.*s", (int)sv.size(), sv.data()); }
+
+// Field-type predicates (leaf traits; the reflect-driven field UI in imguiapp_internal.h dispatches on them).
+// True when std::format can stringify U with "{}": the disabled primary std::formatter is not
+// default-constructible; enabled specializations are.
+template <typename U>
+inline constexpr bool ImIsFormattable = std::is_default_constructible_v<std::formatter<std::remove_cvref_t<U>, char>>;
+
+// True for a fixed-size char buffer member (e.g. char Label[128]) -> edited as text.
+template <typename U>
+inline constexpr bool ImIsCharArray = std::is_array_v<U> && std::is_same_v<std::remove_cv_t<std::remove_extent_t<U>>, char>;
