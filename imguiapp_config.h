@@ -2,6 +2,17 @@
 
 #include "imgui.h"
 
+// F77: imguix-core shared library. Applayer entry points are exported from the core DLL by the linker
+// (WINDOWS_EXPORT_ALL_SYMBOLS), so IMGUIX_API stays empty when building the core; consumers import.
+// Defined here because imguiapp_config.h is the header common to every applayer public header.
+#ifndef IMGUIX_API
+#if defined(_WIN32) && !defined(IMGUIX_CORE_EXPORTS)
+#define IMGUIX_API __declspec(dllimport)
+#else
+#define IMGUIX_API
+#endif
+#endif
+
 struct ImGuiApp;
 
 typedef int ImGuiAppFrameFlags;

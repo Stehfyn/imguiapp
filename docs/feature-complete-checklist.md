@@ -807,10 +807,18 @@ static-relink bridging (which would duplicate imguix globals -- the flow3 double
   async monotonic-name reload with F68 state-preserve, toolset-pinned compile, source-mapped error
   surfacing, interpreter as the no-compiler fallback.
   *Accept: doc lands with the ABI verdict + lifecycle; no code before it.*
-- [ ] **F77 imguix-core shared split** — carve the framework runtime (imgui + imguiapp core, minus
+- [x] **F77 imguix-core shared split** — carve the framework runtime (imgui + imguiapp core, minus
   demo/composer/editor) into a shared target; `IMGUI_API`/`IMGUIX_API` become dllexport/dllimport; host +
   tests link it. Pure build refactor -- all suites stay green, zero behavior change. Gates F78.
   *Accept: full rebuild green (nodes + core + headless-verify) against the shared core.*
+  DONE: `imguix` is now a SHARED library. `IMGUIX_CORE_EXPORTS` (private, on imgui/imgui_te/imguix) flips
+  `IMGUI_API` to dllexport (imconfig) so every imgui + test-engine symbol exports from the one core DLL;
+  applayer/implot symbols export via `WINDOWS_EXPORT_ALL_SYMBOLS`. Consumers leave the macro undefined and
+  import: `IMGUI_API`/`IMGUIX_API` are dllimport, resolving one context + allocator + globals + vtables
+  from the DLL (dll-preview-design.md §1), never a duplicated runtime. The four header-only `Push*Control`
+  templates lost their `IMGUI_API` (they instantiate per-TU with consumer types; dllimport templates cannot
+  resolve local instantiations). imguix.dll is copied next to every exe. All three suites green against the
+  shared core: imguix-tests 111/111, imguix-core-tests 362 checks/0 failures, headless-verify 31/31 + verify OK.
 - [ ] **F78 DLL preview backend** — `GenerateAppPreviewModuleCode`, the `ImGuiAppPreviewDll` session
   (compile / load / create / tick / async reload / state preserve / source-mapped error surface), the
   Preview tab backend toggle (DLL when a toolset exists, interpreter otherwise).
