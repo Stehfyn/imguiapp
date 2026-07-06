@@ -1200,6 +1200,12 @@ struct ImGuiAppTestHarnessConfig
 //-----------------------------------------------------------------------------
 namespace ImGui
 {
+  // Controls sorted by the resolved dependency wiring: every producer before its consumers, composition
+  // order among independents. Rebuilt when the composition changes. ONLY the Task layer's OnUpdate pass
+  // iterates this -- update is the pass where producers write what consumers read same-frame. Command
+  // collection and rendering stay composition order. (Internal: the runtime topo rebuild behind the app.)
+  IMGUI_API const ImVector<ImGuiAppControlBase*>* AppRebuildUpdateOrder(ImGuiApp* app);
+
   // AV: encoder teardown + image codec + meta-stream verify/parse
   // Close (if open) then Destroy any provider's encoder via its vtable. Null-safe.
   IMGUI_API void AppAVDestroyEncoder(ImGuiAppAVEncoder* encoder);
