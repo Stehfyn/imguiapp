@@ -1919,6 +1919,43 @@ struct ImAppPulse : ImGuiAppControl<ImAppPulseData, ImAppPulseTempData>
   }
 };
 
+//=================== headless test harness (folded from imguiapp_testharness.h) ===================
+// ImGuiAppTestHarness: Test Engine + headless render + frame encode + WAL in one entry point. Its
+// IMPL (imguiapp.cpp) is the only applayer code that drags the imgui test engine (IMGUI_ENABLE_TEST_ENGINE).
+struct ImGuiTestEngine;
+
+struct ImGuiAppTestHarnessConfig
+{
+  const char*          Name;
+  const char*          ArtifactDir;
+  ImGuiAppHeadlessMode Headless;
+  bool                 RecordVideo;
+  bool                 KeepArtifactsOnPass;
+  ImGuiAppPacerMode    PacerMode;
+  float                Fps;
+  ImGuiAppAVTimingMode Timing;
+  ImGuiAppAVEncoder*   Encoder;
+  ImGuiAppWALLevel     WALLevel;
+  const char*          TestFilter;
+  void (*RegisterTests)(ImGuiTestEngine* engine);
+  bool                 VerifyRecording;
+  ImGuiAppHeadlessMode* EffectiveHeadless;
+
+  ImGuiAppTestHarnessConfig()
+  {
+    Name = nullptr; ArtifactDir = nullptr; Headless = ImGuiAppHeadlessMode_Offscreen; RecordVideo = true;
+    KeepArtifactsOnPass = false; PacerMode = ImGuiAppPacerMode_Fixed; Fps = 60.0f; Timing = ImGuiAppAVTimingMode_Auto;
+    Encoder = nullptr; WALLevel = ImGuiAppWALLevel_Frame; TestFilter = nullptr; RegisterTests = nullptr;
+    VerifyRecording = true; EffectiveHeadless = nullptr;
+  }
+};
+
+namespace ImGui
+{
+  // Runs queued tests to completion and returns a ctest-ready exit code (see docs/av-design.md).
+  IMGUI_API int AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessConfig* config);
+}
+
 #ifndef IMGUIX_DISABLE_TOOLS
 
   //=================== canvas UI (folded from imguiapp_canvas.h, Phase A4) ===================
