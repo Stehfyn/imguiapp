@@ -23,21 +23,21 @@ wire-ops sweep.
 - **Eye-hide keeps position.** step23/24 pin that a hidden→shown node returns to its stored GridPos
   (the imnodes-eviction round-trip that once reset it to the origin).
 
-## Drag-reparent automated test — harness limitation (not a behavior gap)
+## Drag-reparent automated test — resolved (step103)
 
 The hierarchy rows are `TreeNodeEx("##row", …)` under a per-node `PushID(id)` chain — hidden-label
-items with no string path. A test must reconstruct the id by folding `ImHashData(id, …, window->ID)`
-down the tree path. That works for a ROOT node (step22 eye, step59 clone both drive real rows this
-way) but could not be made to resolve reliably for a window nested under the Display layer within the
-harness, so the `ItemDragAndDrop` between a hosted-control row and a window row could not be driven
-headlessly. The reparent BEHAVIOR is covered by the guard + rewire reading above; what is missing is
-the UI-automation of the drag itself. Follow-up: a tree-row test seam (e.g. the outliner publishing
-row rects, or a headless "reparent(child, parent)" command the drop already funnels into) would let
-this verb be driven like the others.
+items whose id a test reconstructs by folding `ImHashData(id, …, window->ID)` down the tree path
+(step22 eye, step59 clone both drive real rows this way). The earlier gap was framed as needing a
+window nested under the Display layer; that framing was wrong. AppGraphReparent is scope-blind — a
+top-level Control dragged onto a top-level Window funnels through the identical
+`BeginDragDropSource`/`AcceptDragDropPayload` → Act=5 → AppGraphReparent path. So step103 builds a
+top-level Control + Window, reconstructs both single-element row ids via `AppTreeRowId`, drives
+`ItemDragAndDrop`, and asserts the containment link appears — then asserts an illegal Field→Window
+drop is a no-op (the pair-gate rejects it). The gesture is now UI-automated like the others; no
+production change and no `##row` addressability change was needed.
 
 ## OPEN (bugs)
 
-_(empty)_ — no behavior defect found. The one gap is test AUTOMATION of the drag-reparent gesture
-(above), tracked as a follow-up, not a bug.
+_(empty)_ — no behavior defect found; the drag-reparent gesture is now driven headlessly by step103.
 
 Gate: imguix-tests 68/68 (test-only sweep + one new clone test; no production change).

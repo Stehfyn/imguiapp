@@ -48,14 +48,17 @@ absent-by-design are NOT here; doc-hygiene corrections are (F49).
 
 ## P2 — behavior-class sweeps + feedback infrastructure
 
-- [~] **F09 outliner family sweep** — drag-reparent (control↔windows, field↔structs, drilled
+- [x] **F09 outliner family sweep** — drag-reparent (control↔windows, field↔structs, drilled
   variants), eye/hide, clone icon; fix + test what falls out.
   *Accept: family sweep doc with empty OPEN list; tests per verb. (outliner-sweep-2026-07-05.md:
-  OPEN(bugs) empty. eye/hide = step22-24, clone = step59. drag-reparent BEHAVIOR verified by reading
-  (AppGraphReparent pair-gate rejects illegal drops; rewire clean) but its automated hierarchy-drag
-  test is blocked by non-addressable `##row` items nested under the Display layer — a harness
-  limitation, tracked as a test-seam follow-up, NOT a behavior bug. Marked ~ (not [x]) until that
-  gesture is driven.)*
+  OPEN(bugs) empty. eye/hide = step22-24, clone = step59.)*
+  DONE: the sole remaining gap — the automated drag-reparent gesture — is now driven headlessly by
+  step103_outliner_drag_reparent. AppGraphReparent is scope-blind, so a top-level Control dragged onto
+  a top-level Window exercises the identical BeginDragDropSource/Target → Act=5 → AppGraphReparent path
+  the deep-nested case would (no `##row` addressability change needed — the row id is reconstructed via
+  the existing AppTreeRowId helper, same idiom as step22/step59). The test asserts the containment link
+  appears after the Control→Window drop, AND that an illegal Field→Window drop is a no-op (the pair-gate
+  rejects it) — converting the sweep's read-only gate proof into an executed one.
 - [x] **F10 wire-ops family sweep** — detach re-drag, retarget, binding create/update/delete,
   drilled variants.
   *Accept: same form as F09. (wire-ops-sweep-2026-07-05.md: OPEN empty; canvas_c6 retarget/detach
