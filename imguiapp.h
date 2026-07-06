@@ -5,8 +5,12 @@
 Index of this file:
 // [SECTION] Header mess
 // [SECTION] Forward declarations and basic types
-// [SECTION] Compile-time helpers (ImGuiStatic<>, ImGuiType<>)
 // [SECTION] Dear ImGui end-user API functions
+// [SECTION] Flags & Enumerations
+// [SECTION] Configuration structs
+// [SECTION] Helpers (interface base, state-delta events, RNG, diagnostics, style/color/data descs)
+// [SECTION] App object model (layers, items, controls, ImGuiApp, adapter/control templates)
+// [SECTION] Inline composition API (Push/Pop layers, windows, sidebars, controls; needs a complete ImGuiApp)
 
 */
 
@@ -34,11 +38,14 @@ Index of this file:
 // windows.h's min/max macros (leaked by platform-backend TUs) break its std::min.
 #include "imguiapp_reflect.h"
 
+// AV recording types + interface (ImGuiAppFrameID, ImGuiAppAVFrame, encode/ring config, encoder vtable,
+// recorder). Self-contained; defines ImGuiAppFrameID -- held by value in ImGuiApp and ImGuiAppAVFrame below.
+#include "imguiapp_av.h"
+
 #ifdef _MSC_VER
 #pragma warning (push)
 #pragma warning (disable: 26495)          // [Static Analyzer] Variable 'XXX' is uninitialized. Always initialize a member variable (type.6).
 #endif
-
 //-----------------------------------------------------------------------------
 // [SECTION] Forward declarations and basic types
 //-----------------------------------------------------------------------------
@@ -70,246 +77,19 @@ struct ImGuiAppSidebarBase;
 struct ImGuiAppStateHistory;
 struct ImGuiAppInputLog;
 
-// Frame/app configuration (relocated from the switch-only imapp_config.h).
-typedef int ImGuiAppFrameFlags;
-enum ImGuiAppFrameFlags_
-{
-    ImGuiAppFrameFlags_None              = 0,
-    ImGuiAppFrameFlags_NoClear           = 1 << 0,
-    ImGuiAppFrameFlags_NoPresent         = 1 << 1,
-    ImGuiAppFrameFlags_NoPlatformWindows = 1 << 2,
-};
+// Configuration + basic structs (defined in [SECTION] Configuration structs / Helpers below).
+struct ImGuiAppConfig;
+struct ImGuiAppWAL;
+struct ImGuiAppStyleModDesc;
+struct ImGuiAppColorModDesc;
+struct ImGuiAppDataBinding;
 
-struct ImGuiAppFrameConfig
-{
-    ImVec4             ClearColor;
-    ImGuiAppFrameFlags Flags;
-
-    ImGuiAppFrameConfig()
-        : ClearColor(0.0f, 0.0f, 0.0f, 1.0f)
-        , Flags(ImGuiAppFrameFlags_None)
-    {
-    }
-};
-
-enum ImGuiAppStyle_
-{
-    ImGuiAppStyle_Dark    = 0,
-    ImGuiAppStyle_Light   = 1,
-    ImGuiAppStyle_Classic = 2,
-};
-typedef int ImGuiAppStyle;
-
-struct ImGuiAppPlatform
-{
-    const char* Name;
-    void*       NativeWindowHandle;
-};
-
-typedef int ImGuiAppHeadlessMode;
-enum ImGuiAppHeadlessMode_
-{
-    ImGuiAppHeadlessMode_None = 0,   // normal windowed app
-    ImGuiAppHeadlessMode_Null,       // no GPU, no pixels (test engine only; backend CaptureFrame stays null)
-    ImGuiAppHeadlessMode_Offscreen,  // GPU renders to an offscreen target; no OS window, CaptureFrame works
-};
-
-struct ImGuiAppConfig
-{
-    ImGuiAppPlatform     Platform;
-    ImGuiConfigFlags     ConfigFlags;
-    ImGuiAppStyle        Style;
-    ImVec4               ClearColor;
-    float                FontScale;
-    float                DpiScale;
-    ImGuiAppHeadlessMode Headless;
-    bool                 PersistSettings;
-    const char*          WindowTitle;
-    int                  WindowWidth;
-    int                  WindowHeight;
-
-    ImGuiAppConfig()
-    {
-        Platform.Name               = nullptr;
-        Platform.NativeWindowHandle = nullptr;
-        ConfigFlags                 = 0;
-        Style                       = ImGuiAppStyle_Dark;
-        ClearColor                  = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);
-        FontScale                   = 1.0f;
-        DpiScale                    = 1.0f;
-        Headless                    = ImGuiAppHeadlessMode_None;
-        PersistSettings             = true;
-        WindowTitle                 = nullptr;
-        WindowWidth                 = 0;
-        WindowHeight                = 0;
-    }
-};
-
-enum ImGuiAppCommand
-{
-  ImGuiAppCommand_None,
-  ImGuiAppCommand_Shutdown,
-  ImGuiAppCommand_COUNT,
-};
-
-enum ImGuiAppCommandPrivate
-{
-  ImGuiAppCommandPrivate_ = ImGuiAppCommand_COUNT,
-};
-
-// Frame identity: one id per frame, taken at the top of OnDrawFrame. The correlation key across video
-// frames, sidecar records, WAL lines, and test logs (docs/av-design.md). DEFINED in imguiapp_av.h (held
-// there by value in ImGuiAppAVFrame; that header is included below); forward-declared here for the
-// by-pointer use just above.
-struct ImGuiAppFrameID;
-
-// Advisory frame pacer. Backend run loops call AppPacerWait once per iteration, before OnDrawFrame;
-// Off returns immediately. The pacer decides what time the app SIMULATES; video timing is separate
-// (imapp_av.h ImGuiAppAVTimingMode) -- honest-realtime video takes PTS from FrameID.TimeSec.
-typedef int ImGuiAppPacerMode;
-enum ImGuiAppPacerMode_
-{
-  ImGuiAppPacerMode_Off = 0,     // free-run; vsync/present mode governs
-  ImGuiAppPacerMode_Target,      // pace wall clock to TargetHz (sleep + spin hybrid)
-  ImGuiAppPacerMode_Fixed,       // Target pacing AND io.DeltaTime forced to exactly 1/TargetHz (determinism: replay, tests)
-};
-
-struct ImGuiAppPacer
-{
-  ImGuiAppPacerMode Mode;
-  float             TargetHz;        // <= 0 with Mode_Target = pace to primary monitor refresh
-  float             SleepSlackMs;    // spin the last N ms (OS sleep granularity guard)
-                                     // read-only telemetry
-  double            LastFrameMs;
-  double            LastWaitMs;
-  ImU64             MissedDeadlines; // frames that arrived after their deadline
-
-  ImGuiAppPacer() { Mode = ImGuiAppPacerMode_Off; TargetHz = 0.0f; SleepSlackMs = 2.0f; LastFrameMs = 0.0; LastWaitMs = 0.0; MissedDeadlines = 0; }
-};
-
-// Write-ahead logger. Each record is appended and flushed BEFORE the operation it names executes, so after
-// a crash the file tail names the in-flight operation. Attach to ImGuiApp::WAL; null = silent.
-typedef int ImGuiAppWALLevel;
-enum ImGuiAppWALLevel_
-{
-  ImGuiAppWALLevel_Off = 0,
-  ImGuiAppWALLevel_Lifecycle,   // composition changes, storage, command dispatch
-  ImGuiAppWALLevel_Frame,       // + per-frame per-layer phase begins (crash hunts; large files)
-};
-
-struct ImGuiAppWAL
-{
-  void*                  File;    // FILE*; typed void* to keep <cstdio> out of this header
-  int                    Seq;     // monotonic record number
-  ImGuiAppWALLevel       Level;
-  const ImGuiAppFrameID* FrameID; // optional (point at ImGuiApp::FrameID): prefixes records "[tick:N tsc:T]"
-  char                   Path[256];
-
-  ImGuiAppWAL() { File = nullptr; Seq = 0; Level = ImGuiAppWALLevel_Off; FrameID = nullptr; Path[0] = 0; }
-};
-
-// AV recording types + interface (ImGuiAppAVFrame, encode/ring config, encoder vtable, recorder).
-// Provides ImGuiAppFrameID (defined there) + the AV recording types; ImGuiApp below holds both by value.
-#include "imguiapp_av.h"
-
-
-// Platform backend interface. The core app layer depends only on this vtable. Exactly one backend
-// translation unit is linked per build; it defines ImGuiApp_GetPlatformBackend().
-struct ImGuiAppPlatformBackend
-{
-  bool (*InitPlatform)(ImGuiApp* app, ImGuiAppConfig& config);
-  void (*ShutdownPlatform)(ImGuiApp* app);
-  int  (*RunLoop)(ImGuiApp* app);
-  // Optional (null = backend cannot capture; recording fails with a clear error). Readback in the
-  // encode phase (after render, before present). Encode-every-frame contract: the FIRST call of a
-  // take returns the current frame (synchronously if the pipeline is unprimed); steady state may
-  // return frame N-1's pixels PROVIDED out_frame->FrameID carries the id recorded at copy time (a
-  // zeroed id gets the pumping frame's stamped by the recorder); a call with no new frame rendered
-  // since the last one returns the freshest unreturned copy if already GPU-complete (never block),
-  // else false -- callers drain the tail by re-calling after the GPU settles. Never return the
-  // same FrameIndex twice. Pixels stay valid until the next CaptureFrame call.
-  bool (*CaptureFrame)(ImGuiApp* app, ImGuiAppAVFrame* out_frame);
-};
-
-IMGUI_API const ImGuiAppPlatformBackend* ImGuiApp_GetPlatformBackend();
-
-//-----------------------------------------------------------------------------
-// [SECTION] Compile-time helpers (ImGuiStatic<>, ImGuiType<>)
-//-----------------------------------------------------------------------------
-
-// The ImFuncSig / IM_LABEL_SIZE / ImParseType* macros + ImGuiStatic<> / ImGuiType<> / GenerateLabel moved
-// to imguiapp_static.h (leaf compile-time type-identity layer, included at the top of this file).
-
-struct ImGuiInterface { char Label[IM_LABEL_SIZE] = {}; ImGuiInterface() = default; virtual ~ImGuiInterface() = default; };
-
-// ImGuiStatic<> / ImGuiType<> / GenerateLabel now live in imguiapp_static.h (see the include near the top).
-
-// State-delta event helpers over (this frame, last frame): rising = started, falling = ended, changed = either.
-inline static bool ImAppRising (bool now, bool last) { return now && !last; }
-inline static bool ImAppFalling(bool now, bool last) { return !now && last; }
-inline static bool ImAppChanged(bool now, bool last) { return now ^ last; }
-template <typename T>
-inline static bool ImAppChanged(const T& now, const T& last) { return !(now == last); }
-
-// splitmix64, no global state. Keep the seed in PersistData (seed in OnInitialize, step only through the
-// seed) so snapshots and replay reproduce it; hidden effect sources (rand(), clocks) break replay.
-inline static ImU64 ImAppRandom(ImU64* seed)
-{
-  ImU64 z = (*seed += 0x9E3779B97F4A7C15ull);
-  z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
-  z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
-  return z ^ (z >> 31);
-}
-inline static float ImAppRandomFloat(ImU64* seed, float mn, float mx)   // uniform in [mn, mx)
-{
-  return mn + (mx - mn) * (float)(ImAppRandom(seed) >> 40) / (float)(1ull << 24);
-}
-inline static int ImAppRandomInt(ImU64* seed, int mn, int mx)           // uniform in [mn, mx]
-{
-  return mx <= mn ? mn : mn + (int)(ImAppRandom(seed) % (ImU64)(mx - mn + 1));
-}
-
-// Best-effort symbolized backtrace of the caller as "  #N name (file:line)" lines; returns characters
-// written. skip_frames drops innermost frames (0 = caller). Win32 only; other platforms write "".
-IMGUI_API int ImStackTrace(char* out, int out_size, int skip_frames = 0);
-
-// IM_ASSERT sink (wired via IMGUI_USER_CONFIG): logs expr/file/line + ImStackTrace to the SetAppAssertWAL
-// sink and stderr, flushes, then __debugbreak()s under a debugger or exits with code 3 -- never the CRT popup.
-IMGUI_API void ImGuiAppAssertFail(const char* expr, const char* file, int line);
-
-// One authorable style-var override: Value.x for float vars, both lanes for ImVec2 vars; Active is
-// runtime-toggleable.
-// Aggregate (default member initializers, no ctors) so the build-time reflection walk sees
-// its members. Float-valued vars brace-init as { var, ImVec2(v, 0.0f) }.
-struct ImGuiAppStyleModDesc
-{
-  ImGuiStyleVar Var    = 0;
-  ImVec2        Value  = ImVec2(0.0f, 0.0f);
-  bool          Active = true;
-};
-
-// One authorable PushStyleColor override. Value is packed IM_COL32 RGBA.
-// Aggregate for the same reason as ImGuiAppStyleModDesc.
-struct ImGuiAppColorModDesc
-{
-  ImGuiCol Col    = 0;
-  ImU32    Value  = 0;
-  bool     Active = true;
-};
-
-// Routes one of a control's data dependencies to a specific producer instance at push time.
-// TypeID names WHICH dependency of the pack is routed; Instance names the producer.
-struct ImGuiAppDataBinding
-{
-  ImGuiID TypeID;           // ImGuiType<Dep>::ID of the dependency being routed
-  ImGuiID Instance;         // producer's instance id (0 = the type singleton)
-  bool    Optional = false; // absent producer resolves to null instead of asserting; the consumer
-                            // handles null (and is rebound live when the producer is pushed/popped)
-};
-
-// Storage key for a control's instance data in ImGuiApp::Data: instance 0 keeps the bare
-// data type id (the type singleton), any other instance qualifies it.
-IMGUI_API ImGuiID ImGuiAppInstanceKey(ImGuiID type_id, ImGuiID instance);
+// Flags (full enum lists in [SECTION] Flags & Enumerations below).
+typedef int ImGuiAppFrameFlags;    // -> enum ImGuiAppFrameFlags_
+typedef int ImGuiAppStyle;         // -> enum ImGuiAppStyle_
+typedef int ImGuiAppHeadlessMode;  // -> enum ImGuiAppHeadlessMode_
+typedef int ImGuiAppPacerMode;     // -> enum ImGuiAppPacerMode_
+typedef int ImGuiAppWALLevel;      // -> enum ImGuiAppWALLevel_
 
 //-----------------------------------------------------------------------------
 // [SECTION] Dear ImGui end-user API functions
@@ -421,6 +201,245 @@ namespace ImGui
   IMGUI_API int PushAppStyleMods(const ImGuiAppStyleModDesc* mods, int count);
   IMGUI_API int PushAppColorMods(const ImGuiAppColorModDesc* mods, int count);
 }
+
+//-----------------------------------------------------------------------------
+// [SECTION] Flags & Enumerations
+//-----------------------------------------------------------------------------
+
+// Frame/app configuration (relocated from the switch-only imapp_config.h).
+enum ImGuiAppFrameFlags_
+{
+    ImGuiAppFrameFlags_None              = 0,
+    ImGuiAppFrameFlags_NoClear           = 1 << 0,
+    ImGuiAppFrameFlags_NoPresent         = 1 << 1,
+    ImGuiAppFrameFlags_NoPlatformWindows = 1 << 2,
+};
+
+enum ImGuiAppStyle_
+{
+    ImGuiAppStyle_Dark    = 0,
+    ImGuiAppStyle_Light   = 1,
+    ImGuiAppStyle_Classic = 2,
+};
+
+enum ImGuiAppHeadlessMode_
+{
+    ImGuiAppHeadlessMode_None = 0,   // normal windowed app
+    ImGuiAppHeadlessMode_Null,       // no GPU, no pixels (test engine only; backend CaptureFrame stays null)
+    ImGuiAppHeadlessMode_Offscreen,  // GPU renders to an offscreen target; no OS window, CaptureFrame works
+};
+
+enum ImGuiAppCommand
+{
+  ImGuiAppCommand_None,
+  ImGuiAppCommand_Shutdown,
+  ImGuiAppCommand_COUNT,
+};
+
+enum ImGuiAppCommandPrivate
+{
+  ImGuiAppCommandPrivate_ = ImGuiAppCommand_COUNT,
+};
+
+// Advisory frame pacer level (see ImGuiAppPacer).
+enum ImGuiAppPacerMode_
+{
+  ImGuiAppPacerMode_Off = 0,     // free-run; vsync/present mode governs
+  ImGuiAppPacerMode_Target,      // pace wall clock to TargetHz (sleep + spin hybrid)
+  ImGuiAppPacerMode_Fixed,       // Target pacing AND io.DeltaTime forced to exactly 1/TargetHz (determinism: replay, tests)
+};
+
+// Write-ahead logger level (see ImGuiAppWAL).
+enum ImGuiAppWALLevel_
+{
+  ImGuiAppWALLevel_Off = 0,
+  ImGuiAppWALLevel_Lifecycle,   // composition changes, storage, command dispatch
+  ImGuiAppWALLevel_Frame,       // + per-frame per-layer phase begins (crash hunts; large files)
+};
+
+//-----------------------------------------------------------------------------
+// [SECTION] Configuration structs
+//-----------------------------------------------------------------------------
+
+struct ImGuiAppFrameConfig
+{
+    ImVec4             ClearColor;
+    ImGuiAppFrameFlags Flags;
+
+    ImGuiAppFrameConfig()
+        : ClearColor(0.0f, 0.0f, 0.0f, 1.0f)
+        , Flags(ImGuiAppFrameFlags_None)
+    {
+    }
+};
+
+struct ImGuiAppPlatform
+{
+    const char* Name;
+    void*       NativeWindowHandle;
+};
+
+struct ImGuiAppConfig
+{
+    ImGuiAppPlatform     Platform;
+    ImGuiConfigFlags     ConfigFlags;
+    ImGuiAppStyle        Style;
+    ImVec4               ClearColor;
+    float                FontScale;
+    float                DpiScale;
+    ImGuiAppHeadlessMode Headless;
+    bool                 PersistSettings;
+    const char*          WindowTitle;
+    int                  WindowWidth;
+    int                  WindowHeight;
+
+    ImGuiAppConfig()
+    {
+        Platform.Name               = nullptr;
+        Platform.NativeWindowHandle = nullptr;
+        ConfigFlags                 = 0;
+        Style                       = ImGuiAppStyle_Dark;
+        ClearColor                  = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);
+        FontScale                   = 1.0f;
+        DpiScale                    = 1.0f;
+        Headless                    = ImGuiAppHeadlessMode_None;
+        PersistSettings             = true;
+        WindowTitle                 = nullptr;
+        WindowWidth                 = 0;
+        WindowHeight                = 0;
+    }
+};
+
+// Advisory frame pacer. Backend run loops call AppPacerWait once per iteration, before OnDrawFrame;
+// Off returns immediately. The pacer decides what time the app SIMULATES; video timing is separate
+// (imapp_av.h ImGuiAppAVTimingMode) -- honest-realtime video takes PTS from FrameID.TimeSec.
+struct ImGuiAppPacer
+{
+  ImGuiAppPacerMode Mode;
+  float             TargetHz;        // <= 0 with Mode_Target = pace to primary monitor refresh
+  float             SleepSlackMs;    // spin the last N ms (OS sleep granularity guard)
+                                     // read-only telemetry
+  double            LastFrameMs;
+  double            LastWaitMs;
+  ImU64             MissedDeadlines; // frames that arrived after their deadline
+
+  ImGuiAppPacer() { Mode = ImGuiAppPacerMode_Off; TargetHz = 0.0f; SleepSlackMs = 2.0f; LastFrameMs = 0.0; LastWaitMs = 0.0; MissedDeadlines = 0; }
+};
+
+// Write-ahead logger. Each record is appended and flushed BEFORE the operation it names executes, so after
+// a crash the file tail names the in-flight operation. Attach to ImGuiApp::WAL; null = silent.
+struct ImGuiAppWAL
+{
+  void*                  File;    // FILE*; typed void* to keep <cstdio> out of this header
+  int                    Seq;     // monotonic record number
+  ImGuiAppWALLevel       Level;
+  const ImGuiAppFrameID* FrameID; // optional (point at ImGuiApp::FrameID): prefixes records "[tick:N tsc:T]"
+  char                   Path[256];
+
+  ImGuiAppWAL() { File = nullptr; Seq = 0; Level = ImGuiAppWALLevel_Off; FrameID = nullptr; Path[0] = 0; }
+};
+
+// Platform backend interface. The core app layer depends only on this vtable. Exactly one backend
+// translation unit is linked per build; it defines ImGuiApp_GetPlatformBackend().
+struct ImGuiAppPlatformBackend
+{
+  bool (*InitPlatform)(ImGuiApp* app, ImGuiAppConfig& config);
+  void (*ShutdownPlatform)(ImGuiApp* app);
+  int  (*RunLoop)(ImGuiApp* app);
+  // Optional (null = backend cannot capture; recording fails with a clear error). Readback in the
+  // encode phase (after render, before present). Encode-every-frame contract: the FIRST call of a
+  // take returns the current frame (synchronously if the pipeline is unprimed); steady state may
+  // return frame N-1's pixels PROVIDED out_frame->FrameID carries the id recorded at copy time (a
+  // zeroed id gets the pumping frame's stamped by the recorder); a call with no new frame rendered
+  // since the last one returns the freshest unreturned copy if already GPU-complete (never block),
+  // else false -- callers drain the tail by re-calling after the GPU settles. Never return the
+  // same FrameIndex twice. Pixels stay valid until the next CaptureFrame call.
+  bool (*CaptureFrame)(ImGuiApp* app, ImGuiAppAVFrame* out_frame);
+};
+
+IMGUI_API const ImGuiAppPlatformBackend* ImGuiApp_GetPlatformBackend();
+
+//-----------------------------------------------------------------------------
+// [SECTION] Helpers (interface base, state-delta events, RNG, diagnostics, style/color/data descs)
+//-----------------------------------------------------------------------------
+
+// The ImFuncSig / IM_LABEL_SIZE / ImParseType* macros + ImGuiStatic<> / ImGuiType<> / GenerateLabel moved
+// to imguiapp_static.h (leaf compile-time type-identity layer, included at the top of this file).
+
+struct ImGuiInterface { char Label[IM_LABEL_SIZE] = {}; ImGuiInterface() = default; virtual ~ImGuiInterface() = default; };
+
+// ImGuiStatic<> / ImGuiType<> / GenerateLabel now live in imguiapp_static.h (see the include near the top).
+
+// State-delta event helpers over (this frame, last frame): rising = started, falling = ended, changed = either.
+inline static bool ImAppRising (bool now, bool last) { return now && !last; }
+inline static bool ImAppFalling(bool now, bool last) { return !now && last; }
+inline static bool ImAppChanged(bool now, bool last) { return now ^ last; }
+template <typename T>
+inline static bool ImAppChanged(const T& now, const T& last) { return !(now == last); }
+
+// splitmix64, no global state. Keep the seed in PersistData (seed in OnInitialize, step only through the
+// seed) so snapshots and replay reproduce it; hidden effect sources (rand(), clocks) break replay.
+inline static ImU64 ImAppRandom(ImU64* seed)
+{
+  ImU64 z = (*seed += 0x9E3779B97F4A7C15ull);
+  z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+  z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+  return z ^ (z >> 31);
+}
+inline static float ImAppRandomFloat(ImU64* seed, float mn, float mx)   // uniform in [mn, mx)
+{
+  return mn + (mx - mn) * (float)(ImAppRandom(seed) >> 40) / (float)(1ull << 24);
+}
+inline static int ImAppRandomInt(ImU64* seed, int mn, int mx)           // uniform in [mn, mx]
+{
+  return mx <= mn ? mn : mn + (int)(ImAppRandom(seed) % (ImU64)(mx - mn + 1));
+}
+
+// Best-effort symbolized backtrace of the caller as "  #N name (file:line)" lines; returns characters
+// written. skip_frames drops innermost frames (0 = caller). Win32 only; other platforms write "".
+IMGUI_API int ImStackTrace(char* out, int out_size, int skip_frames = 0);
+
+// IM_ASSERT sink (wired via IMGUI_USER_CONFIG): logs expr/file/line + ImStackTrace to the SetAppAssertWAL
+// sink and stderr, flushes, then __debugbreak()s under a debugger or exits with code 3 -- never the CRT popup.
+IMGUI_API void ImGuiAppAssertFail(const char* expr, const char* file, int line);
+
+// One authorable style-var override: Value.x for float vars, both lanes for ImVec2 vars; Active is
+// runtime-toggleable.
+// Aggregate (default member initializers, no ctors) so the build-time reflection walk sees
+// its members. Float-valued vars brace-init as { var, ImVec2(v, 0.0f) }.
+struct ImGuiAppStyleModDesc
+{
+  ImGuiStyleVar Var    = 0;
+  ImVec2        Value  = ImVec2(0.0f, 0.0f);
+  bool          Active = true;
+};
+
+// One authorable PushStyleColor override. Value is packed IM_COL32 RGBA.
+// Aggregate for the same reason as ImGuiAppStyleModDesc.
+struct ImGuiAppColorModDesc
+{
+  ImGuiCol Col    = 0;
+  ImU32    Value  = 0;
+  bool     Active = true;
+};
+
+// Routes one of a control's data dependencies to a specific producer instance at push time.
+// TypeID names WHICH dependency of the pack is routed; Instance names the producer.
+struct ImGuiAppDataBinding
+{
+  ImGuiID TypeID;           // ImGuiType<Dep>::ID of the dependency being routed
+  ImGuiID Instance;         // producer's instance id (0 = the type singleton)
+  bool    Optional = false; // absent producer resolves to null instead of asserting; the consumer
+                            // handles null (and is rebound live when the producer is pushed/popped)
+};
+
+// Storage key for a control's instance data in ImGuiApp::Data: instance 0 keeps the bare
+// data type id (the type singleton), any other instance qualifies it.
+IMGUI_API ImGuiID ImGuiAppInstanceKey(ImGuiID type_id, ImGuiID instance);
+
+//-----------------------------------------------------------------------------
+// [SECTION] App object model (layers, items, controls, ImGuiApp, adapter/control templates)
+//-----------------------------------------------------------------------------
 
 struct ImGuiAppLayerBase : ImGuiInterface
 {
@@ -891,6 +910,10 @@ struct ImGuiAppSidebar : ImGuiAppSidebarBase
   virtual void OnUpdate(const ImGuiApp* app, float dt)         const override {};
   virtual void OnRender(const ImGuiApp*)                       const override {};
 };
+
+//-----------------------------------------------------------------------------
+// [SECTION] Inline composition API (Push/Pop layers, windows, sidebars, controls; needs a complete ImGuiApp)
+//-----------------------------------------------------------------------------
 
 namespace ImGui
 {
