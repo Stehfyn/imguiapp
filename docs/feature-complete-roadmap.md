@@ -131,6 +131,15 @@ Highest-leverage findings against the section-2 flows (audit's ranking):
 
 ## 7. Suggested sequence to 100%
 
+> **100% REACHED — 2026-07-05.** The feature series below is complete: every item in
+> [feature-complete-checklist.md](feature-complete-checklist.md) (F01–F78.5) shipped + tested or parked by
+> intent, confirmed by [feature-audit-2026-07-05.md](feature-audit-2026-07-05.md) (v2). The series grew past
+> the original F01–F63 with the post-audit decisions — vocabulary nodes (F53–F57), run-without-a-build
+> (playback debugger F61–F65 + previewer F66–F70), and the DLL live preview (F76–F78.5, copy-marshalling so
+> imguix stays static). The forward horizon (Lifecycle view, module interop, status-layer model, command
+> payloads, edit-intent bus, the DLL in-panel render + method-body editor) now lives in
+> [up-next.md](up-next.md), not here. The historical plan is preserved below.
+
 Explicit feature series (one deliverable + acceptance gate each):
 [feature-complete-checklist.md](feature-complete-checklist.md) — F01..F63 in build order, plus
 the dependency spine and six concurrent lanes (the phase order is only the safe serial order;

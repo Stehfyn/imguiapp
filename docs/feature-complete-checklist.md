@@ -790,12 +790,22 @@ interpreter's vocabulary IS F53-F57's semantics.
   (restore-only) and a replay tick (restore nearest + replay), matching the recorded hash + value; the
   identity gate refuses a mismatched composition. core 362 checks / 0 failures. flows 1-7 are real;
   flow8 is real against the interim serializer pending F70.
-- [ ] **F72 re-audit** — re-run the doc-claims audit; zero missing/partial not explicitly parked
+- [x] **F72 re-audit** — re-run the doc-claims audit; zero missing/partial not explicitly parked
   with a doc note; matrix published into feature-audit doc v2.
   *Accept: the re-audit IS 100%.*
-- [ ] **F73 roadmap reset** — up-next.md + roadmap rewritten to the post-100 horizon (command
+  DONE: [feature-audit-2026-07-05.md](feature-audit-2026-07-05.md) (v2) maps every ranked gap from the v1
+  audit (2026-07-04, 470 claims) to the shipped, tested F-item that closed it, confirms only F72/F73 were
+  ever `[ ]`, and lists the parked-by-intent set + the tracked residuals (F78/F78.5 in-panel render, F47/F48
+  refinements, F40 low-value chrome tests) and the step93 test-flake as a reliability follow-on (NOT a
+  feature gap). Verdict: 100% at gate imguix-tests 112/112 · imguix-core-tests 409/0 · headless 31/31.
+- [x] **F73 roadmap reset** — up-next.md + roadmap rewritten to the post-100 horizon (command
   payloads, status-layer model, module interop, edit-intent bus, remappable input binding (F74/F75),
   Lifecycle view).
+  DONE: up-next.md rewritten to a "100% reached" preamble + a post-100 horizon (Now: DLL in-panel render,
+  in-app method-body editor, Lifecycle view; Horizon: module interop / status-layer model / command
+  payloads / edit-intent bus / reliability residuals) with the series recorded under "Recently landed".
+  feature-complete-roadmap.md §7 gained a "100% REACHED" banner pointing forward to up-next.md; the
+  historical plan is preserved.
 
 ## P11 — post-100 horizon (started early; NOT required for 100%)
 
