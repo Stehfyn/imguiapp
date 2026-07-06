@@ -107,17 +107,21 @@ typedef int ImGuiAppRecordQueuePolicy; // -> enum ImGuiAppRecordQueuePolicy_
 
 namespace ImGui
 {
+    // Lifecycle
     IMGUI_API void InitializeApp(ImGuiApp* app, const ImGuiAppConfig* config = nullptr);
     IMGUI_API void ShutdownApp(ImGuiApp* app);
     IMGUI_API void UpdateApp(ImGuiApp* app);           // dt = GetIO().DeltaTime
     IMGUI_API void UpdateApp(ImGuiApp* app, float dt); // explicit dt (replay injects here)
     IMGUI_API void RenderApp(const ImGuiApp* app);
+
+    // Storage registration (size > 0 => snapshottable; a TempData byte range enables input record/replay)
     IMGUI_API void RegisterAppStorage(ImGuiApp* app, ImGuiID id, void* ptr, void (*destroy)(void*));
     IMGUI_API void RegisterAppStorage(ImGuiApp* app, ImGuiID id, void* ptr, int size, void (*destroy)(void*));                                 // size > 0 => snapshottable
     IMGUI_API void RegisterAppStorage(ImGuiApp* app, ImGuiID id, void* ptr, int size, int temp_offset, int temp_size, void (*destroy)(void*)); // + input (TempData) byte range
     IMGUI_API void UnregisterAppStorage(ImGuiApp* app, ImGuiID id);                                                                            // destroys + removes one entry
     IMGUI_API void ClearAppStorage(ImGuiApp* app);
 
+    // State snapshot / time-travel
     // Snapshot appends snapshottable state to the ring (layout rebuilt + history cleared on composition
     // change); Restore copies snapshot `index` (0 = oldest) into the live app. False = nothing
     // snapshottable / invalid index or composition.
@@ -125,6 +129,7 @@ namespace ImGui
     IMGUI_API bool AppStateRestore(ImGuiApp* app, ImGuiAppStateHistory* h, int index);
     IMGUI_API void AppStateHistoryClear(ImGuiAppStateHistory* h);
 
+    // Input record / replay
     // AppInputRecord appends this frame's inputs (every control's TempData + dt) and resulting state hash;
     // call once per frame AFTER RenderApp. AppInputReplay re-runs the recorded frames through UpdateApp (no
     // rendering) -- restore the starting state first. out_first_divergence (if non-null) receives the first
@@ -133,6 +138,7 @@ namespace ImGui
     IMGUI_API bool AppInputReplay(ImGuiApp* app, const ImGuiAppInputLog* log, int* out_first_divergence);
     IMGUI_API void AppInputLogClear(ImGuiAppInputLog* log);
 
+    // State hashing (per-frame fingerprint + slot-layout schema hash)
     // Hash of the Persist + LastTemp prefix of every snapshottable instance -- the same
     // per-frame fingerprint AppInputRecord stores. 0 when nothing snapshottable exists.
     IMGUI_API ImGuiID AppStateHash(const ImGuiApp* app);
@@ -143,6 +149,7 @@ namespace ImGui
     // to equal the recorded one. 0 when nothing snapshottable exists.
     IMGUI_API ImU32 AppStateSchemaHash(const ImGuiApp* app);
 
+    // Frame pacing
     // Advisory frame pacing. Backend run loops call this once per iteration before OnDrawFrame; Off
     // returns immediately (the call is unconditional in the loops). Sleeps until deadline - SleepSlackMs,
     // spins the rest on QPC; Fixed mode also forces io.DeltaTime to exactly 1/TargetHz.
@@ -158,6 +165,7 @@ namespace ImGui
     // on that monitor until its next deadline). Main viewport never skips; Off pacer never skips.
     IMGUI_API bool AppPacerViewportShouldPresent(ImGuiApp* app, ImGuiViewport* viewport);
 
+    // Write-ahead log
     // AppWALWrite appends one record and flushes to disk BEFORE returning; records below the WAL's level
     // are dropped. All three are null-safe on wal.
     IMGUI_API bool AppWALOpen(ImGuiAppWAL* wal, const char* path, ImGuiAppWALLevel level);
@@ -167,6 +175,7 @@ namespace ImGui
     // WAL sink for IM_ASSERT failures routed to ImGuiAppAssertFail.
     IMGUI_API void SetAppAssertWAL(ImGuiAppWAL* wal);
 
+    // Composition identity + update order
     // Identity of the app's composition (layers, windows/sidebars, controls, in order). Changes exactly
     // when something is pushed or popped; mirrors poll it and reconcile only on change.
     IMGUI_API ImGuiID GetAppCompositionID(const ImGuiApp* app);
@@ -177,6 +186,7 @@ namespace ImGui
     // consumers read same-frame. Command collection and rendering stay composition order.
     IMGUI_API const ImVector<ImGuiAppControlBase*>* AppRebuildUpdateOrder(ImGuiApp* app);
 
+    // Composition: push/pop layers, windows, sidebars, controls (templates defined in the inline section below)
     template <typename T>
     inline void    PushAppSidebar(ImGuiApp* app, ImGuiViewport* vp, ImGuiDir dir, float size = 0.0f, ImGuiWindowFlags flags = 0);
     IMGUI_API void PopAppSidebar(ImGuiApp* app);
@@ -203,6 +213,7 @@ namespace ImGui
     template <typename T>
     IMGUI_API inline void PushSidebarControl(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, ImGuiID instance = 0, const ImGuiAppDataBinding* binds = nullptr, int binds_count = 0);
 
+    // Demo
     // host: the PROCESS's real app, offered as the "Host app" live-mirror perspective
     // (strictly read-only there: time scrub is disabled for the host -- restoring its
     // state from inside its own render would mutate mid-frame).
@@ -211,6 +222,7 @@ namespace ImGui
     // NOTE: the Composer introspection accessors (AppComposer*) moved to imguiapp_internal.h (tool-coupled,
     // gated behind IMGUIX_DISABLE_TOOLS).
 
+    // Authored style/color overrides
     // Push every Active (in-range) entry; returns the number pushed -- pop with PopStyleVar/PopStyleColor(count).
     IMGUI_API int PushAppStyleMods(const ImGuiAppStyleModDesc* mods, int count);
     IMGUI_API int PushAppColorMods(const ImGuiAppColorModDesc* mods, int count);
