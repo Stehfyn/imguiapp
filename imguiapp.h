@@ -313,12 +313,7 @@ struct ImGuiAppDataBinding
 
 // Storage key for a control's instance data in ImGuiApp::Data: instance 0 keeps the bare
 // data type id (the type singleton), any other instance qualifies it.
-inline ImGuiID ImGuiAppInstanceKey(ImGuiID type_id, ImGuiID instance)
-{
-  if (instance == 0)
-    return type_id;
-  return (ImGuiID)ImHashData(&instance, sizeof(instance), type_id);
-}
+IMGUI_API ImGuiID ImGuiAppInstanceKey(ImGuiID type_id, ImGuiID instance);
 
 //-----------------------------------------------------------------------------
 // [SECTION] Dear ImGui end-user API functions
