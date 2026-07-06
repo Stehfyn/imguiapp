@@ -108,35 +108,35 @@ typedef int ImGuiAppRecordQueuePolicy; // -> enum ImGuiAppRecordQueuePolicy_
 namespace ImGui
 {
     // Lifecycle
-    IMGUI_API void InitializeApp(ImGuiApp* app, const ImGuiAppConfig* config = nullptr);
-    IMGUI_API void ShutdownApp(ImGuiApp* app);
-    IMGUI_API void UpdateApp(ImGuiApp* app);           // dt = GetIO().DeltaTime
-    IMGUI_API void UpdateApp(ImGuiApp* app, float dt); // explicit dt (replay injects here)
-    IMGUI_API void RenderApp(const ImGuiApp* app);
+    IMGUI_API void    InitializeApp(ImGuiApp* app, const ImGuiAppConfig* config = nullptr);
+    IMGUI_API void    ShutdownApp(ImGuiApp* app);
+    IMGUI_API void    UpdateApp(ImGuiApp* app);           // dt = GetIO().DeltaTime
+    IMGUI_API void    UpdateApp(ImGuiApp* app, float dt); // explicit dt (replay injects here)
+    IMGUI_API void    RenderApp(const ImGuiApp* app);
 
     // Storage registration (size > 0 => snapshottable; a TempData byte range enables input record/replay)
-    IMGUI_API void RegisterAppStorage(ImGuiApp* app, ImGuiID id, void* ptr, void (*destroy)(void*));
-    IMGUI_API void RegisterAppStorage(ImGuiApp* app, ImGuiID id, void* ptr, int size, void (*destroy)(void*));                                 // size > 0 => snapshottable
-    IMGUI_API void RegisterAppStorage(ImGuiApp* app, ImGuiID id, void* ptr, int size, int temp_offset, int temp_size, void (*destroy)(void*)); // + input (TempData) byte range
-    IMGUI_API void UnregisterAppStorage(ImGuiApp* app, ImGuiID id);                                                                            // destroys + removes one entry
-    IMGUI_API void ClearAppStorage(ImGuiApp* app);
+    IMGUI_API void    RegisterAppStorage(ImGuiApp* app, ImGuiID id, void* ptr, void (*destroy)(void*));
+    IMGUI_API void    RegisterAppStorage(ImGuiApp* app, ImGuiID id, void* ptr, int size, void (*destroy)(void*));                                 // size > 0 => snapshottable
+    IMGUI_API void    RegisterAppStorage(ImGuiApp* app, ImGuiID id, void* ptr, int size, int temp_offset, int temp_size, void (*destroy)(void*)); // + input (TempData) byte range
+    IMGUI_API void    UnregisterAppStorage(ImGuiApp* app, ImGuiID id);                                                                            // destroys + removes one entry
+    IMGUI_API void    ClearAppStorage(ImGuiApp* app);
 
     // State snapshot / time-travel
     // Snapshot appends snapshottable state to the ring (layout rebuilt + history cleared on composition
     // change); Restore copies snapshot `index` (0 = oldest) into the live app. False = nothing
     // snapshottable / invalid index or composition.
-    IMGUI_API bool AppStateSnapshot(ImGuiApp* app, ImGuiAppStateHistory* h);
-    IMGUI_API bool AppStateRestore(ImGuiApp* app, ImGuiAppStateHistory* h, int index);
-    IMGUI_API void AppStateHistoryClear(ImGuiAppStateHistory* h);
+    IMGUI_API bool    AppStateSnapshot(ImGuiApp* app, ImGuiAppStateHistory* h);
+    IMGUI_API bool    AppStateRestore(ImGuiApp* app, ImGuiAppStateHistory* h, int index);
+    IMGUI_API void    AppStateHistoryClear(ImGuiAppStateHistory* h);
 
     // Input record / replay
     // AppInputRecord appends this frame's inputs (every control's TempData + dt) and resulting state hash;
     // call once per frame AFTER RenderApp. AppInputReplay re-runs the recorded frames through UpdateApp (no
     // rendering) -- restore the starting state first. out_first_divergence (if non-null) receives the first
     // frame whose state hash differs from the recording; -1 = deterministic reproduction.
-    IMGUI_API bool AppInputRecord(ImGuiApp* app, ImGuiAppInputLog* log, float dt);
-    IMGUI_API bool AppInputReplay(ImGuiApp* app, const ImGuiAppInputLog* log, int* out_first_divergence);
-    IMGUI_API void AppInputLogClear(ImGuiAppInputLog* log);
+    IMGUI_API bool    AppInputRecord(ImGuiApp* app, ImGuiAppInputLog* log, float dt);
+    IMGUI_API bool    AppInputReplay(ImGuiApp* app, const ImGuiAppInputLog* log, int* out_first_divergence);
+    IMGUI_API void    AppInputLogClear(ImGuiAppInputLog* log);
 
     // State hashing (per-frame fingerprint + slot-layout schema hash)
     // Hash of the Persist + LastTemp prefix of every snapshottable instance -- the same
@@ -147,33 +147,33 @@ namespace ImGui
     // StorageEntries order) -- what state hashes and snapshots depend on. The take's Identity
     // record carries this; F64's reconstruction identity gate requires the reconstruction app's
     // to equal the recorded one. 0 when nothing snapshottable exists.
-    IMGUI_API ImU32 AppStateSchemaHash(const ImGuiApp* app);
+    IMGUI_API ImU32   AppStateSchemaHash(const ImGuiApp* app);
 
     // Frame pacing
     // Advisory frame pacing. Backend run loops call this once per iteration before OnDrawFrame; Off
     // returns immediately (the call is unconditional in the loops). Sleeps until deadline - SleepSlackMs,
     // spins the rest on QPC; Fixed mode also forces io.DeltaTime to exactly 1/TargetHz.
-    IMGUI_API void AppPacerWait(ImGuiApp* app);
+    IMGUI_API void    AppPacerWait(ImGuiApp* app);
 
     // The rate the pacer actually paces at: TargetHz when positive, else the primary
     // monitor's refresh rate (the same resolution AppPacerWait performs). Callers that
     // need the frame rate (e.g. an encode config) read it here instead of guessing.
-    IMGUI_API float AppPacerResolveHz(const ImGuiApp* app);
+    IMGUI_API float   AppPacerResolveHz(const ImGuiApp* app);
 
     // Consulted by the backend's per-viewport present hook (Renderer_SwapBuffers /
     // Platform_RenderWindow). True = present this frame; false = skip (contents unchanged
     // on that monitor until its next deadline). Main viewport never skips; Off pacer never skips.
-    IMGUI_API bool AppPacerViewportShouldPresent(ImGuiApp* app, ImGuiViewport* viewport);
+    IMGUI_API bool    AppPacerViewportShouldPresent(ImGuiApp* app, ImGuiViewport* viewport);
 
     // Write-ahead log
     // AppWALWrite appends one record and flushes to disk BEFORE returning; records below the WAL's level
     // are dropped. All three are null-safe on wal.
-    IMGUI_API bool AppWALOpen(ImGuiAppWAL* wal, const char* path, ImGuiAppWALLevel level);
-    IMGUI_API void AppWALClose(ImGuiAppWAL* wal);
-    IMGUI_API void AppWALWrite(ImGuiAppWAL* wal, ImGuiAppWALLevel level, const char* fmt, ...) IM_FMTARGS(3);
+    IMGUI_API bool    AppWALOpen(ImGuiAppWAL* wal, const char* path, ImGuiAppWALLevel level);
+    IMGUI_API void    AppWALClose(ImGuiAppWAL* wal);
+    IMGUI_API void    AppWALWrite(ImGuiAppWAL* wal, ImGuiAppWALLevel level, const char* fmt, ...) IM_FMTARGS(3);
 
     // WAL sink for IM_ASSERT failures routed to ImGuiAppAssertFail.
-    IMGUI_API void SetAppAssertWAL(ImGuiAppWAL* wal);
+    IMGUI_API void    SetAppAssertWAL(ImGuiAppWAL* wal);
 
     // Composition identity + update order
     // Identity of the app's composition (layers, windows/sidebars, controls, in order). Changes exactly
@@ -204,8 +204,8 @@ namespace ImGui
     IMGUI_API void        PopAppControl(ImGuiApp* app);
     IMGUI_API void        PopAppWindow(ImGuiApp* app);
     // Internal composition helpers (defined in imguiapp.cpp; used by the Push/Pop templates below).
-    IMGUI_API void ShutdownAppControls(ImGuiApp* app, ImVector<ImGuiAppControlBase*>& controls);
-    IMGUI_API void AppDeduplicateItemLabel(char* label, int label_size, const ImVector<ImGuiAppWindowBase*>* windows, const ImVector<ImGuiAppSidebarBase*>* sidebars);
+    IMGUI_API void        ShutdownAppControls(ImGuiApp* app, ImVector<ImGuiAppControlBase*>& controls);
+    IMGUI_API void        AppDeduplicateItemLabel(char* label, int label_size, const ImVector<ImGuiAppWindowBase*>* windows, const ImVector<ImGuiAppSidebarBase*>* sidebars);
 
     template <typename T>
     IMGUI_API inline void PushWindowControl(ImGuiApp* app, ImGuiAppWindowBase* window, ImGuiID instance = 0, const ImGuiAppDataBinding* binds = nullptr, int binds_count = 0);
@@ -217,15 +217,15 @@ namespace ImGui
     // host: the PROCESS's real app, offered as the "Host app" live-mirror perspective
     // (strictly read-only there: time scrub is disabled for the host -- restoring its
     // state from inside its own render would mutate mid-frame).
-    IMGUI_API void ShowAppLayerDemo(bool* p_open = nullptr, ImGuiApp* host = nullptr);
+    IMGUI_API void        ShowAppLayerDemo(bool* p_open = nullptr, ImGuiApp* host = nullptr);
 
     // NOTE: the Composer introspection accessors (AppComposer*) moved to imguiapp_internal.h (tool-coupled,
     // gated behind IMGUIX_DISABLE_TOOLS).
 
     // Authored style/color overrides
     // Push every Active (in-range) entry; returns the number pushed -- pop with PopStyleVar/PopStyleColor(count).
-    IMGUI_API int PushAppStyleMods(const ImGuiAppStyleModDesc* mods, int count);
-    IMGUI_API int PushAppColorMods(const ImGuiAppColorModDesc* mods, int count);
+    IMGUI_API int         PushAppStyleMods(const ImGuiAppStyleModDesc* mods, int count);
+    IMGUI_API int         PushAppColorMods(const ImGuiAppColorModDesc* mods, int count);
 }
 
 //-----------------------------------------------------------------------------
@@ -316,12 +316,7 @@ struct ImGuiAppFrameID
     ImU64  Tsc;        // __rdtsc / platform equivalent at frame begin
     double TimeSec;    // QPC seconds since run start
 
-    ImGuiAppFrameID()
-    {
-        FrameIndex = 0;
-        Tsc        = 0;
-        TimeSec    = 0.0;
-    }
+    ImGuiAppFrameID() { memset(this, 0, sizeof(*this)); }
 };
 
 // One captured frame. Produced by the platform backend's CaptureFrame; consumed by an
@@ -336,15 +331,7 @@ struct ImGuiAppAVFrame
     const void*     UserData; // optional per-frame blob (meta stream record, never visible pixels)
     int             UserDataSize;
 
-    ImGuiAppAVFrame()
-    {
-        Width        = 0;
-        Height       = 0;
-        PitchBytes   = 0;
-        Pixels       = nullptr;
-        UserData     = nullptr;
-        UserDataSize = 0;
-    }
+    ImGuiAppAVFrame() { memset(this, 0, sizeof(*this)); }
 };
 
 struct ImGuiAppAVEncodeConfig
@@ -384,22 +371,13 @@ struct ImGuiAppAVEncoder
 {
     const char* Name;
     bool        SupportsRealtimePts; // provider can carry per-frame wall-clock PTS (true VFR)
-    bool (*Open)(ImGuiAppAVEncoder* self, const ImGuiAppAVEncodeConfig* config);
-    bool (*WriteFrame)(ImGuiAppAVEncoder* self, const ImGuiAppAVFrame* frame); // PTS from frame->FrameID.TimeSec under Realtime
-    void (*Close)(ImGuiAppAVEncoder* self);
-    void (*Destroy)(ImGuiAppAVEncoder* self);
-    void* UserData; // provider state
+    bool        (*Open)(ImGuiAppAVEncoder* self, const ImGuiAppAVEncodeConfig* config);
+    bool        (*WriteFrame)(ImGuiAppAVEncoder* self, const ImGuiAppAVFrame* frame); // PTS from frame->FrameID.TimeSec under Realtime
+    void        (*Close)(ImGuiAppAVEncoder* self);
+    void        (*Destroy)(ImGuiAppAVEncoder* self);
+    void*       UserData; // provider state
 
-    ImGuiAppAVEncoder()
-    {
-        Name                = nullptr;
-        SupportsRealtimePts = false;
-        Open                = nullptr;
-        WriteFrame          = nullptr;
-        Close               = nullptr;
-        Destroy             = nullptr;
-        UserData            = nullptr;
-    }
+    ImGuiAppAVEncoder() { memset(this, 0, sizeof(*this)); }
 };
 
 // Reconstructed meta-stream header (magic "IMAVMETA", version, fps, start TSC + QPC Hz).
