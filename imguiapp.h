@@ -1117,25 +1117,25 @@ struct ImGuiInterfaceAdapter : Base, ImGuiInterfaceAdapterBase<PersistDataT, Tem
     virtual void OnInitialize(ImGuiApp* app) const override final
     {
         IM_ASSERT(_InstanceData != nullptr);
-        std::apply([=, this](DataDependencies*... dependencies) {OnInitialize(app, &_InstanceData->PersistData, dependencies...); }, GetAllDependencyData(app));
+        std::apply([=, this](DataDependencies*... dependencies) { OnInitialize(app, &_InstanceData->PersistData, dependencies...); }, GetAllDependencyData(app));
     }
 
     virtual void OnShutdown(ImGuiApp*, PersistDataT*, const DataDependencies*...) const override {}
     virtual void OnShutdown(ImGuiApp* app) const override final
     {
-        std::apply([=, this](DataDependencies*... dependencies) {OnShutdown(app, &_InstanceData->PersistData, dependencies...); }, GetAllDependencyData(app));
+        std::apply([=, this](DataDependencies*... dependencies) { OnShutdown(app, &_InstanceData->PersistData, dependencies...); }, GetAllDependencyData(app));
     }
 
     virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*, const PersistDataT*, const TempDataT*, const DataDependencies*...) const override {}
     virtual void OnGetCommand(const ImGuiApp* app, ImGuiAppCommand* cmd) const override final
     {
-        std::apply([=, this](DataDependencies*... dependencies) {OnGetCommand(app, cmd, &_InstanceData->PersistData, &_InstanceData->TempData, dependencies...); }, GetAllDependencyData(app));
+        std::apply([=, this](DataDependencies*... dependencies) { OnGetCommand(app, cmd, &_InstanceData->PersistData, &_InstanceData->TempData, dependencies...); }, GetAllDependencyData(app));
     }
 
     virtual void OnUpdate(float, PersistDataT*, const TempDataT*, const TempDataT*, const DataDependencies*...) const override {}
     virtual void OnUpdate(const ImGuiApp* app, float dt) const override final
     {
-        std::apply([=, this](DataDependencies*... dependencies) {OnUpdate(dt, &_InstanceData->PersistData, &_InstanceData->TempData, &_InstanceData->LastTempData, dependencies...); }, GetAllDependencyData(app));
+        std::apply([=, this](DataDependencies*... dependencies) { OnUpdate(dt, &_InstanceData->PersistData, &_InstanceData->TempData, &_InstanceData->LastTempData, dependencies...); }, GetAllDependencyData(app));
         _InstanceData->LastTempData = _InstanceData->TempData;
     }
 
@@ -1143,7 +1143,7 @@ struct ImGuiInterfaceAdapter : Base, ImGuiInterfaceAdapterBase<PersistDataT, Tem
     virtual void OnRender(const ImGuiApp* app) const override final
     {
         _InstanceData->TempData = {};
-        std::apply([=, this](DataDependencies*... dependencies) {OnRender(&_InstanceData->PersistData, &_InstanceData->TempData, dependencies...); }, GetAllDependencyData(app));
+        std::apply([=, this](DataDependencies*... dependencies) { OnRender(&_InstanceData->PersistData, &_InstanceData->TempData, dependencies...); }, GetAllDependencyData(app));
     }
 };
 
