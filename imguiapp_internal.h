@@ -2193,6 +2193,25 @@ namespace ImGui
   // at font-init; null leaves the inspector on the UI font. (Was in imguiapp.h; tool-coupled.)
   IMGUI_API void SetAppCodeFont(::ImGuiAppGraph* g, ImFont* font);
 
+  // Composer introspection accessors (relocated from imguiapp.h; tool-coupled, "exposed for tests").
+  // App-time transport (F29): number of state snapshots the running composer has recorded of its
+  // snapshottable controls (0 = none). Drives the toolbar scrubber; exposed for the headless scrub test.
+  IMGUI_API int AppComposerAppTimeFrames(ImGuiApp* host);
+
+  // App-time transport source (F63): ImGuiAppTransportSource_ (LiveRing vs FileRun). Exposed for tests.
+  IMGUI_API int AppComposerTransportSource(ImGuiApp* host);
+
+  // Tick shown by the FILE-mode transport (F63): the decoded frame's tick at the current scrub index
+  // (0 when no recorded run is open). Exposed for the scrub-to-tick acceptance.
+  IMGUI_API ImU64 AppComposerFileRunShownTick(ImGuiApp* host);
+
+  // Composer outliner column width (F32): >0 shown, 0 hidden. Exposed for the status-bar zone test.
+  IMGUI_API float AppComposerOutlinerWidth(ImGuiApp* host);
+
+  // Composer layout-preset visibilities (F36): bitmask tree(1)|insp(2)|code(4)|live(8). Exposed for the
+  // preset-switch test; a Compose/Review/Observe pick sets a fixed combination.
+  IMGUI_API int AppComposerLayoutFlags(ImGuiApp* host);
+
   //---------------------------------------------------------------------------
   // F68 preview SURFACE + brushing (relocated from imguiapp_preview.h, Phase A3). Definitions live in
   // imguiapp_preview.cpp under the same IMGUIX_DISABLE_TOOLS guard.

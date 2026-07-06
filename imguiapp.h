@@ -17,6 +17,7 @@ Index of this file:
 #include "imgui.h" 										    // IMGUI_API, ImGuiID, ImGuiStorage, ImBitArray, ImGuiTextIndex, ImChunkStream
 #include "imgui_internal.h"               // ImStrncpy
 #include "imapp_config.h"
+#include "imguiapp_static.h"              // ImFuncSig/IM_LABEL_SIZE/ImParseType* macros + ImGuiStatic<>/ImGuiType<>/GenerateLabel
 
 // Keep VERSION and VERSION_NUM in sync.
 #define IMGUI_APPLAYER_VERSION      "0.4.1"
@@ -240,110 +241,12 @@ IMGUI_API const ImGuiAppPlatformBackend* ImGuiApp_GetPlatformBackend();
 // [SECTION] Compile-time helpers (ImGuiStatic<>, ImGuiType<>)
 //-----------------------------------------------------------------------------
 
-#ifndef ImFuncSig
-#ifdef _MSC_VER
-#define ImFuncSig __FUNCSIG__
-#else
-#define ImFuncSig __PRETTY_FUNCTION__
-#endif 
-#endif 
-
-#ifndef IM_LABEL_SIZE
-#define IM_LABEL_SIZE 256
-#endif 
-
-#ifndef ImParseTypeStart
-#ifdef _MSC_VER
-#define ImParseTypeStart "::"
-#define ImParseTypeStart2 " "
-#else
-#define ImParseTypeStart '='
-#endif 
-#endif 
-
-#ifndef ImParseTypeStart2
-#define ImParseTypeStart2 ImParseTypeStart
-#endif
-
-#ifndef ImParseTypeEnd
-#ifdef _MSC_VER
-#define ImParseTypeEnd ">"
-#else
-#define ImParseTypeEnd ']'
-#endif 
-#endif 
-
+// The ImFuncSig / IM_LABEL_SIZE / ImParseType* macros + ImGuiStatic<> / ImGuiType<> / GenerateLabel moved
+// to imguiapp_static.h (leaf compile-time type-identity layer, included at the top of this file).
 
 struct ImGuiInterface { char Label[IM_LABEL_SIZE] = {}; ImGuiInterface() = default; virtual ~ImGuiInterface() = default; };
 
-template <typename T>
-struct ImGuiStatic
-{
-  inline static constexpr const char*      _FunctionSignature()                { return ImFuncSig; }
-  inline static constexpr bool             _StartsWith(std::string_view sv, std::string_view prefix) { return sv.size() >= prefix.size() && sv.substr(0, prefix.size()) == prefix; }
-  inline static constexpr std::string_view _StripTypeKeyword(std::string_view sv)
-  {
-    return _StartsWith(sv, "struct ") ? sv.substr(7) :
-           _StartsWith(sv, "class ")  ? sv.substr(6) :
-           _StartsWith(sv, "enum ")   ? sv.substr(5) :
-           _StartsWith(sv, "union ")  ? sv.substr(6) : sv;
-  }
-  inline static constexpr std::string_view _StripDisplayScope(std::string_view sv)
-  {
-    sv = _StripTypeKeyword(sv);
-    size_t scope = sv.rfind("::");
-    return _StripTypeKeyword(scope == std::string_view::npos ? sv : sv.substr(scope + 2));
-  }
-  inline static constexpr std::string_view _ParseType(std::string_view sv)
-  {
-    constexpr std::string_view clang_marker = "T = ";
-    size_t start = sv.find(clang_marker);
-    if (start != std::string_view::npos)
-    {
-      start += clang_marker.size();
-      size_t end = sv.find(';', start);
-      size_t bracket_end = sv.find(']', start);
-      if (end == std::string_view::npos || (bracket_end != std::string_view::npos && bracket_end < end))
-        end = bracket_end;
-      if (end == std::string_view::npos)
-        end = sv.size();
-      return _StripDisplayScope(sv.substr(start, end - start));
-    }
-
-    constexpr std::string_view msvc_marker = "ImGuiStatic<";
-    start = sv.find(msvc_marker);
-    if (start != std::string_view::npos)
-    {
-      start += msvc_marker.size();
-      size_t depth = 1;
-      for (size_t i = start; i < sv.size(); ++i)
-      {
-        if (sv[i] == '<')
-          ++depth;
-        else if (sv[i] == '>' && --depth == 0)
-          return _StripDisplayScope(sv.substr(start, i - start));
-      }
-    }
-
-    size_t end = sv.rfind(ImParseTypeEnd);
-    auto sv2 = sv.substr(0, end);
-    start = (sv2.rfind(ImParseTypeStart) > sv2.rfind(ImParseTypeStart2)) ? sv2.rfind(ImParseTypeStart) : sv2.rfind(ImParseTypeStart2);
-    start = start >= end ? 0 : start;
-    return _StripDisplayScope((sv.size() > end) && (end >= (start + 2)) ? sv.substr(start + 2, end - (start + 1)) : sv);
-  }
-  inline static constexpr ImGuiID          _ConstantHash(std::string_view sv)  { return *sv.data() ? static_cast<ImGuiID>(*sv.data()) + 33 * _ConstantHash(sv.data() + 1) : 5381; }
-  inline static           ImGuiID          GetRelativeID()                     { std::call_once(_Initialized, []() { Count = 1; }); return Count++; }
-  static constexpr        std::string_view Name                                { _ParseType(_FunctionSignature()) };
-  static constexpr        ImGuiID          ID                                  { _ConstantHash(Name) };
-  inline static           int              Count;
-  inline static           std::once_flag   _Initialized;
-};
-
-template <typename T>
-using ImGuiType = ImGuiStatic<std::remove_cvref_t<std::remove_pointer_t<T>>>;
-
-template <typename T>
-inline static void GenerateLabel(char* label, size_t size) { std::string_view sv = ImGuiType<T>::Name; ImFormatString(label, size, "%.*s", (int)sv.size(), sv.data()); }
+// ImGuiStatic<> / ImGuiType<> / GenerateLabel now live in imguiapp_static.h (see the include near the top).
 
 // State-delta event helpers over (this frame, last frame): rising = started, falling = ended, changed = either.
 inline static bool ImAppRising (bool now, bool last) { return now && !last; }
@@ -520,23 +423,8 @@ namespace ImGui
   // state from inside its own render would mutate mid-frame).
   IMGUI_API void ShowAppLayerDemo(bool* p_open = nullptr, ImGuiApp* host = nullptr);
 
-  // App-time transport (F29): number of state snapshots the running composer has recorded of its
-  // snapshottable controls (0 = none). Drives the toolbar scrubber; exposed for the headless scrub test.
-  IMGUI_API int AppComposerAppTimeFrames(ImGuiApp* host);
-
-  // App-time transport source (F63): ImGuiAppTransportSource_ (LiveRing vs FileRun). Exposed for tests.
-  IMGUI_API int AppComposerTransportSource(ImGuiApp* host);
-
-  // Tick shown by the FILE-mode transport (F63): the decoded frame's tick at the current scrub index
-  // (0 when no recorded run is open). Exposed for the scrub-to-tick acceptance.
-  IMGUI_API ImU64 AppComposerFileRunShownTick(ImGuiApp* host);
-
-  // Composer outliner column width (F32): >0 shown, 0 hidden. Exposed for the status-bar zone test.
-  IMGUI_API float AppComposerOutlinerWidth(ImGuiApp* host);
-
-  // Composer layout-preset visibilities (F36): bitmask tree(1)|insp(2)|code(4)|live(8). Exposed for the
-  // preset-switch test; a Compose/Review/Observe pick sets a fixed combination.
-  IMGUI_API int AppComposerLayoutFlags(ImGuiApp* host);
+  // NOTE: the Composer introspection accessors (AppComposer*) moved to imguiapp_internal.h (tool-coupled,
+  // gated behind IMGUIX_DISABLE_TOOLS).
 
   // Push every Active (in-range) entry; returns the number pushed -- pop with PopStyleVar/PopStyleColor(count).
   IMGUI_API int PushAppStyleMods(const ImGuiAppStyleModDesc* mods, int count);
