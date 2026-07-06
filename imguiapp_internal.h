@@ -21,74 +21,17 @@
 
 
 
-//-----------------------------------------------------------------------------
-// [SECTION] Timing
-//-----------------------------------------------------------------------------
-
-// What time the video claims. A video is honest about realtime only under Realtime.
-typedef int ImGuiAppAVTimingMode;
-enum ImGuiAppAVTimingMode_
-{
-  ImGuiAppAVTimingMode_Auto = 0,   // follow the pacer: Fixed pacer -> Constant, else Realtime
-  ImGuiAppAVTimingMode_Constant,   // CFR: frame N plays at N/Fps (synthetic timeline; matches Fixed dt)
-  ImGuiAppAVTimingMode_Realtime,   // VFR: PTS = FrameID.TimeSec (wall clock; a 50ms hitch plays as 50ms)
-};
+// AV recording behavior types (ImGuiAppAVTimingMode, ImGuiAppAVEncodeConfig, ImGuiAppAVEncoder,
+// ImGuiAppAVMetaHeader, ImGuiAppRecordQueuePolicy, ImGuiAppRingConfig, ImGuiAppRecorder) moved to
+// imguiapp.h -- public so clients can drive recording.
 
 //-----------------------------------------------------------------------------
 // [SECTION] Frames + encoder seam
 //-----------------------------------------------------------------------------
 
-// One captured frame. Produced by the platform backend's CaptureFrame; consumed by an
-// encoder's WriteFrame. Pixels are valid only during the WriteFrame call.
-struct ImGuiAppAVFrame
-{
-  int             Width;
-  int             Height;
-  int             PitchBytes; // row stride; encoders must honor it
-  const void*     Pixels;     // RGBA8
-  ImGuiAppFrameID FrameID;
-  const void*     UserData;   // optional per-frame blob (meta stream record, never visible pixels)
-  int             UserDataSize;
+// ImGuiAppAVFrame (one captured frame) is defined in imguiapp.h (the CaptureFrame vtable references it).
 
-  ImGuiAppAVFrame() { Width = 0; Height = 0; PitchBytes = 0; Pixels = nullptr; UserData = nullptr; UserDataSize = 0; }
-};
-
-struct ImGuiAppAVEncodeConfig
-{
-  const char*          OutputPath;  // container path, or directory for sequence providers
-  float                Fps;         // Constant mode: the frame rate. Realtime mode: nominal rate hint only
-  ImGuiAppAVTimingMode Timing;
-  int                  Width;       // 0 = first frame's size (fixed thereafter; resize aborts recording)
-  int                  Height;
-  int                  BitrateKbps; // hint; lossless providers ignore
-                                    // Metadata lives IN the video: while recording, the meta record stream (40-byte
-                                    // header first, then framed records in emission order) is chunked across the frames'
-                                    // BOTTOM EmbedRows pixel rows as 4x4-pixel luma blocks (black 16 / white 235, read
-                                    // threshold 128 -- survives lossy encode). Per frame: u32 magic 'IMIL' |
-                                    // u32 chunk_size | chunk (the stream's next bytes, up to capacity) | u32 ImHashData
-                                    // checksum (CRC32c). Records self-describe, so reassembly is chunk concatenation in
-                                    // frame order; a large record (state snapshot) legitimately spans frames. The only
-                                    // loss mode is a corrupt frame, which truncates the stream at that point on read.
-                                    // Capacity per frame = floor(W/4) * floor(EmbedRows/4) / 8 - 12 bytes.
-  int                  EmbedRows;   // reserved bottom rows; multiple of 4
-
-  ImGuiAppAVEncodeConfig() { OutputPath = nullptr; Fps = 60.0f; Timing = ImGuiAppAVTimingMode_Auto; Width = 0; Height = 0; BitrateKbps = 0; EmbedRows = 32; }
-};
-
-// Encoder provider vtable. Implementations allocate themselves (Create* in their own
-// backends/imguiapp_impl_*.h header) and free themselves via Destroy.
-struct ImGuiAppAVEncoder
-{
-  const char* Name;
-  bool        SupportsRealtimePts; // provider can carry per-frame wall-clock PTS (true VFR)
-  bool (*Open)(ImGuiAppAVEncoder* self, const ImGuiAppAVEncodeConfig* config);
-  bool (*WriteFrame)(ImGuiAppAVEncoder* self, const ImGuiAppAVFrame* frame);   // PTS from frame->FrameID.TimeSec under Realtime
-  void (*Close)(ImGuiAppAVEncoder* self);
-  void (*Destroy)(ImGuiAppAVEncoder* self);
-  void* UserData;                    // provider state
-
-  ImGuiAppAVEncoder() { Name = nullptr; SupportsRealtimePts = false; Open = nullptr; WriteFrame = nullptr; Close = nullptr; Destroy = nullptr; UserData = nullptr; }
-};
+// ImGuiAppAVEncodeConfig + ImGuiAppAVEncoder moved to imguiapp.h (public AV recording behavior).
 
 
 //-----------------------------------------------------------------------------
@@ -131,43 +74,21 @@ enum ImGuiAppAVMetaRecordType_
   ImGuiAppAVMetaRecordType_AudioPcm,       // RESERVED: frame_index + sample format header + PCM chunk (no producer yet)
 };
 
-// Reconstructed meta-stream header (magic "IMAVMETA", version, fps, start TSC + QPC Hz).
-// Field-exact contract with the recorder + parsers; a version bump follows any change.
-struct ImGuiAppAVMetaHeader
-{
-  char  Magic[8]; // "IMAVMETA"
-  ImU32 Version;  // 1
-  float Fps;
-  ImU64 StartTsc;
-  ImU64 QpcHz;
-  ImU64 StartQpc;
-};
+// ImGuiAppAVMetaHeader moved to imguiapp.h (public AV recording behavior).
 
 //-----------------------------------------------------------------------------
 // [SECTION] Recorder
 //-----------------------------------------------------------------------------
 
-// Glue between the app, the platform backend's CaptureFrame, and one encoder.
-// WriteFrame runs on a single encoder thread behind a bounded queue.
-struct ImGuiAppRecorder;   // opaque
-struct ImGuiAppMetaRecorder;   // opaque; F70 meta-only export (no video), same TLV records
+// ImGuiAppRecordQueuePolicy, ImGuiAppRingConfig + the ImGuiAppRecorder definition moved to imguiapp.h.
 
-typedef int ImGuiAppRecordQueuePolicy;
-enum ImGuiAppRecordQueuePolicy_
+struct ImGuiAppMetaRecorder
 {
-  ImGuiAppRecordQueuePolicy_Block = 0,   // never drop (benchmarks/tests); app stalls when the queue is full
-  ImGuiAppRecordQueuePolicy_DropNewest,  // never stall (live capture); drops counted + WAL-logged
-};
+  ImGuiAppRecorder Rec;
+  ImVector<char>   Meta;        // the growing IMAVMETA buffer (header + framed records)
+  int              EmbedRows;   // declared strip depth carried in the Identity record
 
-// Always-on in-memory ring of the last N seconds (frames QOI-compressed on capture,
-// plus their meta records); the stream is chunked across the frames at dump time.
-struct ImGuiAppRingConfig
-{
-  float Seconds;     // ring span
-  int   MaxMemoryMB; // hard cap; oldest frames evicted when either bound binds
-  float Fps;         // <= 0 (default) = keep EVERY frame; > 0 = explicit subsample opt-out of the encode-every-frame contract
-
-  ImGuiAppRingConfig() { Seconds = 10.0f; MaxMemoryMB = 256; Fps = 0.0f; }
+  ImGuiAppMetaRecorder() { EmbedRows = 0; }
 };
 
 // Result of AppAVMetaVerify: the full integrity ladder recomputed from a reconstructed
@@ -475,11 +396,7 @@ handles raw array members such as char Label[128] correctly (one member each).
 //-----------------------------------------------------------------------------
 // [SECTION] Header mess
 //-----------------------------------------------------------------------------
-
-
-
-struct ImGuiCanvasState;                  // canvas engine state (imguiapp_canvas.h), opaque here
-
+struct ImGuiCanvasState;
 //-----------------------------------------------------------------------------
 // [SECTION] Reflection field helpers (VisitAppFields, DrawAppField, EditAppField)
 //-----------------------------------------------------------------------------
@@ -2138,6 +2055,249 @@ namespace ImGui
   IMGUI_API bool   CanvasMenuRequestWire(const ImGuiCanvasState* c, int* out_wire_id);
   IMGUI_API bool   CanvasMenuRequestEmpty(const ImGuiCanvasState* c, ImVec2* out_model_pos);
 }
+
+
+struct ImGuiCanvasNodeRec
+{
+  int    Id;
+  ImVec2 Pos;        // model units
+  ImVec2 Size;       // model units, measured same-frame at submission
+  ImU32  TitleColor; // 0 = style default
+  char   Title[64];
+  char   KindTag[24];  // muted right-aligned title-bar tag (the node's kind word); empty = none
+  char   Badge[16];    // small framed title-bar text after the name; empty = none
+  ImU32  OriginDot;    // leading title-bar dot color; 0 = none
+  bool   DotRing;      // origin dot drawn as a ring instead of filled
+  float  Rounding;     // corner rounding in MODEL units; < 0 = style default
+  float  FixedWidth;   // normalized plate width in MODEL units; <= 0 = content-sized
+  float  NeededW;      // content-derived width need (MODEL units), measured before FixedWidth applies
+  int    HeaderRule;   // rule under the title band: 0 none, 1 solid, 2 dashed
+  ImU32  HeaderRuleColor;
+  int    StripeSide;   // ImGuiCanvasPinSide_ of an edge stripe; -1 = none
+  ImU32  StripeColor;
+  float  StripeThick;  // stripe thickness, MODEL units
+  float  Alpha;        // plate + content opacity multiplier (disabled look); 1 = normal
+  bool   Draggable;
+  bool   Solid;      // cannot be dragged into overlap with other Solid nodes (slide to contact)
+  int    LastFrame;  // ImGui frame count of the last submission (cull/hit bookkeeping)
+};
+
+struct ImGuiCanvasPinRec
+{
+  int    Id;
+  int    NodeId;
+  int    Kind;       // ImGuiCanvasPin_In / _Out (interaction role)
+  int    Side;       // ImGuiCanvasPinSide_ (which node edge; Left/Right = data, Top/Bottom = containment)
+  int    Shape;      // circle (data) / square (containment)
+  ImU32  Color;      // 0 = style (by shape); set via CanvasNextPinColor
+  ImVec2 Anchor;     // MODEL units: pin center at the node edge, row-centered
+  int    LastFrame;
+  int    WiredCount; // wires touching this pin THIS frame (filled pin glyph)
+};
+
+struct ImGuiCanvasWireRec  // per-frame submission, rebuilt every frame
+{
+  int   Id;
+  int   PinA;
+  int   PinB;
+  ImU32 Color;  // 0 = style
+  bool  Dashed; // optional dependency: dashed body (form carrier; dimming is the color coat)
+};
+
+enum ImGuiCanvasInteraction_
+{
+  ImGuiCanvasInteraction_None = 0,
+  ImGuiCanvasInteraction_Pan,
+  ImGuiCanvasInteraction_DragNodes,
+  ImGuiCanvasInteraction_DragWire,      // from FromPin; release on a pin = created, on empty = dropped
+  ImGuiCanvasInteraction_MenuPending,   // RMB down, not yet travelled: release = menu, travel = pan
+};
+
+struct ImGuiCanvasState
+{
+  ImGuiCanvasStyle Style;
+  ImGuiCanvasIO    IO;
+
+  // Camera
+  ImVec2 Pan;
+  float  Zoom;
+  float  FontRatio; // host font scale (DPI * user scale) captured at CanvasBegin; geometry scale = Zoom * FontRatio
+
+  // Nodes
+  ImVector<ImGuiCanvasNodeRec> Nodes;
+  ImGuiStorage                 NodeIdx;        // id -> index + 1
+  ImVector<int>                SubmitOrder;    // last frame's submission order (z-order; hit-test walks it backward)
+  ImVector<int>                SubmitOrderNow; // rebuilt during the current frame
+
+  // Pins + wires
+  ImVector<ImGuiCanvasPinRec>  Pins;
+  ImGuiStorage                 PinIdx;      // id -> index + 1
+  ImVector<ImGuiCanvasWireRec> Wires;       // rebuilt per frame between CanvasBegin/End
+  ImVector<ImGuiCanvasWireRec> WiresPrev;   // last frame's wires: press decisions run at CanvasBegin
+  ImVector<int>                CurNodePins; // pin indices submitted inside the current node (anchor.x resolves at EndNode)
+
+  // Host-declared solid regions (model units, x0 y0 x1 y1): obstacles for solid-node drags.
+  // Submitted between Begin/End, consumed by the NEXT frame's drag FSM -- the same T+1 posture
+  // as the node geometry the drag itself runs on.
+  ImVector<ImVec4> SolidRects;
+  ImVector<ImVec4> SolidRectsPrev;
+
+  // Selection + hover
+  ImVector<int> Selection;
+  int           HoveredNode;  // resolved against current camera + model geometry
+  int           HoveredPin;   // resolved in CanvasEnd (needs this frame's wires/pins); -1 = none
+  int           HoveredWire;
+  int           SelectedWire; // single wire selection (click); -1 = none
+
+  // Per-frame canvas geometry
+  ImVec2             Origin;   // canvas child top-left (screen)
+  ImVec2             CanvasSize;
+  ImDrawList*        DrawList;
+  ImDrawListSplitter Splitter; // ch0 = grid + wires, ch1 = node plates, ch2 = node content
+  bool               InsideCanvas;
+
+  // Submission intent -- this canvas's per-frame TempData: latched by the CanvasNext* calls,
+  // consumed by the next Begin*, reset there. Per instance, never file scope.
+  int    CurNode;       // index into Nodes during Begin/EndNode, -1 otherwise
+  ImVec2 CurNodeScreen; // this frame's screen pos of the node origin
+  int    CurPin;        // index into Pins during Begin/EndPin, -1 otherwise
+  float  CurPinY0;      // row top at CanvasBeginPin (row center resolves at EndPin)
+  char   NextTitle[64];
+  ImU32  NextTitleColor;
+  char   NextTitleTag[24];
+  char   NextBadge[16];
+  ImU32  NextOriginDot;
+  bool   NextDotRing;
+  float  NextRounding;      // model units; < 0 = style default
+  float  NextFixedWidth;    // model units; <= 0 = content-sized
+  int    NextHeaderRule;    // 0 none, 1 solid, 2 dashed
+  ImU32  NextHeaderRuleColor;
+  int    NextStripeSide;    // ImGuiCanvasPinSide_; -1 none
+  ImU32  NextStripeColor;
+  float  NextStripeThick;   // model units
+  float  NextAlpha;         // plate + content opacity multiplier; 1 = normal
+  ImU32  NextPinColor;
+  int    NextPinSide;       // -1 -> derive from Kind (In->Left, Out->Right)
+  char*  NextEditBuf;
+  int    NextEditBufSize;
+  bool*  NextEditFlag;
+  bool   NextWireDashed;
+
+  // Interaction FSM
+  int              Interaction;
+  ImVec2           GestureStartMouse;
+  ImVec2           GestureStartPan;
+  ImVector<ImVec2> DragStartPos;    // model pos of each selected node at drag start
+  ImVector<int>    DragNodes;
+  ImVec2           DragAppliedDisp; // solid drags: displacement actually granted so far (greedy catch-up)
+  int              DragWireFromPin; // DragWire: the fixed end
+
+  // Rename hook: per-frame pointers captured by CanvasNextNodeTitleEditable (host-owned storage).
+  char* EditBuf;
+  int   EditBufSize;
+  bool* EditFlag;
+  int   EditNodeIdx;
+  bool  EditFocusPending;
+  int   LastEditingNodeId; // focus-once tracking across frames
+
+  // Minimap
+  bool   MiniMapReq;
+  float  MiniMapFraction;
+  ImVec2 MiniRectMin;    // background rect incl. padding ring (screen); the FSM keeps out of it
+  ImVec2 MiniRectMax;
+  ImVec2 MiniContentMin; // content rect origin (screen); the mapping's anchor
+  ImVec2 MiniModelMin;   // content bounds min (model); the mapping's other anchor
+  float  MiniScale;      // model units -> minimap pixels
+
+  // Latched events (valid from CanvasEnd until the next CanvasBegin)
+  bool   NodeDblClickReq;
+  int    NodeDblClickId;
+  bool   MenuNodeReq;
+  int    MenuNodeId;
+  bool   MenuWireReq;
+  int    MenuWireId;
+  bool   MenuEmptyReq;
+  ImVec2 MenuEmptyModel;
+  bool   WireCreatedReq;
+  int    CreatedPinA;
+  int    CreatedPinB;
+  bool   WireDroppedReq;
+  int    DroppedFromPin;
+  ImVec2 DroppedModel;
+  bool   WireDetachedReq;
+  int    DetachedWireId;
+  int    DetachedGrabbedPin;
+
+  ImGuiCanvasState()
+  {
+    memset(&Style, 0, sizeof(Style));   // colors filled by CanvasStyleFromTheme in CanvasCreate
+    Style.GridSpacing     = 24.0f;
+    Style.NodeRounding    = 4.0f;
+    Style.NodePadding     = ImVec2(8.0f, 6.0f);
+    Style.NodeBorder      = 1.0f;
+    Style.WireThickness   = 2.5f;
+    Style.PinRadius       = 4.0f;
+    Style.PinHoverRadius  = 8.0f;
+    Style.GridLines       = true;
+    Style.GridSnap        = false;
+
+    IO.LmbPansEmptyCanvas = true;
+    IO.RmbPans            = true;
+    IO.WheelZooms         = true;
+    IO.ZoomMin            = 0.3f;
+    IO.ZoomMax            = 2.5f;
+
+    Pan               = ImVec2(0.0f, 0.0f);
+    Zoom              = 1.0f;
+    FontRatio         = 1.0f;
+    HoveredNode = HoveredPin = HoveredWire = SelectedWire = -1;
+    Origin = CanvasSize = ImVec2(0.0f, 0.0f);
+    DrawList          = nullptr;
+    InsideCanvas      = false;
+    CurNode           = -1;
+    CurNodeScreen     = ImVec2(0.0f, 0.0f);
+    CurPin            = -1;
+    CurPinY0          = 0.0f;
+    NextTitle[0]      = 0;
+    NextTitleColor    = 0;
+    NextTitleTag[0]   = 0;
+    NextBadge[0]      = 0;
+    NextOriginDot     = 0;
+    NextDotRing       = false;
+    NextRounding      = -1.0f;
+    NextFixedWidth    = -1.0f;
+    NextHeaderRule    = 0;
+    NextHeaderRuleColor = 0;
+    NextStripeSide    = -1;
+    NextStripeColor   = 0;
+    NextStripeThick   = 0.0f;
+    NextAlpha         = 1.0f;
+    NextPinColor      = 0;
+    NextPinSide       = -1;
+    NextEditBuf       = nullptr;
+    NextEditBufSize   = 0;
+    NextEditFlag      = nullptr;
+    NextWireDashed    = false;
+    Interaction       = ImGuiCanvasInteraction_None;
+    GestureStartMouse = GestureStartPan = ImVec2(0.0f, 0.0f);
+    DragWireFromPin   = -1;
+    EditBuf = nullptr; EditBufSize = 0; EditFlag = nullptr; EditNodeIdx = -1; EditFocusPending = false;
+    LastEditingNodeId = -1;
+    MiniMapReq        = false;
+    MiniMapFraction   = 0.2f;
+    MiniRectMin = MiniRectMax = ImVec2(0.0f, 0.0f);
+    MiniContentMin = MiniModelMin = ImVec2(0.0f, 0.0f);
+    MiniScale         = 0.0f;
+    NodeDblClickReq = false; NodeDblClickId = -1;
+    MenuNodeReq = MenuWireReq = MenuEmptyReq = false;
+    MenuNodeId = MenuWireId = -1;
+    MenuEmptyModel    = ImVec2(0.0f, 0.0f);
+    WireCreatedReq = WireDroppedReq = WireDetachedReq = false;
+    CreatedPinA = CreatedPinB = DroppedFromPin = DetachedWireId = DetachedGrabbedPin = -1;
+    DroppedModel      = ImVec2(0.0f, 0.0f);
+  }
+};
+
 
   //=============== DLL preview surface (folded from imguiapp_preview_dll.h, Phase A4) ===============
 struct ImGuiAppPreviewDll;   // opaque per-document session (heap, no TU globals)
