@@ -1,131 +1,110 @@
 # Feature Checklist (v2 — post-100)
 
-Forward work items, one deliverable + acceptance gate each, detailed to the file / struct / function /
-test level. The completed F01–F78.5 series is in [archive/feature-complete-checklist.md](archive/feature-complete-checklist.md)
-(closure: [feature-audit-2026-07-05.md](feature-audit-2026-07-05.md)). "Green" = imguix-tests +
-imguix-core-tests + imguix-headless-verify. Build: `cmake --build build/vs2026 --config Release --target
-imguix-tests imguix-core-tests imguix-headless-verify`. Naming: `AppXxx` free functions live in
-`namespace ImGui`; graph-model types are aggregates (no ctors); tests are `stepNN_*` / `canvas_*` (nodes),
-`Test_*` (core), `composer_*` (headless).
+Forward work, detailed to the file / struct / function / test level. The completed F01–F78.5 series is in
+[archive/feature-complete-checklist.md](archive/feature-complete-checklist.md) (closure:
+[feature-audit-2026-07-05.md](feature-audit-2026-07-05.md)). Design-first for high-blast-radius phases
+(matching how F53/F61/F66/F76 gated code on a doc). "Green" = imguix-tests + imguix-core-tests +
+imguix-headless-verify (`cmake --build build/vs2026 --config Release --target imguix-tests imguix-core-tests
+imguix-headless-verify`). Naming: `AppXxx` free functions in `namespace ImGui`; graph-model types are
+aggregates (no ctors); tests `stepNN_*`/`canvas_*` (nodes), `Test_*` (core), `composer_*` (headless).
 
-## V1 — see the DLL preview live in-panel  (DONE)
+The v2 arc, in order (later phases gated on earlier): **A** lean/mean split → **B** embed control source +
+real-code presence + write-back fold → **C** refactor toward the imgui.h canonical schema → **D** UI
+design-language canon + HTML help + bug-button → **E** phase-coherence re-audit/hardening → full UI redesign.
 
-- [x] **V1 DLL preview in-panel render** — the F78 copy-marshalling preview compiles + runs real code but
-  renders in the module's OWN `ImGuiContext` (headless, no GPU); its frame must cross the C-ABI as bytes and
-  display in the Composer's Preview panel. Closes the F78/F78.5 in-panel residual.
-  - **Emitted module ABI** (`GenerateAppPreviewModuleCode`, `imguix/imguiapp/imguiapp_nodes.cpp`): add an
-    `extern "C" __declspec(dllexport) int ImGuiAppPreview_CopyFrame(void* h, unsigned char* rgba, int cap,
-    int* out_w, int* out_h)` alongside `_Create/_Destroy/_Tick/_CopyIn/_CopyOut/_ABI`; keep it additive so
-    the codegen corpus (`ProofDrift`/`ProofControlDrift`) stays byte-identical for bodyless graphs.
-  - **Offscreen render in the module** (preferred): reuse the offscreen render+readback the harness uses —
-    grep `tests/imguiapp_headless_verify.cpp` + `imguix/imguiapp/backends/` (the vulkan offscreen +
-    `imguiapp_impl_qoi`); `_Create` sizes an offscreen target, `_Tick` renders the DLL's `ImDrawData` into
-    it, `_CopyFrame` reads the RGBA back. Fallback: serialize `ImDrawData` + font atlas across and replay
-    into the panel draw list with a TexID remap.
-  - **Session** (`ImGuiAppPreviewDll`, `imguix/imguiapp/imguiapp_preview_dll.{h,cpp}`): add
-    `AppPreviewDllCopyFrame(session, rgba, cap, &w, &h)` forwarding to the module proc.
-  - **Display** (`imguix/imguiapp/imguiapp_demo.cpp`, the `"Preview"` `BeginTabItem` ~line 2692): when a
-    toolset exists + DLL backend active, upload the frame as an `ImTextureData` and `ImGui::Image()` it in
-    the panel — the same texture path F63 uses for decoded run frames; else keep the interpreter surface
-    (`AppPreviewCreate`/`AppPreviewFrame`) as the fallback.
-  - **State**: on `ImGuiAppEditorState` (no TU globals). Preview-tab backend toggle: DLL when
-    `AppPreviewDllToolsetAvailable()`, interpreter otherwise.
-  *Accept: a headless core test (skip-with-note without a toolset) builds a one-control graph with a visible
-  widget (or a `MethodBody` OnRender drawing a filled rect), compiles+loads via the DLL backend, ticks,
-  `CopyFrame`s, and asserts the frame is NON-BLANK (a pixel differs from the clear colour). ProofDrift green.*
-  DONE: drawdata-serialization + host CPU-rasterization (offscreen-GPU-in-a-runtime-DLL rejected as heavy).
-  The emitted module gained three additive `extern "C"` exports (`ImGuiAppPreview_SetDisplaySize` /
-  `_CopyFontAtlas` / `_CopyDrawData`; ABI 20260705->20260706, required at load so a stale DLL is refused);
-  after `_Tick` the host copies the DLL's `ImDrawData` + atlas out and `AppPreviewDllRasterizeFrame`
-  (`imguiapp_preview_dll.cpp`) fills a panel RGBA buffer, blitted via `ComposerUploadRgbaTexture` +
-  `ImGui::Image()` in the Preview panel (`imguiapp_demo.cpp`) behind an Interp/DLL toggle; interpreter stays
-  the fallback. `Test_dll_preview_inpanel_render` (core) asserts a non-blank frame. core 414/0, nodes
-  112/112, headless 31/31 + verify OK. Residual: host input forwarding (DLL-backend widgets not yet
-  interactive in-panel) + the method-body authoring UI.
+## Done since 100%
 
-## V2 — author control method bodies in-app
+- [x] **V0 DLL preview in-panel render** — the compiled DLL app's frame renders inside the Composer Preview
+  panel, closing the F78/F78.5 "see it live" residual. Drawdata-serialization + host CPU-rasterization: the
+  emitted module gained three additive `extern "C"` exports (`ImGuiAppPreview_SetDisplaySize` /
+  `_CopyFontAtlas` / `_CopyDrawData`; ABI `20260705→20260706`, required at load); after `_Tick` the host
+  copies `ImDrawData` + atlas out and `AppPreviewDllRasterizeFrame` (`imguiapp_preview_dll.cpp`) fills a
+  panel RGBA buffer, blitted via `ComposerUploadRgbaTexture` + `ImGui::Image()` (`imguiapp_demo.cpp`) behind
+  an Interp/DLL toggle. `Test_dll_preview_inpanel_render` (core). core 414/0, nodes 112/112, headless 31/31.
+  Residual → folds into B: host input forwarding (DLL widgets not yet interactive in-panel).
 
-- [ ] **V2 method-body editor** — F78.5 stores + compiles hand-written bodies
-  (`ImGuiAppNodeDraft::MethodBody[ImGuiAppControlMethod_COUNT][IMGUIAPP_CONTROL_BODY_MAX]`,
-  `imguix/imguiapp/imguiapp_nodes.h`) with no UI. Add the authoring surface + wire the reload.
-  - **Inspector section** (`imguix/imguiapp/imguiapp_nodes.cpp`, near `EditAppControlEvents` /
-    `EditAppNodeFieldSection`): a collapsible "Code" section on a design Control with one multiline
-    `ImGui::InputTextMultiline` per `ImGuiAppControlMethod_` (`###body_<method>`), writing into
-    `Draft.MethodBody[m]`. Section-collapse persistence via the `AppInspectorSection` `persist_seed` idiom.
-  - **Reload**: an edit bumps the doc dirty bit; the Preview tab calls `AppPreviewDllReload(session, graph,
-    err, sz)` (already preserves Persist by copy) so the new body runs next frame with state kept.
-  - **Interpreter reflection**: `imguix/imguiapp/imguiapp_preview.cpp` should mark a control carrying any
-    non-empty `MethodBody` as REFLECTED (field-widget card + "runs in the DLL preview / after Generate")
-    rather than interpreting it — per previewer-design.md §9.
-  *Accept: `stepNN_method_body_editor` (nodes) types C++ into the OnRender field and asserts it lands in
-  `Draft.MethodBody` + round-trips (save/load model-equal via the archived `AppGraphModelEqual` extension);
-  a headless test rewires a body and asserts the DLL preview reflects it next frame without losing state.*
+## A — "lean & mean" split + opt-out  (design-first: `lean-tools-split-design.md`)
 
-## V3 — Lifecycle view (north-star authoring surface)
+- [ ] **A. imguiapp_internal.h + `IMGUIX_DISABLE_TOOLS`** — carve a clean core/tool boundary so a release
+  build can compile the authoring tools out entirely (true lean release; side benefit: no source-code text
+  baked into the `.exe`).
+  - **New `imguiapp_internal.h`** (analog of `imgui_internal.h`): the INTERFACES of the Composer, Previewer,
+    Debugger, canvas, and nodes fold here (today they live across `imguiapp_nodes.h` / public headers). The
+    always-on runtime API stays in `imguiapp.h`.
+  - **`IMGUIX_DISABLE_TOOLS`** in `imguiapp_config.h` (imconfig analog): ONE master switch (not per-tool).
+    Defined → the tools compile to nothing.
+  - **Gate the tool TUs**: `imguiapp_nodes.cpp`, `imguiapp_canvas.cpp`, `imguiapp_preview.cpp`,
+    `imguiapp_preview_dll.cpp`, `imguiapp_demo.cpp` (+ `imguiapp_av.cpp`/`imguiapp_qoi.cpp` if tool-only) wrap
+    their bodies in `#ifndef IMGUIX_DISABLE_TOOLS` so the file compiles empty when disabled. Keep the per-topic
+    `.cpp` split (imgui precedent: `imgui.cpp`/`imgui_draw.cpp`/`imgui_widgets.cpp`/… — NOT one blob); do NOT
+    introduce `imguiapp_widgets.cpp`, keep `imguiapp_canvas.cpp` + `imguiapp_nodes.cpp` as-is.
+  - **`imguiapp.cpp`** stays the always-on core runtime (app / layers / controls / storage / `ImGuiAppStateHistory`).
+  - **CMake** (`imguix/CMakeLists.txt`): the tool sources still listed (they self-empty under the macro); a
+    lean-release option surfaces `IMGUIX_DISABLE_TOOLS`.
+  *Accept: a normal build stays green (nodes/core/headless unchanged); a `-DIMGUIX_DISABLE_TOOLS` build
+  compiles + links the host with zero tool symbols and no control/source strings in the binary; document the
+  core/tool boundary in the design doc.*
 
-- [ ] **V3 lifecycle chart** — the Composer root as a generated, editable lifecycle chart of the user's app
-  (Unity execution-order model, upgraded to an authoring surface).
-  - **Substrate** (exists): `ImGuiAppScopeOrder` + `ImGuiAppGraph::ScopeOrders` + `AppScopeSequenceIds` /
-    `AppScopeApplyAuthoredOrder` (F58) are the order model; `AppRebuildUpdateOrder` (`imguiapp.cpp`) is the
-    live per-control OnUpdate order; `AppScopeOrderMoveMember` / `AppScopeOrderNudge` are the write verbs.
-  - **Render** (new, e.g. `imguix/imguiapp/imguiapp_lifecycle.cpp` or a canvas mode): one vertical spine =
-    the frame with a loop-back edge; the five core layers (`ImGuiAppLayerType_Task/Command/Status/Layout/
-    Display`) as labeled bands bracketed by Initialization (push order) + Decommissioning (reverse pop);
-    per-control `OnUpdate(dt,temp,last_temp)` slots inside the Task band in dependency order; grey
-    framework-internal rows (`TempData = {}`, `LastTemp = Temp`); the one-frame skew arrow.
-  - **Editable**: dragging a slot calls `AppScopeOrderMoveMember`; codegen emits the new push order (F59).
-  *Accept: `composer_lifecycle_view` (headless) renders the bands + slots in `AppRebuildUpdateOrder` order and
-  a drag reorders a push (order record + emission change), core layers refuse reorder (`AppLayerIsCore`).*
+## B — embed control source + real-code presence + the write-back fold  (design-first: `source-embed-design.md`)
 
-## V4 — module interop
+- [ ] **B. real source, not fake skeletons** — with control source baked into the tools build, the Code tab
+  and debugger show the REAL function bodies (kill the perceived generated skeleton), and edits flow back to
+  disk. Gated on A's switch (lean build excludes it).
+  - **Embed scope (decided)**: the CONTROLS' source only (where F78.5 bodies + write-back live) — NOT the
+    framework or whole repo. Format (byte-array `.cpp` vs resource) + finer subset: B's doc.
+  - **Symbol→source index**: map a control / command / node → its real file + declaration + body span (the
+    lookup behind hover, the Code tab, and write-back).
+  - **Real-code presence**: Code tab shows the real body (vs generated); rich contextual presence — hover a
+    node/control → its actual source; the debugger shows real code at a tick; design-time preview references
+    real impls. (F78.5 hand-written bodies are already real; this generalizes to embedded control source.)
+  - **THE FINAL FOLD (write-back)**: edit a control's OnRender (F78.5) body → test live in the previewer/DLL
+    (V0) → the tool uses the source index to update the REAL file on disk at the mapped span. Inverse of the
+    F22–F24 import edge → full bidirectional source↔graph↔source. Tiers: (1) **method bodies** map to one
+    span, surgical replace — first target; (2) **structural** edits (field/dep/event) regenerate skeleton —
+    harder, later. Destructive → a **diff/confirm gate** before touching disk + index-staleness handling
+    (source edited outside the tool).
+  - Also folds V0's residual: forward host input into the DLL preview so in-panel widgets are interactive.
+  *Accept: (per B's doc) real control bodies render in the Code tab from the embedded index; a tested
+  method-body edit writes back to the real source at the correct span behind a diff/confirm; a headless test
+  drives the write-back + re-reads the file.*
 
-- [ ] **V4 module node + runtime exchange** — the layer model's full shape: independent modules (worker
-  threads / async IO / external processes) the Task layer ingests, the Command layer drives, the Status
-  layer publishes for.
-  - **Graph**: new `ImGuiAppNodeKind_Module` (append to the enum in `imguix/imguiapp/imguiapp_nodes.h`,
-    serialized as int — mind the F54/F57 enum-slot discipline); palette legality via
-    `AppScopeKindComposable`; ports for status-out / command-in.
-  - **Runtime** (`imguix/imguiapp/imguiapp.h`): a status/command exchange (e.g. `ImGuiAppModule` with a
-    thread-safe status snapshot + command inbox) the Task layer reads each frame.
-  - **Codegen**: emit the module bring-up + the Task-layer ingest.
-  *Accept: a compiled+run test — a module node's status reaches a consumer control and a command reaches the
-  module; F01/F05 cover the new records.*
+## C — refactor toward the imgui.h canonical schema  (design-first: `refactor-plan.md`)
 
-## V5 — status-layer model
+- [ ] **C. re-canonicalize structure + comments** — `imguiapp.h` drifted from the `imgui.h` spirit it
+  originally emulated (structure, ordering, comment discipline). Realign; pure structural, ZERO behavior change.
+  - **Target schema** = `imgui.h`'s: `[SECTION]` banners, fixed decl order (context → main API → config/style
+    → … → structs last), the public/internal split (now backed by A's `imguiapp_internal.h`), terse
+    behavior-stating comments.
+  - **Reorder** declarations in the headers + definitions in every `.cpp` to match; **consolidate/remove**
+    dead + duplicated code; **strip AI-written / narrative comments** (keep behavior/constraint only).
+  - **Reference** (OPEN fork): the "canonical" commit era to aim at — `git log` for the last point
+    `imguiapp.h` closely mirrored `imgui.h`; map the drift in `refactor-plan.md` before the big diff.
+  *Accept: all suites green + codegen corpus byte-identical after the reshuffle (behavior-neutral, F77-style);
+  the drift map + target section layout + comment/order rules land in the doc first.*
 
-- [ ] **V5 queryable status** — replace the status-bar strings with a published structure other modules +
-  the Composer read. New `ImGuiAppStatus` (published by the `ImGuiAppLayerType_Status` layer); `AppGetStatus`
-  accessor; the Composer's status chrome reads it instead of ad-hoc strings.
-  *Accept: a control publishes a status field and another reads it through the layer; a test asserts the
-  published value.*
+## D — UI design-language canon · HTML help · bug-button  (design-first per item)
 
-## V6 — command payloads
+- [ ] **D1. design-language canon** — formalize icon↔meaning + the standing idioms (no glyph buttons, fixed
+  metric columns, theme/DPI-invariant chrome, the F38 motion table) as a spec + likely a code-level
+  icon/semantic registry so usage can't drift.
+  *Accept: a design-language doc + (if built) a registry a test iterates for icon/semantic uniqueness.*
+- [ ] **D2. rich HTML help** — generated help. OPEN fork: source of truth (the F34 command registry +
+  node-kind/tooltip metadata → generated HTML) and embedded-in-tools (rides B) vs external artifact.
+  *Accept: generated HTML covers the command/verb + node-kind surface; regenerates from the registry.*
+- [ ] **D3. bug-button** — a toolbar toggle: ON records EVERYTHING (inputs + frames + state — the F61
+  container the harness already writes via `AppMetaRecordBegin`/`AppMetaRecordEnd`, `imguiapp_av.*`) until
+  toggled OFF; tag the segment with a typed description + metadata; save as a playable bug artifact the
+  playback debugger (F62–F65) opens. Encoding = ground truth of what happened. Rides existing AV/playback
+  rails → mostly a toggle + a description field + a save path + a small UI.
+  *Accept: `composer_bug_button` records a session, tags it, writes the container, and `AppRunOpen` reads it
+  back with the description metadata; scrub matches.*
 
-- [ ] **V6 command arguments** — commands are bare `ImGuiAppCommand` enums today (interim by intent).
-  Arguments belong in a queue. Add `ImGuiAppCommandQueue` (typed payloads) alongside the enum; extend
-  `OnGetCommand` / `OnExecuteCommand` (`imguix/imguiapp/imguiapp.h`) + codegen to carry a payload.
-  *Accept: a compiled+run test dispatches a command with an argument and the handler receives it; contract
-  suite (archived contracts 3/4: same-frame latch + dedup) extended for payload identity.*
+## E — phase-coherence re-audit + hardening → full UI redesign  (final)
 
-## V7 — edit-intent bus
-
-- [ ] **V7 fold the doc-control escape hatch** — the composer doc-control's "const dependency that panels
-  mutate" is acknowledged tech debt (see the host command bus in `imguix/imguiapp/imguiapp_demo.cpp`). Once
-  V6 payloads exist, route panel edits as commands through the one dispatcher (sibling to the shipped
-  input→command binding, archived F74/F75: `AppGraphConsumeHostCommand` / the `Keymap`).
-  *Accept: a panel mutation flows as a payload command, no direct const-dep write; a test asserts the edit
-  applies via the command path.*
-
-## V8 — reliability + tracked residuals
-
-- [ ] **V8a step93 flake** — `step93_order_roundtrip` (nodes) is flaky (~1-in-2). Root-cause the `Order=`
-  path in `AppGraphDeserialize` (`imguix/imguiapp/imguiapp_nodes.cpp` ~line 13033) + the surrounding
-  `ImGuiAppScopeOrder` handling (F60 fixed one use-after-free; another nondeterminism remains).
-  *Accept: step93 green 100 consecutive runs.*
-- [ ] **V8b canvas/scope residuals** — the archived F47/F48 follow-ons: interactive Note resize handle +
-  per-note colour read (`ImGuiAppNodeKind_Note` / `NoteColor` / `AppDrawScopePortals` already exist);
-  outliner note ordering; heavier scope-chrome pixel-extent tests.
-  *Accept: each residual has a test; the note colour/resize round-trip.*
-- [ ] **V8c chrome test-debt** — the archived F40 low-value residuals (undo/redo/history clicks,
-  Diff-in-panel mode, theme desc tables).
-  *Accept: each has a click-path or draw-scan test.*
+- [ ] **E1. phase-coherence hardening** — re-audit `phase-coherence.md` after C reshuffles structure; consider
+  formalizing the coherence invariant as a TEST (not just an audit doc); enforce "no tolerance constant
+  without a named noise source."
+  *Accept: coherence re-audit doc updated; the invariant, where formalizable, is a green test.*
+- [ ] **E2. full UI redesign** — redesign the entire Composer UI once everything above is stable/final.
+  Deliberately open until then.
+  *Accept: TBD when E1 lands.*

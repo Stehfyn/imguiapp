@@ -14,22 +14,21 @@ animation / layout vocabulary, a playback debugger, a graph previewer (interpret
 live preview** that compiles + runs the real emitted program by copy-marshalling (imguix stays a static
 lib) — including hand-written control method bodies.
 
-## Post-100 horizon
+## Post-100 arc (A → E, in order)
 
-Sequenced roughly by how directly each closes a live-authoring gap. Per-item detail (files, structs,
-functions, acceptance) lives in [feature-complete-checklist.md](feature-complete-checklist.md) (v2).
+Each phase gates the next. Per-phase detail (files, structs, functions, decisions, acceptance) +
+design-first docs live in [feature-complete-checklist.md](feature-complete-checklist.md) (v2).
 
-1. **See the DLL preview live in-panel** — the compiled preview renders in its own context; get its frame
-   into the Composer's Preview panel.
-2. **Author method bodies in-app** — a control body editor over F78.5's compiled-body machinery.
-3. **Lifecycle view** — the north-star authoring surface: the frame as an editable lifecycle chart (rides
-   the sequence-order write path).
-4. **Module interop** — independent modules the Task layer ingests / Command layer drives / Status layer
-   publishes; a Source/Module node kind + a runtime exchange.
-5. **Status-layer model** — a queryable published-status structure replacing "the status bar".
-6. **Command payloads** — arguments in a queue, not bare enums.
-7. **Edit-intent bus** — fold the doc-control mutation escape hatch into the command pipeline.
-8. **Reliability residuals** — the `step93` order-loader flake + the tracked chrome/scope test-debt.
+- **Done:** DLL preview renders live in-panel (closes the F78/F78.5 "see it live" residual).
+- **A — lean & mean split.** `imguiapp_internal.h` for tool interfaces + one `IMGUIX_DISABLE_TOOLS` switch
+  that compiles the Composer/Previewer/Debugger out → true lean release, no source text in the `.exe`.
+- **B — embed control source.** Bake the controls' source into the tools build → show REAL function bodies
+  (not the fake generated skeleton) + rich contextual presence, and the "final fold": test a body change in
+  the previewer, then write it back to the real source on disk (full bidirectional source↔graph↔source).
+- **C — refactor to the imgui.h canonical schema.** Re-impose imgui.h's structure / ordering / comment
+  discipline across the headers + `.cpp`s; consolidate; strip AI comments. Pure structural, zero behavior.
+- **D — UI canon · HTML help · bug-button.** Formalize the design language (icon↔meaning); generate rich
+  HTML help; a bug-button that records a tagged, playable session over the existing AV/playback rails.
+- **E — phase-coherence re-audit + hardening → full UI redesign.** Only once everything above is stable.
 
 Principle held: a feature never dictates how the library links (why F77's shared-core split was reverted).
-Live debugging and module interop are the north; single-app authoring came first and is done.
