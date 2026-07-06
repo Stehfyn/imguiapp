@@ -25,25 +25,37 @@ design-language canon + HTML help + bug-button → **E** phase-coherence re-audi
 
 ## A — "lean & mean" split + opt-out  (design-first: `lean-tools-split-design.md`)
 
-- [ ] **A. imguiapp_internal.h + `IMGUIX_DISABLE_TOOLS`** — carve a clean core/tool boundary so a release
-  build can compile the authoring tools out entirely (true lean release; side benefit: no source-code text
-  baked into the `.exe`).
-  - **New `imguiapp_internal.h`** (analog of `imgui_internal.h`): the INTERFACES of the Composer, Previewer,
-    Debugger, canvas, and nodes fold here (today they live across `imguiapp_nodes.h` / public headers). The
-    always-on runtime API stays in `imguiapp.h`.
-  - **`IMGUIX_DISABLE_TOOLS`** in `imguiapp_config.h` (imconfig analog): ONE master switch (not per-tool).
-    Defined → the tools compile to nothing.
-  - **Gate the tool TUs**: `imguiapp_nodes.cpp`, `imguiapp_canvas.cpp`, `imguiapp_preview.cpp`,
-    `imguiapp_preview_dll.cpp`, `imguiapp_demo.cpp` (+ `imguiapp_av.cpp`/`imguiapp_qoi.cpp` if tool-only) wrap
-    their bodies in `#ifndef IMGUIX_DISABLE_TOOLS` so the file compiles empty when disabled. Keep the per-topic
-    `.cpp` split (imgui precedent: `imgui.cpp`/`imgui_draw.cpp`/`imgui_widgets.cpp`/… — NOT one blob); do NOT
-    introduce `imguiapp_widgets.cpp`, keep `imguiapp_canvas.cpp` + `imguiapp_nodes.cpp` as-is.
-  - **`imguiapp.cpp`** stays the always-on core runtime (app / layers / controls / storage / `ImGuiAppStateHistory`).
-  - **CMake** (`imguix/CMakeLists.txt`): the tool sources still listed (they self-empty under the macro); a
-    lean-release option surfaces `IMGUIX_DISABLE_TOOLS`.
-  *Accept: a normal build stays green (nodes/core/headless unchanged); a `-DIMGUIX_DISABLE_TOOLS` build
-  compiles + links the host with zero tool symbols and no control/source strings in the binary; document the
-  core/tool boundary in the design doc.*
+Ordered tasks (build order; each is one deliverable + one gate). Full rationale + the core/tool boundary +
+the Option-1 decision (internal.h always-available) are in the design doc. Keep the per-topic `.cpp` split
+(imgui precedent) — NO `imguiapp_widgets.cpp`; `imguiapp_canvas.cpp` + `imguiapp_nodes.cpp` stay separate.
+
+- [ ] **A1. `imguiapp_internal.h` (interface re-home)** — create it (the `imgui_internal.h` analog) and move
+  the tool interface declarations into it: from `imguiapp_nodes.h` / `imguiapp_canvas.h` / `imguiapp_preview.h`
+  / `imguiapp_preview_dll.h`, plus `imguiapp_anim.h` and the `imguiapp_av.h` recorder INTERFACE. The AV codec
+  (`imguiapp_qoi.*` + libav backend) stays OUT. `imguiapp.h` keeps only the always-on runtime API; tool `.cpp`s
+  + `imguiapp_demo.cpp` `#include "imguiapp_internal.h"`. `internal.h` is NOT gated (Option 1). Pure header
+  re-home, tools ON — no behavior change.
+  *Accept: nodes 112/112, core 409/0, headless 31/31 unchanged + codegen corpus byte-identical; `imguiapp.h`
+  no longer declares any tool API (grep).*
+- [ ] **A2. the switch + CMake option** — document `// #define IMGUIX_DISABLE_TOOLS` in `imguiapp_config.h`;
+  add CMake option `IMGUIX_ENABLE_TOOLS` (default ON) that, when OFF, appends `IMGUIX_DISABLE_TOOLS` to
+  `IMGUIX_COMPILE_DEFINITIONS` (`imguix/CMakeLists.txt`). Macro not yet consumed.
+  *Accept: default build unchanged + green; toggling the option flips the define (configure-time check).*
+- [ ] **A3. gate the tool impl TUs** — wrap the bodies of `imguiapp_nodes.cpp`, `imguiapp_canvas.cpp`,
+  `imguiapp_preview.cpp`, `imguiapp_preview_dll.cpp`, `imguiapp_demo.cpp` (+ `imguiapp_av.cpp`/`imguiapp_anim`
+  impl where tool-only) in `#ifndef IMGUIX_DISABLE_TOOLS … #endif` so each compiles to an empty object when
+  disabled (imgui's `IMGUI_DISABLE` pattern). The tools-ON path is byte-identical.
+  *Accept: tools-ON build green (unchanged); a spot-compile of a gated TU under the macro yields an empty
+  object (no symbols).*
+- [ ] **A4. sever core→tool references** — anything in the always-on core (`imguiapp.cpp` / `imguiapp.h` /
+  the minimal host) that calls a now-gated tool API must be relocated or guarded so a lean link has no
+  unresolved tool symbol. Surface them by attempting the lean link; fix by moving the caller into a tool TU
+  or guarding it.
+  *Accept: the lean configuration links with zero unresolved tool symbols pulled from core.*
+- [ ] **A5. lean build config + verify** — a CMake lean path (`-DIMGUIX_ENABLE_TOOLS=OFF`): the core library +
+  a minimal host, no composer/demo target. Build + link it.
+  *Accept: lean build compiles + links; a `strings` scan of the lean binary shows NO control/source/
+  generated-code text; the tools-ON suites still 112/409/31 green (both configs pass).*
 
 ## B — embed control source + real-code presence + the write-back fold  (design-first: `source-embed-design.md`)
 
