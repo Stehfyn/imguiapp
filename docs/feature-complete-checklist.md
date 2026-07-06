@@ -769,12 +769,27 @@ interpreter's vocabulary IS F53-F57's semantics.
 
 ## P10 — closure
 
-- [ ] **F71 flow tests** — one end-to-end headless test per roadmap flow 1-8:
+- [x] **F71 flow tests** — one end-to-end headless test per roadmap flow 1-8:
   `flow1_new_app`, `flow2_maintain_existing`, `flow3_self_roundtrip` (reuses F51's harness),
   `flow4_move_copy_anywhere`, `flow5_time_travel`, `flow6_vocabulary` (op chain + tween +
   region authored, generated, run), `flow7_preview_play` (author → play in the previewer, no
   generate), `flow8_playback_debug` (record → open → scrub → state matches).
   *Accept: all eight green.*
+  DONE (`tests/imguiapp_flow_tests.cpp` + `RunFlowTests`): all 8 flows land beside flow1/flow3 (F51) and
+  the F52 shell case. flow2 loads composer_self.txt (existing app), reads it read-only (signature
+  unchanged), promotes a window+control, regenerates + reloads byte-identical. flow4 stamps a prefab copy
+  then reparents it under a second window; AppGraphHistoryGoto(0) reproduces the pre-edit signature exactly
+  (undo restores exactly), redo the final. flow5 snapshots an accumulator app into ImGuiAppStateHistory,
+  scrubs back, and restore+replay reproduces the tail byte-for-byte. flow6 authors ONE composition with an
+  op chain gating a command + a Tween driving a field + a window docked via a Layout region; generate emits
+  all three (folded guard, PushAppControl<ImAppTween>, DockBuilderDockWindow) + round-trips. flow7 plays a
+  producer/consumer/event/command graph in the F67/F68 interpreter (no generate): value crosses the data
+  edge, the `^` edge fires once, the command dispatches once. flow8 records a controlled accumulator run to
+  an INTERIM in-memory ImAVMeta stream (mirrors F64BuildControlledRun in headless-verify -- swaps to F70's
+  live preview→container export at merge), AppRunOpen + AppRunStateAtTick scrub at a snapshot tick
+  (restore-only) and a replay tick (restore nearest + replay), matching the recorded hash + value; the
+  identity gate refuses a mismatched composition. core 362 checks / 0 failures. flows 1-7 are real;
+  flow8 is real against the interim serializer pending F70.
 - [ ] **F72 re-audit** — re-run the doc-claims audit; zero missing/partial not explicitly parked
   with a doc note; matrix published into feature-audit doc v2.
   *Accept: the re-audit IS 100%.*
