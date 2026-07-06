@@ -114,12 +114,50 @@ namespace ImGui
     IMGUI_API void        UpdateApp(ImGuiApp* app, float dt); // explicit dt (replay injects here)
     IMGUI_API void        RenderApp(const ImGuiApp* app);
 
+    // Composition: push/pop layers, windows, sidebars, controls (templates defined in the inline section below)
+    template <typename T>
+    IMGUI_API inline void PushAppLayer(ImGuiApp* app);
+    IMGUI_API void        PopAppLayer(ImGuiApp* app);
+
+    template <typename T>
+    inline void           PushAppSidebar(ImGuiApp* app, ImGuiViewport* vp, ImGuiDir dir, float size = 0.0f, ImGuiWindowFlags flags = 0);
+    IMGUI_API void        PopAppSidebar(ImGuiApp* app);
+
+    template <typename T>
+    IMGUI_API inline void PushAppWindow(ImGuiApp* app);
+    IMGUI_API void        PopAppWindow(ImGuiApp* app);
+
+    // instance: client-chosen discriminator; 0 = the type singleton (bare type-id key), any other
+    // value keys a distinct instance of the same control data type. binds routes individual
+    // dependencies to specific producer instances; an unrouted dependency resolves to the pushing
+    // control's own instance id, then to the singleton (producer must be pushed first either way).
+    template <typename T>
+    IMGUI_API inline void PushAppControl(ImGuiApp* app, ImGuiID instance = 0, const ImGuiAppDataBinding* binds = nullptr, int binds_count = 0);
+    IMGUI_API void        PopAppControl(ImGuiApp* app);
+    template <typename T>
+    IMGUI_API inline void PushWindowControl(ImGuiApp* app, ImGuiAppWindowBase* window, ImGuiID instance = 0, const ImGuiAppDataBinding* binds = nullptr, int binds_count = 0);
+    template <typename T>
+    IMGUI_API inline void PushSidebarControl(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, ImGuiID instance = 0, const ImGuiAppDataBinding* binds = nullptr, int binds_count = 0);
+
+    // Composition identity
+    // Identity of the app's composition (layers, windows/sidebars, controls, in order). Changes exactly
+    // when something is pushed or popped; mirrors poll it and reconcile only on change.
+    // (AppRebuildUpdateOrder -- the internal dependency-topo rebuild -- lives in imguiapp_internal.h.)
+    IMGUI_API ImGuiID     GetAppCompositionID(const ImGuiApp* app);
+
     // Storage registration (size > 0 => snapshottable; a TempData byte range enables input record/replay)
     IMGUI_API void        RegisterAppStorage(ImGuiApp* app, ImGuiID id, void* ptr, void (*destroy)(void*));
     IMGUI_API void        RegisterAppStorage(ImGuiApp* app, ImGuiID id, void* ptr, int size, void (*destroy)(void*));                                 // size > 0 => snapshottable
     IMGUI_API void        RegisterAppStorage(ImGuiApp* app, ImGuiID id, void* ptr, int size, int temp_offset, int temp_size, void (*destroy)(void*)); // + input (TempData) byte range
+    // Register a control's instance data (id-keyed). snapshottable => registers inst_size + TempData byte range
+    // (snapshot/replay); otherwise registers opaque (caller passes the type-derived sizes/offset/destroy).
+    IMGUI_API void        RegisterAppControlStorage(ImGuiApp* app, ImGuiID id, void* instance_data, bool snapshottable, int inst_size, int temp_offset, int temp_size, void (*destroy)(void*));
     IMGUI_API void        UnregisterAppStorage(ImGuiApp* app, ImGuiID id);                                                                            // destroys + removes one entry
     IMGUI_API void        ClearAppStorage(ImGuiApp* app);
+
+    // Internal helper for the inline Push templates below (defined in imguiapp.cpp; must stay here because
+    // those public templates call it). ShutdownAppControls -- cpp-only -- lives in imguiapp_internal.h.
+    IMGUI_API void        AppDeduplicateItemLabel(char* label, int label_size, const ImVector<ImGuiAppWindowBase*>* windows, const ImVector<ImGuiAppSidebarBase*>* sidebars);
 
     // State snapshot / time-travel
     // Snapshot appends snapshottable state to the ring (layout rebuilt + history cleared on composition
@@ -128,15 +166,6 @@ namespace ImGui
     IMGUI_API bool        AppStateSnapshot(ImGuiApp* app, ImGuiAppStateHistory* h);
     IMGUI_API bool        AppStateRestore(ImGuiApp* app, ImGuiAppStateHistory* h, int index);
     IMGUI_API void        AppStateHistoryClear(ImGuiAppStateHistory* h);
-
-    // Input record / replay
-    // AppInputRecord appends this frame's inputs (every control's TempData + dt) and resulting state hash;
-    // call once per frame AFTER RenderApp. AppInputReplay re-runs the recorded frames through UpdateApp (no
-    // rendering) -- restore the starting state first. out_first_divergence (if non-null) receives the first
-    // frame whose state hash differs from the recording; -1 = deterministic reproduction.
-    IMGUI_API bool        AppInputRecord(ImGuiApp* app, ImGuiAppInputLog* log, float dt);
-    IMGUI_API bool        AppInputReplay(ImGuiApp* app, const ImGuiAppInputLog* log, int* out_first_divergence);
-    IMGUI_API void        AppInputLogClear(ImGuiAppInputLog* log);
 
     // State hashing (per-frame fingerprint + slot-layout schema hash)
     // Hash of the Persist + LastTemp prefix of every snapshottable instance -- the same
@@ -148,6 +177,15 @@ namespace ImGui
     // record carries this; F64's reconstruction identity gate requires the reconstruction app's
     // to equal the recorded one. 0 when nothing snapshottable exists.
     IMGUI_API ImU32       AppStateSchemaHash(const ImGuiApp* app);
+
+    // Input record / replay
+    // AppInputRecord appends this frame's inputs (every control's TempData + dt) and resulting state hash;
+    // call once per frame AFTER RenderApp. AppInputReplay re-runs the recorded frames through UpdateApp (no
+    // rendering) -- restore the starting state first. out_first_divergence (if non-null) receives the first
+    // frame whose state hash differs from the recording; -1 = deterministic reproduction.
+    IMGUI_API bool        AppInputRecord(ImGuiApp* app, ImGuiAppInputLog* log, float dt);
+    IMGUI_API bool        AppInputReplay(ImGuiApp* app, const ImGuiAppInputLog* log, int* out_first_divergence);
+    IMGUI_API void        AppInputLogClear(ImGuiAppInputLog* log);
 
     // Frame pacing
     // Advisory frame pacing. Backend run loops call this once per iteration before OnDrawFrame; Off
@@ -175,52 +213,19 @@ namespace ImGui
     // WAL sink for IM_ASSERT failures routed to ImGuiAppAssertFail.
     IMGUI_API void        SetAppAssertWAL(ImGuiAppWAL* wal);
 
-    // Composition identity
-    // Identity of the app's composition (layers, windows/sidebars, controls, in order). Changes exactly
-    // when something is pushed or popped; mirrors poll it and reconcile only on change.
-    // (AppRebuildUpdateOrder -- the internal dependency-topo rebuild -- lives in imguiapp_internal.h.)
-    IMGUI_API ImGuiID     GetAppCompositionID(const ImGuiApp* app);
-
-    // Composition: push/pop layers, windows, sidebars, controls (templates defined in the inline section below)
-    template <typename T>
-    inline void           PushAppSidebar(ImGuiApp* app, ImGuiViewport* vp, ImGuiDir dir, float size = 0.0f, ImGuiWindowFlags flags = 0);
-    IMGUI_API void        PopAppSidebar(ImGuiApp* app);
-
-    template <typename T>
-    IMGUI_API inline void PushAppLayer(ImGuiApp* app);
-    IMGUI_API void        PopAppLayer(ImGuiApp* app);
-
-    // instance: client-chosen discriminator; 0 = the type singleton (bare type-id key), any other
-    // value keys a distinct instance of the same control data type. binds routes individual
-    // dependencies to specific producer instances; an unrouted dependency resolves to the pushing
-    // control's own instance id, then to the singleton (producer must be pushed first either way).
-    template <typename T>
-    IMGUI_API inline void PushAppControl(ImGuiApp* app, ImGuiID instance = 0, const ImGuiAppDataBinding* binds = nullptr, int binds_count = 0);
-    IMGUI_API void        PopAppControl(ImGuiApp* app);
-    IMGUI_API void        PopAppWindow(ImGuiApp* app);
-    // Internal composition helpers (defined in imguiapp.cpp; used by the Push/Pop templates below).
-    IMGUI_API void        ShutdownAppControls(ImGuiApp* app, ImVector<ImGuiAppControlBase*>& controls);
-    IMGUI_API void        AppDeduplicateItemLabel(char* label, int label_size, const ImVector<ImGuiAppWindowBase*>* windows, const ImVector<ImGuiAppSidebarBase*>* sidebars);
-
-    template <typename T>
-    IMGUI_API inline void PushWindowControl(ImGuiApp* app, ImGuiAppWindowBase* window, ImGuiID instance = 0, const ImGuiAppDataBinding* binds = nullptr, int binds_count = 0);
-
-    template <typename T>
-    IMGUI_API inline void PushSidebarControl(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, ImGuiID instance = 0, const ImGuiAppDataBinding* binds = nullptr, int binds_count = 0);
+    // Authored style/color overrides
+    // Push every Active (in-range) entry; returns the number pushed -- pop with PopStyleVar/PopStyleColor(count).
+    IMGUI_API int         PushAppStyleMods(const ImGuiAppStyleModDesc* mods, int count);
+    IMGUI_API int         PushAppColorMods(const ImGuiAppColorModDesc* mods, int count);
 
     // Demo
     // host: the PROCESS's real app, offered as the "Host app" live-mirror perspective
     // (strictly read-only there: time scrub is disabled for the host -- restoring its
     // state from inside its own render would mutate mid-frame).
-    IMGUI_API void        ShowAppLayerDemo(bool* p_open = nullptr, ImGuiApp* host = nullptr);
+    IMGUI_API void        ShowAppDemo(bool* p_open = nullptr, ImGuiApp* host = nullptr);
 
     // NOTE: the Composer introspection accessors (AppComposer*) moved to imguiapp_internal.h (tool-coupled,
     // gated behind IMGUIX_DISABLE_TOOLS).
-
-    // Authored style/color overrides
-    // Push every Active (in-range) entry; returns the number pushed -- pop with PopStyleVar/PopStyleColor(count).
-    IMGUI_API int         PushAppStyleMods(const ImGuiAppStyleModDesc* mods, int count);
-    IMGUI_API int         PushAppColorMods(const ImGuiAppColorModDesc* mods, int count);
 }
 
 //-----------------------------------------------------------------------------
@@ -1382,16 +1387,13 @@ namespace ImGui
         IM_ASSERT(instance_data);
 
         app->Data.SetVoidPtr(id, instance_data);
-        // Trivially-copyable instance data registers its size + TempData byte range (snapshot/replay);
-        // heap-owning data registers opaque.
-        {
-            const bool snapshottable = std::is_trivially_copyable_v<typename T::ControlInstanceDataType>;
-            RegisterAppStorage(app, id, instance_data,
-                               snapshottable ? (int)sizeof(typename T::ControlInstanceDataType) : 0,
-                               snapshottable ? (int)((char*)&instance_data->TempData - (char*)instance_data) : 0,
-                               snapshottable ? (int)sizeof(instance_data->TempData) : 0,
-                               DestroyAppStorageValue<typename T::ControlInstanceDataType>);
-        }
+        // Trivially-copyable instance data is snapshottable (size + TempData byte range); heap-owning data is opaque.
+        using Inst = typename T::ControlInstanceDataType;
+        RegisterAppControlStorage(app, id, instance_data, std::is_trivially_copyable_v<Inst>,
+                                  (int)sizeof(Inst),
+                                  (int)((char*)&instance_data->TempData - (char*)instance_data),
+                                  (int)sizeof(instance_data->TempData),
+                                  DestroyAppStorageValue<Inst>);
         control->_InstanceID   = instance;
         control->_InstanceData = instance_data;
         control->ResolveDependencies(app, binds, binds_count);
@@ -1426,16 +1428,13 @@ namespace ImGui
         IM_ASSERT(instance_data);
 
         app->Data.SetVoidPtr(id, instance_data);
-        // Trivially-copyable instance data registers its size + TempData byte range (snapshot/replay);
-        // heap-owning data registers opaque.
-        {
-            const bool snapshottable = std::is_trivially_copyable_v<typename T::ControlInstanceDataType>;
-            RegisterAppStorage(app, id, instance_data,
-                               snapshottable ? (int)sizeof(typename T::ControlInstanceDataType) : 0,
-                               snapshottable ? (int)((char*)&instance_data->TempData - (char*)instance_data) : 0,
-                               snapshottable ? (int)sizeof(instance_data->TempData) : 0,
-                               DestroyAppStorageValue<typename T::ControlInstanceDataType>);
-        }
+        // Trivially-copyable instance data is snapshottable (size + TempData byte range); heap-owning data is opaque.
+        using Inst = typename T::ControlInstanceDataType;
+        RegisterAppControlStorage(app, id, instance_data, std::is_trivially_copyable_v<Inst>,
+                                  (int)sizeof(Inst),
+                                  (int)((char*)&instance_data->TempData - (char*)instance_data),
+                                  (int)sizeof(instance_data->TempData),
+                                  DestroyAppStorageValue<Inst>);
         control->_InstanceID   = instance;
         control->_InstanceData = instance_data;
         control->ResolveDependencies(app, binds, binds_count);
@@ -1472,16 +1471,13 @@ namespace ImGui
         IM_ASSERT(instance_data);
 
         app->Data.SetVoidPtr(id, instance_data);
-        // Trivially-copyable instance data registers its size + TempData byte range (snapshot/replay);
-        // heap-owning data registers opaque.
-        {
-            const bool snapshottable = std::is_trivially_copyable_v<typename T::ControlInstanceDataType>;
-            RegisterAppStorage(app, id, instance_data,
-                               snapshottable ? (int)sizeof(typename T::ControlInstanceDataType) : 0,
-                               snapshottable ? (int)((char*)&instance_data->TempData - (char*)instance_data) : 0,
-                               snapshottable ? (int)sizeof(instance_data->TempData) : 0,
-                               DestroyAppStorageValue<typename T::ControlInstanceDataType>);
-        }
+        // Trivially-copyable instance data is snapshottable (size + TempData byte range); heap-owning data is opaque.
+        using Inst = typename T::ControlInstanceDataType;
+        RegisterAppControlStorage(app, id, instance_data, std::is_trivially_copyable_v<Inst>,
+                                  (int)sizeof(Inst),
+                                  (int)((char*)&instance_data->TempData - (char*)instance_data),
+                                  (int)sizeof(instance_data->TempData),
+                                  DestroyAppStorageValue<Inst>);
         control->_InstanceID   = instance;
         control->_InstanceData = instance_data;
         control->ResolveDependencies(app, binds, binds_count);

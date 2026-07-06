@@ -1077,6 +1077,17 @@ namespace ImGui
       app->StorageEntries.push_back(entry);
   }
 
+  // Register a control's instance data (id-keyed). When snapshottable, forwards the type-derived size + TempData
+  // byte range (snapshot/replay); otherwise registers opaque. Callers supply the type-derived args (sizeof/offset).
+  IMGUI_API void RegisterAppControlStorage(ImGuiApp* app, ImGuiID id, void* instance_data, bool snapshottable, int inst_size, int temp_offset, int temp_size, void (*destroy)(void*))
+  {
+      RegisterAppStorage(app, id, instance_data,
+                         snapshottable ? inst_size : 0,
+                         snapshottable ? temp_offset : 0,
+                         snapshottable ? temp_size : 0,
+                         destroy);
+  }
+
   IMGUI_API void AppStateHistoryClear(ImGuiAppStateHistory* h)
   {
       IM_ASSERT(h != nullptr);
@@ -3312,7 +3323,7 @@ namespace ImGui
 // [SECTION] Generated-code view (source-mapped, shared by every code surface)
 // [SECTION] Composer editor body (outliner | canvas + bottom console | inspector; project inspector)
 // [SECTION] Composer host window + demo menu
-// [SECTION] Demo bring-up (ShowAppLayerDemo: sample app + editor app composition)
+// [SECTION] Demo bring-up (ShowAppDemo: sample app + editor app composition)
 
 #ifdef IMGUIX_HAS_LIBAV
 #endif
@@ -6523,7 +6534,7 @@ namespace ImGui
   }
 
   //-----------------------------------------------------------------------------
-  // [SECTION] Demo bring-up (ShowAppLayerDemo: ONE application)
+  // [SECTION] Demo bring-up (ShowAppDemo: ONE application)
   //-----------------------------------------------------------------------------
   // The demo composes its chrome AND its examples INTO the running app -- the same object model
   // the live mirror reflects, so Live shows everything that exists. Called from a late layer's
@@ -6532,7 +6543,7 @@ namespace ImGui
   // vector is being iterated right now) -- the demo never pushes one; the host's foundation from
   // InitializeApp is the one layer stack.
 
-  IMGUI_API void ShowAppLayerDemo(bool* p_open, ImGuiApp* host)
+  IMGUI_API void ShowAppDemo(bool* p_open, ImGuiApp* host)
   {
       // A caller without an ImGuiApp (plain imgui contexts: samples, tests) gets a demo-owned
       // fallback, which is then the process's one app; the demo drives its frame below.

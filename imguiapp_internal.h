@@ -1206,6 +1206,10 @@ namespace ImGui
   // collection and rendering stay composition order. (Internal: the runtime topo rebuild behind the app.)
   IMGUI_API const ImVector<ImGuiAppControlBase*>* AppRebuildUpdateOrder(ImGuiApp* app);
 
+  // Shut down + free every control in `controls` (OnShutdown, unregister its storage, delete). Internal:
+  // called only by the Pop* composition functions (imguiapp.cpp).
+  IMGUI_API void ShutdownAppControls(ImGuiApp* app, ImVector<ImGuiAppControlBase*>& controls);
+
   // AV: encoder teardown + image codec + meta-stream verify/parse
   // Close (if open) then Destroy any provider's encoder via its vtable. Null-safe.
   IMGUI_API void AppAVDestroyEncoder(ImGuiAppAVEncoder* encoder);
