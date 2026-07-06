@@ -826,32 +826,47 @@ rather than being deferred only because the retrofit is cheap and self-contained
 
 The live preview should run the REAL generated program, not an interpretation of the graph. F67/F68's
 interpreter stays as the instant / no-compiler fallback; a DLL backend compiles the emitted C++ and runs
-the same code the user ships. Design fixes the mechanism before code (`dll-preview-design.md`): the crux is
-ONE runtime (context + allocator + framework globals + vtables), resolved by a shared `imguix-core`, not by
-static-relink bridging (which would duplicate imguix globals -- the flow3 double-register hazard).
+the same code the user ships. DECISION REVISED (2026-07-05): the preview must NOT be gated on how the
+consumer links imguix. So instead of a shared `imguix-core` (which forced imguix shared for everyone and
+removed static linking -- F77, reverted), the preview module is SELF-CONTAINED and copy-marshalled: it owns
+its entire runtime (its own ImGuiContext + allocator + app) and the host moves only bytes across the C-ABI
+(control Persist/Temp copied in/out). imguix stays a STATIC lib; the preview is link-mode-agnostic.
 
 - [x] **F76 DLL preview design doc** — `dll-preview-design.md`: shared-core verdict, C-ABI create/destroy,
   async monotonic-name reload with F68 state-preserve, toolset-pinned compile, source-mapped error
   surfacing, interpreter as the no-compiler fallback.
   *Accept: doc lands with the ABI verdict + lifecycle; no code before it.*
-- [x] **F77 imguix-core shared split** — carve the framework runtime (imgui + imguiapp core, minus
-  demo/composer/editor) into a shared target; `IMGUI_API`/`IMGUIX_API` become dllexport/dllimport; host +
-  tests link it. Pure build refactor -- all suites stay green, zero behavior change. Gates F78.
-  *Accept: full rebuild green (nodes + core + headless-verify) against the shared core.*
-  DONE: `imguix` is now a SHARED library. `IMGUIX_CORE_EXPORTS` (private, on imgui/imgui_te/imguix) flips
-  `IMGUI_API` to dllexport (imconfig) so every imgui + test-engine symbol exports from the one core DLL;
-  applayer/implot symbols export via `WINDOWS_EXPORT_ALL_SYMBOLS`. Consumers leave the macro undefined and
-  import: `IMGUI_API`/`IMGUIX_API` are dllimport, resolving one context + allocator + globals + vtables
-  from the DLL (dll-preview-design.md §1), never a duplicated runtime. The four header-only `Push*Control`
-  templates lost their `IMGUI_API` (they instantiate per-TU with consumer types; dllimport templates cannot
-  resolve local instantiations). imguix.dll is copied next to every exe. All three suites green against the
-  shared core: imguix-tests 111/111, imguix-core-tests 362 checks/0 failures, headless-verify 31/31 + verify OK.
-- [ ] **F78 DLL preview backend** — `GenerateAppPreviewModuleCode`, the `ImGuiAppPreviewDll` session
-  (compile / load / create / tick / async reload / state preserve / source-mapped error surface), the
-  Preview tab backend toggle (DLL when a toolset exists, interpreter otherwise).
+- [x] **F77 imguix link-mode independence** (was: imguix-core shared split) — REVERTED/SUPERSEDED. The
+  shared split was implemented then undone: forcing imguix into a shared DLL for one preview feature taxed
+  every consumer and removed static linking (a valid, common build). The DLL preview is instead self-
+  contained + copy-marshalled (F78), so imguix stays a STATIC lib and the preview works regardless of link
+  mode. Net after revert: `imguix` is STATIC, `IMGUI_API` is a no-op, no `IMGUIX_API`, no shared-core, no
+  dllexport/dllimport surface, no imguix.dll copy steps.
+  *Accept (revised): imguix builds STATIC; all three suites green; the DLL preview needs no shared linkage.*
+  DONE: F77's build changes reverted to the pre-split state (root+imguix+tests+tools+demo CMake, imconfig,
+  imguiapp.h/config.h); imguix `add_library(... STATIC ...)`. Verified green after revert (nodes 112/112,
+  core 407/0, headless 31/31 + verify OK) with F78 layered on the static lib.
+- [x] **F78 DLL preview backend** — `GenerateAppPreviewModuleCode`, the `ImGuiAppPreviewDll` session
+  (compile / load / create / tick / reload / state preserve / error surface).
   *Accept: `dll_preview_roundtrip` (drive a widget on real compiled code, assert the model) +
   `dll_preview_reload_preserves` (rewire + reload keeps unrelated fields); skipped-with-note where no
   toolset is present, never vacuous.*
+  DONE (COPY-MARSHALLING, link-agnostic -- F77's shared split reverted): `GenerateAppPreviewModuleCode`
+  emits a SELF-CONTAINED module -- its own `ImGuiContext` + allocator + app, and a bytes-only extern "C" ABI
+  (`ImGuiAppPreview_ABI`/`_Create`/`_Destroy`/`_Tick`/`_CopyIn`/`_CopyOut`; `IMGUI_USER_CONFIG` #defined in
+  the module, not a -D). `ImGuiAppPreviewDll` (imguiapp_preview_dll.{h,cpp}) locates cl via vswhere/vcvars,
+  compiles the module statically linked against imguix + imgui(+te) + the renderer/MF/ffmpeg SDK libs
+  (`/OPT:REF` strips the unused backends) into `preview_<n>.dll` (monotonic name), loads it, ABI-checks, and
+  drives it PURELY by copying a control's Persist/Temp bytes across the boundary (keyed by label -> storage
+  entry). Nothing -- pointer, context, allocator -- is shared, so the preview works whether the consumer
+  links imguix static or shared. Reload recompiles a fresh DLL and preserves each control's Persist bytes by
+  copy (POD `SavedControl` -- a nested ImVector would hit the F58 memcpy-push use-after-free). Tests in
+  imguix-core-tests (skip-with-note without a toolset): `dll_preview_roundtrip` compiles the module, drives
+  `poke` via CopyIn, ticks, and asserts `count` advanced on REAL compiled code; `dll_preview_reload_preserves`
+  adds a sibling field, recompiles+reloads, and asserts the unrelated `count` survived. core 407/0,
+  headless 31/31, nodes 112/112. Tracked follow-on (F48/F70-style residual): the Preview-tab toggle that
+  renders the compiled app's widgets INSIDE the composer panel needs a drawdata/texture blit (the module
+  renders in its own context) -- deferred; the interpreter remains the in-panel live surface.
 
 ## Dependency spine + parallel lanes
 

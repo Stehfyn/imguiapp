@@ -1125,6 +1125,16 @@ namespace ImGui
   // hosts an ImGuiAppComposerControl thus emits a shell that runs the Composer against the library.
   IMGUI_API void                GenerateAppShellCode(const ImGuiAppGraph* g, ImGuiTextBuffer* out);
 
+#ifndef IMGUIAPP_PREVIEW_ABI
+#define IMGUIAPP_PREVIEW_ABI 20260705u   // host<->DLL preview ABI tag (F78); bump on any layout/vtable/signature change
+#endif
+  // DLL preview module (F78): the shell composition body + host scaffold, but the entry point is a C-ABI
+  // (extern "C" __declspec(dllexport) ImGuiAppPreview_Create/_Destroy/_ABI) instead of main(). A runtime-
+  // compiled module hands the host a composed ImGuiApp built by the same SetupApp, crossing the boundary as
+  // a framework base pointer. IMGUIAPP_PREVIEW_ABI is baked into both host and module; a load-time mismatch
+  // (stale headers / wrong toolset) is refused rather than crashing on a layout skew.
+  IMGUI_API void                GenerateAppPreviewModuleCode(const ImGuiAppGraph* g, ImGuiTextBuffer* out);
+
   // Per-node codegen: emits only the code one node produces -- a Control's struct(s) with derived
   // deps, the CommandLayer's AppCommand enum + dispatch, a bring-up line, or (App node) the whole
   // composition. Appends to *out.

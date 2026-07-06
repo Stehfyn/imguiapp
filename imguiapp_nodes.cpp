@@ -12073,6 +12073,85 @@ namespace ImGui
     out->appendf("  return app.Run(argc, argv);\n}\n");
   }
 
+  void GenerateAppPreviewModuleCode(const ImGuiAppGraph* g, ImGuiTextBuffer* out)
+  {
+    IM_ASSERT(g != nullptr && out != nullptr);
+
+    // A standalone TU the runtime compiler builds (statically linked, self-contained). The composition body
+    // is the single emitter; string.h for the marshalling memcpy/strcmp below. IMGUI_USER_CONFIG is set in
+    // the SOURCE (not a -D) so imgui.h's #include of it needs no command-line quote juggling; the imconfig
+    // is found on the -I path the build bakes in.
+    out->appendf("#define IMGUI_USER_CONFIG \"imguix_imconfig.h\"\n");
+    out->appendf("#include \"imguiapp.h\"\n#include <string.h>\n\n");
+    GenerateAppGraphCode(g, out);
+
+    // Copy-marshalling module: it owns its ENTIRE runtime -- its own ImGuiContext + allocator + app --
+    // and shares NOTHING with the host. The host copies a control's TempData bytes IN, ticks, and copies
+    // Persist/Temp bytes OUT across the C-ABI below; the void* handle is opaque (the host never dereferences
+    // it). Link-agnostic (self-contained static link) and touches no framework interface -- the marshalling
+    // rides the existing storage-entry byte ranges. no TU globals: the context + app hang off the handle.
+    const char* base = AppGraphCommandDefinitionCount(g) > 0 ? "ClientApp" : "ImGuiApp";
+    out->appendf("\nstruct AppShell : %s {};\n", base);
+    out->appendf("struct ImGuiAppPreviewInstance { ImGuiContext* Ctx; AppShell* App; };\n\n");
+
+    // Locate a control's snapshottable storage entry by label (control -> data id -> entry).
+    out->appendf("static ImGuiAppStorageEntry* ImGuiAppPreview_Entry(AppShell* app, const char* label)\n{\n");
+    out->appendf("  for (int i = 0; i < app->Controls.Size; i++)\n");
+    out->appendf("    if (strcmp(app->Controls[i]->Label, label) == 0)\n    {\n");
+    out->appendf("      ImGuiID id = app->Controls[i]->GetControlDataID();\n");
+    out->appendf("      for (int e = 0; e < app->StorageEntries.Size; e++)\n");
+    out->appendf("        if (app->StorageEntries[e].ID == id) return &app->StorageEntries[e];\n");
+    out->appendf("    }\n  return nullptr;\n}\n\n");
+
+    out->appendf("extern \"C\" __declspec(dllexport) unsigned int ImGuiAppPreview_ABI() { return %uu; }\n", (unsigned)IMGUIAPP_PREVIEW_ABI);
+    out->appendf("extern \"C\" __declspec(dllexport) void* ImGuiAppPreview_Create(int display_w, int display_h)\n{\n");
+    out->appendf("  ImGuiContext* ctx = ImGui::CreateContext();\n");
+    out->appendf("  ImGui::SetCurrentContext(ctx);\n");
+    out->appendf("  ImGuiIO& io = ImGui::GetIO();\n");
+    out->appendf("  io.DisplaySize = ImVec2((float)(display_w > 0 ? display_w : 1280), (float)(display_h > 0 ? display_h : 720));\n");
+    out->appendf("  unsigned char* tex_px = nullptr; int tex_w = 0, tex_h = 0;\n");
+    out->appendf("  io.Fonts->GetTexDataAsRGBA32(&tex_px, &tex_w, &tex_h);\n");
+    out->appendf("  ImGuiAppPreviewInstance* inst = IM_NEW(ImGuiAppPreviewInstance)();\n");
+    out->appendf("  inst->Ctx = ctx;\n");
+    out->appendf("  inst->App = IM_NEW(AppShell)();\n");
+    out->appendf("  SetupApp(inst->App, ImGui::GetMainViewport());\n");
+    out->appendf("  return inst;\n}\n");
+    out->appendf("extern \"C\" __declspec(dllexport) void ImGuiAppPreview_Destroy(void* h)\n{\n");
+    out->appendf("  ImGuiAppPreviewInstance* inst = (ImGuiAppPreviewInstance*)h;\n");
+    out->appendf("  if (inst == nullptr) return;\n");
+    out->appendf("  ImGui::SetCurrentContext(inst->Ctx);\n");
+    out->appendf("  IM_DELETE(inst->App);\n");
+    out->appendf("  ImGui::DestroyContext(inst->Ctx);\n");
+    out->appendf("  IM_DELETE(inst);\n}\n");
+    out->appendf("extern \"C\" __declspec(dllexport) void ImGuiAppPreview_Tick(void* h, float dt)\n{\n");
+    out->appendf("  ImGuiAppPreviewInstance* inst = (ImGuiAppPreviewInstance*)h;\n");
+    out->appendf("  ImGui::SetCurrentContext(inst->Ctx);\n");
+    out->appendf("  ImGui::NewFrame();\n");
+    out->appendf("  ImGui::UpdateApp(inst->App, dt);\n");
+    out->appendf("  ImGui::RenderApp(inst->App);\n");
+    out->appendf("  ImGui::Render();\n}\n");
+    // Copy a control's state OUT by label. temp!=0 -> the TempData input range; else Persist+LastTemp.
+    out->appendf("extern \"C\" __declspec(dllexport) int ImGuiAppPreview_CopyOut(void* h, const char* label, int temp, void* out, int cap)\n{\n");
+    out->appendf("  ImGuiAppPreviewInstance* inst = (ImGuiAppPreviewInstance*)h;\n");
+    out->appendf("  ImGuiAppStorageEntry* e = ImGuiAppPreview_Entry(inst->App, label);\n");
+    out->appendf("  if (e == nullptr || e->Size == 0) return 0;\n");
+    out->appendf("  int off = temp ? e->TempOffset : 0;\n");
+    out->appendf("  int len = temp ? e->TempSize : e->TempOffset;\n");
+    out->appendf("  if (len > cap) len = cap;\n");
+    out->appendf("  if (len > 0) memcpy(out, (const char*)e->Ptr + off, (size_t)len);\n");
+    out->appendf("  return len;\n}\n");
+    // Copy a control's state IN by label (same ranges) -- the host's scripted input / preserved bytes.
+    out->appendf("extern \"C\" __declspec(dllexport) int ImGuiAppPreview_CopyIn(void* h, const char* label, int temp, const void* in, int size)\n{\n");
+    out->appendf("  ImGuiAppPreviewInstance* inst = (ImGuiAppPreviewInstance*)h;\n");
+    out->appendf("  ImGuiAppStorageEntry* e = ImGuiAppPreview_Entry(inst->App, label);\n");
+    out->appendf("  if (e == nullptr || e->Size == 0) return 0;\n");
+    out->appendf("  int off = temp ? e->TempOffset : 0;\n");
+    out->appendf("  int cap = temp ? e->TempSize : e->TempOffset;\n");
+    out->appendf("  int len = size < cap ? size : cap;\n");
+    out->appendf("  if (len > 0) memcpy((char*)e->Ptr + off, in, (size_t)len);\n");
+    out->appendf("  return len;\n}\n");
+  }
+
   // Format a float as a C++ literal: %g alone drops the decimal point from whole values, and "8f" won't compile.
   static void AppFloatLit(char* out, size_t out_size, float v)
   {

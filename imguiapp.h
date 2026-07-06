@@ -430,7 +430,7 @@ namespace ImGui
   inline void PopAppSidebar(ImGuiApp* app);
 
   template <typename T>
-  inline void PushAppLayer(ImGuiApp* app);
+  IMGUI_API inline void PushAppLayer(ImGuiApp* app);
   IMGUI_API inline void PopAppLayer(ImGuiApp* app);
 
   // instance: client-chosen discriminator; 0 = the type singleton (bare type-id key), any other
@@ -438,14 +438,14 @@ namespace ImGui
   // dependencies to specific producer instances; an unrouted dependency resolves to the pushing
   // control's own instance id, then to the singleton (producer must be pushed first either way).
   template <typename T>
-  inline void PushAppControl(ImGuiApp* app, ImGuiID instance = 0, const ImGuiAppDataBinding* binds = nullptr, int binds_count = 0);
+  IMGUI_API inline void PushAppControl(ImGuiApp* app, ImGuiID instance = 0, const ImGuiAppDataBinding* binds = nullptr, int binds_count = 0);
   IMGUI_API inline void PopAppControl(ImGuiApp* app);
 
   template <typename T>
-  inline void PushWindowControl(ImGuiApp* app, ImGuiAppWindowBase* window, ImGuiID instance = 0, const ImGuiAppDataBinding* binds = nullptr, int binds_count = 0);
+  IMGUI_API inline void PushWindowControl(ImGuiApp* app, ImGuiAppWindowBase* window, ImGuiID instance = 0, const ImGuiAppDataBinding* binds = nullptr, int binds_count = 0);
 
   template <typename T>
-  inline void PushSidebarControl(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, ImGuiID instance = 0, const ImGuiAppDataBinding* binds = nullptr, int binds_count = 0);
+  IMGUI_API inline void PushSidebarControl(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, ImGuiID instance = 0, const ImGuiAppDataBinding* binds = nullptr, int binds_count = 0);
 
   // host: the PROCESS's real app, offered as the "Host app" live-mirror perspective
   // (strictly read-only there: time scrub is disabled for the host -- restoring its
@@ -1410,7 +1410,7 @@ namespace ImGui
   // Host a control inside a window: instance data registers in app->Data as usual, but the control joins
   // window->Controls and renders between the host window's Begin/End (no Begin of its own).
   template <typename T>
-  inline void PushWindowControl(ImGuiApp* app, ImGuiAppWindowBase* window, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count)
+  IMGUI_API inline void PushWindowControl(ImGuiApp* app, ImGuiAppWindowBase* window, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count)
   {
       IM_ASSERT(app && window);
 
@@ -1452,7 +1452,7 @@ namespace ImGui
   }
 
   template <typename T>
-  inline void PushSidebarControl(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count)
+  IMGUI_API inline void PushSidebarControl(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count)
   {
       ImGuiID id;
       T* control;
