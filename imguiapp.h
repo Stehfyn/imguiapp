@@ -173,11 +173,11 @@ namespace ImGui
 
   template <typename T>
   inline void PushAppSidebar(ImGuiApp* app, ImGuiViewport* vp, ImGuiDir dir, float size = 0.0f, ImGuiWindowFlags flags = 0);
-  inline void PopAppSidebar(ImGuiApp* app);
+  IMGUI_API void PopAppSidebar(ImGuiApp* app);
 
   template <typename T>
   IMGUI_API inline void PushAppLayer(ImGuiApp* app);
-  IMGUI_API inline void PopAppLayer(ImGuiApp* app);
+  IMGUI_API void PopAppLayer(ImGuiApp* app);
 
   // instance: client-chosen discriminator; 0 = the type singleton (bare type-id key), any other
   // value keys a distinct instance of the same control data type. binds routes individual
@@ -185,7 +185,11 @@ namespace ImGui
   // control's own instance id, then to the singleton (producer must be pushed first either way).
   template <typename T>
   IMGUI_API inline void PushAppControl(ImGuiApp* app, ImGuiID instance = 0, const ImGuiAppDataBinding* binds = nullptr, int binds_count = 0);
-  IMGUI_API inline void PopAppControl(ImGuiApp* app);
+  IMGUI_API void PopAppControl(ImGuiApp* app);
+  IMGUI_API void PopAppWindow(ImGuiApp* app);
+  // Internal composition helpers (defined in imguiapp.cpp; used by the Push/Pop templates below).
+  IMGUI_API void ShutdownAppControls(ImGuiApp* app, ImVector<ImGuiAppControlBase*>& controls);
+  IMGUI_API void AppDeduplicateItemLabel(char* label, int label_size, const ImVector<ImGuiAppWindowBase*>* windows, const ImVector<ImGuiAppSidebarBase*>* sidebars);
 
   template <typename T>
   IMGUI_API inline void PushWindowControl(ImGuiApp* app, ImGuiAppWindowBase* window, ImGuiID instance = 0, const ImGuiAppDataBinding* binds = nullptr, int binds_count = 0);
@@ -1199,28 +1203,6 @@ namespace ImGui
           visitor((const ImGuiAppControlBase*)app->Windows.Data[w]->Controls.Data[i], (const ImGuiAppWindowBase*)app->Windows.Data[w]);
   }
 
-  inline void ShutdownAppControls(ImGuiApp* app, ImVector<ImGuiAppControlBase*>& controls)
-  {
-      IM_ASSERT(app);
-
-      while (!controls.empty())
-      {
-        ImGuiAppControlBase* control = controls.back();
-        controls.pop_back();
-        if (app->WAL != nullptr)
-        {
-          char dt[IM_LABEL_SIZE];
-          control->GetControlDataTypeName(dt, IM_ARRAYSIZE(dt));
-          AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "shutdown control <%s>", dt);
-        }
-        control->OnShutdown(app);
-        const ImGuiID data_id = control->GetControlDataID();   // read before delete
-        IM_DELETE(control);
-        if (data_id != 0)
-          UnregisterAppStorage(app, data_id);
-      }
-  }
-
   template <typename T>
   inline void PushAppLayer(ImGuiApp* app)
   {
@@ -1236,41 +1218,8 @@ namespace ImGui
       app->Layers.back()->OnAttach(app);
   }
 
-  inline void PopAppLayer(ImGuiApp* app)
-  {
-      IM_ASSERT(app);
-
-      if (app->Layers.empty())
-        return;
-
-      ImGuiAppLayerBase* layer = app->Layers.back();
-      app->Layers.pop_back();
-      AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "pop layer %s", layer->Label);
-      layer->OnDetach(app);
-      IM_DELETE(layer);
-  }
-
   // The sole instance of a window type keeps its bare class name; a second live instance of the
   // same type gets "##N" so imgui window ids stay distinct.
-  inline void AppDeduplicateItemLabel(char* label, int label_size, const ImVector<ImGuiAppWindowBase*>* windows, const ImVector<ImGuiAppSidebarBase*>* sidebars)
-  {
-    char base[IM_LABEL_SIZE];
-    ImStrncpy(base, label, IM_ARRAYSIZE(base));
-    for (int suffix = 2; ; suffix++)
-    {
-      bool taken = false;
-      if (windows != nullptr)
-        for (int i = 0; i < windows->Size && !taken; i++)
-          taken = strcmp(windows->Data[i]->Label, label) == 0;
-      if (sidebars != nullptr)
-        for (int i = 0; i < sidebars->Size && !taken; i++)
-          taken = strcmp(sidebars->Data[i]->Label, label) == 0;
-      if (!taken)
-        return;
-      ImFormatString(label, (size_t)label_size, "%s##%d", base, suffix);
-    }
-  }
-
   template <typename T>
   inline void PushAppWindow(ImGuiApp* app)
   {
@@ -1283,21 +1232,6 @@ namespace ImGui
     AppDeduplicateItemLabel(window->Label, IM_ARRAYSIZE(window->Label), &app->Windows, &app->Sidebars);
     app->Windows.push_back(window);
     app->Windows.back()->OnInitialize(app);
-  }
-
-  inline void PopAppWindow(ImGuiApp* app)
-  {
-    IM_ASSERT(app);
-
-    if (app->Windows.empty())
-      return;
-
-    ImGuiAppWindowBase* window = app->Windows.back();
-    app->Windows.pop_back();
-    AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "pop window '%s'", window->Label);
-    ShutdownAppControls(app, window->Controls);
-    window->OnShutdown(app);
-    IM_DELETE(window);
   }
 
   template <typename T>
@@ -1316,20 +1250,6 @@ namespace ImGui
     sidebar->Flags = flags;
     app->Sidebars.push_back(sidebar);
     app->Sidebars.back()->OnInitialize(app);
-  }
-
-  inline void PopAppSidebar(ImGuiApp* app)
-  {
-    IM_ASSERT(app);
-
-    if (app->Sidebars.empty())
-      return;
-    ImGuiAppSidebarBase* sidebar = app->Sidebars.back();
-    app->Sidebars.pop_back();
-    AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "pop sidebar '%s'", sidebar->Label);
-    ShutdownAppControls(app, sidebar->Controls);
-    sidebar->OnShutdown(app);
-    IM_DELETE(sidebar);
   }
 
   template <typename T>
@@ -1372,28 +1292,6 @@ namespace ImGui
       control->ResolveDependencies(app, binds, binds_count);
       app->Controls.push_back(control);
       app->Controls.back()->OnInitialize(app);
-  }
-
-  inline void PopAppControl(ImGuiApp* app)
-  {
-      IM_ASSERT(app);
-
-      if (app->Controls.empty())
-        return;
-
-      ImGuiAppControlBase* control = app->Controls.back();
-      app->Controls.pop_back();
-      if (app->WAL != nullptr)
-      {
-        char dt[IM_LABEL_SIZE];
-        control->GetControlDataTypeName(dt, IM_ARRAYSIZE(dt));
-        AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "pop control <%s>", dt);
-      }
-      control->OnShutdown(app);
-      const ImGuiID data_id = control->GetControlDataID();   // read before delete; pop frees what push registered
-      IM_DELETE(control);
-      if (data_id != 0)
-        UnregisterAppStorage(app, data_id);
   }
 
   // Host a control inside a window: instance data registers in app->Data as usual, but the control joins

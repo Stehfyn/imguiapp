@@ -1434,6 +1434,113 @@ namespace ImGui
   // [SECTION] App bring-up (InitializeApp / UpdateApp / RenderApp / storage)
   //-----------------------------------------------------------------------------
 
+  // Composition push/pop helpers (declarations in imguiapp.h; the Push* templates there call these).
+  void ShutdownAppControls(ImGuiApp* app, ImVector<ImGuiAppControlBase*>& controls)
+  {
+      IM_ASSERT(app);
+
+      while (!controls.empty())
+      {
+        ImGuiAppControlBase* control = controls.back();
+        controls.pop_back();
+        if (app->WAL != nullptr)
+        {
+          char dt[IM_LABEL_SIZE];
+          control->GetControlDataTypeName(dt, IM_ARRAYSIZE(dt));
+          AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "shutdown control <%s>", dt);
+        }
+        control->OnShutdown(app);
+        const ImGuiID data_id = control->GetControlDataID();   // read before delete
+        IM_DELETE(control);
+        if (data_id != 0)
+          UnregisterAppStorage(app, data_id);
+      }
+  }
+
+  void PopAppLayer(ImGuiApp* app)
+  {
+      IM_ASSERT(app);
+
+      if (app->Layers.empty())
+        return;
+
+      ImGuiAppLayerBase* layer = app->Layers.back();
+      app->Layers.pop_back();
+      AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "pop layer %s", layer->Label);
+      layer->OnDetach(app);
+      IM_DELETE(layer);
+  }
+
+  void AppDeduplicateItemLabel(char* label, int label_size, const ImVector<ImGuiAppWindowBase*>* windows, const ImVector<ImGuiAppSidebarBase*>* sidebars)
+  {
+    char base[IM_LABEL_SIZE];
+    ImStrncpy(base, label, IM_ARRAYSIZE(base));
+    for (int suffix = 2; ; suffix++)
+    {
+      bool taken = false;
+      if (windows != nullptr)
+        for (int i = 0; i < windows->Size && !taken; i++)
+          taken = strcmp(windows->Data[i]->Label, label) == 0;
+      if (sidebars != nullptr)
+        for (int i = 0; i < sidebars->Size && !taken; i++)
+          taken = strcmp(sidebars->Data[i]->Label, label) == 0;
+      if (!taken)
+        return;
+      ImFormatString(label, (size_t)label_size, "%s##%d", base, suffix);
+    }
+  }
+
+  void PopAppWindow(ImGuiApp* app)
+  {
+    IM_ASSERT(app);
+
+    if (app->Windows.empty())
+      return;
+
+    ImGuiAppWindowBase* window = app->Windows.back();
+    app->Windows.pop_back();
+    AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "pop window '%s'", window->Label);
+    ShutdownAppControls(app, window->Controls);
+    window->OnShutdown(app);
+    IM_DELETE(window);
+  }
+
+  void PopAppSidebar(ImGuiApp* app)
+  {
+    IM_ASSERT(app);
+
+    if (app->Sidebars.empty())
+      return;
+    ImGuiAppSidebarBase* sidebar = app->Sidebars.back();
+    app->Sidebars.pop_back();
+    AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "pop sidebar '%s'", sidebar->Label);
+    ShutdownAppControls(app, sidebar->Controls);
+    sidebar->OnShutdown(app);
+    IM_DELETE(sidebar);
+  }
+
+  void PopAppControl(ImGuiApp* app)
+  {
+      IM_ASSERT(app);
+
+      if (app->Controls.empty())
+        return;
+
+      ImGuiAppControlBase* control = app->Controls.back();
+      app->Controls.pop_back();
+      if (app->WAL != nullptr)
+      {
+        char dt[IM_LABEL_SIZE];
+        control->GetControlDataTypeName(dt, IM_ARRAYSIZE(dt));
+        AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "pop control <%s>", dt);
+      }
+      control->OnShutdown(app);
+      const ImGuiID data_id = control->GetControlDataID();   // read before delete; pop frees what push registered
+      IM_DELETE(control);
+      if (data_id != 0)
+        UnregisterAppStorage(app, data_id);
+  }
+
   IMGUI_API void InitializeApp(ImGuiApp* app, const ImGuiAppConfig* config)
   {
       IM_ASSERT(app);
