@@ -29,11 +29,11 @@ Index of this file:
 #include <string_view>
 #include <array>                          // compile-time declaration spellings (ImGuiAppVecSpelling)
 
-// Compile-time reflection (imguiapp_reflect.h, the applayer's port of qlibs/reflect):
-// powers the live mirror's field introspection.
+// Compile-time reflection (imguiapp_reflect.h, the applayer's port of qlibs/reflect): powers the live
+// mirror's field introspection. Also defines IMGUIAPP_HAS_REFLECT and the ImGuiApp manifest binding
+// (ImGuiAppLiveFieldDesc / ImGuiAppTypeSchema / ImGuiAppReflectFields).
 // windows.h's min/max macros (leaked by platform-backend TUs) break its std::min.
 #include "imguiapp_reflect.h"
-#define IMGUIAPP_HAS_REFLECT 1
 
 #ifdef _MSC_VER
 #pragma warning (push)
@@ -472,32 +472,8 @@ struct ImGuiAppSidebarBase : ImGuiAppWindowBase
   float    Size    = 0.0f;
 };
 
-// One reflected member of a control's Persist/Temp aggregate (live-mirror introspection).
-// Name/TypeName point at static storage (reflect materializes null-terminated fixed_strings).
-typedef int ImGuiAppLiveFieldKind;
-enum ImGuiAppLiveFieldKind_
-{
-  ImGuiAppLiveFieldKind_Opaque = 0,   // unmapped type: Size bytes, TypeName from reflect
-  ImGuiAppLiveFieldKind_Bool,
-  ImGuiAppLiveFieldKind_S32,
-  ImGuiAppLiveFieldKind_U32,
-  ImGuiAppLiveFieldKind_F32,
-  ImGuiAppLiveFieldKind_F64,
-  ImGuiAppLiveFieldKind_Vec2,
-  ImGuiAppLiveFieldKind_Vec4,
-  ImGuiAppLiveFieldKind_CharArray,    // char[Size]
-};
-
-struct ImGuiAppLiveFieldDesc
-{
-  const char*           Name;
-  const char*           TypeName;
-  const char*           ElemTypeName; // ImVector element type (schema fields); null otherwise
-  int                   Offset;       // within the Persist (or Temp) struct
-  int                   Size;
-  ImGuiAppLiveFieldKind Kind;
-  bool                  Exact;        // TypeName is the member's declared C++ spelling (emit verbatim)
-};
+// NOTE: ImGuiAppLiveFieldKind / ImGuiAppLiveFieldDesc (the reflected-member manifest referenced by the
+// virtuals below) live in imguiapp_reflect.h, included at the top of this file.
 
 struct ImGuiAppControlBase : ImGuiAppItemBase
 {
@@ -528,204 +504,9 @@ struct ImGuiAppControlBase : ImGuiAppItemBase
   virtual bool    SetControlDependencyBinding(ImGuiApp* app, const ImGuiAppDataBinding* bind) { IM_UNUSED(app); IM_UNUSED(bind); return false; }
 };
 
-// Snapshot contract: aggregate + trivially copyable = byte-snapshottable. Owning containers
-// are outside it. This governs SNAPSHOTS only; field enumeration is the weaker
-// ImGuiAppFieldsVisible contract below. `using ImGuiAppOpaque = void;` opts out of both.
-template <typename T>
-inline constexpr bool ImGuiAppDataReflectable = std::is_aggregate_v<T>
-                                             && std::is_trivially_copyable_v<T>
-                                             && !requires { typename T::ImGuiAppOpaque; };
-
-//-----------------------------------------------------------------------------
-// Type schema registry: per-type field manifests BUILT AUTOMATICALLY AT COMPILE TIME from
-// the reflection walk (imguiapp_reflect.h) and materialized into a runtime registry anyone can read (live
-// mirrors, codegen, inspectors). No hand-authored manifests: instantiating a control (or
-// reaching a type through another type's members) registers its manifest transitively.
-// Snapshot reflectability (trivially-copyable byte copies) is separate and stricter.
-//-----------------------------------------------------------------------------
-
-struct ImGuiAppTypeSchema
-{
-  const char*                  TypeName; // display name (scope-stripped, matches ImGuiType<T>::Name)
-  const ImGuiAppLiveFieldDesc* Fields;   // declaration order
-  int                          Count;
-  int                          Size;     // sizeof(T)
-};
-
-IMGUI_API void                        ImGuiAppRegisterTypeSchema(const ImGuiAppTypeSchema* schema);
-IMGUI_API const ImGuiAppTypeSchema*   ImGuiAppFindTypeSchema(const char* type_name);
-
-#ifdef IMGUIAPP_HAS_REFLECT
-
-// Field-enumeration contract: the reflection walk handles any aggregate (the patched probe counts array
-// members correctly), bounded by the 64-binding visit chain. The tag opts out explicitly.
-template <typename T>
-consteval bool ImGuiAppFieldsVisibleFn()
-{
-  if constexpr (!std::is_aggregate_v<T> || requires { typename T::ImGuiAppOpaque; })
-    return false;
-  else
-    return ImAppReflect::size<T>() <= 64u;
-}
-template <typename T>
-inline constexpr bool ImGuiAppFieldsVisible = ImGuiAppFieldsVisibleFn<T>();
-
-// Display name in static null-terminated storage. Uses ImGuiType's signature parser (not
-// reflect's, which cannot parse function-local types), so registry keys match
-// GetControlDataTypeName by construction.
-template <typename T>
-inline const char* ImGuiAppTypeDisplayName()
-{
-  static char name[IM_LABEL_SIZE] = "";
-  if (name[0] == 0)
-    GenerateLabel<std::remove_cvref_t<T>>(name, IM_ARRAYSIZE(name));
-  return name;
-}
-
-template <typename M> struct ImGuiAppVecElemOf { using Type = void; };
-template <typename E> struct ImGuiAppVecElemOf<ImVector<E>> { using Type = E; };
-
-// Compile-time declaration spellings for members reflect's scope/template-stripping
-// type_name cannot spell: "ImVector<Elem>" and "Pointee*".
-template <typename E>
-struct ImGuiAppVecSpelling
-{
-  static constexpr bool PtrElem = std::is_pointer_v<E>;
-  static constexpr std::string_view Elem = ImGuiType<E>::Name;   // ImGuiType strips the pointer; re-spell it
-  static constexpr auto Make()
-  {
-    std::array<char, 9 + Elem.size() + 3> a{};
-    std::size_t k = 0;
-    for (char c : std::string_view{"ImVector<"})
-      a[k++] = c;
-    for (char c : Elem)
-      a[k++] = c;
-    if (PtrElem)
-      a[k++] = '*';
-    a[k++] = '>';
-    return a;
-  }
-  static constexpr std::array<char, 9 + Elem.size() + 3> Value = Make();
-};
-
-template <typename P>
-struct ImGuiAppPtrSpelling
-{
-  static constexpr std::string_view Pointee = ImGuiType<P>::Name;
-  static constexpr auto Make()
-  {
-    std::array<char, Pointee.size() + 2> a{};
-    std::size_t k = 0;
-    for (char c : Pointee)
-      a[k++] = c;
-    a[k++] = '*';
-    return a;
-  }
-  static constexpr std::array<char, Pointee.size() + 2> Value = Make();
-};
-
-template <typename T>
-inline int ImGuiAppReflectFields(ImGuiAppLiveFieldDesc* out, int cap);
-
-// Transitive automatic registration: materializes T's manifest into the runtime registry
-// and, through the field walk, the manifest of every visible aggregate T reaches (members
-// and ImVector elements). Reentrancy-safe: the entry registers before its fields fill.
-template <typename T>
-inline void ImGuiAppEnsureTypeRegistered()
-{
-  if constexpr (ImGuiAppFieldsVisible<T>)
-  {
-    constexpr int n = (int)ImAppReflect::size<T>();
-    const char* type_name = ImGuiAppTypeDisplayName<T>();
-    if (ImGuiAppFindTypeSchema(type_name) != nullptr)
-      return;
-    static ImGuiAppLiveFieldDesc fields[n > 0 ? n : 1];
-    static ImGuiAppTypeSchema schema;
-    schema.TypeName = type_name;
-    schema.Fields = fields;
-    schema.Count = 0;
-    schema.Size = (int)sizeof(T);
-    ImGuiAppRegisterTypeSchema(&schema);
-    schema.Count = ImGuiAppReflectFields<T>(fields, n > 0 ? n : 1);
-  }
-}
-
-
-// Aggregate walk shared by every ImGuiAppControl<> instantiation. Types outside the
-// visibility contract yield zero fields rather than failing to compile.
-template <typename T>
-inline int ImGuiAppReflectFields(ImGuiAppLiveFieldDesc* out, int cap)
-{
-  if constexpr (ImGuiAppFieldsVisible<T>)
-  {
-    constexpr int n = (int)ImAppReflect::size<T>();
-    if (out == nullptr || cap <= 0)
-      return n;
-    int written = 0;
-    ImAppReflect::for_each<T>([&](auto I)
-    {
-      constexpr auto i = decltype(I)::value;
-      using M = std::remove_cvref_t<decltype(ImAppReflect::get<i>(std::declval<T&>()))>;
-      using E = typename ImGuiAppVecElemOf<M>::Type;
-      if (written >= cap)
-        return;
-      ImGuiAppLiveFieldDesc* d = &out[written++];
-      d->Name = ImAppReflect::member_name<i, T>().data();
-      d->ElemTypeName = nullptr;
-      d->Exact = true;
-      d->Offset = (int)ImAppReflect::offset_of<i, T>();
-      d->Size = (int)sizeof(M);
-      if constexpr (std::is_same_v<M, bool>)                                        { d->Kind = ImGuiAppLiveFieldKind_Bool;      d->TypeName = "bool"; }
-      else if constexpr (std::is_same_v<M, float>)                                  { d->Kind = ImGuiAppLiveFieldKind_F32;       d->TypeName = "float"; }
-      else if constexpr (std::is_same_v<M, double>)                                 { d->Kind = ImGuiAppLiveFieldKind_F64;       d->TypeName = "double"; }
-      else if constexpr (std::is_same_v<M, ImVec2>)                                 { d->Kind = ImGuiAppLiveFieldKind_Vec2;      d->TypeName = "ImVec2"; }
-      else if constexpr (std::is_same_v<M, ImVec4>)                                 { d->Kind = ImGuiAppLiveFieldKind_Vec4;      d->TypeName = "ImVec4"; }
-      else if constexpr (std::is_array_v<M> && std::is_same_v<std::remove_extent_t<M>, char>) { d->Kind = ImGuiAppLiveFieldKind_CharArray; d->TypeName = "char"; }
-      else if constexpr (std::is_enum_v<M> && sizeof(M) == 4)                       { d->Kind = ImGuiAppLiveFieldKind_S32;       d->TypeName = "int"; }
-      else if constexpr (std::is_integral_v<M> && std::is_signed_v<M> && sizeof(M) == 4)   { d->Kind = ImGuiAppLiveFieldKind_S32; d->TypeName = "int"; }
-      else if constexpr (std::is_integral_v<M> && std::is_unsigned_v<M> && sizeof(M) == 4) { d->Kind = ImGuiAppLiveFieldKind_U32; d->TypeName = "unsigned int"; }
-      else if constexpr (!std::is_same_v<E, void>)
-      {
-        // ImVector member: exact spelling; a non-pointer element is registered so codegen can
-        // recurse into it (a pointer element's pointee is not owned -- never mirrored).
-        d->Kind = ImGuiAppLiveFieldKind_Opaque;
-        d->TypeName = ImGuiAppVecSpelling<E>::Value.data();
-        if constexpr (!std::is_pointer_v<E>)
-        {
-          d->ElemTypeName = ImGuiAppTypeDisplayName<E>();
-          ImGuiAppEnsureTypeRegistered<E>();
-        }
-      }
-      else if constexpr (std::is_pointer_v<M>)
-      {
-        d->Kind = ImGuiAppLiveFieldKind_Opaque;
-        d->TypeName = ImGuiAppPtrSpelling<std::remove_cv_t<std::remove_pointer_t<M>>>::Value.data();
-      }
-      else if constexpr (ImGuiAppFieldsVisible<M>)
-      {
-        // Nested visible aggregate: registered transitively, mirrored by codegen.
-        d->Kind = ImGuiAppLiveFieldKind_Opaque;
-        d->TypeName = ImGuiAppTypeDisplayName<M>();
-        ImGuiAppEnsureTypeRegistered<M>();
-      }
-      else
-      {
-        // Leaf outside every contract: bytes, honestly labelled.
-        d->Kind = ImGuiAppLiveFieldKind_Opaque;
-        d->TypeName = ImGuiAppTypeDisplayName<M>();
-        d->Exact = false;
-      }
-    });
-    return written;
-  }
-  else
-  {
-    IM_UNUSED(out);
-    IM_UNUSED(cap);
-    return 0;
-  }
-}
-#endif
+// NOTE: the reflectability contracts + type-schema registry + the reflection field-walk
+// (ImGuiAppDataReflectable, ImGuiAppTypeSchema + ImGuiAppRegister/FindTypeSchema, ImGuiAppFieldsVisible,
+// ImGuiAppReflectFields, ImGuiAppEnsureTypeRegistered) live in imguiapp_reflect.h, included at the top.
 
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
 struct ImGuiInterfaceAdapterBase : ImGuiInterface
