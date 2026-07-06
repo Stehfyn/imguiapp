@@ -39,12 +39,12 @@ Verified against the current headers.
 `imguiapp_preview.cpp`, `imguiapp_preview_dll.cpp`, `imguiapp_demo.cpp` (the Composer), and the AV/anim impl
 where tool-only.
 
-**Open sub-question (crux of "lean"):** is `imguiapp_internal.h` itself gated by `IMGUIX_DISABLE_TOOLS`
-(so anim + av + the tool API all compile OUT of a lean build — smallest binary, but a lean-built *generated
-app* that used `ImAppTween` could not link it), OR is `internal.h` always-available (imgui_internal.h-style)
-with only the Composer/Previewer/Debugger IMPL `.cpp`s gated (so anim/av stay linkable, just re-homed)?
-The anim builtins are emitted into generated apps (F56 `PushAppControl<ImAppTween>`), which argues for the
-latter. Needs the user's call before code.
+**DECIDED — `imguiapp_internal.h` is ALWAYS available (imgui_internal.h-style), NOT gated.** The switch
+gates only the tool IMPL `.cpp`s (Composer/Previewer/Debugger: nodes/canvas/preview/demo) + Phase-B's source
+embed. So a lean build keeps the runtime + anim builtins + the recorder API linkable (a generated app can
+still `PushAppControl<ImAppTween>`, F56), while dropping the editor/codegen/preview UI and the embedded
+source. The "no source text in the `.exe`" goal is met by gating the emitter (`imguiapp_nodes.cpp`, where the
+generated-code strings live) + Phase-B's embed — not by removing anim/av.
 
 ## 3. `imguiapp_internal.h`
 
@@ -59,10 +59,13 @@ reorder is Phase C).
 
 ## 4. The gate
 
-- `imguiapp_config.h`: `// #define IMGUIX_DISABLE_TOOLS` documented; when defined, tools compile out.
-- Each tool TU wraps its body: `#ifndef IMGUIX_DISABLE_TOOLS` … `#endif` — so `imguiapp_nodes.cpp` etc.
-  compile to an empty object when disabled (imgui's own pattern for `IMGUI_DISABLE`). The tool declarations
-  in `imguiapp_internal.h` are likewise gated, so a consumer that includes it under the macro sees nothing.
+- `imguiapp_config.h`: `// #define IMGUIX_DISABLE_TOOLS` documented; when defined, the tools compile out.
+- `imguiapp_internal.h` is NOT gated — it always declares the extended/tool API (Option 1). Only the tool
+  IMPL TUs wrap their bodies: `#ifndef IMGUIX_DISABLE_TOOLS` … `#endif` — so `imguiapp_nodes.cpp`,
+  `imguiapp_canvas.cpp`, `imguiapp_preview.cpp`, `imguiapp_preview_dll.cpp`, `imguiapp_demo.cpp` compile to
+  an empty object when disabled (imgui's own pattern for `IMGUI_DISABLE`). Calls into a gated tool API from
+  a lean build are a link error by construction (there's no impl) — the composer/host code that calls them
+  is itself gated/not-built.
 - CMake (`imguix/CMakeLists.txt`): the tool sources stay in `IMGUIX_SOURCES` (they self-empty); add an
   option `IMGUIX_ENABLE_TOOLS` (default ON) that, when OFF, adds `IMGUIX_DISABLE_TOOLS` to
   `IMGUIX_COMPILE_DEFINITIONS`. The demo/composer executable target is not built in the lean config.
