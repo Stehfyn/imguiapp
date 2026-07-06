@@ -4,7 +4,7 @@
 // by construction, so SupportsRealtimePts is true for every timing mode.
 
 #include "imguiapp_impl_qoi.h"
-#include "imguiapp_qoi.h"
+#include "imguiapp_internal.h"
 #include "imgui_internal.h"   // ImFileOpen/ImFileWrite/ImFileClose, ImFormatString
 
 #include <cstdio>
@@ -103,7 +103,7 @@ static bool ImGuiAppQoiSeq_WriteFrame(ImGuiAppAVEncoder* self, const ImGuiAppAVF
   if (frame->Width != bd->Width || frame->Height != bd->Height || bd->Width <= 0 || bd->Height <= 0)
     return false;
 
-  if (!ImQoiEncode(frame->Pixels, frame->Width, frame->Height, frame->PitchBytes, &bd->Encoded))
+  if (!ImGui::AppAVImageEncode(frame->Pixels, frame->Width, frame->Height, frame->PitchBytes, &bd->Encoded))
     return false;
 
   char frame_path[560];
@@ -225,7 +225,7 @@ IMGUI_API bool ImGuiApp_ImplQoi_ExtractEmbeddedMeta(const char* dir, int embed_r
       break;   // sequence end (or a missing frame: the stream truncates here)
     int w = 0;
     int h = 0;
-    const bool decoded = ImQoiDecode(bytes, (int)size, &rgba, &w, &h);
+    const bool decoded = ImGui::AppAVImageDecode(bytes, (int)size, &rgba, &w, &h);
     IM_FREE(bytes);
     if (!decoded)
       return out_meta->Size > 0;
@@ -247,7 +247,7 @@ IMGUI_API bool ImGuiApp_ImplQoi_DecodeFrame(const char* dir, int frame_ordinal, 
     return false;
   int w = 0;
   int h = 0;
-  const bool decoded = ImQoiDecode(bytes, (int)size, out_rgba, &w, &h);
+  const bool decoded = ImGui::AppAVImageDecode(bytes, (int)size, out_rgba, &w, &h);
   IM_FREE(bytes);
   if (!decoded)
     return false;

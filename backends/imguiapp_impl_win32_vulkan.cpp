@@ -1,7 +1,7 @@
 ﻿
 #include "imguiapp_impl_win32_vulkan.h"
 #include "imguiapp.h"
-#include "imguiapp_av.h"          // ImGuiAppAVFrame (CaptureFrame payload)
+#include "imguiapp_internal.h"          // ImGuiAppAVFrame (CaptureFrame payload)
 #include "imguiapp_impl_win32_state.h"
 
 #include "imgui_impl_win32.h"

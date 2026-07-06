@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include "imguiapp_av.h"
+#include "imguiapp_internal.h"
 
 IMGUI_API ImGuiAppAVEncoder* ImGuiApp_ImplLibav_CreateEncoder();
 
