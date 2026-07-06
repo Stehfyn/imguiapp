@@ -12170,6 +12170,66 @@ namespace ImGui
     out->appendf("  int len = size < cap ? size : cap;\n");
     out->appendf("  if (len > 0) memcpy((char*)e->Ptr + off, in, (size_t)len);\n");
     out->appendf("  return len;\n}\n");
+
+    // F78.5 in-panel render: the rendered frame crosses the boundary as COPIED BYTES too -- nothing shared.
+    // SetDisplaySize resizes the DLL's own viewport to the host panel (next NewFrame reads it); CopyFontAtlas
+    // hands out the module's RGBA32 font atlas; CopyDrawData serializes the last-ticked ImDrawData (verts +
+    // indices + per-command clip/offsets, all POD with the host's identical imgui.h layout). The host CPU-
+    // rasterizes those into panel pixels and shows them -- no GPU, pointer or context is shared.
+    out->appendf("extern \"C\" __declspec(dllexport) void ImGuiAppPreview_SetDisplaySize(void* h, int w, int hgt)\n{\n");
+    out->appendf("  ImGuiAppPreviewInstance* inst = (ImGuiAppPreviewInstance*)h;\n");
+    out->appendf("  if (inst == nullptr || w <= 0 || hgt <= 0) return;\n");
+    out->appendf("  ImGui::SetCurrentContext(inst->Ctx);\n");
+    out->appendf("  ImGui::GetIO().DisplaySize = ImVec2((float)w, (float)hgt);\n}\n");
+    out->appendf("extern \"C\" __declspec(dllexport) int ImGuiAppPreview_CopyFontAtlas(void* h, unsigned char* rgba, int cap, int* out_w, int* out_h)\n{\n");
+    out->appendf("  ImGuiAppPreviewInstance* inst = (ImGuiAppPreviewInstance*)h;\n");
+    out->appendf("  ImGui::SetCurrentContext(inst->Ctx);\n");
+    out->appendf("  unsigned char* px = nullptr; int w = 0, hgt = 0;\n");
+    out->appendf("  ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &hgt);\n");
+    out->appendf("  if (out_w != nullptr) *out_w = w;\n");
+    out->appendf("  if (out_h != nullptr) *out_h = hgt;\n");
+    out->appendf("  int need = w * hgt * 4;\n");
+    out->appendf("  if (px == nullptr || need <= 0 || cap < need) return 0;\n");
+    out->appendf("  memcpy(rgba, px, (size_t)need);\n");
+    out->appendf("  return need;\n}\n");
+    // Blob: [magic:i32][DisplayPos.xy DisplaySize.xy:f32*4][cmdLists:i32][totalVtx:i32][totalIdx:i32], then per
+    // list [vtx:i32][idx:i32][cmd:i32][ImDrawVert*vtx][ImDrawIdx*idx][ per cmd: ClipRect.xyzw:f32*4, VtxOffset,
+    // IdxOffset, ElemCount:u32 ]. Two-pass: out_size holds the required byte count; buf is filled only when it
+    // fits (host grows + retries). Header is 32 bytes; each cmd record is 28 bytes.
+    out->appendf("extern \"C\" __declspec(dllexport) int ImGuiAppPreview_CopyDrawData(void* h, void* buf, int cap, int* out_size)\n{\n");
+    out->appendf("  ImGuiAppPreviewInstance* inst = (ImGuiAppPreviewInstance*)h;\n");
+    out->appendf("  ImGui::SetCurrentContext(inst->Ctx);\n");
+    out->appendf("  ImDrawData* dd = ImGui::GetDrawData();\n");
+    out->appendf("  int need = 32;\n");
+    out->appendf("  if (dd != nullptr)\n");
+    out->appendf("    for (int i = 0; i < dd->CmdListsCount; i++)\n    {\n");
+    out->appendf("      const ImDrawList* dl = dd->CmdLists[i];\n");
+    out->appendf("      need += 12 + dl->VtxBuffer.Size * (int)sizeof(ImDrawVert) + dl->IdxBuffer.Size * (int)sizeof(ImDrawIdx) + dl->CmdBuffer.Size * 28;\n");
+    out->appendf("    }\n");
+    out->appendf("  if (out_size != nullptr) *out_size = need;\n");
+    out->appendf("  if (buf == nullptr || cap < need || dd == nullptr) return 0;\n");
+    out->appendf("  char* p = (char*)buf;\n");
+    out->appendf("  int magic = 0x494D4444;\n");
+    out->appendf("  memcpy(p, &magic, 4); p += 4;\n");
+    out->appendf("  float hdr[4]; hdr[0] = dd->DisplayPos.x; hdr[1] = dd->DisplayPos.y; hdr[2] = dd->DisplaySize.x; hdr[3] = dd->DisplaySize.y;\n");
+    out->appendf("  memcpy(p, hdr, 16); p += 16;\n");
+    out->appendf("  int lists = dd->CmdListsCount; memcpy(p, &lists, 4); p += 4;\n");
+    out->appendf("  int totv = dd->TotalVtxCount; memcpy(p, &totv, 4); p += 4;\n");
+    out->appendf("  int toti = dd->TotalIdxCount; memcpy(p, &toti, 4); p += 4;\n");
+    out->appendf("  for (int i = 0; i < lists; i++)\n  {\n");
+    out->appendf("    const ImDrawList* dl = dd->CmdLists[i];\n");
+    out->appendf("    int vc = dl->VtxBuffer.Size, ic = dl->IdxBuffer.Size, cc = dl->CmdBuffer.Size;\n");
+    out->appendf("    memcpy(p, &vc, 4); p += 4; memcpy(p, &ic, 4); p += 4; memcpy(p, &cc, 4); p += 4;\n");
+    out->appendf("    int vb = vc * (int)sizeof(ImDrawVert); memcpy(p, dl->VtxBuffer.Data, (size_t)vb); p += vb;\n");
+    out->appendf("    int ib = ic * (int)sizeof(ImDrawIdx); memcpy(p, dl->IdxBuffer.Data, (size_t)ib); p += ib;\n");
+    out->appendf("    for (int c = 0; c < cc; c++)\n    {\n");
+    out->appendf("      const ImDrawCmd* cmd = &dl->CmdBuffer[c];\n");
+    out->appendf("      float cr[4]; cr[0] = cmd->ClipRect.x; cr[1] = cmd->ClipRect.y; cr[2] = cmd->ClipRect.z; cr[3] = cmd->ClipRect.w;\n");
+    out->appendf("      memcpy(p, cr, 16); p += 16;\n");
+    out->appendf("      unsigned int vo = cmd->VtxOffset, io = cmd->IdxOffset, ec = cmd->UserCallback != nullptr ? 0u : cmd->ElemCount;\n");
+    out->appendf("      memcpy(p, &vo, 4); p += 4; memcpy(p, &io, 4); p += 4; memcpy(p, &ec, 4); p += 4;\n");
+    out->appendf("    }\n  }\n");
+    out->appendf("  return (int)(p - (char*)buf);\n}\n");
   }
 
   // Format a float as a C++ literal: %g alone drops the decimal point from whole values, and "8f" won't compile.

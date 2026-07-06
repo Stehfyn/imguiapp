@@ -8,9 +8,9 @@ imguix-tests imguix-core-tests imguix-headless-verify`. Naming: `AppXxx` free fu
 `namespace ImGui`; graph-model types are aggregates (no ctors); tests are `stepNN_*` / `canvas_*` (nodes),
 `Test_*` (core), `composer_*` (headless).
 
-## V1 — see the DLL preview live in-panel  (IN PROGRESS)
+## V1 — see the DLL preview live in-panel  (DONE)
 
-- [ ] **V1 DLL preview in-panel render** — the F78 copy-marshalling preview compiles + runs real code but
+- [x] **V1 DLL preview in-panel render** — the F78 copy-marshalling preview compiles + runs real code but
   renders in the module's OWN `ImGuiContext` (headless, no GPU); its frame must cross the C-ABI as bytes and
   display in the Composer's Preview panel. Closes the F78/F78.5 in-panel residual.
   - **Emitted module ABI** (`GenerateAppPreviewModuleCode`, `imguix/imguiapp/imguiapp_nodes.cpp`): add an
@@ -33,6 +33,15 @@ imguix-tests imguix-core-tests imguix-headless-verify`. Naming: `AppXxx` free fu
   *Accept: a headless core test (skip-with-note without a toolset) builds a one-control graph with a visible
   widget (or a `MethodBody` OnRender drawing a filled rect), compiles+loads via the DLL backend, ticks,
   `CopyFrame`s, and asserts the frame is NON-BLANK (a pixel differs from the clear colour). ProofDrift green.*
+  DONE: drawdata-serialization + host CPU-rasterization (offscreen-GPU-in-a-runtime-DLL rejected as heavy).
+  The emitted module gained three additive `extern "C"` exports (`ImGuiAppPreview_SetDisplaySize` /
+  `_CopyFontAtlas` / `_CopyDrawData`; ABI 20260705->20260706, required at load so a stale DLL is refused);
+  after `_Tick` the host copies the DLL's `ImDrawData` + atlas out and `AppPreviewDllRasterizeFrame`
+  (`imguiapp_preview_dll.cpp`) fills a panel RGBA buffer, blitted via `ComposerUploadRgbaTexture` +
+  `ImGui::Image()` in the Preview panel (`imguiapp_demo.cpp`) behind an Interp/DLL toggle; interpreter stays
+  the fallback. `Test_dll_preview_inpanel_render` (core) asserts a non-blank frame. core 414/0, nodes
+  112/112, headless 31/31 + verify OK. Residual: host input forwarding (DLL-backend widgets not yet
+  interactive in-panel) + the method-body authoring UI.
 
 ## V2 — author control method bodies in-app
 

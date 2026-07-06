@@ -16,6 +16,7 @@
 #include "imguiapp_canvas.h"
 #include "imguiapp_av.h"                     // F63: run index + FILE-mode transport view
 #include "imguiapp_preview.h"                // F68: live preview interpreter session
+#include "imguiapp_preview_dll.h"            // F78: compiled-DLL preview backend (in-panel render)
 #include "backends/imguiapp_impl_qoi.h"      // F63: on-demand QOI frame decode + meta extract
 #ifdef IMGUIX_HAS_LIBAV
 #include "backends/imguiapp_impl_libav.h"    // F63: on-demand mp4 frame decode + meta extract
@@ -885,6 +886,42 @@ namespace
       tr->FrameTexTick = (int)v->ShownTick;
     }
     return true;
+  }
+
+  // Upload a host-owned RGBA32 buffer into an ImTextureData (created once per size, then full-rect updated),
+  // the F63 blit path reused for the F78.5 in-panel DLL frame. *tex/*tw/*th are the caller's cached texture
+  // and its dimensions. Returns the texture ref to Image().
+  static ImTextureRef ComposerUploadRgbaTexture(ImTextureData** tex, int* tw, int* th, const unsigned char* rgba, int w, int h)
+  {
+    if (*tex != nullptr && (*tex)->Status != ImTextureStatus_Destroyed && (*tw != w || *th != h))
+    {
+      (*tex)->WantDestroyNextFrame = true;   // size changed: hand the old texture back, take a fresh object
+      *tex = nullptr;
+    }
+    if (*tex == nullptr)
+    {
+      *tex = IM_NEW(ImTextureData)();
+      ImGui::RegisterUserTexture(*tex);
+      *tw = w;
+      *th = h;
+    }
+    ImTextureData* t = *tex;
+    if (t->Status == ImTextureStatus_Destroyed)
+    {
+      t->Create(ImTextureFormat_RGBA32, w, h);
+      memcpy(t->GetPixels(), rgba, (size_t)w * h * 4);
+    }
+    else
+    {
+      memcpy(t->GetPixels(), rgba, (size_t)w * h * 4);
+      t->UpdateRect.x = 0;
+      t->UpdateRect.y = 0;
+      t->UpdateRect.w = (unsigned short)w;
+      t->UpdateRect.h = (unsigned short)h;
+      t->UsedRect = t->UpdateRect;
+      t->SetStatus(ImTextureStatus_WantUpdates);
+    }
+    return t->GetTexRef();
   }
 
   // Timeline strip: the F29 slider widened into a marked rail. Per-tick markers come from the F62
@@ -2709,6 +2746,24 @@ namespace
                     ed->PreviewSig = pvsig;
                 }
 
+                // F78.5 DLL backend: the compiled real program. Created lazily when selected AND a toolset
+                // exists; a signature change recompiles + hot-swaps (preserve-by-label). A compile/load failure
+                // leaves PreviewDllErr set and the panel renders the interpreter surface instead.
+                const bool dll_toolset = ImGui::AppPreviewDllToolsetAvailable();
+                if (ed->PreviewUseDll && dll_toolset)
+                {
+                  if (ed->PreviewDll == nullptr)
+                  {
+                    ed->PreviewDll = ImGui::AppPreviewDllCreate(graph, "imguix_dllpreview_composer", ed->PreviewDllErr, IM_ARRAYSIZE(ed->PreviewDllErr));
+                    ed->PreviewDllSig = pvsig;
+                  }
+                  else if (pvsig != ed->PreviewDllSig)
+                  {
+                    if (ImGui::AppPreviewDllReload(ed->PreviewDll, graph, ed->PreviewDllErr, IM_ARRAYSIZE(ed->PreviewDllErr)))
+                      ed->PreviewDllSig = pvsig;
+                  }
+                }
+
                 // Transport: run / pause / reinit. Icon+text buttons (never bare glyphs), theme-styled.
                 ImGui::AlignTextToFramePadding();
                 if (ImGui::Button(ed->PreviewRun ? ICON_FA_PAUSE "  Pause###pvrun" : ICON_FA_PLAY "  Run###pvrun"))
@@ -2720,9 +2775,27 @@ namespace
                   ComposerPreviewRecordStop(ed, doc->Transport);   // a live take can't outlive its app
                   ImGui::AppPreviewDestroy(ed->Preview);   // rebuilt from field defaults next frame
                   ed->Preview = nullptr;
+                  ImGui::AppPreviewDllDestroy(ed->PreviewDll);   // F78.5: the DLL session rebuilds from defaults too
+                  ed->PreviewDll = nullptr;
+                  ed->PreviewDllErr[0] = 0;
                 }
                 ImGui::SetItemTooltip("Rebuild the preview from field defaults (discard live values)");
                 ImGui::SameLine();
+
+                // F78.5: backend selector -- interpreter (default) vs the compiled DLL (real program). Only
+                // offered when a toolset was located; otherwise the interpreter is the only path.
+                if (dll_toolset)
+                {
+                  if (ImGui::Button(ed->PreviewUseDll ? ICON_FA_MICROCHIP "  DLL###pvbackend" : ICON_FA_CODE "  Interp###pvbackend"))
+                  {
+                    ed->PreviewUseDll = !ed->PreviewUseDll;
+                    ed->PreviewDllErr[0] = 0;
+                  }
+                  ImGui::SetItemTooltip(ed->PreviewUseDll
+                    ? "Backend: compiled DLL (the real program, rendered in-panel). Click for the interpreter."
+                    : "Backend: interpreter. Click to compile + run the real program (DLL).");
+                  ImGui::SameLine();
+                }
 
                 // F70: record the preview session to an F61 run container the playback debugger opens.
                 const bool pv_recording = ed->PreviewRec != nullptr;
@@ -2744,8 +2817,13 @@ namespace
                 }
                 ImGui::SetItemTooltip(pv_recording ? "Stop recording; export the run container + open it in the transport" : "Record the previewed model to an F61 run container");
                 ImGui::SameLine();
-                if (pverr[0] != 0)
+                const bool dll_active = ed->PreviewUseDll && dll_toolset && ed->PreviewDll != nullptr;
+                if (ed->PreviewUseDll && dll_toolset && ed->PreviewDllErr[0] != 0)
+                  ImGui::TextColored(ImVec4(0.92f, 0.45f, 0.45f, 1.0f), ICON_FA_TRIANGLE_EXCLAMATION "  %s", ed->PreviewDllErr);
+                else if (pverr[0] != 0)
                   ImGui::TextColored(ImVec4(0.92f, 0.45f, 0.45f, 1.0f), ICON_FA_TRIANGLE_EXCLAMATION "  %s", pverr);
+                else if (dll_active)
+                  ImGui::TextDisabled("Compiled DLL -- the real program, rendered in-panel (recompiles on edit)");
                 else
                   ImGui::TextDisabled("Interpreted live -- edits apply next frame");
                 ImGui::Separator();
@@ -2755,7 +2833,32 @@ namespace
                 // selected/hovered node's widgets halo here; a widget click selects its node in the canvas.
                 if (ImGui::BeginChild("##pvsurface", ImVec2(-FLT_MIN, -FLT_MIN)))
                 {
-                  if (ed->Preview != nullptr)
+                  // F78.5: DLL backend rendered in-panel. Tick the compiled program at the panel size, copy its
+                  // rendered frame across the boundary (draw data + atlas, bytes only), CPU-rasterize it, and
+                  // blit it as a texture. A frame with no geometry (or a create failure) falls back to the
+                  // interpreter surface below.
+                  bool dll_shown = false;
+                  if (dll_active)
+                  {
+                    const ImVec2 avail = ImGui::GetContentRegionAvail();
+                    const int fw = (int)avail.x;
+                    const int fh = (int)avail.y;
+                    if (fw > 0 && fh > 0)
+                    {
+                      ImGui::AppPreviewDllSetDisplaySize(ed->PreviewDll, fw, fh);
+                      if (ed->PreviewRun)
+                        ImGui::AppPreviewDllTick(ed->PreviewDll, io.DeltaTime);
+                      const ImU32 clear = ImGui::GetColorU32(ImGuiCol_WindowBg);
+                      if (ImGui::AppPreviewDllRasterizeFrame(ed->PreviewDll, fw, fh, clear, &ed->PreviewDllRgba))
+                      {
+                        const ImTextureRef ref = ComposerUploadRgbaTexture(&ed->PreviewDllTex, &ed->PreviewDllTexW, &ed->PreviewDllTexH,
+                                                                           ed->PreviewDllRgba.Data, fw, fh);
+                        ImGui::Image(ref, ImVec2((float)fw, (float)fh));
+                        dll_shown = true;
+                      }
+                    }
+                  }
+                  if (!dll_shown && ed->Preview != nullptr)
                   {
                     int hov_src = 0;
                     const int canvas_hover = ImGui::AppGraphHoveredNode(graph, &hov_src);
@@ -2775,7 +2878,7 @@ namespace
                     if (pv_click >= 0)
                       selection = pv_click;
                   }
-                  else
+                  else if (!dll_shown)
                   {
                     ImGui::TextDisabled("No preview -- the graph has a dependency cycle or no controls yet.");
                   }

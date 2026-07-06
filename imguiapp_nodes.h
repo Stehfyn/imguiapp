@@ -591,6 +591,7 @@ struct ImGuiAppEditorUndo
 
 struct ImGuiAppPreview;       // F68 live preview session (imguiapp_preview.h); opaque, held by pointer here
 struct ImGuiAppMetaRecorder;  // F70 meta-only run recorder (imguiapp_av.h); opaque, held by pointer here
+struct ImGuiAppPreviewDll;    // F78 DLL preview session (imguiapp_preview_dll.h); opaque, held by pointer here
 
 // Editor session state, one per graph (the document): the editor's cross-frame values ride the
 // model object they describe, like Selection/ViewScope/ScopeCams. All transient, not serialized.
@@ -684,6 +685,14 @@ struct ImGuiAppEditorState
   ImU64                                PreviewRecTick = 0;                                // F70: ticks recorded this take (== the exported run's tick spine)
   int                                  PreviewRecSnapEvery = 30;                          // F70: StateSnapshot cadence in ticks (a nearest-snapshot restore point every N)
   char                                 PreviewRecPath[256] = "headless-artifacts/preview-session.meta";  // F70: exported container path
+  bool                                 PreviewUseDll = false;                             // F78.5: preview backend selector -- DLL (compiled real program) vs the interpreter (default)
+  mutable ImGuiAppPreviewDll*          PreviewDll = nullptr;                              // F78.5: compiled-DLL preview session (heap; opaque; created lazily, freed on Reinit / process exit)
+  mutable ImGuiID                      PreviewDllSig = 0;                                 // F78.5: AppGraphSignature the DLL preview was last compiled at; a change recompiles + hot-swaps
+  mutable ImTextureData*               PreviewDllTex = nullptr;                           // F78.5: host texture holding the CPU-rasterized DLL frame (created per panel size)
+  int                                  PreviewDllTexW = 0;                                // F78.5: PreviewDllTex width
+  int                                  PreviewDllTexH = 0;                                // F78.5: PreviewDllTex height
+  ImVector<unsigned char>              PreviewDllRgba;                                    // F78.5: reused RGBA32 scratch the DLL frame rasterizes into
+  char                                 PreviewDllErr[192] = "";                           // F78.5: last DLL compile/load diagnostic (shown in the panel; empty = ok)
 };
 
 // The whole authored graph. One monotonic id allocator shared by every node/port/body-attr/link:
@@ -1143,7 +1152,7 @@ namespace ImGui
   IMGUI_API void                GenerateAppShellCode(const ImGuiAppGraph* g, ImGuiTextBuffer* out);
 
 #ifndef IMGUIAPP_PREVIEW_ABI
-#define IMGUIAPP_PREVIEW_ABI 20260705u   // host<->DLL preview ABI tag (F78); bump on any layout/vtable/signature change
+#define IMGUIAPP_PREVIEW_ABI 20260706u   // host<->DLL preview ABI tag (F78); bump on any layout/vtable/signature change
 #endif
   // DLL preview module (F78): the shell composition body + host scaffold, but the entry point is a C-ABI
   // (extern "C" __declspec(dllexport) ImGuiAppPreview_Create/_Destroy/_ABI) instead of main(). A runtime-

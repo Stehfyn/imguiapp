@@ -37,17 +37,29 @@ struct ImGuiAppPreviewDll
   typedef void         (*TickFn)(void*, float);
   typedef int          (*CopyOutFn)(void*, const char*, int, void*, int);
   typedef int          (*CopyInFn)(void*, const char*, int, const void*, int);
+  typedef void         (*SetSizeFn)(void*, int, int);
+  typedef int          (*CopyAtlasFn)(void*, unsigned char*, int, int*, int*);
+  typedef int          (*CopyDrawFn)(void*, void*, int, int*);
 
-  HMODULE   Dll = nullptr;
-  void*     Handle = nullptr;    // opaque instance owned by the module
-  AbiFn     Abi = nullptr;
-  CreateFn  Create = nullptr;
-  DestroyFn Destroy = nullptr;
-  TickFn    Tick = nullptr;
-  CopyOutFn CopyOut = nullptr;
-  CopyInFn  CopyIn = nullptr;
-  int       Counter = 0;         // monotonic DLL name -- never overwrite a mapped DLL
-  char      ScratchDir[1024] = "";
+  HMODULE     Dll = nullptr;
+  void*       Handle = nullptr;    // opaque instance owned by the module
+  AbiFn       Abi = nullptr;
+  CreateFn    Create = nullptr;
+  DestroyFn   Destroy = nullptr;
+  TickFn      Tick = nullptr;
+  CopyOutFn   CopyOut = nullptr;
+  CopyInFn    CopyIn = nullptr;
+  SetSizeFn   SetSize = nullptr;
+  CopyAtlasFn CopyAtlas = nullptr;
+  CopyDrawFn  CopyDraw = nullptr;
+  int         Counter = 0;         // monotonic DLL name -- never overwrite a mapped DLL
+  char        ScratchDir[1024] = "";
+  ImVector<unsigned char> AtlasBuf;   // reused RGBA32 font-atlas copy (frame render)
+  int         AtlasW = 0;
+  int         AtlasH = 0;
+  ImVector<char> DrawBuf;             // reused draw-data blob (frame render)
+  ImVector<ImDrawVert> VtxScratch;    // aligned per-list vertex copy out of the byte blob
+  ImVector<ImDrawIdx>  IdxScratch;    // aligned per-list index copy out of the byte blob
 #endif
 };
 
@@ -184,7 +196,11 @@ namespace ImGui
     ImGuiAppPreviewDll::TickFn    tick    = (ImGuiAppPreviewDll::TickFn)   GetProcAddress(m, "ImGuiAppPreview_Tick");
     ImGuiAppPreviewDll::CopyOutFn cout    = (ImGuiAppPreviewDll::CopyOutFn)GetProcAddress(m, "ImGuiAppPreview_CopyOut");
     ImGuiAppPreviewDll::CopyInFn  cin     = (ImGuiAppPreviewDll::CopyInFn) GetProcAddress(m, "ImGuiAppPreview_CopyIn");
-    if (abi == nullptr || create == nullptr || destroy == nullptr || tick == nullptr || cout == nullptr || cin == nullptr)
+    ImGuiAppPreviewDll::SetSizeFn   ssz   = (ImGuiAppPreviewDll::SetSizeFn)  GetProcAddress(m, "ImGuiAppPreview_SetDisplaySize");
+    ImGuiAppPreviewDll::CopyAtlasFn catl  = (ImGuiAppPreviewDll::CopyAtlasFn)GetProcAddress(m, "ImGuiAppPreview_CopyFontAtlas");
+    ImGuiAppPreviewDll::CopyDrawFn  cdraw = (ImGuiAppPreviewDll::CopyDrawFn) GetProcAddress(m, "ImGuiAppPreview_CopyDrawData");
+    if (abi == nullptr || create == nullptr || destroy == nullptr || tick == nullptr || cout == nullptr || cin == nullptr
+     || ssz == nullptr || catl == nullptr || cdraw == nullptr)
     {
       FreeLibrary(m);
       ImFormatString(err, err_size, "preview module missing a C-ABI export");
@@ -212,6 +228,9 @@ namespace ImGui
     s->Tick = tick;
     s->CopyOut = cout;
     s->CopyIn = cin;
+    s->SetSize = ssz;
+    s->CopyAtlas = catl;
+    s->CopyDraw = cdraw;
     return true;
   }
 
@@ -340,6 +359,198 @@ namespace ImGui
     return true;
   }
 
+  void AppPreviewDllSetDisplaySize(ImGuiAppPreviewDll* s, int w, int h)
+  {
+    if (s != nullptr && s->SetSize != nullptr && s->Handle != nullptr)
+      s->SetSize(s->Handle, w, h);
+  }
+
+  // Rasterize one imgui triangle into a w*h RGBA32 buffer: barycentric coverage (either winding), nearest
+  // atlas sample, per-vertex color interpolation, alpha-over compositing. Vertices are in buffer space
+  // (DisplayPos already subtracted); bbox is clamped to the command's clip rect. Preview fidelity, not a
+  // pixel-exact backend (no MSAA / gamma).
+  static void RasterTri(unsigned char* dst, int w, int h,
+                        const ImDrawVert* a, const ImDrawVert* b, const ImDrawVert* c,
+                        const unsigned char* atlas, int aw, int ah,
+                        int clip_x0, int clip_y0, int clip_x1, int clip_y1)
+  {
+    const float area = (b->pos.x - a->pos.x) * (c->pos.y - a->pos.y) - (b->pos.y - a->pos.y) * (c->pos.x - a->pos.x);
+    if (area == 0.0f)
+      return;
+    const float inv_area = 1.0f / area;
+
+    int x0 = (int)ImFloor(ImMin(a->pos.x, ImMin(b->pos.x, c->pos.x)));
+    int y0 = (int)ImFloor(ImMin(a->pos.y, ImMin(b->pos.y, c->pos.y)));
+    int x1 = (int)ImCeil(ImMax(a->pos.x, ImMax(b->pos.x, c->pos.x)));
+    int y1 = (int)ImCeil(ImMax(a->pos.y, ImMax(b->pos.y, c->pos.y)));
+    if (x0 < clip_x0) x0 = clip_x0;
+    if (y0 < clip_y0) y0 = clip_y0;
+    if (x1 > clip_x1) x1 = clip_x1;
+    if (y1 > clip_y1) y1 = clip_y1;
+
+    for (int y = y0; y < y1; y++)
+      for (int x = x0; x < x1; x++)
+      {
+        const float px = (float)x + 0.5f;
+        const float py = (float)y + 0.5f;
+        float w0 = (b->pos.x - px) * (c->pos.y - py) - (b->pos.y - py) * (c->pos.x - px);
+        float w1 = (c->pos.x - px) * (a->pos.y - py) - (c->pos.y - py) * (a->pos.x - px);
+        float w2 = area - w0 - w1;
+        w0 *= inv_area;
+        w1 *= inv_area;
+        w2 *= inv_area;
+        if (w0 < 0.0f || w1 < 0.0f || w2 < 0.0f)
+          continue;
+
+        const float u = w0 * a->uv.x + w1 * b->uv.x + w2 * c->uv.x;
+        const float v = w0 * a->uv.y + w1 * b->uv.y + w2 * c->uv.y;
+        float tr = 1.0f, tg = 1.0f, tb = 1.0f, ta = 1.0f;
+        if (atlas != nullptr && aw > 0 && ah > 0)
+        {
+          int tx = (int)(u * (float)aw);
+          int ty = (int)(v * (float)ah);
+          tx = tx < 0 ? 0 : (tx >= aw ? aw - 1 : tx);
+          ty = ty < 0 ? 0 : (ty >= ah ? ah - 1 : ty);
+          const unsigned char* t = atlas + ((size_t)ty * aw + tx) * 4;
+          tr = t[0] / 255.0f; tg = t[1] / 255.0f; tb = t[2] / 255.0f; ta = t[3] / 255.0f;
+        }
+
+        const ImU32 ca = a->col, cb = b->col, cc2 = c->col;
+        const float cr = (w0 * ((ca >> IM_COL32_R_SHIFT) & 0xFF) + w1 * ((cb >> IM_COL32_R_SHIFT) & 0xFF) + w2 * ((cc2 >> IM_COL32_R_SHIFT) & 0xFF)) / 255.0f * tr;
+        const float cg = (w0 * ((ca >> IM_COL32_G_SHIFT) & 0xFF) + w1 * ((cb >> IM_COL32_G_SHIFT) & 0xFF) + w2 * ((cc2 >> IM_COL32_G_SHIFT) & 0xFF)) / 255.0f * tg;
+        const float cbl = (w0 * ((ca >> IM_COL32_B_SHIFT) & 0xFF) + w1 * ((cb >> IM_COL32_B_SHIFT) & 0xFF) + w2 * ((cc2 >> IM_COL32_B_SHIFT) & 0xFF)) / 255.0f * tb;
+        const float src_a = (w0 * ((ca >> IM_COL32_A_SHIFT) & 0xFF) + w1 * ((cb >> IM_COL32_A_SHIFT) & 0xFF) + w2 * ((cc2 >> IM_COL32_A_SHIFT) & 0xFF)) / 255.0f * ta;
+        if (src_a <= 0.0f)
+          continue;
+
+        unsigned char* d = dst + ((size_t)y * w + x) * 4;
+        const float inv = 1.0f - src_a;
+        d[0] = (unsigned char)(cr * 255.0f * src_a + d[0] * inv + 0.5f);
+        d[1] = (unsigned char)(cg * 255.0f * src_a + d[1] * inv + 0.5f);
+        d[2] = (unsigned char)(cbl * 255.0f * src_a + d[2] * inv + 0.5f);
+        d[3] = (unsigned char)(src_a * 255.0f + d[3] * inv + 0.5f);
+      }
+  }
+
+  bool AppPreviewDllRasterizeFrame(ImGuiAppPreviewDll* s, int w, int h, unsigned int clear_col, ImVector<unsigned char>* out_rgba)
+  {
+    if (out_rgba == nullptr || w <= 0 || h <= 0)
+      return false;
+    out_rgba->resize(w * h * 4);
+    // Fill with the clear color (channels laid out to match the RGBA32 texture upload path).
+    unsigned char* dst = out_rgba->Data;
+    const unsigned char c0 = (unsigned char)((clear_col >> IM_COL32_R_SHIFT) & 0xFF);
+    const unsigned char c1 = (unsigned char)((clear_col >> IM_COL32_G_SHIFT) & 0xFF);
+    const unsigned char c2 = (unsigned char)((clear_col >> IM_COL32_B_SHIFT) & 0xFF);
+    const unsigned char c3 = (unsigned char)((clear_col >> IM_COL32_A_SHIFT) & 0xFF);
+    for (int i = 0; i < w * h; i++)
+    {
+      dst[i * 4 + 0] = c0;
+      dst[i * 4 + 1] = c1;
+      dst[i * 4 + 2] = c2;
+      dst[i * 4 + 3] = c3;
+    }
+    if (s == nullptr || s->CopyDraw == nullptr || s->CopyAtlas == nullptr || s->Handle == nullptr)
+      return false;
+
+    // Font atlas across the boundary (copied once per size; the preview keeps a stable atlas).
+    int aw = 0, ah = 0;
+    s->CopyAtlas(s->Handle, nullptr, 0, &aw, &ah);
+    if (aw > 0 && ah > 0 && (s->AtlasW != aw || s->AtlasH != ah || s->AtlasBuf.Size < aw * ah * 4))
+    {
+      s->AtlasBuf.resize(aw * ah * 4);
+      if (s->CopyAtlas(s->Handle, s->AtlasBuf.Data, s->AtlasBuf.Size, &aw, &ah) > 0)
+      {
+        s->AtlasW = aw;
+        s->AtlasH = ah;
+      }
+    }
+
+    // Draw-data blob across the boundary (two-pass: size, then fill).
+    int need = 0;
+    s->CopyDraw(s->Handle, nullptr, 0, &need);
+    if (need <= 32)
+      return false;   // header-only == no geometry
+    if (s->DrawBuf.Size < need)
+      s->DrawBuf.resize(need);
+    const int wrote = s->CopyDraw(s->Handle, s->DrawBuf.Data, s->DrawBuf.Size, &need);
+    if (wrote < 32)
+      return false;
+
+    const char* p = s->DrawBuf.Data;
+    const char* end = p + wrote;
+    int magic = 0;
+    memcpy(&magic, p, 4); p += 4;
+    if (magic != 0x494D4444)
+      return false;
+    float hdr[4];
+    memcpy(hdr, p, 16); p += 16;
+    const float disp_x = hdr[0];
+    const float disp_y = hdr[1];
+    int lists = 0, totv = 0, toti = 0;
+    memcpy(&lists, p, 4); p += 4;
+    memcpy(&totv, p, 4); p += 4;
+    memcpy(&toti, p, 4); p += 4;
+
+    const unsigned char* atlas = s->AtlasBuf.Size > 0 ? s->AtlasBuf.Data : nullptr;
+    bool any = false;
+    for (int i = 0; i < lists && p < end; i++)
+    {
+      int vc = 0, ic = 0, cc = 0;
+      memcpy(&vc, p, 4); p += 4;
+      memcpy(&ic, p, 4); p += 4;
+      memcpy(&cc, p, 4); p += 4;
+      // Copy into aligned scratch: the blob packs lists back-to-back, so a list's vertex block can land at a
+      // 2-byte (not 4-byte) offset -- reading ImDrawVert straight from there would be misaligned.
+      s->VtxScratch.resize(vc);
+      if (vc > 0) memcpy(s->VtxScratch.Data, p, (size_t)vc * sizeof(ImDrawVert));
+      p += (size_t)vc * sizeof(ImDrawVert);
+      s->IdxScratch.resize(ic);
+      if (ic > 0) memcpy(s->IdxScratch.Data, p, (size_t)ic * sizeof(ImDrawIdx));
+      p += (size_t)ic * sizeof(ImDrawIdx);
+      const ImDrawVert* verts = s->VtxScratch.Data;
+      const ImDrawIdx* idx = s->IdxScratch.Data;
+      for (int c = 0; c < cc; c++)
+      {
+        float cr[4];
+        memcpy(cr, p, 16); p += 16;
+        unsigned int vo = 0, io = 0, ec = 0;
+        memcpy(&vo, p, 4); p += 4;
+        memcpy(&io, p, 4); p += 4;
+        memcpy(&ec, p, 4); p += 4;
+        if (ec == 0)
+          continue;
+        int cx0 = (int)ImFloor(cr[0] - disp_x);
+        int cy0 = (int)ImFloor(cr[1] - disp_y);
+        int cx1 = (int)ImCeil(cr[2] - disp_x);
+        int cy1 = (int)ImCeil(cr[3] - disp_y);
+        if (cx0 < 0) cx0 = 0;
+        if (cy0 < 0) cy0 = 0;
+        if (cx1 > w) cx1 = w;
+        if (cy1 > h) cy1 = h;
+        if (cx1 <= cx0 || cy1 <= cy0)
+          continue;
+        for (unsigned int e = 0; e + 3 <= ec; e += 3)
+        {
+          const unsigned int i0 = vo + idx[io + e + 0];
+          const unsigned int i1 = vo + idx[io + e + 1];
+          const unsigned int i2 = vo + idx[io + e + 2];
+          if ((int)i0 >= vc || (int)i1 >= vc || (int)i2 >= vc)
+            continue;
+          ImDrawVert a = verts[i0];
+          ImDrawVert b = verts[i1];
+          ImDrawVert cc3 = verts[i2];
+          a.pos.x -= disp_x; a.pos.y -= disp_y;
+          b.pos.x -= disp_x; b.pos.y -= disp_y;
+          cc3.pos.x -= disp_x; cc3.pos.y -= disp_y;
+          RasterTri(dst, w, h, &a, &b, &cc3, atlas, s->AtlasW, s->AtlasH, cx0, cy0, cx1, cy1);
+          any = true;
+        }
+      }
+    }
+    return any;
+  }
+
 #else   // !IMGUIX_PREVIEW_DLL_ENABLED -- no toolset baked in; the composer uses the interpreter.
 
   bool                AppPreviewDllToolsetAvailable() { return false; }
@@ -359,6 +570,8 @@ namespace ImGui
       ImFormatString(err, err_size, "DLL preview not built");
     return false;
   }
+  void                AppPreviewDllSetDisplaySize(ImGuiAppPreviewDll*, int, int) {}
+  bool                AppPreviewDllRasterizeFrame(ImGuiAppPreviewDll*, int, int, unsigned int, ImVector<unsigned char>*) { return false; }
 
 #endif
 }

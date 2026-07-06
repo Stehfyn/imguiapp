@@ -39,4 +39,16 @@ namespace ImGui
   // control's Persist bytes by COPY (out of the old instance, into the new by label) -- the F68 preserve
   // policy on the DLL path. A compile failure keeps the last-good instance running and returns false (err set).
   IMGUI_API bool                 AppPreviewDllReload(ImGuiAppPreviewDll* session, const ImGuiAppGraph* graph, char* err, int err_size);
+
+  // F78.5 in-panel render: close the "live" loop by moving the DLL app's rendered frame across the boundary as
+  // COPIED BYTES (draw data + font atlas), then CPU-rasterizing it host-side -- no GPU/context/pointer shared.
+  // SetDisplaySize resizes the DLL's own viewport so its NEXT tick renders at the panel size.
+  IMGUI_API void                 AppPreviewDllSetDisplaySize(ImGuiAppPreviewDll* session, int w, int h);
+
+  // Copy the last-ticked frame's draw data + font atlas out of the DLL and rasterize it into `out_rgba` (a
+  // `w*h*4` RGBA32 buffer, resized as needed), cleared to `clear_col` (IM_COL32) then filled with the DLL's
+  // triangles (per-vertex color * atlas alpha, clipped per command). Returns true when any geometry landed
+  // (the frame is non-blank); false when the module lacks the frame ABI or produced nothing (interpreter
+  // fallback). Call after AppPreviewDllTick so the frame reflects the current tick.
+  IMGUI_API bool                 AppPreviewDllRasterizeFrame(ImGuiAppPreviewDll* session, int w, int h, unsigned int clear_col, ImVector<unsigned char>* out_rgba);
 }
