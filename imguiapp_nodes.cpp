@@ -11600,11 +11600,19 @@ namespace ImGui
 
     out->appendf("  virtual void OnInitialize(ImGuiApp* app, %s* data", persist_type);
     emit_dep_params(out);
-    out->appendf(") const override final\n  {\n    IM_UNUSED(app); IM_UNUSED(data);\n    // TODO: initialize persistent data\n  }\n\n");
+    out->appendf(") const override final\n  {\n    IM_UNUSED(app); IM_UNUSED(data);\n");
+    if (n->Draft.MethodBody[ImGuiAppControlMethod_OnInitialize][0])   // F78.5: hand-written body replaces the stub
+      out->appendf("    %s\n  }\n\n", n->Draft.MethodBody[ImGuiAppControlMethod_OnInitialize]);
+    else
+      out->appendf("    // TODO: initialize persistent data\n  }\n\n");
 
     out->appendf("  virtual void OnGetCommand(const ImGuiApp* app, ImGuiAppCommand* cmd, const %s* data, const %s* temp_data", persist_type, temp_type);
     emit_dep_params(out);
     out->appendf(") const override final\n  {\n    IM_UNUSED(app); IM_UNUSED(cmd); IM_UNUSED(data); IM_UNUSED(temp_data);\n");
+    if (n->Draft.MethodBody[ImGuiAppControlMethod_OnGetCommand][0])   // F78.5: hand-written body replaces the modeled command emission
+      out->appendf("    %s\n  }\n\n", n->Draft.MethodBody[ImGuiAppControlMethod_OnGetCommand]);
+    else
+    {
     // Event-driven command emissions: level events read temp_data directly; edge events read the persist latch
     // OnUpdate set this frame (the Task layer updates before the Command layer collects).
     bool any_cmd_event = false;
@@ -11664,10 +11672,15 @@ namespace ImGui
         out->appendf("    // TODO: set *cmd when this control should request an app command\n");
     }
     out->appendf("  }\n\n");
+    }   // F78.5: end OnGetCommand default (custom-body else)
 
     out->appendf("  virtual void OnUpdate(float dt, %s* data, const %s* temp_data, const %s* last_temp_data", persist_type, temp_type, temp_type);
     emit_dep_params(out);
     out->appendf(") const override final\n  {\n    IM_UNUSED(dt); IM_UNUSED(data); IM_UNUSED(temp_data); IM_UNUSED(last_temp_data);\n");
+    if (n->Draft.MethodBody[ImGuiAppControlMethod_OnUpdate][0])   // F78.5: hand-written body replaces the modeled events
+      out->appendf("    %s\n  }\n\n", n->Draft.MethodBody[ImGuiAppControlMethod_OnUpdate]);
+    else
+    {
     // Field bindings -> assignment lines.
     for (int d = 0; d < deps.Size; d++)
     {
@@ -11817,10 +11830,16 @@ namespace ImGui
       }
     }
     out->appendf("  }\n\n");
+    }   // F78.5: end OnUpdate default (custom-body else)
 
     out->appendf("  virtual void OnRender(const %s* data, %s* temp_data", persist_type, temp_type);
     emit_dep_params(out);
-    out->appendf(") const override final\n  {\n    IM_UNUSED(data); IM_UNUSED(temp_data);\n    // TODO: render widgets from const data\n");
+    out->appendf(") const override final\n  {\n    IM_UNUSED(data); IM_UNUSED(temp_data);\n");
+    if (n->Draft.MethodBody[ImGuiAppControlMethod_OnRender][0])   // F78.5: hand-written body replaces the render stub
+      out->appendf("    %s\n  }\n};\n\n", n->Draft.MethodBody[ImGuiAppControlMethod_OnRender]);
+    else
+    {
+    out->appendf("    // TODO: render widgets from const data\n");
     {
       // Capture stubs: OnRender's half of the contract is recording raw input into temp_data (zeroed each
       // frame) for the next OnUpdate to compare -- list the authored temp fields so the hookup is obvious.
@@ -11837,6 +11856,7 @@ namespace ImGui
       }
     }
     out->appendf("  }\n};\n\n");
+    }   // F78.5: end OnRender default (custom-body else)
   }
 
   // Containment parent node id for a child node (its ChildOut -> a ChildIn), or -1.
@@ -12722,6 +12742,32 @@ namespace ImGui
   // [SECTION] Whole-graph persistence (SaveAppGraph / LoadAppGraph, legacy [Draft] ingest)
   //-----------------------------------------------------------------------------
 
+  // F78.5 method bodies are multi-line C++; the graph file is line-based, so escape newline -> "\n" and
+  // backslash -> "\\" to keep one body on one line. Reversible (unescape reads a backslash then one char).
+  static void AppEscapeBodyLine(char* dst, int dst_size, const char* src)
+  {
+    int o = 0;
+    for (const char* s = src; *s != 0 && o < dst_size - 3; s++)
+    {
+      if (*s == '\\')      { dst[o++] = '\\'; dst[o++] = '\\'; }
+      else if (*s == '\n') { dst[o++] = '\\'; dst[o++] = 'n';  }
+      else if (*s == '\r') { /* dropped: CRLF -> the \n carries the break */ }
+      else                 { dst[o++] = *s; }
+    }
+    dst[o] = 0;
+  }
+  static void AppUnescapeBodyLine(char* dst, int dst_size, const char* src)
+  {
+    int o = 0;
+    for (const char* s = src; *s != 0 && o < dst_size - 1; s++)
+    {
+      if (*s == '\\' && s[1] == '\\') { dst[o++] = '\\'; s++; }
+      else if (*s == '\\' && s[1] == 'n') { dst[o++] = '\n'; s++; }
+      else dst[o++] = *s;
+    }
+    dst[o] = 0;
+  }
+
   // Emit one [Node] record (shared by whole-graph and subset serialization).
   static void AppEmitNodeRecord(ImGuiTextBuffer* buf, const ImGuiAppNode* n)
   {
@@ -12754,6 +12800,13 @@ namespace ImGui
       buf->appendf("Persist=%s,%d,%d,%s\n", n->Draft.PersistFields.Data[f].Name, (int)n->Draft.PersistFields.Data[f].Type, n->Draft.PersistFields.Data[f].ArraySize, n->Draft.PersistFields.Data[f].StructType);
     for (int f = 0; f < n->Draft.TempFields.Size; f++)
       buf->appendf("Temp=%s,%d,%d,%s\n", n->Draft.TempFields.Data[f].Name, (int)n->Draft.TempFields.Data[f].Type, n->Draft.TempFields.Data[f].ArraySize, n->Draft.TempFields.Data[f].StructType);
+    for (int m = 0; m < ImGuiAppControlMethod_COUNT; m++)   // F78.5: hand-written method bodies (one line, newlines escaped)
+      if (n->Draft.MethodBody[m][0])
+      {
+        char esc[IMGUIAPP_CONTROL_BODY_MAX * 2 + 8];
+        AppEscapeBodyLine(esc, IM_ARRAYSIZE(esc), n->Draft.MethodBody[m]);
+        buf->appendf("Body=%d,%s\n", m, esc);
+      }
     for (int c = 0; c < n->Commands.Size; c++)
       buf->appendf("Command=%s\n", n->Commands.Data[c].Name);
     for (int o = 0; o < n->OpOperands.Size; o++)   // Op inline operand tokens (F55): "index,text" (text takes the remainder)
@@ -13082,6 +13135,7 @@ namespace ImGui
       else if (strncmp(p, "Port=", 5) == 0)      { if (cur) { AppGraphParsePort(cur, p + 5); int last = cur->Ports.Size ? cur->Ports.Data[cur->Ports.Size - 1].Id : 0; if (last > max_id) max_id = last; } }
       else if (strncmp(p, "Persist=", 8) == 0)   { if (cur) AppNodeParseField(&cur->Draft.PersistFields, p + 8); }
       else if (strncmp(p, "Temp=", 5) == 0)      { if (cur) AppNodeParseField(&cur->Draft.TempFields, p + 5); }
+      else if (strncmp(p, "Body=", 5) == 0)      { if (cur) { const int mi = atoi(p + 5); const char* comma = strchr(p + 5, ','); if (comma != nullptr && mi >= 0 && mi < ImGuiAppControlMethod_COUNT) AppUnescapeBodyLine(cur->Draft.MethodBody[mi], IMGUIAPP_CONTROL_BODY_MAX, comma + 1); } }
       else if (strncmp(p, "Command=", 8) == 0)   { if (cur) AppNodeAddCommand(cur, p + 8); }
       else if (strncmp(p, "Operand=", 8) == 0)   { if (cur) AppNodeParseOperand(cur, p + 8); }
       else if (strncmp(p, "Event=", 6) == 0)     { if (cur) AppNodeParseEvent(cur, p + 6); }

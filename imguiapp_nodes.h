@@ -200,12 +200,29 @@ struct ImGuiAppFieldDesc
   char              StructType[IM_LABEL_SIZE] = "";  // referenced struct type name for ImGuiAppFieldType_Struct
 };
 
-// One drafted control: a name plus its persisted and per-frame field sets.
+// The control's four authorable virtual methods (F78.5). A hand-written body opts one method out of the
+// modeled/stub codegen: the emitter emits the body verbatim, and the DLL preview compiles + runs it.
+enum ImGuiAppControlMethod_
+{
+  ImGuiAppControlMethod_OnInitialize = 0,
+  ImGuiAppControlMethod_OnGetCommand,
+  ImGuiAppControlMethod_OnUpdate,
+  ImGuiAppControlMethod_OnRender,
+  ImGuiAppControlMethod_COUNT
+};
+#define IMGUIAPP_CONTROL_BODY_MAX 2048   // per-method custom C++ body cap (fixed buffer -> draft stays memcpy-safe)
+
+// One drafted control: a name, its persisted and per-frame field sets, and optional hand-written method bodies.
 struct ImGuiAppNodeDraft
 {
   char                        Name[IM_LABEL_SIZE] = "NewControl";
   ImVector<ImGuiAppFieldDesc> PersistFields;
   ImVector<ImGuiAppFieldDesc> TempFields;
+  // F78.5: optional custom C++ per method (indexed by ImGuiAppControlMethod_). Empty = modeled/stub codegen.
+  // A non-empty body is emitted verbatim as that method's body; the body sees the method's generated params
+  // (app / data / temp_data / last_temp_data / dt / cmd) and the emitted Data/TempData struct fields. Fixed
+  // buffers (not ImVector) keep the draft trivially copyable inside node vectors. Interpreter reflects, not runs.
+  char                        MethodBody[ImGuiAppControlMethod_COUNT][IMGUIAPP_CONTROL_BODY_MAX] = {};
 };
 
 namespace ImGui

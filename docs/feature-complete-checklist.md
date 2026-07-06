@@ -867,6 +867,23 @@ its entire runtime (its own ImGuiContext + allocator + app) and the host moves o
   headless 31/31, nodes 112/112. Tracked follow-on (F48/F70-style residual): the Preview-tab toggle that
   renders the compiled app's widgets INSIDE the composer panel needs a drawdata/texture blit (the module
   renders in its own context) -- deferred; the interpreter remains the in-panel live surface.
+- [x] **F78.5 hand-written control method bodies** (requested after F78) — author raw C++ for a control's
+  OnInitialize / OnGetCommand / OnUpdate / OnRender (e.g. `ImGui::BeginChild` in OnRender); the DLL preview
+  compiles + runs it live. A non-empty body opts THAT method out of the modeled/stub codegen (per-method,
+  so modeled events can coexist with a hand-written OnRender); the interpreter reflects (does not run) a
+  control carrying custom bodies. Model + emitter + persistence only -- no UI this phase.
+  *Accept: `dll_preview_custom_body` -- a custom OnUpdate advances the model AND a custom OnRender calls real
+  ImGui (Begin/BeginChild/Text), compiled + run on the DLL backend; the codegen corpus stays byte-identical
+  for bodyless graphs (ProofDrift green).*
+  DONE: `ImGuiAppNodeDraft::MethodBody[ImGuiAppControlMethod_COUNT][IMGUIAPP_CONTROL_BODY_MAX]` (fixed
+  buffers, so the draft stays trivially copyable in node vectors -- no nested-ImVector UAF). The one control
+  emitter (`AppEmitControlWithDeps`) splices a non-empty body verbatim as the method body, else the existing
+  modeled/stub emission -- byte-neutral when absent (ProofDrift/ProofControlDrift unchanged). Persisted as
+  `Body=<method>,<escaped>` (newline/backslash escaped for the line-based file); `AppGraphModelEqual`
+  compares bodies (F01 round-trip + F05 undo cover them). core 409/0 (incl. dll_preview_custom_body: custom
+  OnUpdate +2/frame x3 -> clicks==6; custom OnRender's Begin/BeginChild ran without crash), nodes 112/112,
+  headless 31/31 + verify OK. Follow-on (rides F78's in-panel residual): a UI text field to author bodies +
+  reflect them into the interpreter's card.
 
 ## Dependency spine + parallel lanes
 
