@@ -16,56 +16,63 @@ stay separate), add an `imguiapp_internal.h`, and gate the tool TUs behind one m
 
 ## 2. Core vs tool classification
 
-Verified against the current headers.
+**THE RULE (decided): if it's UI, it's a tool; anything else is NOT a tool.** So the switch
+(`IMGUIX_DISABLE_TOOLS`) gates UI only; all non-UI machinery stays core.
 
-**CORE — slim public runtime (`imguiapp.h`, always on):**
-- `imguiapp.h` (1503 lines) — already `[SECTION]`-structured like imgui.h; the runtime API: `ImGuiApp`,
-  `ImGuiAppLayer(Base)`, `ImGuiAppControl(Base)`, `RegisterAppStorage`, `UpdateApp`/`RenderApp`, the
-  push/pop helpers + `ImGuiAppControl<>` templates, `ImGuiAppStateHistory` (snapshot/restore/replay),
-  `ImGuiAppWAL`, commands, `GetAppCompositionID`, `ImGuiAppPlatform`/backends. Does NOT include any tool
-  header today.
-- `imguiapp_config.h` — the config header (imconfig analog); gains the switch (§4).
-- `imguiapp.cpp` — the core impl.
+**CORE — always on (everything that is not UI):**
+- `imguiapp.h` (already `[SECTION]`-structured like imgui.h) + `imguiapp.cpp`: the runtime — `ImGuiApp`,
+  layers, controls, `RegisterAppStorage`, `UpdateApp`/`RenderApp`, `ImGuiAppStateHistory`, `ImGuiAppWAL`,
+  commands, `GetAppCompositionID`, `ImGuiAppPlatform`/backends. `imguiapp_config.h` (gains the switch, §4).
+- **Graph MODEL + CODEGEN** (not UI): `ImGuiAppGraph`/`AppGraph*` (add/serialize/validate/topo),
+  `GenerateApp*Code` + the emitter/importer. (Lives in `imguiapp_nodes.cpp` today, intertwined with the
+  editor UI — §MIXED.)
+- **RECORDER + encoder** (records with tools OFF): `AppRecord*`, `AppMetaRecord*`, `ImGuiAppRecorder`,
+  `ImGuiAppMetaRecorder`, `ImGuiAppAVEncoder` seam, `ImGuiAppAVMeta*` write, frame capture. Impl may move
+  into `imguiapp.cpp`; the backends' encoder-hook is core.
+- **DECODER / loader / playback read side** (not UI): `AppRunOpen`/`Close`/`TickCount`/`TickAt`/
+  `StateAtTick`, `ImGuiAppRunIndex`, the frame decode. (F62–F65 read machinery — core; only the transport
+  *UI* is tool.)
+- **Interpreter CORE** (F67 headless build+run in `imguiapp_preview.cpp`): `AppPreviewCreate`/`Frame`/
+  `Reconcile` + the evaluator — not UI.
+- anim builtins (`ImApp*`); the AV codec (`qoi`/`libav`/`mediafoundation`).
 
-**INTERNAL / EXTENDED — folded into `imguiapp_internal.h`** (the `imgui_internal.h` analog; §3):
-- The tool interfaces: `imguiapp_nodes.h` (graph model + editor + codegen), `imguiapp_canvas.h`,
-  `imguiapp_preview.h` + `imguiapp_preview_dll.h`.
-- **`imguiapp_anim.h`** — the animation builtins' interface (DECIDED: fold in).
-- **`imguiapp_av.h`** — the run recorder / meta / container INTERFACE (DECIDED: fold in). The AV **codec**
-  stays OUT of `internal.h` as its own backend: `imguiapp_qoi.{h,cpp}` + `backends/imguiapp_impl_qoi.*`
-  (+ any libav backend).
+**TOOL — UI only (gated by `IMGUIX_DISABLE_TOOLS`):**
+- The Composer (`imguiapp_demo.cpp`); the graph EDITOR UI (`ShowAppGraphEditor`/`ShowAppGraphTree` + inspector
+  / panel rendering in `imguiapp_nodes.cpp`); the canvas UI (`imguiapp_canvas.cpp`, entirely UI); the preview
+  SURFACE (F68 widget surface + brushing in `imguiapp_preview.cpp` / `imguiapp_preview_dll.cpp`); the playback
+  transport UI + bug-button UI (in the demo).
 
-**IMPL TUs gated by `IMGUIX_DISABLE_TOOLS`:** `imguiapp_nodes.cpp`, `imguiapp_canvas.cpp`,
-`imguiapp_preview.cpp`, `imguiapp_preview_dll.cpp`, `imguiapp_demo.cpp` (the Composer), and the AV/anim impl
-where tool-only.
+**⚠ MIXED files (the real work):** `imguiapp_nodes.cpp` (model+codegen = core / editor UI = tool) and
+`imguiapp_preview.cpp` (interpreter core = core / F68 surface = tool) each hold both → the UI must be SPLIT
+out (own gated TU), not gated wholesale. `imguiapp_canvas.cpp` + `imguiapp_demo.cpp` are UI-only → gate
+wholesale. `imguiapp_av.cpp` is record+decode, no UI → core.
 
-**DECIDED — `imguiapp_internal.h` is ALWAYS available (imgui_internal.h-style), NOT gated.** The switch
-gates only the tool IMPL `.cpp`s (Composer/Previewer/Debugger: nodes/canvas/preview/demo) + Phase-B's source
-embed. So a lean build keeps the runtime + anim builtins + the recorder API linkable (a generated app can
-still `PushAppControl<ImAppTween>`, F56), while dropping the editor/codegen/preview UI and the embedded
-source. The "no source text in the `.exe`" goal is met by gating the emitter (`imguiapp_nodes.cpp`, where the
-generated-code strings live) + Phase-B's embed — not by removing anim/av.
+**`imguiapp_internal.h`** (Option-1, ALWAYS available, NOT gated) holds the TOOL-UI + internal-helper
+interfaces; the core model/codegen/recorder/decoder/interpreter interfaces stay in core headers (`imguiapp.h`
+/ a core model header / a core `imguiapp_av.h`). A lean build keeps model+codegen+recorder+decoder+
+interpreter+anim linkable (a generated app still `PushAppControl<ImAppTween>` (F56) and still records/opens
+runs); it drops only the UI + Phase-B's embedded source. "No source in the `.exe`" comes from gating the
+embed (Phase B) — codegen skeleton strings are small and stay.
 
 ## 3. `imguiapp_internal.h`
 
-New header, the `imgui_internal.h` analog. It AGGREGATES the interfaces today declared across
-`imguiapp_nodes.h` / `imguiapp_canvas.h` / `imguiapp_preview*.h`, plus `imguiapp_anim.h` and the
-`imguiapp_av.h` recorder INTERFACE (the AV codec stays a separate backend), and the internal-only helpers.
-The public
-`imguiapp.h` keeps only the always-on runtime API. Tool `.cpp`s `#include "imguiapp_internal.h"` instead of
-each other's public headers. `imguiapp_internal.h` is itself only meaningful in a tools build (its content
-sits under the same gate, §4). No behavior change — this is a header re-home, not a rewrite (the deep
-reorder is Phase C).
+New header, the `imgui_internal.h` analog. It AGGREGATES the TOOL-UI interfaces + internal-only helpers:
+the graph editor UI (split out of `imguiapp_nodes.cpp`), the canvas UI (`imguiapp_canvas.h`), the preview
+SURFACE UI (split out of `imguiapp_preview.cpp` + `imguiapp_preview_dll.h`), and the demo/transport/bug-button
+UI decls. It does NOT hold the core machinery: the graph MODEL + CODEGEN, the RECORDER, the DECODER/loader
+(`AppRun*`), the interpreter CORE, and anim all keep CORE headers (`imguiapp.h` / a core model header / a
+core `imguiapp_av.h`). `imguiapp_internal.h` is ALWAYS available (Option 1), NOT gated. The deep reorder is
+Phase C; Phase A is header re-home + the mixed-file UI split, not a rewrite.
 
 ## 4. The gate
 
 - `imguiapp_config.h`: `// #define IMGUIX_DISABLE_TOOLS` documented; when defined, the tools compile out.
-- `imguiapp_internal.h` is NOT gated — it always declares the extended/tool API (Option 1). Only the tool
-  IMPL TUs wrap their bodies: `#ifndef IMGUIX_DISABLE_TOOLS` … `#endif` — so `imguiapp_nodes.cpp`,
-  `imguiapp_canvas.cpp`, `imguiapp_preview.cpp`, `imguiapp_preview_dll.cpp`, `imguiapp_demo.cpp` compile to
-  an empty object when disabled (imgui's own pattern for `IMGUI_DISABLE`). Calls into a gated tool API from
-  a lean build are a link error by construction (there's no impl) — the composer/host code that calls them
-  is itself gated/not-built.
+- `imguiapp_internal.h` is NOT gated — it always declares the tool-UI + internal API (Option 1). Only the
+  UI-ONLY impl TUs wrap their bodies in `#ifndef IMGUIX_DISABLE_TOOLS` … `#endif` (imgui's `IMGUI_DISABLE`
+  pattern): `imguiapp_canvas.cpp`, `imguiapp_demo.cpp`, the graph-editor-UI TU split out of `imguiapp_nodes.cpp`,
+  and the preview-surface UI split out of `imguiapp_preview.cpp` / `imguiapp_preview_dll.cpp`. The MIXED files'
+  CORE remainder (`imguiapp_nodes.cpp` model+codegen; `imguiapp_preview.cpp` interpreter core; `imguiapp_av.cpp`
+  record+decode) is NOT gated. A lean build's host simply does not call the (now absent) UI.
 - CMake (`imguix/CMakeLists.txt`): the tool sources stay in `IMGUIX_SOURCES` (they self-empty); add an
   option `IMGUIX_ENABLE_TOOLS` (default ON) that, when OFF, adds `IMGUIX_DISABLE_TOOLS` to
   `IMGUIX_COMPILE_DEFINITIONS`. The demo/composer executable target is not built in the lean config.

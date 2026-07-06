@@ -25,37 +25,67 @@ design-language canon + HTML help + bug-button → **E** phase-coherence re-audi
 
 ## A — "lean & mean" split + opt-out  (design-first: `lean-tools-split-design.md`)
 
-Ordered tasks (build order; each is one deliverable + one gate). Full rationale + the core/tool boundary +
-the Option-1 decision (internal.h always-available) are in the design doc. Keep the per-topic `.cpp` split
-(imgui precedent) — NO `imguiapp_widgets.cpp`; `imguiapp_canvas.cpp` + `imguiapp_nodes.cpp` stay separate.
+Ordered tasks (build order; one deliverable + one gate each). Design doc: `lean-tools-split-design.md`.
+Keep the per-topic `.cpp` split (imgui precedent) — NO `imguiapp_widgets.cpp`. **Facts below are verified
+against the tree so an implementor edits, not explores.**
 
-- [ ] **A1. `imguiapp_internal.h` (interface re-home)** — create it (the `imgui_internal.h` analog) and move
-  the tool interface declarations into it: from `imguiapp_nodes.h` / `imguiapp_canvas.h` / `imguiapp_preview.h`
-  / `imguiapp_preview_dll.h`, plus `imguiapp_anim.h` and the `imguiapp_av.h` recorder INTERFACE. The AV codec
-  (`imguiapp_qoi.*` + libav backend) stays OUT. `imguiapp.h` keeps only the always-on runtime API; tool `.cpp`s
-  + `imguiapp_demo.cpp` `#include "imguiapp_internal.h"`. `internal.h` is NOT gated (Option 1). Pure header
-  re-home, tools ON — no behavior change.
-  *Accept: nodes 112/112, core 409/0, headless 31/31 unchanged + codegen corpus byte-identical; `imguiapp.h`
-  no longer declares any tool API (grep).*
-- [ ] **A2. the switch + CMake option** — document `// #define IMGUIX_DISABLE_TOOLS` in `imguiapp_config.h`;
-  add CMake option `IMGUIX_ENABLE_TOOLS` (default ON) that, when OFF, appends `IMGUIX_DISABLE_TOOLS` to
-  `IMGUIX_COMPILE_DEFINITIONS` (`imguix/CMakeLists.txt`). Macro not yet consumed.
-  *Accept: default build unchanged + green; toggling the option flips the define (configure-time check).*
-- [ ] **A3. gate the tool impl TUs** — wrap the bodies of `imguiapp_nodes.cpp`, `imguiapp_canvas.cpp`,
-  `imguiapp_preview.cpp`, `imguiapp_preview_dll.cpp`, `imguiapp_demo.cpp` (+ `imguiapp_av.cpp`/`imguiapp_anim`
-  impl where tool-only) in `#ifndef IMGUIX_DISABLE_TOOLS … #endif` so each compiles to an empty object when
-  disabled (imgui's `IMGUI_DISABLE` pattern). The tools-ON path is byte-identical.
-  *Accept: tools-ON build green (unchanged); a spot-compile of a gated TU under the macro yields an empty
-  object (no symbols).*
-- [ ] **A4. sever core→tool references** — anything in the always-on core (`imguiapp.cpp` / `imguiapp.h` /
-  the minimal host) that calls a now-gated tool API must be relocated or guarded so a lean link has no
-  unresolved tool symbol. Surface them by attempting the lean link; fix by moving the caller into a tool TU
-  or guarding it.
-  *Accept: the lean configuration links with zero unresolved tool symbols pulled from core.*
-- [ ] **A5. lean build config + verify** — a CMake lean path (`-DIMGUIX_ENABLE_TOOLS=OFF`): the core library +
-  a minimal host, no composer/demo target. Build + link it.
-  *Accept: lean build compiles + links; a `strings` scan of the lean binary shows NO control/source/
-  generated-code text; the tools-ON suites still 112/409/31 green (both configs pass).*
+**THE CLASSIFICATION RULE (decided): if it's UI, it's a tool; anything else is NOT a tool.**
+- **TOOL (gated by `IMGUIX_DISABLE_TOOLS`) = UI only:** the Composer (`imguiapp_demo.cpp`), the graph EDITOR
+  UI (`ShowAppGraphEditor`/`ShowAppGraphTree` etc. in `imguiapp_nodes.cpp`), the canvas UI
+  (`imguiapp_canvas.cpp`), the preview SURFACE (F68 widget surface in `imguiapp_preview.cpp` +
+  `imguiapp_preview_dll.cpp`), the playback transport UI + bug-button UI (in `imguiapp_demo.cpp`).
+- **CORE (always on, NOT UI):** the graph MODEL + validate + serialize + CODEGEN (`AppGraph*`, `GenerateApp*`);
+  the RECORDER + encoder + meta-write (`AppRecord*`, `AppMetaRecord*`, `ImGuiAppRecorder`,
+  `ImGuiAppMetaRecorder`, `ImGuiAppAVEncoder`); the DECODER/LOADER/playback read side (`AppRunOpen`/`Close`/
+  `TickCount`/`TickAt`/`StateAtTick`, `ImGuiAppRunIndex`/`ImGuiAppRunTransport`); the interpreter CORE (F67
+  headless build+run in `imguiapp_preview.cpp`); the anim builtins; the AV codec (`qoi`/`libav`/`mediafoundation`).
+- **`imguiapp_internal.h`** (Option-1, always-available) holds the TOOL-UI + internal-helper interfaces; the
+  core model/codegen/recorder/decoder/interpreter interfaces stay in core headers (`imguiapp.h` / a core
+  model header / core `imguiapp_av.h`).
+
+**⚠ MIXED FILES — the real work.** `imguiapp_nodes.cpp` (graph model + codegen = core; editor UI = tool) and
+`imguiapp_preview.cpp` (interpreter core = core; F68 surface = tool) each hold BOTH. Under the rule they must
+be split UI-out, not gated wholesale (A2/A3 below). `imguiapp_canvas.cpp` + `imguiapp_demo.cpp` are UI-only →
+gate wholesale. `imguiapp_av.cpp` is record+decode (core) with no UI → stays core (its record impl may move
+into `imguiapp.cpp`); any transport/record-button UI it holds moves to the demo.
+
+**Parallelism (Phase A):** A1 (config+CMake) is INDEPENDENT. The UI-extraction splits (A2 nodes, A3 preview)
+are per-file independent → parallel. A4 (gate the UI-only TUs) parallelizes per file. A5→A6 serial tail.
+Lane picture: `A1 ∥ (A2 ∥ A3) → A4×n → A5 → A6`.
+
+- [ ] **A1. switch + CMake option** — `// #define IMGUIX_DISABLE_TOOLS` documented in `imguiapp_config.h`;
+  CMake option `IMGUIX_ENABLE_TOOLS` (default ON) → OFF appends `IMGUIX_DISABLE_TOOLS` to
+  `IMGUIX_COMPILE_DEFINITIONS` (`imguix/CMakeLists.txt`). Independent of the header work.
+  *Accept: default build unchanged + green; `-DIMGUIX_ENABLE_TOOLS=OFF` shows the define in the compile defs.*
+- [ ] **A2. split the graph editor UI out of `imguiapp_nodes.cpp`** — separate the UI (`ShowAppGraphEditor`,
+  `ShowAppGraphTree`, canvas/inspector/panel rendering — grep `ShowAppGraph|EditApp|^\s*static void .*Draw`)
+  from the MODEL/CODEGEN (`AppGraph*`, `GenerateApp*`, serialize/validate — stay core). UI goes to a gated
+  `.cpp` (e.g. `imguiapp_nodes_ui.cpp`) or a gated region; model/codegen stay in a core TU. Move UI decls to
+  `imguiapp_internal.h`, model/codegen decls to a core header.
+  *Accept: tools-ON green + codegen corpus byte-identical; with `IMGUIX_DISABLE_TOOLS` the model+codegen still
+  compile (a core-only TU links `AppGraphAddNode`/`GenerateAppGraphCode`), the editor UI is gone.*
+- [ ] **A3. split the preview SURFACE out of `imguiapp_preview.cpp`** — the F68 widget surface + brushing UI
+  (grep `AppPreviewSetSurface|AppPreviewRender|ImGui::` widget calls) is tool; the F67 interpreter core
+  (`AppPreviewCreate`/`Frame`/`Reconcile`, the evaluator) is core. Same split shape as A2.
+  *Accept: tools-ON green; lean build keeps the interpreter core linkable, surface UI gone.*
+- [ ] **A4. `imguiapp_internal.h` + gate the UI-only TUs** — create `internal.h` (imgui_internal.h analog,
+  always-available): fold in the tool-UI interfaces (from A2/A3 + `imguiapp_canvas.h` + the demo/transport/
+  bug UI decls). Move `imguiapp.h`'s 3 tool-coupled decls out (`:71` fwd `ImGuiAppGraph`, `:457`
+  `AppLayerDemoGraph`, `:483` `SetAppCodeFont`). Wrap the UI-only TUs in `#ifndef IMGUIX_DISABLE_TOOLS`:
+  `imguiapp_canvas.cpp`, `imguiapp_demo.cpp`, the A2/A3 UI TUs, `imguiapp_preview_dll.cpp` surface. Rewire
+  includes (grep `-rln '#include "imguiapp_nodes.h"'` etc. across `imguix/imguiapp tests tools imguix-demo`;
+  includers today: nodes→{nodes,canvas,demo,preview.h,preview_dll.h,core/flow/nodes/codegen_proof tests,
+  headless_verify}; canvas→{canvas,nodes,demo,nodes_tests,headless_verify}; preview→{preview,demo,core/flow/
+  nodes tests}; preview_dll→{preview_dll,demo,core_tests}; anim→{core_tests}).
+  *Accept: tools-ON green; `grep -nE 'ShowAppGraph|AppPreviewSetSurface' imguiapp.h` empty; a UI-only TU
+  spot-compiled with the macro yields no symbols.*
+- [ ] **A5. verify core→tool severance** — attempt the lean link; anything UI pulled from core is relocated.
+  Baseline: `imguiapp.cpp` had ZERO tool refs pre-split.
+  *Accept: lean config links with zero unresolved UI symbols from core.*
+- [ ] **A6. lean build config + verify** — CMake lean path (`-DIMGUIX_ENABLE_TOOLS=OFF`): core lib (model +
+  codegen + recorder + decoder + interpreter core) + a minimal host, no composer/demo. Build + link.
+  *Accept: lean build compiles + links; `strings <lean-binary>` shows NO embedded control/source text; the
+  tools-ON suites still 112/409/31 green (both configs pass).*
 
 ## B — embed control source + real-code presence + the write-back fold  (design-first: `source-embed-design.md`)
 
