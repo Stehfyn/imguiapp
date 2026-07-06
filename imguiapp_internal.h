@@ -9,15 +9,26 @@ Index of this file:
 
 // [SECTION] Header mess
 // [SECTION] Forward declarations
-// [SECTION] AV meta stream + recorder + run artifacts   (was imguiapp_av.h)
-// [SECTION] Graph model + codegen + editor-UI structs   (was imguiapp_nodes.h)
-// [SECTION] Embeddable Composer control
-// [SECTION] Animation builtins                          (was imguiapp_anim.h)
-// [SECTION] Headless test harness                       (was imguiapp_testharness.h)
+// [SECTION] AV meta stream + recorder + run artifacts (was imguiapp_av.h)
+// [SECTION] Meta stream (embedded in the video)
+// [SECTION] Meta-only recorder + stream stats
+// [SECTION] Run index (F62): tick-keyed landing over a reconstructed meta stream
+// [SECTION] State-at-tick (F64): restore nearest snapshot + replay inputs to tick N
+// [SECTION] Transport source (F63): the App-time transport's two frame sources
+// [SECTION] Graph model + codegen + editor-UI decls (was imguiapp_nodes.h)
+// [SECTION] Design-phase node drafts (ImGuiAppFieldType, ImGuiAppFieldDesc, ImGuiAppNodeDraft)
+// [SECTION] Typed graph kinds (node/layer/port/edge discriminators)
+// [SECTION] Graph topology and persistence (ImGuiAppNodeLink, link capture, save/load)
+// [SECTION] Typed node graph (ports, nodes, bindings, scope memory, view state, prefabs, undo)
+// [SECTION] Editor + composer value types (registry, issues, chrome/theme, spans)
+// [SECTION] ImGuiAppEditorState, ImGuiAppGraph (the composer document + session)
+// [SECTION] Embeddable Composer control (generated-shell bootstrap)
+// [SECTION] Animation builtins (was imguiapp_anim.h)
+// [SECTION] Headless test harness (was imguiapp_testharness.h)
 // [SECTION] ImGui applayer internal API (core)
 // -- #ifndef IMGUIX_DISABLE_TOOLS (a lean build cuts everything below) --
-// [SECTION][TOOLS] Canvas UI
-// [SECTION][TOOLS] ImGui applayer internal API (tool UI)
+// [SECTION][TOOLS] Canvas UI (was imguiapp_canvas.h)
+// [SECTION][TOOLS] ImGui applayer internal API -- canvas UI, DLL preview surface, editor UI
 
 */
 
@@ -116,249 +127,6 @@ typedef int ImGuiAppEdgeKind;          // -> enum ImGuiAppEdgeKind_          // 
 typedef int ImGuiAppEventEdge;         // -> enum ImGuiAppEventEdge_         // event trigger edge
 typedef int ImGuiAppEventAction;       // -> enum ImGuiAppEventAction_       // event action
 typedef int ImGuiAppHoverSource;
-
-
-//-----------------------------------------------------------------------------
-// [SECTION] Editor + composer value types (registry, issues, chrome/theme, spans)
-//-----------------------------------------------------------------------------
-
-namespace ImGui
-{
-  // Typed graph model: ids, nodes, links, validate, signature
-  // AddNode/AddBuiltin stamp the kind's mandatory ports and a body-attr id; the returned pointer is
-  // valid only until the next node is added (Nodes may reallocate). Find* resolve by search, never by
-  // index. RemoveNode also sweeps incident links and orphaned bindings.
-  IMGUI_API int               AppGraphAllocId(ImGuiAppGraph* g);
-  IMGUI_API ImGuiAppNode*     AppGraphAddNode(ImGuiAppGraph* g, ImGuiAppNodeKind kind, const char* name);
-  IMGUI_API ImGuiAppNode*     AppGraphAddBuiltin(ImGuiAppGraph* g, ImGuiAppNodeKind kind, const char* type_name, const char* data_type_name);
-  // Add a logic Op node (F54). op_token is one of the AppEventExprCheck-checkable operators (AND/OR/XOR/NOT,
-  // ==/!=/</<=/>/>=, select, min/max); null or unknown => the default (AND). TypeName carries the operator and
-  // fixes the operand-pin arity; the result DataOut is stamped DataTypeId=0 (opts out of one-producer-per-type).
-  IMGUI_API ImGuiAppNode*     AppGraphAddOp(ImGuiAppGraph* g, const char* op_token);
-  IMGUI_API void              AppGraphRemoveNode(ImGuiAppGraph* g, int node_id);
-  IMGUI_API ImGuiAppNode*     AppGraphFindNode(ImGuiAppGraph* g, int node_id);
-  IMGUI_API ImGuiAppNodePort* AppGraphFindPort(ImGuiAppGraph* g, int port_id, ImGuiAppNode** out_owner);
-  IMGUI_API bool              AppGraphHasLayerType(const ImGuiAppGraph* g, ImGuiAppLayerType type);
-  IMGUI_API void              AppNodeAddCommand(ImGuiAppNode* n, const char* name);
-  IMGUI_API void              AppNodeRemoveCommand(ImGuiAppNode* n, int index);
-
-  // Runtime data-flow key for a node named <node_name>: ConstantHash of the sanitized "<Name>Data"
-  // codegen emits == ImGuiType<<Name>Data>::ID, so a design DataOut port shares the live storage key.
-  IMGUI_API ImGuiID           AppNodeStructTypeId(const char* node_name);
-
-  // Stable fold of the codegen-determining authored (!IsLive) state: changes iff the emitted C++ would
-  // change. Excludes positions/ids/live-mirror churn. char[] hashed as NUL-terminated string (ctors
-  // zero only byte 0, so ImHashData over the fixed buffer would be unstable).
-  IMGUI_API ImGuiID           AppGraphSignature(const ImGuiAppGraph* g);
-
-  // What kinds compose into a drilled scope (F28): the single truth behind the interior palette and the
-  // empty-scope wall caption. A live non-layer scope (window/sidebar/control/struct mirror) takes nothing
-  // -- read-only -- so this returns false for every kind; the authored twin admits its members.
-  IMGUI_API bool              AppScopeKindComposable(const ImGuiAppGraph* g, int scope_id, ImGuiAppNodeKind kind);
-
-  // Origin vocabulary (F26): the one colour shared by the canvas title-bar dot, the outliner row tint and
-  // the demo legend. Live and Promoted (a design control whose emitted data type matches a live node) each
-  // get a distinct mark; plain design returns 0 (no push -> default row colour). Single source, so the
-  // three surfaces cannot drift.
-  IMGUI_API ImU32             AppGraphOriginColor(const ImGuiAppNode* n);
-
-  // Codegen freshness (F17). The signature is the single source of truth: AppGraphSyncRevision folds
-  // it once per frame and bumps Revision on any content change; AppGraphMarkGenerated stamps the
-  // signature at codegen time; the graph is STALE while the live signature differs from that stamp
-  // (FRESH == generated this session AND unchanged since). GenSignature/Revision are session-local
-  // (reset on load), so a freshly loaded graph reads as never-generated.
-  IMGUI_API int               AppGraphSyncRevision(ImGuiAppGraph* g);
-  IMGUI_API void              AppGraphMarkGenerated(ImGuiAppGraph* g);
-  IMGUI_API bool              AppGraphCodeStale(const ImGuiAppGraph* g);
-  IMGUI_API bool              AppGraphCodeFresh(const ImGuiAppGraph* g);
-
-  // Count the codegen self-diagnostics embedded in generated text (F19): the "// WARNING" comments the
-  // emitter drops for degenerate constructs and the "// codegen aborted" banner. Scans the emitted C++
-  // itself (single source: the emitter), never re-deriving the conditions. out_list (optional) receives
-  // each marker line trimmed of leading indent, one per line.
-  IMGUI_API int               AppScanCodegenWarnings(const char* code, ImGuiTextBuffer* out_list);
-
-  // CanLink validates an attempted edge (kind pairing, no self/dup, no duplicate dep type, no cycle),
-  // writing a reason to err on rejection. CaptureAppGraphLinks folds the canvas wire events, refusing
-  // illegal creations; returns true if the model changed.
-  IMGUI_API bool              AppGraphCanLink(ImGuiAppGraph* g, int start_port, int end_port, char* err, int err_size);
-  IMGUI_API bool              CaptureAppGraphLinks(ImGuiAppGraph* g, char* err, int err_size);
-
-  // Per-edge field-binding editor for one data link (call inside an attribute).
-  IMGUI_API void              EditAppDataEdgeBindings(ImGuiAppGraph* g, int link_id);
-
-
-  // Graph editor UI: canvas, inspector, tree, keymap
-  // Render the whole typed graph inside the current window. app may be null (design-only); when
-  // non-null, builtin control bodies can reflect live data. *selected_node_id is caller-owned (-1 =
-  // none): the editor reconciles it both ways (canvas<->tree) and clears dangling ids. show_live hides
-  // (never deletes) live-mirror nodes when false.
-  IMGUI_API void                                ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, bool show_live);
-  }
-  // Editor command registry (F34): one table is the single source for the editor's verbs. Each declares
-  // the surfaces it appears on (bitmask); the Space palette renders from it, and the four-roads
-  // completeness test iterates it to check every verb is reachable from every surface it declares.
-  enum ImGuiAppCmdSurface_
-  {
-    ImGuiAppCmdSurface_Palette  = 1 << 0,   // the Space operator palette
-    ImGuiAppCmdSurface_Menu     = 1 << 1,   // a right-click context menu
-    ImGuiAppCmdSurface_Shortcut = 1 << 2,   // a keyboard shortcut
-    ImGuiAppCmdSurface_Gizmo    = 1 << 3,   // an on-canvas gizmo/overlay button
-  };
-
-  struct ImGuiAppEditorCommand
-  {
-    int              Id;         // dispatch id (matches the palette run() switch)
-    const char*      Icon;       // FontAwesome glyph, or "" if none
-    const char*      Label;      // "Edit: Delete selection"
-    const char*      Shortcut;   // display string, e.g. "Ctrl+Z" or ""
-    ImGuiKey         Key;        // shortcut key (ImGuiKey_None if none)
-    int              Mods;       // ImGuiMod_* for the shortcut
-    int              Surfaces;   // ImGuiAppCmdSurface_ bitmask
-    ImGuiAppNodeKind AddKind;    // add verbs carry their kind; ImGuiAppNodeKind_COUNT otherwise
-  };
-
-  // One problem found by AppGraphValidate. Severity: 1 = warning, 2 = error. NodeId is the node to
-  // reveal (-1 for whole-graph issues).
-  struct ImGuiAppGraphIssue
-  {
-    int  NodeId;
-    int  Severity;
-    char Text[256];
-
-    ImGuiAppGraphIssue() { NodeId = -1; Severity = 1; Text[0] = 0; }
-  };
-
-  // Brushing across coordinated views: any panel reports the datum under the mouse; every panel reads
-  // LAST frame's report and highlights it (one-frame latency). The source lets a view skip echoing its
-  // own hover. Single-editor-instance state.
-
-  enum ImGuiAppHoverSource_
-  {
-    ImGuiAppHoverSource_None = 0,
-    ImGuiAppHoverSource_Canvas,      // the node editor
-    ImGuiAppHoverSource_Tree,        // the outliner
-    ImGuiAppHoverSource_Inspector,   // inspector / binding rows
-    ImGuiAppHoverSource_External,    // problems list, code panel, any host-app panel
-  };
-
-  // Host verbs surfaced in the canvas command palette (workbench W2). Register each frame before
-  // ShowAppGraphEditor (pointers must outlive the frame); a picked command is reported back through
-  // AppGraphConsumeHostCommand (one-frame latency, the editor never calls the host).
-  struct ImGuiAppGraphHostCmd
-  {
-    const char* Label;    // e.g. "File: Save graph"
-    const char* Shortcut; // displayed dim + right-aligned; "" = none
-    int         Id;       // host-defined, returned by AppGraphConsumeHostCommand
-    ImGuiKey    Key = ImGuiKey_None;   // optional keyboard road; the editor records a match, host owns the meaning
-    int         Mods = 0;              // ImGuiMod_ combo required with Key
-  };
-
-  // Composer chrome palette, derived from the current ImGuiStyle theme (AppComposerStyleFromTheme):
-  // neutrals ride the WindowBg -> Text axis, semantic hues are pulled toward Text for light-theme
-  // legibility. Fields are final packed IM_COL32 values; overwrite after derivation to customize.
-  struct ImGuiAppComposerStyle
-  {
-    // Node kind accents
-    ImU32 KindLayer;
-    ImU32 KindWindow;
-    ImU32 KindSidebar;
-    ImU32 KindControl;
-    ImU32 KindStruct;
-    ImU32 KindField;
-    ImU32 KindOp;
-    ImU32 KindDefault;
-    // Layer-type accents
-    ImU32 LayerTask;
-    ImU32 LayerCommand;  // also marks hidden nodes
-    ImU32 LayerStatus;
-    ImU32 LayerLayout;
-    ImU32 LayerDisplay;
-    ImU32 AccentNeutral; // fallback accent for typeless rows/ports
-                         // Pins
-    ImU32 PinData;
-    ImU32 PinChild;
-    ImU32 PinTie;
-    ImU32 PinDefault;
-    // Diagnostics
-    ImU32 SevError;
-    ImU32 SevWarn;
-    ImU32 ErrorText;
-    ImU32 Danger;
-    // Live mirror / promotion
-    ImU32 OriginLive;
-    ImU32 OriginPromoted;
-    ImU32 DotLive;
-    ImU32 DotPromoted;
-    ImU32 DotDrift;
-    // Overlay accents
-    ImU32 Gold;
-    // Field chrome (flat draw-list widgets)
-    ImU32 FieldBg;
-    ImU32 FieldBgHovered;
-    ImU32 FieldBgEdit;
-    ImU32 FieldBorder;
-    ImU32 FieldText;
-    ImU32 TextMuted;    // idle glyphs (disclosure chevrons)
-    ImU32 TextOnAccent; // near-black text/numerals over accent fills
-    ImU32 DarkOutline;  // near-black rings over accent fills
-                        // Group boxes + numbered rail
-    ImU32 GroupFill;
-    ImU32 GroupOutline;
-    ImU32 GroupTitleBg; // opaque: grid must not bleed through text
-    ImU32 RailLine;
-  };
-
-  // Composer chrome scalar idiom -- one table for the motion (F38) and type/space ladders (F39). Not
-  // theme-derived; the single source so no overlay hard-codes an alpha, and no chrome text hard-codes
-  // an off-ladder size. Type tiers are RATIOS of the body font size; spacing steps in SpaceQuantum em.
-  struct ImGuiAppComposerMotion
-  {
-    // Motion + quietness (F38)
-    float OverlayRest    = 0.55f;    // an idle canvas overlay sits quiet
-    float OverlayHover   = 1.00f;    // ... brightens to full when the pointer rests on it
-    float OverlayGesture = 0.20f;    // ... and recedes during a wire-drag / marquee (get out of the way)
-    float FadeMs         = 150.0f;   // single linear alpha fade between those states (and for transient chrome)
-    // Typography ladder (F39): chrome text tiers, strictly descending
-    float TypeBody       = 1.00f;    // primary chrome text
-    float TypeSecondary  = 0.90f;    // secondary tier (chip labels, sub-rows)
-    float TypeCaption    = 0.80f;    // smallest tier (dense readouts, code gutter, scope strip)
-    // Spacing quantum (F39): chrome gaps step in this em fraction
-    float SpaceQuantum   = 0.25f;
-  };
-
-  // The composer chrome's push-stack palette, exposed read-write (stable pointer): the project
-  // inspector's Theme section edits it live. Col slots are semantic and fixed; Value/Active are the
-  // editable half. Seeded from AppComposerGetStyle.
-  struct ImGuiAppChromeTheme
-  {
-    ImGuiAppColorModDesc Combo[8]; // dropdown fields (enum combos, struct picker): field + popup + rows
-    ImGuiAppColorModDesc Edit[4];  // in-place editors (InputText/InputInt): transparent frame over the drawn bg
-  };
-
-  // Scope interior: a data edge crossing the current drill-down boundary docks on the wall as a
-  // portal chip (inbound producers left, outbound consumers right). Derived per frame from
-  // Links + ViewScope -- no ids, no persistence, no codegen, no validation.
-  struct ImGuiAppScopePortal
-  {
-    int  LinkId;        // the crossing data edge
-    int  InsidePortId;  // the in-scope endpoint's port (the chip wires to this pin)
-    int  OutsideNodeId; // the off-scope node the chip names; click jumps to its scope
-    bool Inbound;       // true: outside producer -> inside consumer (left wall); false: right wall
-
-    ImGuiAppScopePortal() { LinkId = -1; InsidePortId = -1; OutsideNodeId = -1; Inbound = true; }
-  };
-
-  // One node's contribution to the last whole-graph emission: [LineBegin, LineEnd) in the generated
-  // text. A node may own several spans (type definitions AND its bring-up line in SetupApp).
-  struct ImGuiAppCodeSpan
-  {
-    int NodeId;
-    int LineBegin;
-    int LineEnd;
-
-    ImGuiAppCodeSpan() { NodeId = -1; LineBegin = 0; LineEnd = 0; }
-  };
 
 //-----------------------------------------------------------------------------
 // [SECTION] AV meta stream + recorder + run artifacts (was imguiapp_av.h)
@@ -722,7 +490,7 @@ struct ImGuiAppNodeLink
 };
 
 //-----------------------------------------------------------------------------
-// [SECTION] Typed node graph (ports, nodes, graph model, factory, codegen, persistence)
+// [SECTION] Typed node graph (ports, nodes, bindings, scope memory, view state, prefabs, undo)
 //-----------------------------------------------------------------------------
 
 // One pin on a node, stored (never index-derived) so its id is stable across reorder/delete.
@@ -951,6 +719,179 @@ struct ImGuiAppEditorUndo
   const struct ImGuiAppGraph* Owner = nullptr; // identity guard
   ImGuiID                     LiveHash = 0;    // hash of Snaps[Cursor], for cheap change detection
 };
+
+//-----------------------------------------------------------------------------
+// [SECTION] Editor + composer value types (registry, issues, chrome/theme, spans)
+//-----------------------------------------------------------------------------
+
+// Editor command registry (F34): one table is the single source for the editor's verbs. Each declares
+// the surfaces it appears on (bitmask); the Space palette renders from it, and the four-roads
+// completeness test iterates it to check every verb is reachable from every surface it declares.
+enum ImGuiAppCmdSurface_
+{
+  ImGuiAppCmdSurface_Palette  = 1 << 0,   // the Space operator palette
+  ImGuiAppCmdSurface_Menu     = 1 << 1,   // a right-click context menu
+  ImGuiAppCmdSurface_Shortcut = 1 << 2,   // a keyboard shortcut
+  ImGuiAppCmdSurface_Gizmo    = 1 << 3,   // an on-canvas gizmo/overlay button
+};
+
+struct ImGuiAppEditorCommand
+{
+  int              Id;         // dispatch id (matches the palette run() switch)
+  const char*      Icon;       // FontAwesome glyph, or "" if none
+  const char*      Label;      // "Edit: Delete selection"
+  const char*      Shortcut;   // display string, e.g. "Ctrl+Z" or ""
+  ImGuiKey         Key;        // shortcut key (ImGuiKey_None if none)
+  int              Mods;       // ImGuiMod_* for the shortcut
+  int              Surfaces;   // ImGuiAppCmdSurface_ bitmask
+  ImGuiAppNodeKind AddKind;    // add verbs carry their kind; ImGuiAppNodeKind_COUNT otherwise
+};
+
+// One problem found by AppGraphValidate. Severity: 1 = warning, 2 = error. NodeId is the node to
+// reveal (-1 for whole-graph issues).
+struct ImGuiAppGraphIssue
+{
+  int  NodeId;
+  int  Severity;
+  char Text[256];
+
+  ImGuiAppGraphIssue() { NodeId = -1; Severity = 1; Text[0] = 0; }
+};
+
+// Brushing across coordinated views: any panel reports the datum under the mouse; every panel reads
+// LAST frame's report and highlights it (one-frame latency). The source lets a view skip echoing its
+// own hover. Single-editor-instance state.
+
+enum ImGuiAppHoverSource_
+{
+  ImGuiAppHoverSource_None = 0,
+  ImGuiAppHoverSource_Canvas,      // the node editor
+  ImGuiAppHoverSource_Tree,        // the outliner
+  ImGuiAppHoverSource_Inspector,   // inspector / binding rows
+  ImGuiAppHoverSource_External,    // problems list, code panel, any host-app panel
+};
+
+// Host verbs surfaced in the canvas command palette (workbench W2). Register each frame before
+// ShowAppGraphEditor (pointers must outlive the frame); a picked command is reported back through
+// AppGraphConsumeHostCommand (one-frame latency, the editor never calls the host).
+struct ImGuiAppGraphHostCmd
+{
+  const char* Label;    // e.g. "File: Save graph"
+  const char* Shortcut; // displayed dim + right-aligned; "" = none
+  int         Id;       // host-defined, returned by AppGraphConsumeHostCommand
+  ImGuiKey    Key = ImGuiKey_None;   // optional keyboard road; the editor records a match, host owns the meaning
+  int         Mods = 0;              // ImGuiMod_ combo required with Key
+};
+
+// Composer chrome palette, derived from the current ImGuiStyle theme (AppComposerStyleFromTheme):
+// neutrals ride the WindowBg -> Text axis, semantic hues are pulled toward Text for light-theme
+// legibility. Fields are final packed IM_COL32 values; overwrite after derivation to customize.
+struct ImGuiAppComposerStyle
+{
+  // Node kind accents
+  ImU32 KindLayer;
+  ImU32 KindWindow;
+  ImU32 KindSidebar;
+  ImU32 KindControl;
+  ImU32 KindStruct;
+  ImU32 KindField;
+  ImU32 KindOp;
+  ImU32 KindDefault;
+  // Layer-type accents
+  ImU32 LayerTask;
+  ImU32 LayerCommand;  // also marks hidden nodes
+  ImU32 LayerStatus;
+  ImU32 LayerLayout;
+  ImU32 LayerDisplay;
+  ImU32 AccentNeutral; // fallback accent for typeless rows/ports
+                       // Pins
+  ImU32 PinData;
+  ImU32 PinChild;
+  ImU32 PinTie;
+  ImU32 PinDefault;
+  // Diagnostics
+  ImU32 SevError;
+  ImU32 SevWarn;
+  ImU32 ErrorText;
+  ImU32 Danger;
+  // Live mirror / promotion
+  ImU32 OriginLive;
+  ImU32 OriginPromoted;
+  ImU32 DotLive;
+  ImU32 DotPromoted;
+  ImU32 DotDrift;
+  // Overlay accents
+  ImU32 Gold;
+  // Field chrome (flat draw-list widgets)
+  ImU32 FieldBg;
+  ImU32 FieldBgHovered;
+  ImU32 FieldBgEdit;
+  ImU32 FieldBorder;
+  ImU32 FieldText;
+  ImU32 TextMuted;    // idle glyphs (disclosure chevrons)
+  ImU32 TextOnAccent; // near-black text/numerals over accent fills
+  ImU32 DarkOutline;  // near-black rings over accent fills
+                      // Group boxes + numbered rail
+  ImU32 GroupFill;
+  ImU32 GroupOutline;
+  ImU32 GroupTitleBg; // opaque: grid must not bleed through text
+  ImU32 RailLine;
+};
+
+// Composer chrome scalar idiom -- one table for the motion (F38) and type/space ladders (F39). Not
+// theme-derived; the single source so no overlay hard-codes an alpha, and no chrome text hard-codes
+// an off-ladder size. Type tiers are RATIOS of the body font size; spacing steps in SpaceQuantum em.
+struct ImGuiAppComposerMotion
+{
+  // Motion + quietness (F38)
+  float OverlayRest    = 0.55f;    // an idle canvas overlay sits quiet
+  float OverlayHover   = 1.00f;    // ... brightens to full when the pointer rests on it
+  float OverlayGesture = 0.20f;    // ... and recedes during a wire-drag / marquee (get out of the way)
+  float FadeMs         = 150.0f;   // single linear alpha fade between those states (and for transient chrome)
+  // Typography ladder (F39): chrome text tiers, strictly descending
+  float TypeBody       = 1.00f;    // primary chrome text
+  float TypeSecondary  = 0.90f;    // secondary tier (chip labels, sub-rows)
+  float TypeCaption    = 0.80f;    // smallest tier (dense readouts, code gutter, scope strip)
+  // Spacing quantum (F39): chrome gaps step in this em fraction
+  float SpaceQuantum   = 0.25f;
+};
+
+// The composer chrome's push-stack palette, exposed read-write (stable pointer): the project
+// inspector's Theme section edits it live. Col slots are semantic and fixed; Value/Active are the
+// editable half. Seeded from AppComposerGetStyle.
+struct ImGuiAppChromeTheme
+{
+  ImGuiAppColorModDesc Combo[8]; // dropdown fields (enum combos, struct picker): field + popup + rows
+  ImGuiAppColorModDesc Edit[4];  // in-place editors (InputText/InputInt): transparent frame over the drawn bg
+};
+
+// Scope interior: a data edge crossing the current drill-down boundary docks on the wall as a
+// portal chip (inbound producers left, outbound consumers right). Derived per frame from
+// Links + ViewScope -- no ids, no persistence, no codegen, no validation.
+struct ImGuiAppScopePortal
+{
+  int  LinkId;        // the crossing data edge
+  int  InsidePortId;  // the in-scope endpoint's port (the chip wires to this pin)
+  int  OutsideNodeId; // the off-scope node the chip names; click jumps to its scope
+  bool Inbound;       // true: outside producer -> inside consumer (left wall); false: right wall
+
+  ImGuiAppScopePortal() { LinkId = -1; InsidePortId = -1; OutsideNodeId = -1; Inbound = true; }
+};
+
+// One node's contribution to the last whole-graph emission: [LineBegin, LineEnd) in the generated
+// text. A node may own several spans (type definitions AND its bring-up line in SetupApp).
+struct ImGuiAppCodeSpan
+{
+  int NodeId;
+  int LineBegin;
+  int LineEnd;
+
+  ImGuiAppCodeSpan() { NodeId = -1; LineBegin = 0; LineEnd = 0; }
+};
+
+//-----------------------------------------------------------------------------
+// [SECTION] ImGuiAppEditorState, ImGuiAppGraph (the composer document + session)
+//-----------------------------------------------------------------------------
 
 // Editor session state, one per graph (the document): the editor's cross-frame values ride the
 // model object they describe, like Selection/ViewScope/ScopeCams. All transient, not serialized.
@@ -1627,6 +1568,77 @@ namespace ImGui
   // loads as a one-element vector. *drafts is cleared before loading.
   IMGUI_API bool SaveAppNodeGraphMulti(const char* path, const ImVector<ImGuiAppNodeDraft>* drafts, const ImVector<ImGuiAppNodeLink>* links);
   IMGUI_API bool LoadAppNodeGraphMulti(const char* path, ImVector<ImGuiAppNodeDraft>* drafts, ImVector<ImGuiAppNodeLink>* links);
+
+  // Typed graph model: ids, nodes, links, validate, signature
+  // AddNode/AddBuiltin stamp the kind's mandatory ports and a body-attr id; the returned pointer is
+  // valid only until the next node is added (Nodes may reallocate). Find* resolve by search, never by
+  // index. RemoveNode also sweeps incident links and orphaned bindings.
+  IMGUI_API int               AppGraphAllocId(ImGuiAppGraph* g);
+  IMGUI_API ImGuiAppNode*     AppGraphAddNode(ImGuiAppGraph* g, ImGuiAppNodeKind kind, const char* name);
+  IMGUI_API ImGuiAppNode*     AppGraphAddBuiltin(ImGuiAppGraph* g, ImGuiAppNodeKind kind, const char* type_name, const char* data_type_name);
+  // Add a logic Op node (F54). op_token is one of the AppEventExprCheck-checkable operators (AND/OR/XOR/NOT,
+  // ==/!=/</<=/>/>=, select, min/max); null or unknown => the default (AND). TypeName carries the operator and
+  // fixes the operand-pin arity; the result DataOut is stamped DataTypeId=0 (opts out of one-producer-per-type).
+  IMGUI_API ImGuiAppNode*     AppGraphAddOp(ImGuiAppGraph* g, const char* op_token);
+  IMGUI_API void              AppGraphRemoveNode(ImGuiAppGraph* g, int node_id);
+  IMGUI_API ImGuiAppNode*     AppGraphFindNode(ImGuiAppGraph* g, int node_id);
+  IMGUI_API ImGuiAppNodePort* AppGraphFindPort(ImGuiAppGraph* g, int port_id, ImGuiAppNode** out_owner);
+  IMGUI_API bool              AppGraphHasLayerType(const ImGuiAppGraph* g, ImGuiAppLayerType type);
+  IMGUI_API void              AppNodeAddCommand(ImGuiAppNode* n, const char* name);
+  IMGUI_API void              AppNodeRemoveCommand(ImGuiAppNode* n, int index);
+
+  // Runtime data-flow key for a node named <node_name>: ConstantHash of the sanitized "<Name>Data"
+  // codegen emits == ImGuiType<<Name>Data>::ID, so a design DataOut port shares the live storage key.
+  IMGUI_API ImGuiID           AppNodeStructTypeId(const char* node_name);
+
+  // Stable fold of the codegen-determining authored (!IsLive) state: changes iff the emitted C++ would
+  // change. Excludes positions/ids/live-mirror churn. char[] hashed as NUL-terminated string (ctors
+  // zero only byte 0, so ImHashData over the fixed buffer would be unstable).
+  IMGUI_API ImGuiID           AppGraphSignature(const ImGuiAppGraph* g);
+
+  // What kinds compose into a drilled scope (F28): the single truth behind the interior palette and the
+  // empty-scope wall caption. A live non-layer scope (window/sidebar/control/struct mirror) takes nothing
+  // -- read-only -- so this returns false for every kind; the authored twin admits its members.
+  IMGUI_API bool              AppScopeKindComposable(const ImGuiAppGraph* g, int scope_id, ImGuiAppNodeKind kind);
+
+  // Origin vocabulary (F26): the one colour shared by the canvas title-bar dot, the outliner row tint and
+  // the demo legend. Live and Promoted (a design control whose emitted data type matches a live node) each
+  // get a distinct mark; plain design returns 0 (no push -> default row colour). Single source, so the
+  // three surfaces cannot drift.
+  IMGUI_API ImU32             AppGraphOriginColor(const ImGuiAppNode* n);
+
+  // Codegen freshness (F17). The signature is the single source of truth: AppGraphSyncRevision folds
+  // it once per frame and bumps Revision on any content change; AppGraphMarkGenerated stamps the
+  // signature at codegen time; the graph is STALE while the live signature differs from that stamp
+  // (FRESH == generated this session AND unchanged since). GenSignature/Revision are session-local
+  // (reset on load), so a freshly loaded graph reads as never-generated.
+  IMGUI_API int               AppGraphSyncRevision(ImGuiAppGraph* g);
+  IMGUI_API void              AppGraphMarkGenerated(ImGuiAppGraph* g);
+  IMGUI_API bool              AppGraphCodeStale(const ImGuiAppGraph* g);
+  IMGUI_API bool              AppGraphCodeFresh(const ImGuiAppGraph* g);
+
+  // Count the codegen self-diagnostics embedded in generated text (F19): the "// WARNING" comments the
+  // emitter drops for degenerate constructs and the "// codegen aborted" banner. Scans the emitted C++
+  // itself (single source: the emitter), never re-deriving the conditions. out_list (optional) receives
+  // each marker line trimmed of leading indent, one per line.
+  IMGUI_API int               AppScanCodegenWarnings(const char* code, ImGuiTextBuffer* out_list);
+
+  // CanLink validates an attempted edge (kind pairing, no self/dup, no duplicate dep type, no cycle),
+  // writing a reason to err on rejection. CaptureAppGraphLinks folds the canvas wire events, refusing
+  // illegal creations; returns true if the model changed.
+  IMGUI_API bool              AppGraphCanLink(ImGuiAppGraph* g, int start_port, int end_port, char* err, int err_size);
+  IMGUI_API bool              CaptureAppGraphLinks(ImGuiAppGraph* g, char* err, int err_size);
+
+  // Per-edge field-binding editor for one data link (call inside an attribute).
+  IMGUI_API void              EditAppDataEdgeBindings(ImGuiAppGraph* g, int link_id);
+
+
+  // Graph editor UI: canvas, inspector, tree, keymap
+  // Render the whole typed graph inside the current window. app may be null (design-only); when
+  // non-null, builtin control bodies can reflect live data. *selected_node_id is caller-owned (-1 =
+  // none): the editor reconciles it both ways (canvas<->tree) and clears dangling ids. show_live hides
+  // (never deletes) live-mirror nodes when false.
+  IMGUI_API void                                ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, bool show_live);
 
 
   // Code generation
