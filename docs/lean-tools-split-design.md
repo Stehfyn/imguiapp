@@ -47,12 +47,13 @@ stay separate), add an `imguiapp_internal.h`, and gate the tool TUs behind one m
 out (own gated TU), not gated wholesale. `imguiapp_canvas.cpp` + `imguiapp_demo.cpp` are UI-only → gate
 wholesale. `imguiapp_av.cpp` is record+decode, no UI → core.
 
-**`imguiapp_internal.h`** (Option-1, ALWAYS available, NOT gated) holds the TOOL-UI + internal-helper
-interfaces; the core model/codegen/recorder/decoder/interpreter interfaces stay in core headers (`imguiapp.h`
-/ a core model header / a core `imguiapp_av.h`). A lean build keeps model+codegen+recorder+decoder+
-interpreter+anim linkable (a generated app still `PushAppControl<ImAppTween>` (F56) and still records/opens
-runs); it drops only the UI + Phase-B's embedded source. "No source in the `.exe`" comes from gating the
-embed (Phase B) — codegen skeleton strings are small and stay.
+**`imguiapp_internal.h`** holds the TOOL-UI + internal-helper interfaces; its tool-UI declarations are
+wrapped in `#ifndef IMGUIX_DISABLE_TOOLS` so the macro hides the UI in the header too. The core
+model/codegen/recorder/decoder/interpreter/anim interfaces stay in CORE headers (`imguiapp.h` / a core model
+header / a core `imguiapp_av.h`), unconditional — so a lean build still links model+codegen+recorder+decoder+
+interpreter+anim (a generated app still `PushAppControl<ImAppTween>` (F56) and still records/opens runs); it
+drops only the UI + Phase-B's embedded source. "No source in the `.exe`" comes from gating the embed
+(Phase B) — codegen skeleton strings are small and stay.
 
 ## 3. `imguiapp_internal.h`
 
@@ -61,18 +62,23 @@ the graph editor UI (split out of `imguiapp_nodes.cpp`), the canvas UI (`imguiap
 SURFACE UI (split out of `imguiapp_preview.cpp` + `imguiapp_preview_dll.h`), and the demo/transport/bug-button
 UI decls. It does NOT hold the core machinery: the graph MODEL + CODEGEN, the RECORDER, the DECODER/loader
 (`AppRun*`), the interpreter CORE, and anim all keep CORE headers (`imguiapp.h` / a core model header / a
-core `imguiapp_av.h`). `imguiapp_internal.h` is ALWAYS available (Option 1), NOT gated. The deep reorder is
-Phase C; Phase A is header re-home + the mixed-file UI split, not a rewrite.
+core `imguiapp_av.h`). `imguiapp_internal.h`'s tool-UI decls are wrapped in `#ifndef IMGUIX_DISABLE_TOOLS`
+(the macro hides the UI in the header too); the core headers it does NOT own stay unconditional. The deep
+reorder is Phase C; Phase A is header re-home + the mixed-file UI split, not a rewrite.
 
 ## 4. The gate
 
 - `imguiapp_config.h`: `// #define IMGUIX_DISABLE_TOOLS` documented; when defined, the tools compile out.
-- `imguiapp_internal.h` is NOT gated — it always declares the tool-UI + internal API (Option 1). Only the
-  UI-ONLY impl TUs wrap their bodies in `#ifndef IMGUIX_DISABLE_TOOLS` … `#endif` (imgui's `IMGUI_DISABLE`
-  pattern): `imguiapp_canvas.cpp`, `imguiapp_demo.cpp`, the graph-editor-UI TU split out of `imguiapp_nodes.cpp`,
-  and the preview-surface UI split out of `imguiapp_preview.cpp` / `imguiapp_preview_dll.cpp`. The MIXED files'
-  CORE remainder (`imguiapp_nodes.cpp` model+codegen; `imguiapp_preview.cpp` interpreter core; `imguiapp_av.cpp`
-  record+decode) is NOT gated. A lean build's host simply does not call the (now absent) UI.
+- `imguiapp_internal.h`'s tool-UI declarations are themselves wrapped in `#ifndef IMGUIX_DISABLE_TOOLS` …
+  `#endif` — the macro HIDES the UI in the HEADER too (a lean consumer that includes `internal.h` sees no UI
+  API), not just in the impl. Any non-UI internal helper decls stay unconditional. This does NOT strand the
+  lean runtime: the UI=tool rule already moved anim / decoder / model / codegen / interpreter interfaces OUT
+  of `internal.h` into CORE headers, which stay unconditional — so a lean build still links them.
+- The UI-only impl TUs likewise wrap their bodies (imgui's `IMGUI_DISABLE` pattern): `imguiapp_canvas.cpp`,
+  `imguiapp_demo.cpp`, the graph-editor-UI TU split out of `imguiapp_nodes.cpp`, and the preview-surface UI
+  split out of `imguiapp_preview.cpp` / `imguiapp_preview_dll.cpp`. The MIXED files' CORE remainder
+  (`imguiapp_nodes.cpp` model+codegen; `imguiapp_preview.cpp` interpreter core; `imguiapp_av.cpp` record+decode)
+  is NOT gated.
 - CMake (`imguix/CMakeLists.txt`): the tool sources stay in `IMGUIX_SOURCES` (they self-empty); add an
   option `IMGUIX_ENABLE_TOOLS` (default ON) that, when OFF, adds `IMGUIX_DISABLE_TOOLS` to
   `IMGUIX_COMPILE_DEFINITIONS`. The demo/composer executable target is not built in the lean config.
