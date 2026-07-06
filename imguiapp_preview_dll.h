@@ -1,4 +1,5 @@
 #pragma once
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL (UI): DLL preview surface, hidden in a lean build (Phase A4)
 
 // DLL preview backend (F78 design: docs/dll-preview-design.md). The high-fidelity sibling of the F67/F68
 // interpreter: instead of interpreting the graph it emits the real program (GenerateAppPreviewModuleCode),
@@ -52,3 +53,5 @@ namespace ImGui
   // fallback). Call after AppPreviewDllTick so the frame reflects the current tick.
   IMGUI_API bool                 AppPreviewDllRasterizeFrame(ImGuiAppPreviewDll* session, int w, int h, unsigned int clear_col, ImVector<unsigned char>* out_rgba);
 }
+
+#endif // IMGUIX_DISABLE_TOOLS

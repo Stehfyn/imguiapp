@@ -850,6 +850,7 @@ namespace
 
   void AppPvDestroyBuffer(void* p) { IM_FREE(p); }
 
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: F68 preview-surface widgets + brushing (Phase A3)
   void AppPvFieldWidget(const AppPvSlot* sl, char* p)
   {
     switch (sl->Type)
@@ -914,6 +915,7 @@ namespace
     ImGui::Spacing();
     ImGui::PopID();
   }
+#endif // IMGUIX_DISABLE_TOOLS
 }
 
 int ImGuiAppPreviewControl::AppPvCommandValueForEvent(ImGuiAppPreview* s, const char* name)
@@ -940,8 +942,10 @@ void ImGuiAppPreviewControl::OnRender(const ImGuiApp* app) const
 
   // Real widget input on the composed window surface (design 8.1). Guarded to hosted/surface controls so the
   // headless CORE (app-level controls, no window/NewFrame) makes no ImGui calls.
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: surface widget input (Phase A3) -- core->UI call site
   if (Hosted || Session->Surface.Enabled)
     AppPvRenderFields(Session, Inst, buffer, Label);
+#endif // IMGUIX_DISABLE_TOOLS
 }
 
 //-----------------------------------------------------------------------------
@@ -1235,6 +1239,7 @@ namespace ImGui
     RenderApp(session->App);
   }
 
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: F68 preview-surface + brushing public API (Phase A3)
   void AppPreviewRender(ImGuiAppPreview* session)
   {
     if (session == nullptr || session->App == nullptr) return;
@@ -1266,6 +1271,7 @@ namespace ImGui
     session->Surface.ClickNode = -1;   // consumed
     return n;
   }
+#endif // IMGUIX_DISABLE_TOOLS
 
   bool AppPreviewSetInput(ImGuiAppPreview* session, int node_id, const char* temp_field, double value)
   {

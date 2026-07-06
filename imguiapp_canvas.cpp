@@ -1,3 +1,4 @@
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL (UI): compiled out in a lean build (Phase A4)
 // ImGuiAppLayer canvas engine. Invariant: node geometry is STORED in model units; the camera is
 // applied exactly once, at draw/hit-test time, always with THIS frame's values; sizes are measured
 // the same frame and same zoom they rendered with. docs/canvas-engine-design.md,
@@ -1871,3 +1872,5 @@ namespace ImGui
     return c->MenuEmptyReq;
   }
 }
+
+#endif // IMGUIX_DISABLE_TOOLS

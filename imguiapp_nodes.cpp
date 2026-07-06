@@ -44,6 +44,7 @@ namespace ImGui
 
   // Per-window widget state keys (ImGui state storage): the BL widgets' shared edit focus + drag
   // scratch, and the rename scaffold's Begin/End latch. Window-scoped like ImGui's own ActiveId.
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   static const ImGuiID kAppKeyBlEditing   = 0x424C0001;
   static const ImGuiID kAppKeyBlFocus     = 0x424C0002;
   static const ImGuiID kAppKeyBlDragId    = 0x424C0003;
@@ -100,6 +101,7 @@ namespace ImGui
     ImGui::CanvasBeginNode(c, id);
   }
 
+#endif // IMGUIX_DISABLE_TOOLS
   const char* AppFieldTypeName(ImGuiAppFieldType type)
   {
     switch (type)
@@ -135,6 +137,7 @@ namespace ImGui
   }
 
   // Frame-height square so it aligns with the adjacent InputText/Combo. Returns true on click.
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   static bool AppRowDeleteButton(const char* str_id)
   {
     const float sz = ImGui::GetFrameHeight();
@@ -986,6 +989,7 @@ namespace ImGui
     return changed;
   }
 
+#endif // IMGUIX_DISABLE_TOOLS
   // Parse one "name,typeint,arraysize" field record into fields.
   static void AppNodeParseField(ImVector<ImGuiAppFieldDesc>* fields, const char* line)
   {
@@ -1491,6 +1495,7 @@ namespace ImGui
   // The Composer's single canvas instance, created on first use. The engine stores node geometry in
   // MODEL units and measures it the same frame it renders (imguiapp_canvas.h).
 
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   static ImGuiCanvasState* AppEditorCanvas(const ImGuiAppGraph* g)
   {
     if (AppGraphEditorState(g)->Canvas == nullptr)
@@ -1502,10 +1507,12 @@ namespace ImGui
   {
     return AppEditorCanvas(g);
   }
+#endif // IMGUIX_DISABLE_TOOLS
 
   // A node's engine-measured size in MODEL units; false until it has been submitted once.
   // Last frame's MODEL measurement (the engine record), consumed this frame -- the framework's
   // T+1 law; invariant units. The engine's deadband keeps the value zoom-idempotent.
+#ifndef IMGUIX_DISABLE_TOOLS
   static bool AppNodeModelSize(const ImGuiAppGraph* g, int node_id, ImVec2* out)
   {
     const ImVec2 s = ImGui::CanvasNodeSize(AppEditorCanvas(g), node_id);
@@ -1514,6 +1521,10 @@ namespace ImGui
     *out = s;
     return true;
   }
+#else
+  // Lean build: no canvas engine -> nothing measured; callers fall back to the per-kind estimate below.
+  static bool AppNodeModelSize(const ImGuiAppGraph*, int, ImVec2*) { return false; }
+#endif // IMGUIX_DISABLE_TOOLS
 
   // Model-unit footprint: last measurement, else the per-kind estimate.
   static ImVec2 AppLayoutNodeSize(const ImGuiAppGraph* g, const ImGuiAppNode* n)
@@ -1603,6 +1614,7 @@ namespace ImGui
   // Stack `ids` vertically from `origin`, one node per row -- the runtime executes these
   // sequentially, and vertical order IS execution order on this canvas. One slot per id into
   // `out_positions` (when non-null). Returns the stack's extent below origin.y (0 when empty).
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   static float AppGraphWindowSectionStack(const ImGuiAppGraph* g, const ImVector<int>* ids, const ImVec2& origin, ImVector<ImVec2>* out_positions)
   {
     float y = origin.y;
@@ -1623,11 +1635,13 @@ namespace ImGui
 
   // The section's stack origin against a given Display layer height (callers off the editor
   // canvas pass the guarded AppLayoutNodeSize height; the editor passes the measured one).
+#endif // IMGUIX_DISABLE_TOOLS
   static ImVec2 AppGraphWindowSectionOrigin(const ImGuiAppNode* wl, float wl_h)
   {
     return ImVec2(wl->GridPos.x + kAppGraphWindowSectionIndent, wl->GridPos.y + wl_h + kAppGraphWindowSectionGap);
   }
 
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   static bool AppGraphPlacementOccupied(const ImGuiAppGraph* g, const ImGuiAppNode* self, const ImVec2& pos)
   {
     const float margin = 28.0f;
@@ -1699,6 +1713,7 @@ namespace ImGui
     return start;
   }
 
+#endif // IMGUIX_DISABLE_TOOLS
   static void AppGraphCollectVisibleLayerStack(const ImGuiAppGraph* g, bool show_live, ImVector<int>* out_node_ids)
   {
     out_node_ids->clear();
@@ -1729,6 +1744,7 @@ namespace ImGui
   static void   AppCanvasSetNodePos(const ImGuiAppGraph* g, int node_id, const ImVec2& model);  // fwd: engine passthrough (model units)
 
   // MODEL-unit node height (the engine measures in model units; fallback row pitch until measured).
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   static float AppGraphLayerNodeHeight(const ImGuiAppGraph* g, int node_id)
   {
     const float h = ImGui::CanvasNodeSize(AppEditorCanvas(g), node_id).y;
@@ -2031,6 +2047,8 @@ namespace ImGui
     }
   }
 
+#endif // IMGUIX_DISABLE_TOOLS   -- end U6 layer packing (Phase A2)
+#ifndef IMGUIX_DISABLE_TOOLS   // AppGraphPlaceNode: real canvas-measured placement (tools)
   static void AppGraphPlaceNode(ImGuiAppGraph* g, ImGuiAppNode* n, const ImVec2* preferred)
   {
     n->GridPos = AppGraphFindOpenPlacement(g, n, preferred ? *preferred : ImVec2(0.0f, 0.0f), preferred != nullptr);
@@ -2040,6 +2058,15 @@ namespace ImGui
     n->_NeedsPlace = true;
   }
 
+#else
+  // Lean build: no canvas engine -> no measured auto-placement; seat at preferred point (or origin).
+  static void AppGraphPlaceNode(ImGuiAppGraph* g, ImGuiAppNode* n, const ImVec2* preferred)
+  {
+    n->GridPos = preferred ? *preferred : ImVec2(0.0f, 0.0f);
+    n->HasGridPos = (n->Kind != ImGuiAppNodeKind_Layer);
+    n->_NeedsPlace = true;
+  }
+#endif // IMGUIX_DISABLE_TOOLS
   static ImGuiAppNode* AppGraphInitNode(ImGuiAppGraph* g, ImGuiAppNodeKind kind, const char* name)
   {
     // Push an EMPTY node first (its ImVector<Port> is null), then populate in place: ImVector relocates by
@@ -2430,6 +2457,7 @@ namespace ImGui
   // into Field nodes. While exploded the owner's inline vector is empty -- the nodes own the members --
   // so editing that vector is a dead write the next collapse discards. Route every edit/add/delete to the
   // Field nodes instead; the node title is the authoritative member name on collapse.
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   static void EditAppNodeFieldSection(ImGuiAppGraph* g, ImGuiAppNode* owner, int list, const char* label)
   {
     if (owner->IsLive)
@@ -2499,6 +2527,7 @@ namespace ImGui
 
   // Explode one of a Control's two structs OUT as a standalone Struct node (named <Control>Data /
   // <Control>TempData), tied via a data edge. The control's inline list is cleared (the struct owns it).
+#endif // IMGUIX_DISABLE_TOOLS
   static void AppGraphExplodeControlData(ImGuiAppGraph* g, ImGuiAppNode* c, bool temp)
   {
     if (c == nullptr || c->Kind != ImGuiAppNodeKind_Control || c->IsLive || c->IsBuiltin)
@@ -2759,6 +2788,7 @@ namespace ImGui
       n->Commands.erase(n->Commands.Data + index);
   }
 
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   static void EditAppNodeCommands(ImGuiAppNode* n, bool with_add_pill = true)
   {
     IM_ASSERT(n != nullptr);
@@ -2867,6 +2897,7 @@ namespace ImGui
   // ImGuiAppEventDesc authors one such comparison plus its reaction; codegen emits the guarded block verbatim.
   //-----------------------------------------------------------------------------
 
+#endif // IMGUIX_DISABLE_TOOLS
   static const char* AppEventEdgeName(int e)
   {
     switch (e)
@@ -2902,6 +2933,7 @@ namespace ImGui
 
   // One row per event: "when <TempField> <edge> -> <action>" plus the action's parameters. Events watch
   // TempData, so the add pill needs a Temp field to exist first.
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   static void EditAppControlEvents(ImGuiAppGraph* g, ImGuiAppNode* n)
   {
     IM_ASSERT(g != nullptr && n != nullptr);
@@ -3013,6 +3045,7 @@ namespace ImGui
   }
 
   // Owner node id for a port id (const-friendly; -1 if unknown). Used by topo/codegen which take const graphs.
+#endif // IMGUIX_DISABLE_TOOLS
   static int AppGraphPortOwnerId(const ImGuiAppGraph* g, int port_id)
   {
     for (int i = 0; i < g->Nodes.Size; i++)
@@ -3289,6 +3322,7 @@ namespace ImGui
   // means "delete", not "create here"). Set by the detach event below, consumed by the editor's
   // CanvasWireDropped handler.
 
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   bool CaptureAppGraphLinks(ImGuiAppGraph* g, char* err, int err_size)
   {
     IM_ASSERT(g != nullptr);
@@ -3403,6 +3437,7 @@ namespace ImGui
     ImGui::PopID();
   }
 
+#endif // IMGUIX_DISABLE_TOOLS
   //-----------------------------------------------------------------------------
   // [SECTION] Hover sync (brushing across coordinated views) + cached validation
   //-----------------------------------------------------------------------------
@@ -3435,6 +3470,7 @@ namespace ImGui
 
   // Engine passthroughs: model units everywhere; the camera is the engine's one transform.
   // Zoom = logical camera (font pushes, persisted view state); Scale = model -> screen pixels.
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   static float AppCanvasZoom(const ImGuiAppGraph* g)
   {
     return ImGui::CanvasGetZoom(AppEditorCanvas(g));
@@ -3451,7 +3487,18 @@ namespace ImGui
   {
     ImGui::CanvasSetNodePos(AppEditorCanvas(g), node_id, model);
   }
-
+#else
+  // Lean build: no canvas engine. Positions are the authored model GridPos; "set" is a no-op (no camera).
+  static float  AppCanvasZoom(const ImGuiAppGraph*)  { return 1.0f; }
+  static float  AppCanvasScale(const ImGuiAppGraph*) { return 1.0f; }
+  static ImVec2 AppCanvasNodePos(const ImGuiAppGraph* g, int node_id)
+  {
+    for (int i = 0; i < g->Nodes.Size; i++)
+      if (g->Nodes.Data[i].Id == node_id) return g->Nodes.Data[i].GridPos;
+    return ImVec2(0.0f, 0.0f);
+  }
+  static void   AppCanvasSetNodePos(const ImGuiAppGraph*, int, const ImVec2&) { }
+#endif // IMGUIX_DISABLE_TOOLS
   void AppGraphSetHostCommands(const ImGuiAppGraph* g, const ImGuiAppGraphHostCmd* cmds, int count)
   {
     AppGraphEditorState(g)->HostCmds = cmds;
@@ -3815,6 +3862,7 @@ namespace ImGui
   // its start point, which duplicates the path's previous point at every line->arc and arc->arc
   // joint; AddPolyline's join normals degenerate on zero-length segments and render a width
   // BULGE there. Dedup keeps the stroke width constant along the whole wire.
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   static void AppWirePathStroke(ImDrawList* dl, ImU32 col, float th)
   {
     ImVector<ImVec2>& p = dl->_Path;
@@ -3880,6 +3928,7 @@ namespace ImGui
   // This frame's layer-column geometry, published by AppDrawLayerGroupBox for consumers in the
   // same pass (trunk routing): the LAYER NODE rects ARE the obstacle set -- one producer per
   // value, never re-derived (docs/phase-coherence.md rule 3). Screen space, this frame's camera.
+#endif // IMGUIX_DISABLE_TOOLS
   struct AppLayerColumnGeom
   {
     bool   Valid = false;
@@ -3897,6 +3946,7 @@ namespace ImGui
   // grid -> this box -> nodes, so the grid can never show through the box/bands and the bands sit under
   // the nodes. Caller wraps this in the zoomed font (decorations size against em like node content).
   // Always publishes `out_geom`; `draw` false computes geometry only (overlay hidden).
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   static void AppDrawLayerGroupBox(const ImGuiAppGraph* g, bool show_live, bool draw, float em_base, float fh_base, AppLayerColumnGeom* out_geom)
   {
     // Per visible layer: screen y-span + accent for the flow rail and phase bands.
@@ -4174,6 +4224,7 @@ namespace ImGui
     return false;
   }
 
+#endif // IMGUIX_DISABLE_TOOLS
   static const char*    kAppDockDirNames[] = { "Left", "Right", "Up", "Down" };
   static const ImGuiDir kAppDockDirs[]     = { ImGuiDir_Left, ImGuiDir_Right, ImGuiDir_Up, ImGuiDir_Down };
 
@@ -4265,6 +4316,7 @@ namespace ImGui
 
   // Editable style-var override rows for a Window/Sidebar/Control node. Rows land in the item's StyleMods at
   // bring-up (SetupApp), where the runtime pushes Active entries around the item's submission.
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   static void EditAppNodeStyleMods(ImGuiAppNode* n)
   {
     const float em = ImGui::GetFontSize();
@@ -4489,6 +4541,7 @@ namespace ImGui
     }
   }
 
+#endif // IMGUIX_DISABLE_TOOLS
   //-----------------------------------------------------------------------------
   // [SECTION] Inspector (component sections, style/color descs, project + multi-select)
   //-----------------------------------------------------------------------------
@@ -4530,6 +4583,7 @@ namespace ImGui
 
   // Read-only live field table for one struct (Persist or Temp) of a RUNNING control.
   // Values are read from the live instance every frame -- they change as the app runs.
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   static void AppLiveFieldsTable(const char* str_id, const ImGuiAppControlBase* ctrl, bool temp_data, const void* base)
   {
     ImGuiAppLiveFieldDesc fields[64];
@@ -4566,6 +4620,7 @@ namespace ImGui
     }
   }
 
+#endif // IMGUIX_DISABLE_TOOLS
   // Resolve a live mirror node back to the runtime object it reflects (the inverse of BuildAppLiveGraph's
   // keying: windows by label hash, sidebars by label hash + 1, controls by PersistData id).
   static ImGuiAppItemBase* AppGraphFindLiveItem(ImGuiApp* app, const ImGuiAppNode* n)
@@ -4600,6 +4655,7 @@ namespace ImGui
   // Style section: desc rows under a component header whose enable checkbox masters every row's Active
   // flag and whose kebab holds copy / paste / reset. The section clipboard is session-lived, value-typed.
 
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   static void AppNodeStyleSection(ImGuiAppGraph* g, ImGuiAppNode* n)
   {
     const int total = n->StyleMods.Size + n->ColorMods.Size;
@@ -4978,6 +5034,7 @@ namespace ImGui
     ImGui::PopID();
   }
 
+#endif // IMGUIX_DISABLE_TOOLS
   static bool AppGraphHostsControl(const ImGuiAppGraph* g, int host_id);   // fwd
 
   // Node color by kind, shared by the outliner rows and the canvas group frames.
@@ -5094,6 +5151,7 @@ namespace ImGui
 
   // Per-branch camera memory lives ON the graph (ImGuiAppGraph::ScopeCams, transient like
   // ViewScope): every editor over a graph shares its memory; two graphs never share state.
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   static void AppScopeCameraSave(ImGuiAppGraph* g, ImGuiCanvasState* cv, int scope_id)
   {
     ImGuiAppScopeCamera* cam = nullptr;
@@ -5124,6 +5182,7 @@ namespace ImGui
     return false;
   }
 
+#endif // IMGUIX_DISABLE_TOOLS
   static bool AppScopeCanEnter(const ImGuiAppNode* n)
   {
     return n != nullptr && (n->Kind == ImGuiAppNodeKind_Layer || n->Kind == ImGuiAppNodeKind_Window
@@ -5743,6 +5802,7 @@ namespace ImGui
   // lands in THIS frame's ordinals -- the member card badges and the strip both read the new sequence the
   // same frame. Hit-tests LAST frame's published chip rects (screen space; the camera does not move during a
   // strip drag). While a drag is live the canvas LMB-pan is suppressed so the reorder never scrolls the view.
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   static void AppHandleScopeStripDrag(ImGuiAppGraph* g)
   {
     ImGuiAppEditorState* ed = AppGraphEditorState(g);
@@ -5804,6 +5864,7 @@ namespace ImGui
     ImGui::CanvasGetIO(cv)->LmbPansEmptyCanvas = (ed->StripDragNode < 0);
   }
 
+#endif // IMGUIX_DISABLE_TOOLS
   // Per-scope sequence tidy (F44): arrange the drilled scope's members left -> right in execution order
   // (AppScopeSequenceIds), writing THIS scope's placement records only -- root GridPos stays put (the
   // step45 altitude split). Non-sequential scopes (control/struct interiors) have no order, so fall back
@@ -6146,6 +6207,7 @@ namespace ImGui
   // before CanvasBegin. An empty scope publishes nothing (the empty CTA owns that state).
   // Bounds grow instantly and shrink only past a deadband (docs/phase-coherence.md 1b -- the
   // fixed point: the rect is stable while every edge is within the deadband of its target).
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   static void AppDrawScopeWalls(ImGuiAppGraph* g, ImGuiCanvasState* cv, bool show_live, float em_base, float fh_base)
   {
     IM_UNUSED(fh_base);
@@ -6425,6 +6487,7 @@ namespace ImGui
     }
   }
 
+#endif // IMGUIX_DISABLE_TOOLS
   void AppScopeCollectPortals(const ImGuiAppGraph* g, ImVector<ImGuiAppScopePortal>* out)
   {
     out->resize(0);
@@ -6475,6 +6538,7 @@ namespace ImGui
   // height (inbound producers on the left wall, outbound consumers on the right), wired to the
   // real pin. Hover brushes the off-scope node; click jumps to its scope. Post-CanvasEnd on the
   // annotation list; hit-tests follow the overlay rule (AllowWhenBlockedByActiveItem).
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   static void AppDrawScopePortals(ImGuiAppGraph* g, ImVec2 editor_min, ImVec2 editor_size, int* selected_node_id)
   {
     ImGuiAppEditorState* ed = AppGraphEditorState(g);
@@ -6559,6 +6623,7 @@ namespace ImGui
   }
 
   // Pin color by port kind: data pins blue, containment pins orange (tie pins use AppPinTieColor green).
+#endif // IMGUIX_DISABLE_TOOLS
   static ImU32 AppPinColor(ImGuiAppPortKind kind)
   {
     switch (kind)
@@ -6576,6 +6641,7 @@ namespace ImGui
   // clicking a segment jumps back to that depth. A CHILD window overlaying the canvas, not
   // draw-list buttons in the canvas window (the canvas item is submitted first and owns the
   // mouse) and not a top-level window (any click on the host window raises the host above it).
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   static void AppDrawScopeBreadcrumb(ImGuiAppGraph* g, int* selected_node_id, ImVec2 editor_min)
   {
     const float em = ImGui::GetFontSize();
@@ -6760,6 +6826,7 @@ namespace ImGui
   // (global tidy). Reads each member's altitude-correct canvas rect and writes the new position through
   // the nudge idiom -- the canvas move routes to this scope's placements while drilled; GridPos is the
   // root read-back's own. Live picks and collapse-hidden nodes are skipped.
+#endif // IMGUIX_DISABLE_TOOLS
   enum AppAlignMode_ { AppAlign_Left, AppAlign_Right, AppAlign_Top, AppAlign_Bottom, AppAlign_DistribH, AppAlign_DistribV };
 
   static void AppGraphAlignSelection(ImGuiAppGraph* g, int mode, bool show_live)
@@ -6845,6 +6912,7 @@ namespace ImGui
   }
 
   // The six ops as MenuItems, shared by the selection context submenu and the Shift+A popup.
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   static void AppGraphAlignMenuItems(ImGuiAppGraph* g, bool show_live)
   {
     const bool has2 = g->Selection.Size >= 2;
@@ -6862,6 +6930,7 @@ namespace ImGui
   // shortcut, key, and which surfaces (palette / context menu / shortcut / gizmo) each declares. The Space
   // palette renders directly from it; the completeness test iterates it and checks each verb is reachable
   // from every surface it declares. run() stays the Id-keyed dispatch in the palette (below).
+#endif // IMGUIX_DISABLE_TOOLS
   static const ImGuiAppEditorCommand s_editor_commands[] =
   {
     // Id  Icon  Label                          Shortcut  Key                     Mods            Surfaces                                                            AddKind
@@ -7085,6 +7154,7 @@ namespace ImGui
   // Keymap editor (F75): one row per rebindable verb -- label, effective-chord button (click to capture a new
   // chord), reset. Conflicts (two verbs, one chord) are flagged; the resolver's first-in-registry-order rule
   // still decides which fires. Chrome: em spacing, theme colors, single ###ids per control for headless drives.
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   void AppGraphShowKeymapEditor(ImGuiAppGraph* g)
   {
     IM_ASSERT(g != nullptr);
@@ -10015,6 +10085,7 @@ namespace ImGui
     AppGraphCheckpoint(g);
   }
 
+#endif // IMGUIX_DISABLE_TOOLS
   void AppGraphSelectionBreadcrumb(const ImGuiAppGraph* g, int node_id, char* buf, int buf_size)
   {
     IM_ASSERT(g != nullptr && buf != nullptr && buf_size > 0);
@@ -10383,6 +10454,7 @@ namespace ImGui
 
   // Render one field list as live mock widgets. Numeric state is kept in the window's ImGuiStorage keyed by the
   // field id, so scrubbed values persist across frames; strings show a read-only box (mock layout, not wired).
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   static void AppMockRenderFields(const ImVector<ImGuiAppFieldDesc>& fields)
   {
     ImGuiStorage* st = ImGui::GetStateStorage();
@@ -10501,6 +10573,7 @@ namespace ImGui
     }
   }
 
+#endif // IMGUIX_DISABLE_TOOLS
   //-----------------------------------------------------------------------------
   // [SECTION] Topological order + whole-graph codegen
   //-----------------------------------------------------------------------------
@@ -15288,6 +15361,7 @@ namespace ImGui
   }
 
   // Click a tree row: Ctrl toggles it in the multi-selection; plain click selects only it. Primary (*Sel) follows.
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   static void AppTreeClick(ImGuiAppGraph* g, ImGuiAppNode* n, AppTreeCtx* c)
   {
     if (c->Sel == nullptr)
@@ -15858,12 +15932,14 @@ namespace ImGui
       }
     }
   }
+#endif // IMGUIX_DISABLE_TOOLS
 }
 
 //-----------------------------------------------------------------------------
 // [SECTION] Embeddable Composer control (definitions; type in imguiapp_nodes.h)
 //-----------------------------------------------------------------------------
 
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
 void ImGuiAppComposerControl::OnInitialize(ImGuiApp* app, ImGuiAppComposerControlData* data) const
 {
   data->Host = app;                                  // handed to the editor; enables the live self-mirror
@@ -15881,3 +15957,5 @@ void ImGuiAppComposerControl::OnRender(const ImGuiAppComposerControlData* data, 
     ImGui::ShowAppGraphEditor(d->Host, &d->Graph, &d->Selected, false);
   ImGui::End();
 }
+
+#endif // IMGUIX_DISABLE_TOOLS   -- end U26 composer control methods

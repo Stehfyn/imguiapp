@@ -3,6 +3,7 @@
 // the same units they are consumed in. docs/canvas-engine-design.md, docs/phase-coherence.md.
 
 #pragma once
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL (UI): hidden in a lean build (Phase A4)
 
 #include "imgui.h"
 
@@ -185,3 +186,5 @@ namespace ImGui
   IMGUI_API bool   CanvasMenuRequestWire(const ImGuiCanvasState* c, int* out_wire_id);
   IMGUI_API bool   CanvasMenuRequestEmpty(const ImGuiCanvasState* c, ImVec2* out_model_pos);
 }
+
+#endif // IMGUIX_DISABLE_TOOLS

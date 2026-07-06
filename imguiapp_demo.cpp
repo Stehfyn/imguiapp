@@ -1,3 +1,4 @@
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL (UI): compiled out in a lean build (Phase A4)
 // ImGuiAppLayer demo.
 //
 // Index of this file (search for "[SECTION]"):
@@ -12,6 +13,7 @@
 
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "imguiapp.h"
+#include "imguiapp_internal.h"               // tool-UI decls (AppLayerDemoGraph, SetAppCodeFont, preview surface, editor UI)
 #include "imguiapp_nodes.h"
 #include "imguiapp_canvas.h"
 #include "imguiapp_av.h"                     // F63: run index + FILE-mode transport view
@@ -3383,3 +3385,5 @@ namespace ImGui
       }
   }
 }
+
+#endif // IMGUIX_DISABLE_TOOLS

@@ -16,7 +16,7 @@ Index of this file:
 
 #include "imgui.h" 										    // IMGUI_API, ImGuiID, ImGuiStorage, ImBitArray, ImGuiTextIndex, ImChunkStream
 #include "imgui_internal.h"               // ImStrncpy
-#include "imguiapp_config.h"
+#include "imapp_config.h"
 
 // Keep VERSION and VERSION_NUM in sync.
 #define IMGUI_APPLAYER_VERSION      "0.4.1"
@@ -68,7 +68,6 @@ template <typename PersistDataT, typename TempDataT, typename... DataDependencie
 
 // Forward declarations: ImGuiAppDisplay layer
 struct ImGuiAppWindowBase;
-struct ImGuiAppGraph;   // authored node graph (imguiapp_nodes.h)
 
 // Forward declarations: ImGuiAppSidebar layer
 struct ImGuiAppSidebarBase;
@@ -76,6 +75,81 @@ struct ImGuiAppSidebarBase;
 // Forward declarations: state history + input log (time travel / record-replay)
 struct ImGuiAppStateHistory;
 struct ImGuiAppInputLog;
+
+// Frame/app configuration (relocated from the switch-only imapp_config.h).
+typedef int ImGuiAppFrameFlags;
+enum ImGuiAppFrameFlags_
+{
+    ImGuiAppFrameFlags_None              = 0,
+    ImGuiAppFrameFlags_NoClear           = 1 << 0,
+    ImGuiAppFrameFlags_NoPresent         = 1 << 1,
+    ImGuiAppFrameFlags_NoPlatformWindows = 1 << 2,
+};
+
+struct ImGuiAppFrameConfig
+{
+    ImVec4             ClearColor;
+    ImGuiAppFrameFlags Flags;
+
+    ImGuiAppFrameConfig()
+        : ClearColor(0.0f, 0.0f, 0.0f, 1.0f)
+        , Flags(ImGuiAppFrameFlags_None)
+    {
+    }
+};
+
+enum ImGuiAppStyle_
+{
+    ImGuiAppStyle_Dark    = 0,
+    ImGuiAppStyle_Light   = 1,
+    ImGuiAppStyle_Classic = 2,
+};
+typedef int ImGuiAppStyle;
+
+struct ImGuiAppPlatform
+{
+    const char* Name;
+    void*       NativeWindowHandle;
+};
+
+typedef int ImGuiAppHeadlessMode;
+enum ImGuiAppHeadlessMode_
+{
+    ImGuiAppHeadlessMode_None = 0,   // normal windowed app
+    ImGuiAppHeadlessMode_Null,       // no GPU, no pixels (test engine only; backend CaptureFrame stays null)
+    ImGuiAppHeadlessMode_Offscreen,  // GPU renders to an offscreen target; no OS window, CaptureFrame works
+};
+
+struct ImGuiAppConfig
+{
+    ImGuiAppPlatform     Platform;
+    ImGuiConfigFlags     ConfigFlags;
+    ImGuiAppStyle        Style;
+    ImVec4               ClearColor;
+    float                FontScale;
+    float                DpiScale;
+    ImGuiAppHeadlessMode Headless;
+    bool                 PersistSettings;
+    const char*          WindowTitle;
+    int                  WindowWidth;
+    int                  WindowHeight;
+
+    ImGuiAppConfig()
+    {
+        Platform.Name               = nullptr;
+        Platform.NativeWindowHandle = nullptr;
+        ConfigFlags                 = 0;
+        Style                       = ImGuiAppStyle_Dark;
+        ClearColor                  = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);
+        FontScale                   = 1.0f;
+        DpiScale                    = 1.0f;
+        Headless                    = ImGuiAppHeadlessMode_None;
+        PersistSettings             = true;
+        WindowTitle                 = nullptr;
+        WindowWidth                 = 0;
+        WindowHeight                = 0;
+    }
+};
 
 enum ImGuiAppCommand
 {
@@ -452,10 +526,6 @@ namespace ImGui
   // state from inside its own render would mutate mid-frame).
   IMGUI_API void ShowAppLayerDemo(bool* p_open = nullptr, ImGuiApp* host = nullptr);
 
-  // The demo Composer's document graph inside `host` (its GraphDocData storage entry), or null
-  // before composition. Test harnesses drive the editor camera through it.
-  IMGUI_API ::ImGuiAppGraph* AppLayerDemoGraph(ImGuiApp* host);
-
   // App-time transport (F29): number of state snapshots the running composer has recorded of its
   // snapshottable controls (0 = none). Drives the toolbar scrubber; exposed for the headless scrub test.
   IMGUI_API int AppComposerAppTimeFrames(ImGuiApp* host);
@@ -477,10 +547,6 @@ namespace ImGui
   // Push every Active (in-range) entry; returns the number pushed -- pop with PopStyleVar/PopStyleColor(count).
   IMGUI_API int PushAppStyleMods(const ImGuiAppStyleModDesc* mods, int count);
   IMGUI_API int PushAppColorMods(const ImGuiAppColorModDesc* mods, int count);
-
-  // Monospace font for the generated-code inspector (space-padded alignment needs fixed width). Register
-  // at font-init time; null leaves the inspector on the UI font.
-  IMGUI_API void SetAppCodeFont(::ImGuiAppGraph* g, ImFont* font);   // code panels; null -> UI font
 }
 
 struct ImGuiAppLayerBase : ImGuiInterface

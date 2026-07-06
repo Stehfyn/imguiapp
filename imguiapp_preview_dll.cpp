@@ -1,3 +1,4 @@
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL (UI): compiled out in a lean build (Phase A4)
 // DLL preview backend implementation (F78; docs/dll-preview-design.md). Copy-marshalling: the preview DLL
 // owns its entire runtime; the host only compiles/loads it and moves bytes across the C-ABI (see the emitted
 // surface in GenerateAppPreviewModuleCode). No shared context/allocator/pointer -> link-agnostic.
@@ -575,3 +576,5 @@ namespace ImGui
 
 #endif
 }
+
+#endif // IMGUIX_DISABLE_TOOLS
