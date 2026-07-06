@@ -229,6 +229,17 @@ struct ImGuiAppRecorder
   }
 };
 
+// F70 meta-only recorder (opaque in imguiapp_av.h). Global scope, mirroring ImGuiAppRecorder above:
+// Rec reuses the shipped AvBuild* writers' state (App/IoChain/InputLog/shadow); no encoder, no thread.
+struct ImGuiAppMetaRecorder
+{
+  ImGuiAppRecorder Rec;
+  ImVector<char>   Meta;        // the growing IMAVMETA buffer (header + framed records)
+  int              EmbedRows;   // declared strip depth carried in the Identity record
+
+  ImGuiAppMetaRecorder() { EmbedRows = 0; }
+};
+
 IMGUI_API void ImGui::AppAVDestroyEncoder(ImGuiAppAVEncoder* encoder)
 {
   if (encoder == nullptr)
@@ -1090,6 +1101,110 @@ IMGUI_API void AppRecordAttachInputLog(ImGuiAppRecorder* rec, const ImGuiAppInpu
   rec->InputLog = log;
   rec->LastInputCount = log != nullptr ? log->Count : 0;   // frames before attach are not part of this take
   rec->InputHdrComposition = 0;
+}
+
+//-----------------------------------------------------------------------------
+// [SECTION] Meta-only run recorder (F70)
+//-----------------------------------------------------------------------------
+// A preview session records without a video pipeline: it drives its own ImGuiApp and emits the
+// SAME TLV stream the video recorder embeds (header + Identity/Frame/IoFrame/InputHdr/InputFrame/
+// StateSnapshot/Digest), reusing the AvBuild* writers above. Rec carries only the writers' state
+// (App/IoChain/InputLog/shadow); its encoder thread + queue are never started here.
+// (ImGuiAppMetaRecorder is defined at global scope beside ImGuiAppRecorder, above.)
+
+IMGUI_API ImGuiAppMetaRecorder* AppMetaRecordBegin(ImGuiApp* app, float fps, int embed_rows)
+{
+  IM_ASSERT(app != nullptr);
+  if (app == nullptr)
+    return nullptr;
+
+  ImGuiAppMetaRecorder* mr = IM_NEW(ImGuiAppMetaRecorder)();
+  mr->Rec.App = app;
+  mr->EmbedRows = embed_rows < 4 ? 4 : embed_rows & ~3;   // 4x4 blocks: clamp like AvBeginCommon
+
+  ImGuiAppAVMetaHeader hdr;
+  memset(&hdr, 0, sizeof(hdr));
+  memcpy(hdr.Magic, kAvMetaMagic, 8);
+  hdr.Version = 1;
+  hdr.Fps = fps;
+  hdr.StartTsc = AvClockTsc();
+  hdr.QpcHz = AvClockHz();
+  hdr.StartQpc = AvClockCounter();
+  mr->Meta.resize((int)sizeof(hdr));
+  memcpy(mr->Meta.Data, &hdr, sizeof(hdr));
+
+  // Identity leads the stream (before any Frame/IoFrame); the io hash chain seeds from its schema hash.
+  AvBuildIdentityRecord(&mr->Rec.IdentityRecord, app, mr->EmbedRows, &mr->Rec.SchemaHash);
+  AvPut(&mr->Meta, mr->Rec.IdentityRecord.Data, mr->Rec.IdentityRecord.Size);
+  mr->Rec.IoChain = mr->Rec.SchemaHash;
+  return mr;
+}
+
+IMGUI_API void AppMetaRecordAttachInputLog(ImGuiAppMetaRecorder* mr, const ImGuiAppInputLog* log)
+{
+  IM_ASSERT(mr != nullptr);
+  if (mr == nullptr)
+    return;
+  mr->Rec.InputLog = log;
+  mr->Rec.LastInputCount = log != nullptr ? log->Count : 0;   // frames before attach are not part of this take
+  mr->Rec.InputHdrComposition = 0;
+}
+
+IMGUI_API void AppMetaRecordTick(ImGuiAppMetaRecorder* mr, ImU64 tick, double time_sec, bool snapshot)
+{
+  IM_ASSERT(mr != nullptr && mr->Rec.App != nullptr);
+  if (mr == nullptr || mr->Rec.App == nullptr)
+    return;
+  mr->Rec.App->FrameID.FrameIndex = tick;   // AvCollectInputRecords stamps this tick's InputFrame with it
+
+  ImVector<char> out;
+
+  // Frame first (the tick spine == frame ordinal; RunTickSlot needs it before its Io/Input/Snapshot).
+  ImGuiAppFrameID id;
+  id.FrameIndex = tick;
+  id.Tsc = 0;
+  id.TimeSec = time_sec;
+  AvBuildFrameRecord(&out, &id, nullptr, 0);
+  AvPut(&mr->Meta, out.Data, out.Size);
+
+  // IoFrame: raw input -> this tick's state hash + chain link (mouse/keys empty in the headless drive).
+  out.clear();
+  AvBuildIoFrameRecord(&mr->Rec, &out, tick, nullptr, nullptr);
+  AvPut(&mr->Meta, out.Data, out.Size);
+
+  // InputHdr (once) + this tick's InputFrame, when an input log is attached (opt-in replay layer).
+  if (mr->Rec.InputLog != nullptr)
+  {
+    out.clear();
+    AvCollectInputRecords(&mr->Rec, &out);
+    AvPut(&mr->Meta, out.Data, out.Size);
+  }
+
+  // StateSnapshot at snapshot ticks: the whole snapshottable block (nearest-snapshot restore point).
+  if (snapshot)
+  {
+    out.clear();
+    if (AvBuildStateSnapshotRecord(&out, mr->Rec.App, tick))
+      AvPut(&mr->Meta, out.Data, out.Size);
+  }
+}
+
+IMGUI_API void AppMetaRecordEnd(ImGuiAppMetaRecorder* mr, ImVector<char>* out_meta)
+{
+  IM_ASSERT(mr != nullptr);
+  if (mr == nullptr)
+    return;
+
+  // Digest: the stream's FINAL record -- ImHashData over every preceding logical-stream byte (seed 0).
+  const ImU64 stream_bytes = (ImU64)mr->Meta.Size;
+  const ImU32 digest = (ImU32)ImHashData(mr->Meta.Data, (size_t)stream_bytes, 0);
+  ImVector<char> out;
+  AvBuildDigestRecord(&out, stream_bytes, digest);
+  AvPut(&mr->Meta, out.Data, out.Size);
+
+  if (out_meta != nullptr)
+    out_meta->swap(mr->Meta);
+  IM_DELETE(mr);
 }
 
 IMGUI_API void AppRecordEnd(ImGuiAppRecorder* rec)

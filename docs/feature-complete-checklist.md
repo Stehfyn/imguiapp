@@ -749,11 +749,23 @@ interpreter's vocabulary IS F53-F57's semantics.
   latch, dedup dispatch, pop symmetry, render purity, time travel) runs against the
   INTERPRETER as a second backend beside generated code.
   *Accept: contracts 1-9 green on the interpreter; one suite, two implementations.*
-- [ ] **F70 preview ⇄ time-travel tie** — the previewed app feeds StateHistory (F29 transport
+- [x] **F70 preview ⇄ time-travel tie** — the previewed app feeds StateHistory (F29 transport
   scrubs it) and the recorder (a preview session exports an F61 container the playback
   debugger opens).
   *Accept: preview → record → open → scrub-to-tick state matches (closes the loop:
   author → play → record → debug, zero compiles).*
+  DONE: (1) ComposerTransport's LiveRing source scrubs the PREVIEW app's StateHistory when the
+  Preview tab is running (imguiapp_demo.cpp), snapshot/restore machinery shared with the host mirror.
+  (2) A meta-only run recorder rides the shipped AV writer — AppMetaRecordBegin/AttachInputLog/Tick/End
+  (imguiapp_av.{h,cpp}) reuse the AvBuild* record builders to emit the SAME IMAVMETA header +
+  Identity/Frame/IoFrame/InputHdr/InputFrame/StateSnapshot/Digest TLV stream the video recorder embeds,
+  minus the pixel pipeline; the Preview tab's Record/Stop toggle exports the container + opens it in the
+  transport (session state on ImGuiAppEditorState, no globals). (3) The exported container opens via the
+  UNCHANGED AppRunOpen. Test (tests/imguiapp_core_tests.cpp Test_preview_record_scrub_tie): a preview
+  session runs 16 fixed-dt ticks, records (snapshots @1/5/9/13 + opt-in input), AppRunOpen reads it back
+  (ticks=16, snaps=4, chain ok, digest complete), and AppRunStateAtTick reconstructs a second session so
+  its state hash equals the recorded hash at N — restore-only @tick9 and restore+replay @tick11 (2 frames,
+  divergence −1). Verified: core-tests 400 checks 0 failures; nodes 111/111; headless-verify 31/31 + verify OK.
 
 ## P10 — closure
 

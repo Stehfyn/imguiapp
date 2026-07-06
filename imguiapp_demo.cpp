@@ -591,22 +591,32 @@ namespace
         ImGui::BuildAppLiveGraph(data->Mirror, &data->Graph);
       }
 
-      // App-time transport (F29). Gated on ShowLive + a mirror. While running, snapshot the mirror's
-      // snapshottable (POD) controls each frame and track the newest frame; while frozen, hold + restore
-      // the scrubbed frame's bytes back into the app (time travel). Opaque controls (this chrome) are
-      // skipped by AppStateSnapshot, so only the user app's state rewinds.
-      if (data->Mirror != nullptr && data->Transport != nullptr && data->ShowLive)
+      // App-time transport (F29). While running, snapshot the live app's snapshottable (POD) controls
+      // each frame and track the newest frame; while frozen, hold + restore the scrubbed frame's bytes
+      // back into the app (time travel). Opaque controls (this chrome) are skipped by AppStateSnapshot,
+      // so only the user app's state rewinds.
+      //
+      // F70 tie: the LIVE ring's source is the PREVIEW app when a preview session is running (the
+      // transport scrubs the interpreted model), else the host live-mirror. Both are real ImGuiApps with
+      // registered storage, so the same snapshot/restore machinery applies to either.
+      if (data->Transport != nullptr)
       {
         ComposerTransport* tr = data->Transport;
-        if (!tr->Frozen)
+        ImGuiAppEditorState* ed = ImGui::AppGraphEditorState(&data->Graph);
+        ImGuiApp* preview_app = (ed != nullptr && ed->Preview != nullptr && ed->PreviewRun) ? ImGui::AppPreviewApp(ed->Preview) : nullptr;
+        ImGuiApp* live_app = preview_app != nullptr ? preview_app : (data->ShowLive ? data->Mirror : nullptr);
+        if (live_app != nullptr)
         {
-          ImGui::AppStateSnapshot(data->Mirror, &tr->History);
-          tr->Frame = tr->History.Count - 1;   // live: follow the newest frame
-        }
-        else if (tr->History.Count > 0)
-        {
-          tr->Frame = ImClamp(tr->Frame, 0, tr->History.Count - 1);
-          ImGui::AppStateRestore(data->Mirror, &tr->History, tr->Frame);
+          if (!tr->Frozen)
+          {
+            ImGui::AppStateSnapshot(live_app, &tr->History);
+            tr->Frame = tr->History.Count - 1;   // live: follow the newest frame
+          }
+          else if (tr->History.Count > 0)
+          {
+            tr->Frame = ImClamp(tr->Frame, 0, tr->History.Count - 1);
+            ImGui::AppStateRestore(live_app, &tr->History, tr->Frame);
+          }
         }
       }
 
@@ -730,6 +740,59 @@ namespace
     tr->CommandTicks.clear();
     tr->FrameTexTick = -1;   // the held texture no longer matches any tick
     tr->RunDir[0] = 0;
+  }
+
+  // F70 preview-session record (docs/previewer-design.md section 10). The record path drives the
+  // preview app under the frame dt and exports an F61 run container via the meta-only writer
+  // (imguiapp_av.h AppMetaRecord*) -- the SAME Identity/Frame/IoFrame/InputFrame/StateSnapshot/Digest
+  // records the video recorder embeds, minus the pixel pipeline. Session state rides the editor object;
+  // no globals. Pump once per advanced preview frame; stop finalizes then opens the take via AppRunOpen.
+  static void ComposerPreviewRecordPump(ImGuiAppEditorState* ed, float dt)
+  {
+    if (ed->PreviewRec == nullptr || ed->Preview == nullptr)
+      return;
+    ImGuiApp* app = ImGui::AppPreviewApp(ed->Preview);
+    ImGui::AppInputRecord(app, &ed->PreviewRecInput, dt);   // opt-in replay layer bridges non-snapshot ticks
+    const ImU64 tick = ++ed->PreviewRecTick;
+    const int snap_every = ed->PreviewRecSnapEvery > 0 ? ed->PreviewRecSnapEvery : 1;
+    const bool snap = ((tick - 1) % (ImU64)snap_every) == 0;   // tick 1 + every N: nearest-snapshot restore points
+    ImGui::AppMetaRecordTick(ed->PreviewRec, tick, (double)(tick - 1) / 60.0, snap);
+  }
+
+  static void ComposerPreviewRecordStop(ImGuiAppEditorState* ed, ComposerTransport* tr)
+  {
+    if (ed->PreviewRec == nullptr)
+      return;
+    ImVector<char> meta;
+    ImGui::AppMetaRecordEnd(ed->PreviewRec, &meta);   // appends the Digest, frees the recorder
+    ed->PreviewRec = nullptr;
+
+    if (ImFileHandle fh = ImFileOpen(ed->PreviewRecPath, "wb"))   // the exported container on disk
+    {
+      ImFileWrite(meta.Data, sizeof(char), (ImU64)meta.Size, fh);
+      ImFileClose(fh);
+    }
+
+    // Close the loop in-app: the just-recorded take opens through the SAME AppRunOpen the file playback
+    // uses, wired as the transport's FILE source (tick-only scrub -- a meta-only take carries no frames).
+    if (tr != nullptr)
+    {
+      ComposerCloseRun(tr);
+      tr->Run = ImGui::AppRunOpen(meta.Data, meta.Size);
+      if (tr->Run != nullptr)
+      {
+        tr->FileView.Run = tr->Run;
+        tr->FileView.Decode = nullptr;
+        tr->FileView.DecodeUser = nullptr;
+        tr->Source = ImGuiAppTransportSource_FileRun;
+        ImStrncpy(tr->RunName, ed->PreviewRecPath, sizeof(tr->RunName));
+        ImGui::AppRunTransportShow(&tr->FileView, 0);   // land on the first tick
+      }
+      else
+      {
+        ImFormatString(tr->OpenErr, IM_ARRAYSIZE(tr->OpenErr), "Recorded preview take rejected by AppRunOpen.");
+      }
+    }
   }
 
   // Open RunName as a recorded take: an mp4 (<name>.mp4, when libav is built) or a QOI directory
@@ -2654,10 +2717,32 @@ namespace
                 ImGui::SameLine();
                 if (ImGui::Button(ICON_FA_ARROW_ROTATE_LEFT "  Reinit"))
                 {
+                  ComposerPreviewRecordStop(ed, doc->Transport);   // a live take can't outlive its app
                   ImGui::AppPreviewDestroy(ed->Preview);   // rebuilt from field defaults next frame
                   ed->Preview = nullptr;
                 }
                 ImGui::SetItemTooltip("Rebuild the preview from field defaults (discard live values)");
+                ImGui::SameLine();
+
+                // F70: record the preview session to an F61 run container the playback debugger opens.
+                const bool pv_recording = ed->PreviewRec != nullptr;
+                if (ImGui::Button(pv_recording ? ICON_FA_STOP "  Stop###pvrec" : ICON_FA_CIRCLE "  Record###pvrec") && ed->Preview != nullptr)
+                {
+                  if (pv_recording)
+                  {
+                    ComposerPreviewRecordStop(ed, doc->Transport);
+                  }
+                  else
+                  {
+                    ImGuiApp* pv_app = ImGui::AppPreviewApp(ed->Preview);
+                    ImGui::AppInputLogClear(&ed->PreviewRecInput);   // frames before this take are excluded
+                    ed->PreviewRecTick = 0;
+                    ed->PreviewRec = ImGui::AppMetaRecordBegin(pv_app, 60.0f, ImGuiAppAVEncodeConfig().EmbedRows);
+                    ImGui::AppMetaRecordAttachInputLog(ed->PreviewRec, &ed->PreviewRecInput);
+                    ed->PreviewRun = true;   // recording captures advancing frames
+                  }
+                }
+                ImGui::SetItemTooltip(pv_recording ? "Stop recording; export the run container + open it in the transport" : "Record the previewed model to an F61 run container");
                 ImGui::SameLine();
                 if (pverr[0] != 0)
                   ImGui::TextColored(ImVec4(0.92f, 0.45f, 0.45f, 1.0f), ICON_FA_TRIANGLE_EXCLAMATION "  %s", pverr);
@@ -2678,6 +2763,10 @@ namespace
 
                     if (ed->PreviewRun) ImGui::AppPreviewFrame(ed->Preview, io.DeltaTime);
                     else                ImGui::AppPreviewRender(ed->Preview);
+
+                    // F70: an active take records this advanced tick (raw io + opt-in input + snapshot cadence).
+                    if (ed->PreviewRec != nullptr && ed->PreviewRun)
+                      ComposerPreviewRecordPump(ed, io.DeltaTime);
 
                     const int pv_hover = ImGui::AppPreviewHoveredNode(ed->Preview);    // preview -> composer
                     if (pv_hover >= 0)

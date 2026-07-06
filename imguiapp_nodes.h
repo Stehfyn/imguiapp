@@ -572,7 +572,8 @@ struct ImGuiAppEditorUndo
   ImGuiID                      LiveHash = 0;     // hash of Snaps[Cursor], for cheap change detection
 };
 
-struct ImGuiAppPreview;   // F68 live preview session (imguiapp_preview.h); opaque, held by pointer here
+struct ImGuiAppPreview;       // F68 live preview session (imguiapp_preview.h); opaque, held by pointer here
+struct ImGuiAppMetaRecorder;  // F70 meta-only run recorder (imguiapp_av.h); opaque, held by pointer here
 
 // Editor session state, one per graph (the document): the editor's cross-frame values ride the
 // model object they describe, like Selection/ViewScope/ScopeCams. All transient, not serialized.
@@ -661,6 +662,11 @@ struct ImGuiAppEditorState
   mutable ImGuiAppPreview*             Preview = nullptr;                                 // F68: live preview interpreter session for this document (heap; opaque; freed with the process / rebuilt on Reinit)
   bool                                 PreviewRun = true;                                 // F68: run vs pause the previewed model (widgets stay interactive while paused)
   mutable ImGuiID                      PreviewSig = 0;                                    // F68: AppGraphSignature the preview was last reconciled at; a change reconciles (preserve-by-field) next frame
+  ImGuiAppMetaRecorder*                PreviewRec = nullptr;                              // F70: active preview-session take (meta-only run container), or null
+  ImGuiAppInputLog                     PreviewRecInput;                                   // F70: opt-in replay layer recorded alongside this take (AppInputRecord per driven frame)
+  ImU64                                PreviewRecTick = 0;                                // F70: ticks recorded this take (== the exported run's tick spine)
+  int                                  PreviewRecSnapEvery = 30;                          // F70: StateSnapshot cadence in ticks (a nearest-snapshot restore point every N)
+  char                                 PreviewRecPath[256] = "headless-artifacts/preview-session.meta";  // F70: exported container path
 };
 
 // The whole authored graph. One monotonic id allocator shared by every node/port/body-attr/link:

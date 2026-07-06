@@ -136,6 +136,7 @@ struct ImGuiAppAVMetaHeader
 // Glue between the app, the platform backend's CaptureFrame, and one encoder.
 // WriteFrame runs on a single encoder thread behind a bounded queue.
 struct ImGuiAppRecorder;   // opaque
+struct ImGuiAppMetaRecorder;   // opaque; F70 meta-only export (no video), same TLV records
 
 typedef int ImGuiAppRecordQueuePolicy;
 enum ImGuiAppRecordQueuePolicy_
@@ -402,5 +403,30 @@ namespace ImGui
   // with `reason`. ImGuiAppAssertFail calls this before exit so the flight recording lands beside the
   // assert WAL. Returns the number of rings successfully dumped.
   IMGUI_API int AppDumpAssertRings(const char* reason);
+
+  //---------------------------------------------------------------------------
+  // Meta-only run recorder (F70): a preview session records without video
+  //---------------------------------------------------------------------------
+  // The previewer (docs/previewer-design.md section 10) closes author -> play -> record ->
+  // debug with zero compiles: a preview session drives its own ImGuiApp under a fixed dt and
+  // exports an F61 run container. The bytes are exactly what the video recorder embeds -- the
+  // IMAVMETA header + Identity/Frame/IoFrame/InputHdr/InputFrame/StateSnapshot/Digest records
+  // (same AvBuild* writers) -- minus the pixel pipeline (no encoder, no frames). AppRunOpen +
+  // AppRunStateAtTick read the result unchanged. All state rides the caller's recorder object.
+  IMGUI_API ImGuiAppMetaRecorder* AppMetaRecordBegin(ImGuiApp* app, float fps, int embed_rows);
+
+  // Attach a caller-owned input log (same opt-in semantics as AppRecordAttachInputLog): with it,
+  // each tick ALSO serializes InputHdr/InputFrame so AppRunStateAtTick can replay non-snapshot
+  // ticks. Keep calling AppInputRecord once per driven frame as usual.
+  IMGUI_API void AppMetaRecordAttachInputLog(ImGuiAppMetaRecorder* mr, const ImGuiAppInputLog* log);
+
+  // Record one tick: a Frame + IoFrame (state hash + chain), this tick's InputFrame when an input
+  // log is attached, and a StateSnapshot when snapshot is true. Call once per driven frame AFTER
+  // UpdateApp/RenderApp/EndFrame (and AppInputRecord if attaching input). tick == FrameID.FrameIndex.
+  IMGUI_API void AppMetaRecordTick(ImGuiAppMetaRecorder* mr, ImU64 tick, double time_sec, bool snapshot);
+
+  // Finalize: append the Digest (completeness proof over every preceding byte), hand the full meta
+  // buffer to out_meta (opens directly via AppRunOpen), and free the recorder. Null-safe.
+  IMGUI_API void AppMetaRecordEnd(ImGuiAppMetaRecorder* mr, ImVector<char>* out_meta);
 
 } // namespace ImGui
