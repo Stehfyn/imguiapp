@@ -3807,7 +3807,7 @@ namespace
       if (data->WriteMsg[0] && ImGui::AppGraphCodeStale(&data->Graph))
         data->WriteMsg[0] = 0;   // the "wrote/copied" confirmation stops being true the frame the graph diverges from disk
       {
-        const ImVector<ImGui::ImGuiAppGraphIssue>* issues = ImGui::AppGraphIssuesCached(&data->Graph);
+        const ImVector<ImGuiAppGraphIssue>* issues = ImGui::AppGraphIssuesCached(&data->Graph);
         data->NumErrors = 0;
         data->NumWarnings = 0;
         for (int i = 0; i < issues->Size; i++)
@@ -5115,7 +5115,7 @@ namespace
   // (selection highlight + scroll, hover brushing, click-to-select). Pure view: reads const data,
   // records the click into *selection.
   static void ShowGeneratedCodeView(const ImGuiAppGraph* graph, const char* str_id, const ImGuiTextBuffer& text, const ImVector<int>& lines,
-                                    const ImVector<ImGui::ImGuiAppCodeSpan>* spans, int* selection)
+                                    const ImVector<ImGuiAppCodeSpan>* spans, int* selection)
   {
     ImFont* code_font = graph != nullptr ? ImGui::AppGraphEditorState(graph)->CodeFont : nullptr;
     if (code_font)
@@ -5136,7 +5136,7 @@ namespace
       const ImVec4 row_ink  = ImGui::GetStyleColorVec4(ImGuiCol_Text);
       const ImVec4 row_gold = ImLerp(kDemoGold, row_ink, 0.15f);
 
-      ImGui::ImGuiAppHoverSource hsrc = ImGui::ImGuiAppHoverSource_None;
+      ImGuiAppHoverSource hsrc = ImGuiAppHoverSource_None;
       const int brushed_node = spans != nullptr && graph != nullptr ? ImGui::AppGraphHoveredNode(graph, &hsrc) : -1;
       const int sel = selection != nullptr ? *selection : -1;
       auto span_owner = [&](int ln) -> int
@@ -5199,7 +5199,7 @@ namespace
 
           if (owner >= 0 && ImGui::IsItemHovered())
           {
-            ImGui::AppGraphHoverNode(graph, owner, ImGui::ImGuiAppHoverSource_External);
+            ImGui::AppGraphHoverNode(graph, owner, ImGuiAppHoverSource_External);
             if (selection != nullptr && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
               *selection = owner;
           }
@@ -5223,7 +5223,7 @@ namespace
     float                             TreeDragDX;              // grab offset within the grip, captured at drag start
     bool                              InspDragging;            // inspector splitter drag FSM (advanced only in OnUpdate)
     ImGuiTextBuffer                   CodeText;                // whole app's generated C++ (kept current while the panel is open)
-    ImVector<ImGui::ImGuiAppCodeSpan> CodeSpans;               // source map: node id -> line ranges in CodeText
+    ImVector<ImGuiAppCodeSpan>        CodeSpans;               // source map: node id -> line ranges in CodeText
     ImVector<int>                     CodeLines;               // byte offset of each line start in CodeText (render index)
     ImGuiTextBuffer                   CodeNodeText;            // the selected node's code (the focused "Node" tab)
     ImVector<int>                     NodeLines;               // line starts in CodeNodeText
@@ -5238,7 +5238,7 @@ namespace
     ImGuiTextBuffer                     DiffText;
     ImVector<int>                       DiffLines;
     bool                                HasDiff;  // a saved graph existed to diff against
-    ImVector<ImGui::ImGuiAppGraphIssue> Issues;   // validation problems, recomputed while the panel is open
+    ImVector<ImGuiAppGraphIssue>        Issues;   // validation problems, recomputed while the panel is open
 
     // Project tab: the document's files on disk, rescanned on a slow cadence in OnUpdate.
     struct ProjFile { char Name[160]; unsigned long long Size; bool IsGraph; bool IsHeader; };
@@ -5344,7 +5344,7 @@ namespace
 
     if (ImGui::AppInspectorSection("##psec_theme", ICON_FA_PALETTE, "Composer theme", nullptr, nullptr))
     {
-      ImGui::ImGuiAppChromeTheme* theme = ImGui::AppGraphChromeTheme();
+      ImGuiAppChromeTheme* theme = ImGui::AppGraphChromeTheme();
       auto theme_rows = [](const char* caption, ImGuiAppColorModDesc* descs, int count)
       {
         ImGui::TextDisabled("%s", caption);
@@ -5632,7 +5632,7 @@ namespace
           // the outliner teaches what Design / Live / Promoted mean. Display-only flat labels; the
           // HelpMarker carries the design -> live -> promotion story.
           {
-            const ImGui::ImGuiAppComposerStyle* cst = ImGui::AppComposerGetStyle();
+            const ImGuiAppComposerStyle* cst = ImGui::AppComposerGetStyle();
             const ImGuiStyle&                   st  = ImGui::GetStyle();
             auto legend = [&](const char* label, ImU32 col)
             {
@@ -5687,7 +5687,7 @@ namespace
         if (ImGui::BeginChild("##NodeGraph", ImVec2(col_w, canvas_h), ImGuiChildFlags_Borders))
         {
           // Document verbs for the canvas palette; the pick comes back through AppGraphConsumeHostCommand.
-          static const ImGui::ImGuiAppGraphHostCmd host_cmds[] =
+          static const ImGuiAppGraphHostCmd host_cmds[] =
           {
             { "File: Save graph", "Ctrl+S", ComposerHostCmd_Save, ImGuiKey_S, ImGuiMod_Ctrl },
             { "File: Load graph", "", ComposerHostCmd_Load },
@@ -6053,7 +6053,7 @@ namespace
 
                     const int pv_hover = ImGui::AppPreviewHoveredNode(ed->Preview);    // preview -> composer
                     if (pv_hover >= 0)
-                      ImGui::AppGraphHoverNode(graph, pv_hover, ImGui::ImGuiAppHoverSource_External);
+                      ImGui::AppGraphHoverNode(graph, pv_hover, ImGuiAppHoverSource_External);
                     const int pv_click = ImGui::AppPreviewTakeClickedNode(ed->Preview);
                     if (pv_click >= 0)
                       selection = pv_click;
@@ -6110,7 +6110,7 @@ namespace
                     ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f), ICON_FA_CHECK "  No configuration problems.");
                   for (int i = 0; i < data->Issues.Size; i++)
                   {
-                    const ImGui::ImGuiAppGraphIssue& it = data->Issues.Data[i];
+                    const ImGuiAppGraphIssue& it = data->Issues.Data[i];
                     if ((it.Severity >= 2 && !ed->OutputShowErr) || (it.Severity < 2 && !ed->OutputShowWarn) || !ed->OutputFilter.PassFilter(it.Text))
                       continue;
                     const ImVec4 col = (it.Severity >= 2) ? ImVec4(0.92f, 0.45f, 0.45f, 1.0f) : ImVec4(0.92f, 0.80f, 0.40f, 1.0f);
@@ -6123,7 +6123,7 @@ namespace
                       selection = it.NodeId;
                     }
                     if (it.NodeId >= 0 && ImGui::IsItemHovered())
-                      ImGui::AppGraphHoverNode(&doc->Graph, it.NodeId, ImGui::ImGuiAppHoverSource_External);
+                      ImGui::AppGraphHoverNode(&doc->Graph, it.NodeId, ImGuiAppHoverSource_External);
                     ImGui::PopStyleColor();
                     ImGui::PopID();
                   }
