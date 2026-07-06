@@ -8,17 +8,20 @@ all suites stay green and the codegen corpus stays byte-identical.
 Runs AFTER Phase A (so tool decls already live in `imguiapp_internal.h` and the core/tool boundary is clean;
 C reorders *within* that structure). Design-first (this doc) before the big diff.
 
-## 1. What drifted (archaeology)
+## 1. Canonical reference + what drifted (archaeology)
 
-- The 4 top-level `[SECTION]`s are INTACT since the earliest `imguiapp.h` (`0e17e75`, 2026-07-02, pre-rename
-  ancestor was `imapp.h`): `Header mess` / `Forward declarations and basic types` / `Compile-time helpers
-  (ImGuiStatic<>, ImGuiType<>)` / `Dear ImGui end-user API functions`. The SCHEMA held.
-- The drift is WITHIN sections: `imguiapp.h` grew 979 → 1503 lines (+524, ~53%) over the F-series. Sources of
-  drift: (a) bloat / dead + duplicated code; (b) AI-written narrative comments accreted feature-by-feature;
-  (c) declaration order within sections wandered; (d) tool declarations mixed into the public header (Phase A
-  moves those to `internal.h`); (e) `.cpp` definition order no longer tracks header declaration order.
-- Reference discipline = the `0e17e75`-era file (terse comments, tight ordering, no tool decls in the public
-  header) — NOT a revert (all features stay); restore the DISCIPLINE while keeping the F01–F78.5 surface.
+- **CANONICAL REFERENCE (decided): commit `9616693`, `imgui_applayer.h` (2026-04-23, 546 lines)** — the
+  original file, before the rename chain `imgui_applayer.h → imapp.h → imguiapp.h`. Its section TOC copies
+  `imgui.h`'s own list VERBATIM as the schema template (`Header mess` / `Forward declarations` / `Compile-time
+  helpers` / `Dear ImGui end-user API` / `Helpers` / `Multi-Select API` / `Font API` / `Obsolete functions`),
+  then fills the applayer's sections. This is the purest imgui.h emulation, months before any drift — the
+  discipline Phase C restores. (NOT a revert; all F01–F78.5 features stay — we restore the STRUCTURE/comment/
+  ordering discipline of `9616693` while keeping today's surface.)
+- The 4 core `[SECTION]`s survived the rename chain (still present in today's `imguiapp.h`), but the file
+  drifted 546 → 1503 lines. Sources of drift: (a) bloat / dead + duplicated code; (b) AI-written narrative
+  comments accreted feature-by-feature; (c) declaration order within sections wandered; (d) tool declarations
+  mixed into the public header (Phase A moves those to `internal.h`); (e) `.cpp` definition order no longer
+  tracks header declaration order; (f) drift from `9616693`'s verbatim-imgui.h TOC discipline.
 
 ## 2. The imgui.h schema (the target rules)
 
@@ -56,8 +59,7 @@ C reorders *within* that structure). Design-first (this doc) before the big diff
   public/internal split clean, no AI-narrative comments remain, no dead/dup code.
 - `imguiapp.h` line count trends back toward the pre-drift discipline (bloat removed), features intact.
 
-## 6. Open fork
+## 6. Reference (settled)
 
-- Confirm the **reference commit/era** to diff against: `0e17e75` (earliest `imguiapp.h`) is the proposed
-  discipline reference; if a specific pre-rename `imapp.h` commit is "the one," name it and the drift map
-  targets that instead.
+- The drift map diffs against **`9616693` : `imgui_applayer.h`** (2026-04-23, 546L) — the canonical
+  imgui.h-schema original. github.com/Stehfyn/imguiapp/blob/9616693/imgui_applayer.h
