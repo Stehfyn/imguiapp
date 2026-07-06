@@ -18,35 +18,40 @@ stay separate), add an `imguiapp_internal.h`, and gate the tool TUs behind one m
 
 Verified against the current headers.
 
-**CORE — always on (the runtime a shipped app links):**
+**CORE — slim public runtime (`imguiapp.h`, always on):**
 - `imguiapp.h` (1503 lines) — already `[SECTION]`-structured like imgui.h; the runtime API: `ImGuiApp`,
   `ImGuiAppLayer(Base)`, `ImGuiAppControl(Base)`, `RegisterAppStorage`, `UpdateApp`/`RenderApp`, the
   push/pop helpers + `ImGuiAppControl<>` templates, `ImGuiAppStateHistory` (snapshot/restore/replay),
   `ImGuiAppWAL`, commands, `GetAppCompositionID`, `ImGuiAppPlatform`/backends. Does NOT include any tool
-  header today — good.
+  header today.
 - `imguiapp_config.h` — the config header (imconfig analog); gains the switch (§4).
 - `imguiapp.cpp` — the core impl.
-- `imguiapp_anim.h` — the animation builtins (`ImAppTween`/`Timer`/`Spring`/`Pulse`) are runtime
-  `ImGuiAppControl`s a shipped app can use → **CORE** (proposed; confirm).
 
-**TOOL — gated by `IMGUIX_DISABLE_TOOLS`:**
-- `imguiapp_nodes.{h,cpp}` — graph model + editor + codegen (the biggest tool surface;
-  `AppGraph*`, `ShowAppGraphEditor`, `GenerateApp*Code`, the emitter/importer).
-- `imguiapp_canvas.{h,cpp}` — the canvas engine.
-- `imguiapp_preview.{h,cpp}` + `imguiapp_preview_dll.{h,cpp}` — the interpreter + DLL preview backends.
-- `imguiapp_demo.cpp` — the Composer itself.
-- `imguiapp_av.{h,cpp}` + `imguiapp_qoi.{h,cpp}` + `backends/imguiapp_impl_qoi.*` — the run recorder + image
-  encode (used by the harness, the previewer time-travel tie, and the D3 bug-button). A lean shipped app
-  does not record → **TOOL** (proposed; confirm — `ImGuiAppStateHistory` in `imguiapp.h` stays core; only
-  the AV *container/meta/frame* layer is tool).
+**INTERNAL / EXTENDED — folded into `imguiapp_internal.h`** (the `imgui_internal.h` analog; §3):
+- The tool interfaces: `imguiapp_nodes.h` (graph model + editor + codegen), `imguiapp_canvas.h`,
+  `imguiapp_preview.h` + `imguiapp_preview_dll.h`.
+- **`imguiapp_anim.h`** — the animation builtins' interface (DECIDED: fold in).
+- **`imguiapp_av.h`** — the run recorder / meta / container INTERFACE (DECIDED: fold in). The AV **codec**
+  stays OUT of `internal.h` as its own backend: `imguiapp_qoi.{h,cpp}` + `backends/imguiapp_impl_qoi.*`
+  (+ any libav backend).
 
-Open boundary calls for the user: (a) `imguiapp_anim.h` core vs tool; (b) `imguiapp_av`/`qoi` tool vs core.
-Default above: anim = core, av/qoi = tool.
+**IMPL TUs gated by `IMGUIX_DISABLE_TOOLS`:** `imguiapp_nodes.cpp`, `imguiapp_canvas.cpp`,
+`imguiapp_preview.cpp`, `imguiapp_preview_dll.cpp`, `imguiapp_demo.cpp` (the Composer), and the AV/anim impl
+where tool-only.
+
+**Open sub-question (crux of "lean"):** is `imguiapp_internal.h` itself gated by `IMGUIX_DISABLE_TOOLS`
+(so anim + av + the tool API all compile OUT of a lean build — smallest binary, but a lean-built *generated
+app* that used `ImAppTween` could not link it), OR is `internal.h` always-available (imgui_internal.h-style)
+with only the Composer/Previewer/Debugger IMPL `.cpp`s gated (so anim/av stay linkable, just re-homed)?
+The anim builtins are emitted into generated apps (F56 `PushAppControl<ImAppTween>`), which argues for the
+latter. Needs the user's call before code.
 
 ## 3. `imguiapp_internal.h`
 
-New header, the `imgui_internal.h` analog. It AGGREGATES the tool interfaces that are today declared across
-`imguiapp_nodes.h` / `imguiapp_canvas.h` / `imguiapp_preview*.h` (and the internal-only helpers). The public
+New header, the `imgui_internal.h` analog. It AGGREGATES the interfaces today declared across
+`imguiapp_nodes.h` / `imguiapp_canvas.h` / `imguiapp_preview*.h`, plus `imguiapp_anim.h` and the
+`imguiapp_av.h` recorder INTERFACE (the AV codec stays a separate backend), and the internal-only helpers.
+The public
 `imguiapp.h` keeps only the always-on runtime API. Tool `.cpp`s `#include "imguiapp_internal.h"` instead of
 each other's public headers. `imguiapp_internal.h` is itself only meaningful in a tools build (its content
 sits under the same gate, §4). No behavior change — this is a header re-home, not a rewrite (the deep
