@@ -38,7 +38,7 @@ Index of this file:
 
 // Compile-time reflection (imguiapp_reflect.h, the applayer's port of qlibs/reflect): powers the live
 // mirror's field introspection. Also defines IMGUIAPP_HAS_REFLECT and the ImGuiApp manifest binding
-// (ImGuiAppLiveFieldDesc / ImGuiAppTypeSchema / ImGuiAppReflectFields).
+// (ImGuiAppLiveFieldDesc / ImGuiAppTypeSchema / AppReflectFields).
 // windows.h's min/max macros (leaked by platform-backend TUs) break its std::min.
 #include "imguiapp_reflect.h"
 
@@ -871,7 +871,7 @@ struct ImGuiAppControlBase : ImGuiAppItemBase
 
 // NOTE: the reflectability contracts + type-schema registry + the reflection field-walk
 // (ImGuiAppDataReflectable, ImGuiAppTypeSchema + ImGuiAppRegister/FindTypeSchema, ImGuiAppFieldsVisible,
-// ImGuiAppReflectFields, ImGuiAppEnsureTypeRegistered) live in imguiapp_reflect.h, included at the top.
+// AppReflectFields, AppEnsureTypeRegistered) live in imguiapp_reflect.h, included at the top.
 
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
 struct ImGuiInterfaceAdapterBase : ImGuiInterface
@@ -1148,8 +1148,8 @@ struct ImGuiAppControl : ImGuiInterfaceAdapter<ImGuiAppControlBase, PersistDataT
     ImGuiAppControl()
     {
 #ifdef IMGUIAPP_HAS_REFLECT
-        ImGuiAppEnsureTypeRegistered<PersistDataT>();
-        ImGuiAppEnsureTypeRegistered<TempDataT>();
+        ImGui::AppEnsureTypeRegistered<PersistDataT>();
+        ImGui::AppEnsureTypeRegistered<TempDataT>();
 #endif
     }
 
@@ -1174,7 +1174,7 @@ struct ImGuiAppControl : ImGuiInterfaceAdapter<ImGuiAppControlBase, PersistDataT
     virtual int GetControlFields(ImGuiAppLiveFieldDesc* out, int cap, bool temp_data) const override final
     {
 #ifdef IMGUIAPP_HAS_REFLECT
-        return temp_data ? ImGuiAppReflectFields<TempDataT>(out, cap) : ImGuiAppReflectFields<PersistDataT>(out, cap);
+        return temp_data ? ImGui::AppReflectFields<TempDataT>(out, cap) : ImGui::AppReflectFields<PersistDataT>(out, cap);
 #else
         IM_UNUSED(out);
         IM_UNUSED(cap);
@@ -1185,7 +1185,7 @@ struct ImGuiAppControl : ImGuiInterfaceAdapter<ImGuiAppControlBase, PersistDataT
 
     virtual bool IsControlDataReflectable(bool temp_data) const override final
     {
-        return temp_data ? ImGuiAppDataReflectable<TempDataT> : ImGuiAppDataReflectable<PersistDataT>;
+        return temp_data ? ImAppDataReflectable<TempDataT> : ImAppDataReflectable<PersistDataT>;
     }
 
     virtual void RefreshControlDependencyData(const ImGuiApp* app) override final

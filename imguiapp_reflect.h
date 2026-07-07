@@ -689,7 +689,7 @@ struct ImGuiAppLiveFieldDesc
 // are outside it. This governs SNAPSHOTS only; field enumeration is the weaker
 // ImGuiAppFieldsVisible contract below. `using ImGuiAppOpaque = void;` opts out of both.
 template <typename T>
-inline constexpr bool ImGuiAppDataReflectable = std::is_aggregate_v<T>
+inline constexpr bool ImAppDataReflectable = std::is_aggregate_v<T>
                                              && std::is_trivially_copyable_v<T>
                                              && !requires { typename T::ImGuiAppOpaque; };
 
@@ -705,8 +705,11 @@ struct ImGuiAppTypeSchema
   int                          Size;     // sizeof(T)
 };
 
-IMGUI_API void                        ImGuiAppRegisterTypeSchema(const ImGuiAppTypeSchema* schema);
-IMGUI_API const ImGuiAppTypeSchema*   ImGuiAppFindTypeSchema(const char* type_name);
+namespace ImGui
+{
+IMGUI_API void                        AppRegisterTypeSchema(const ImGuiAppTypeSchema* schema);
+IMGUI_API const ImGuiAppTypeSchema*   AppFindTypeSchema(const char* type_name);
+}
 
 // The reflection engine above is always present in this header; the walk below powers the live mirror's
 // field introspection.
@@ -779,20 +782,23 @@ struct ImGuiAppPtrSpelling
   static constexpr std::array<char, Pointee.size() + 2> Value = Make();
 };
 
+namespace ImGui
+{
+
 template <typename T>
-inline int ImGuiAppReflectFields(ImGuiAppLiveFieldDesc* out, int cap);
+inline int AppReflectFields(ImGuiAppLiveFieldDesc* out, int cap);
 
 // Transitive automatic registration: materializes T's manifest into the runtime registry
 // and, through the field walk, the manifest of every visible aggregate T reaches (members
 // and ImVector elements). Reentrancy-safe: the entry registers before its fields fill.
 template <typename T>
-inline void ImGuiAppEnsureTypeRegistered()
+inline void AppEnsureTypeRegistered()
 {
   if constexpr (ImGuiAppFieldsVisible<T>)
   {
     constexpr int n = (int)ImAppReflect::size<T>();
     const char* type_name = ImGuiAppTypeDisplayName<T>();
-    if (ImGuiAppFindTypeSchema(type_name) != nullptr)
+    if (AppFindTypeSchema(type_name) != nullptr)
       return;
     static ImGuiAppLiveFieldDesc fields[n > 0 ? n : 1];
     static ImGuiAppTypeSchema schema;
@@ -800,16 +806,15 @@ inline void ImGuiAppEnsureTypeRegistered()
     schema.Fields = fields;
     schema.Count = 0;
     schema.Size = (int)sizeof(T);
-    ImGuiAppRegisterTypeSchema(&schema);
-    schema.Count = ImGuiAppReflectFields<T>(fields, n > 0 ? n : 1);
+    AppRegisterTypeSchema(&schema);
+    schema.Count = AppReflectFields<T>(fields, n > 0 ? n : 1);
   }
 }
-
 
 // Aggregate walk shared by every ImGuiAppControl<> instantiation. Types outside the
 // visibility contract yield zero fields rather than failing to compile.
 template <typename T>
-inline int ImGuiAppReflectFields(ImGuiAppLiveFieldDesc* out, int cap)
+inline int AppReflectFields(ImGuiAppLiveFieldDesc* out, int cap)
 {
   if constexpr (ImGuiAppFieldsVisible<T>)
   {
@@ -848,7 +853,7 @@ inline int ImGuiAppReflectFields(ImGuiAppLiveFieldDesc* out, int cap)
         if constexpr (!std::is_pointer_v<E>)
         {
           d->ElemTypeName = ImGuiAppTypeDisplayName<E>();
-          ImGuiAppEnsureTypeRegistered<E>();
+          AppEnsureTypeRegistered<E>();
         }
       }
       else if constexpr (std::is_pointer_v<M>)
@@ -861,7 +866,7 @@ inline int ImGuiAppReflectFields(ImGuiAppLiveFieldDesc* out, int cap)
         // Nested visible aggregate: registered transitively, mirrored by codegen.
         d->Kind = ImGuiAppLiveFieldKind_Opaque;
         d->TypeName = ImGuiAppTypeDisplayName<M>();
-        ImGuiAppEnsureTypeRegistered<M>();
+        AppEnsureTypeRegistered<M>();
       }
       else
       {
@@ -881,12 +886,10 @@ inline int ImGuiAppReflectFields(ImGuiAppLiveFieldDesc* out, int cap)
   }
 }
 
-// imgui-namespace sugar over ImAppReflect::for_each (the reflect-driven field UI in
-// imguiapp_internal.h builds on it). Visit each reflected field of an aggregate:
-// visitor(int index, std::string_view name, auto& value). The value is passed by reference;
-// pass a const T* to visit read-only.
-namespace ImGui
-{
+  // imgui-namespace sugar over ImAppReflect::for_each (the reflect-driven field UI in
+  // imguiapp_internal.h builds on it). Visit each reflected field of an aggregate:
+  // visitor(int index, std::string_view name, auto& value). The value is passed by reference;
+  // pass a const T* to visit read-only.
   template <typename T, typename Visitor>
   inline void VisitAppFields(T* obj, Visitor visitor)
   {

@@ -364,8 +364,13 @@ static ImU64 AppClockTsc()
 }
 
 // Process-wide run epoch: FrameID.TimeSec is seconds since the first stamped frame of
-// any app in the process, so multiple apps share one timeline.
-static double s_app_run_epoch = -1.0;
+// any app in the process, so multiple apps share one timeline. Initialized once, on the
+// first call (i.e. the first stamped frame), via C++11 thread-safe local-static init.
+static double AppRunEpoch()
+{
+    static double epoch = AppClockNowSec();
+    return epoch;
+}
 
 void ImGuiApp::Frame()
 {
@@ -379,11 +384,10 @@ void ImGuiApp::OnDrawFrame()
 {
     // Frame identity first: everything this frame emits (WAL lines, captured video
     // frames, sidecar records) correlates through this id.
-    if (s_app_run_epoch < 0.0)
-        s_app_run_epoch = AppClockNowSec();
+    const double epoch = AppRunEpoch();
     FrameID.FrameIndex++;
     FrameID.Tsc = AppClockTsc();
-    FrameID.TimeSec = AppClockNowSec() - s_app_run_epoch;
+    FrameID.TimeSec = AppClockNowSec() - epoch;
 
     ImGuiX::BeginFrame();
     DrawFrame(this);
@@ -445,16 +449,16 @@ static ImVector<const ImGuiAppTypeSchema*>* AppTypeSchemas()
     return &schemas;
 }
 
-void ImGuiAppRegisterTypeSchema(const ImGuiAppTypeSchema* schema)
+void ImGui::AppRegisterTypeSchema(const ImGuiAppTypeSchema* schema)
 {
-    // Count may still be 0 here: ImGuiAppEnsureTypeRegistered registers the entry before
+    // Count may still be 0 here: AppEnsureTypeRegistered registers the entry before
     // filling its fields so cyclic member reachability terminates.
     IM_ASSERT(schema != nullptr && schema->TypeName != nullptr && schema->Fields != nullptr);
-    IM_ASSERT(ImGuiAppFindTypeSchema(schema->TypeName) == nullptr);   // one schema per display name
+    IM_ASSERT(AppFindTypeSchema(schema->TypeName) == nullptr);   // one schema per display name
     AppTypeSchemas()->push_back(schema);
 }
 
-const ImGuiAppTypeSchema* ImGuiAppFindTypeSchema(const char* type_name)
+const ImGuiAppTypeSchema* ImGui::AppFindTypeSchema(const char* type_name)
 {
     if (type_name == nullptr || type_name[0] == 0)
         return nullptr;
@@ -19640,7 +19644,7 @@ namespace ImGui
   // reaches (member type or ImVector element) is written once per document, before first use.
   static void AppEmitSchemaTypeMirror(const char* type_name, ImGuiStorage* emitted, ImGuiTextBuffer* out)
   {
-    const ImGuiAppTypeSchema* s = ImGuiAppFindTypeSchema(type_name);
+    const ImGuiAppTypeSchema* s = AppFindTypeSchema(type_name);
     if (s == nullptr)
       return;
     const ImGuiID key = ImHashStr(type_name);
