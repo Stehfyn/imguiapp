@@ -800,7 +800,7 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
       else
       {
         sidebar->Open = false;
-			}
+      }
       ImGui::End();
 
       sidebar->OnStylePop(app);
