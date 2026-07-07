@@ -57,7 +57,7 @@ struct ImGuiAppCommandLayer;
 // Forward declarations: ImGuiAppControl layer
 struct ImGuiAppControlBase;
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
-struct ImGuiInterfaceAdapterBase;
+struct ImGuiAppInterfaceAdapterBase;
 template <typename Base, typename PersistDataT, typename TempDataT, typename... DataDependencies>
 struct ImGuiInterfaceAdapter;
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
@@ -670,11 +670,11 @@ IMGUI_API const ImGuiAppPlatformBackend* ImGuiApp_GetPlatformBackend();
 // ImGuiAppStatic<> / ImGuiAppType<> / ImAppNulTerminate / ImAppFormatLabel / ImAppTypeDisplayName, and
 // the AppReflectFields walk) lives in imguiapp_reflect.h, included at the top of this file.
 
-struct ImGuiInterface
+struct ImGuiAppInterface
 {
     char Label[IM_LABEL_SIZE] = {};
-    ImGuiInterface()          = default;
-    virtual ~ImGuiInterface() = default;
+    ImGuiAppInterface()          = default;
+    virtual ~ImGuiAppInterface() = default;
 };
 
 
@@ -742,7 +742,7 @@ IMGUI_API ImGuiID ImAppHashType(ImGuiID type_id, ImGuiID instance);
 // [SECTION] App object model (layers, items, controls, ImGuiApp, adapter/control templates)
 //-----------------------------------------------------------------------------
 
-struct ImGuiAppLayerBase : ImGuiInterface
+struct ImGuiAppLayerBase : ImGuiAppInterface
 {
     virtual void OnAttach(ImGuiApp*) const        = 0;
     virtual void OnDetach(ImGuiApp*) const        = 0;
@@ -761,7 +761,7 @@ struct ImGuiAppStyleScope
     int ColorCount = 0;
 };
 
-struct ImGuiAppItemBase : ImGuiInterface
+struct ImGuiAppItemBase : ImGuiAppInterface
 {
     // Authored style/color overrides applied around the item's submission.
     ImVector<ImGuiAppStyleModDesc> StyleMods;
@@ -878,7 +878,7 @@ struct ImGuiAppControlBase : ImGuiAppItemBase
 // near the top of this file, right after that include.
 
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
-struct ImGuiInterfaceAdapterBase : ImGuiInterface
+struct ImGuiAppInterfaceAdapterBase : ImGuiAppInterface
 {
     virtual void OnInitialize(ImGuiApp*, PersistDataT*, const DataDependencies*...) const                                                 = 0;
     virtual void OnShutdown(ImGuiApp*, PersistDataT*, const DataDependencies*...) const                                                   = 0;
@@ -935,7 +935,7 @@ struct ImGuiAppDisplayLayer : ImGuiAppLayer
     virtual void OnRender(const ImGuiApp*) const override final;
 };
 
-struct ImGuiAppBase : ImGuiInterface
+struct ImGuiAppBase : ImGuiAppInterface
 {
     virtual void OnExecuteCommand(ImGuiAppCommand cmd) = 0;
     bool         ShutdownPending                       = false;
@@ -1029,7 +1029,7 @@ struct ImGuiApp : ImGuiAppBase
 };
 
 template <typename Base, typename PersistDataT, typename TempDataT, typename... DataDependencies>
-struct ImGuiInterfaceAdapter : Base, ImGuiInterfaceAdapterBase<PersistDataT, TempDataT, DataDependencies...>
+struct ImGuiInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistDataT, TempDataT, DataDependencies...>
 {
     // Created, registered in ImGuiApp::Data, and bound here by PushAppControl<>() before OnInitialize.
     struct InstanceData
