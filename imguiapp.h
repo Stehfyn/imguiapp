@@ -123,6 +123,8 @@ namespace ImGui
     // dependencies to specific producer instances; an unrouted dependency resolves to the pushing
     // control's own instance id, then to the singleton (producer must be pushed first either way).
     template <typename T>
+    IMGUI_API inline T*   AppControlCreate(ImGuiApp* app, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count, const char* host_kind, const char* host_label);
+    template <typename T>
     IMGUI_API inline void PushAppControl(ImGuiApp* app, ImGuiID instance = 0, const ImGuiAppDataBinding* binds = nullptr, int binds_count = 0);
     IMGUI_API void        PopAppControl(ImGuiApp* app);
     template <typename T>
@@ -140,6 +142,9 @@ namespace ImGui
     IMGUI_API void        RegisterAppStorage(ImGuiApp* app, ImGuiID id, void* ptr, void (*destroy)(void*));
     IMGUI_API void        RegisterAppStorage(ImGuiApp* app, ImGuiID id, void* ptr, int size, void (*destroy)(void*));                                 // size > 0 => snapshottable
     IMGUI_API void        RegisterAppStorage(ImGuiApp* app, ImGuiID id, void* ptr, int size, int temp_offset, int temp_size, void (*destroy)(void*)); // + input (TempData) byte range
+    template <typename T>
+    IMGUI_API inline void DestroyAppStorageValue(void* ptr);
+    
     // Register a control's instance data (id-keyed). snapshottable => registers inst_size + TempData byte range
     // (snapshot/replay); otherwise registers opaque (caller passes the type-derived sizes/offset/destroy).
     IMGUI_API void        RegisterAppControlStorage(ImGuiApp* app, ImGuiID id, void* instance_data, bool snapshottable, int inst_size, int temp_offset, int temp_size, void (*destroy)(void*));
@@ -220,6 +225,11 @@ namespace ImGui
     // Push every Active (in-range) entry; returns the number pushed -- pop with PopStyleVar/PopStyleColor(count).
     IMGUI_API int         PushAppStyleMods(const ImGuiAppStyleModDesc* mods, int count);
     IMGUI_API int         PushAppColorMods(const ImGuiAppColorModDesc* mods, int count);
+
+    template <typename Visitor>
+    IMGUI_API inline void ForEachAppControl(ImGuiApp* app, Visitor visitor);
+    template <typename Visitor>
+    IMGUI_API inline void ForEachAppControl(const ImGuiApp* app, Visitor visitor);
 
     // Demo
     // host: the PROCESS's real app, offered as the "Host app" live-mirror perspective
