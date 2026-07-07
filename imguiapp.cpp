@@ -44,13 +44,27 @@
 // [SECTION] Assert forensics (symbolized backtrace + WAL sink). See imguix_imconfig.h for IM_ASSERT routing.
 //-----------------------------------------------------------------------------
 
-static ImGuiAppWAL* g_app_assert_wal = nullptr;
+// Assert-time forensics state. Read from the assert handler (ImGuiAppAssertFail) -- a
+// context-free callback with no `this`, so this must be reachable as a process-wide slot.
+// Function-local static: constructed on first use, no TU-scope global, no static-init-order
+// hazard for the recorder vector.
+struct ImGuiAppAssertState
+{
+  ImGuiAppWAL*                WAL = nullptr;         // sink for the assert line; null = stderr only
+  ImVector<ImGuiAppRecorder*> RingRecorders;        // armed flight-recorder rings to dump on assert (F15)
+};
+
+static ImGuiAppAssertState& AppAssert()
+{
+    static ImGuiAppAssertState state;
+    return state;
+}
 
 namespace ImGui
 {
   IMGUI_API void SetAppAssertWAL(ImGuiAppWAL* wal)
   {
-      g_app_assert_wal = wal;
+      AppAssert().WAL = wal;
   }
 }
 
@@ -111,7 +125,7 @@ IMGUI_API void ImGuiAppAssertFail(const char* expr, const char* file, int line)
     char stack[3072];
     ImStackTrace(stack, IM_ARRAYSIZE(stack), 1);
 
-    ImGui::AppWALWrite(g_app_assert_wal, ImGuiAppWALLevel_Lifecycle, "ASSERT FAILED: (%s) at %s:%d\n%s", expr, file, line, stack);
+    ImGui::AppWALWrite(AppAssert().WAL, ImGuiAppWALLevel_Lifecycle, "ASSERT FAILED: (%s) at %s:%d\n%s", expr, file, line, stack);
     fprintf(stderr, "ASSERT FAILED: (%s) at %s:%d\n%s", expr, file, line, stack);
     fflush(stderr);
 
@@ -185,16 +199,6 @@ int ImGuiApp::Run(int argc, char** argv)
     return ImGuiApp_GetPlatformBackend()->RunLoop(this);
 }
 
-// Pacer bookkeeping the ImGuiAppPacer struct doesn't carry. Single slot: one paced app
-// per process; the deadline chain re-anchors when a different app starts pacing.
-struct ImGuiAppPacerState
-{
-  const ImGuiApp* App;
-  double          NextDeadline; // on the monotonic app clock; < 0 = chain not started
-  double          LastEnter;    // previous AppPacerWait entry (feeds LastFrameMs)
-};
-static ImGuiAppPacerState s_app_pacer = { nullptr, -1.0, -1.0 };
-
 #ifdef _WIN32
 // High-resolution waitable timer (Win10 1803+): sub-millisecond waits with no change to
 // global scheduler resolution (never timeBeginPeriod: system-wide + power-hostile).
@@ -203,30 +207,60 @@ static ImGuiAppPacerState s_app_pacer = { nullptr, -1.0, -1.0 };
 #ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
 #define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
 #endif
-static HANDLE s_app_pacer_timer = nullptr;
-static bool   s_app_pacer_timer_failed = false;
-// MMCSS "Games" registration for the paced thread: scheduling QoS once the timed wait
-// expires (the timer decides WHEN the thread is ready; MMCSS makes the scheduler run it
-// promptly under contention). Best-effort; null = unregistered.
-static HANDLE s_app_pacer_mmcss = nullptr;
-static bool   s_app_pacer_mmcss_failed = false;
 #endif
+
+// Per-viewport present deadlines (secondary platform windows; main viewport never skips).
+struct ImGuiAppViewportPace
+{
+  ImGuiID ViewportId;
+  double  NextDeadline;
+  ImU64   LastSeenFrame; // FrameID.FrameIndex; feeds lazy pruning of vanished viewports
+};
+
+// Pacer bookkeeping the ImGuiAppPacer struct doesn't carry. Single slot: one paced app
+// per process; the deadline chain re-anchors when a different app starts pacing.
+struct ImGuiAppPacerState
+{
+  const ImGuiApp* App          = nullptr;
+  double          NextDeadline = -1.0; // on the monotonic app clock; < 0 = chain not started
+  double          LastEnter    = -1.0; // previous AppPacerWait entry (feeds LastFrameMs)
+#ifdef _WIN32
+  // High-res waitable timer + MMCSS "Games" registration for the paced thread: the timer
+  // decides WHEN the thread is ready, MMCSS makes the scheduler run it promptly under
+  // contention. Both best-effort; *Failed latches a one-time failure so we stop retrying.
+  HANDLE          Timer        = nullptr; // null = uncreated
+  bool            TimerFailed  = false;
+  HANDLE          Mmcss        = nullptr; // null = unregistered
+  bool            MmcssFailed  = false;
+#endif
+  ImVector<ImGuiAppViewportPace> ViewportPace; // secondary-window present deadlines
+};
+
+// Process-wide pacer state (one paced app per process). Function-local static: constructed
+// on first use, no TU-scope global -- and never aggregate-reset, so the timer/MMCSS handles
+// survive a paced app's Shutdown (only the deadline-chain fields clear; see Shutdown).
+static ImGuiAppPacerState& AppPacer()
+{
+    static ImGuiAppPacerState state;
+    return state;
+}
 
 static void AppPacerShutdownTimer()
 {
 #ifdef _WIN32
-    if (s_app_pacer_timer != nullptr)
+    ImGuiAppPacerState& pacer = AppPacer();
+    if (pacer.Timer != nullptr)
     {
-        ::CloseHandle(s_app_pacer_timer);
-        s_app_pacer_timer = nullptr;
+        ::CloseHandle(pacer.Timer);
+        pacer.Timer = nullptr;
     }
-    s_app_pacer_timer_failed = false;
-    if (s_app_pacer_mmcss != nullptr)
+    pacer.TimerFailed = false;
+    if (pacer.Mmcss != nullptr)
     {
-        ::AvRevertMmThreadCharacteristics(s_app_pacer_mmcss);
-        s_app_pacer_mmcss = nullptr;
+        ::AvRevertMmThreadCharacteristics(pacer.Mmcss);
+        pacer.Mmcss = nullptr;
     }
-    s_app_pacer_mmcss_failed = false;
+    pacer.MmcssFailed = false;
 #endif
 }
 
@@ -240,15 +274,6 @@ static float AppPacerPrimaryRefreshHz()
 #endif
     return 60.0f;
 }
-
-// Per-viewport present deadlines (secondary platform windows; main viewport never skips).
-struct ImGuiAppViewportPace
-{
-  ImGuiID ViewportId;
-  double  NextDeadline;
-  ImU64   LastSeenFrame; // FrameID.FrameIndex; feeds lazy pruning of vanished viewports
-};
-static ImVector<ImGuiAppViewportPace> s_app_vp_pace;
 
 // Refresh rate of the monitor hosting a viewport. ImGuiPlatformMonitor carries no
 // refresh field, so win32 resolves it from the HMONITOR the platform backend stored in
@@ -325,8 +350,13 @@ void ImGuiApp::Shutdown()
     // another live app's pacing hiccups for one frame and self-heals on its next wait.
     // AvRevertMmThreadCharacteristics is only valid on the thread that registered --
     // Shutdown must run on the paced (main) thread.
-    if (s_app_pacer.App == this)
-        s_app_pacer = { nullptr, -1.0, -1.0 };
+    ImGuiAppPacerState& pacer = AppPacer();
+    if (pacer.App == this)
+    {
+        pacer.App = nullptr;
+        pacer.NextDeadline = -1.0;
+        pacer.LastEnter = -1.0;
+    }
     AppPacerShutdownTimer();
 
     ImGui::ShutdownApp(this);
@@ -873,23 +903,24 @@ namespace ImGui
       }
       const double period = 1.0 / (double)hz;
 
+      ImGuiAppPacerState& pacer = AppPacer();
       const double now = AppClockNowSec();
-      if (s_app_pacer.App != app || s_app_pacer.NextDeadline < 0.0)
+      if (pacer.App != app || pacer.NextDeadline < 0.0)
       {
         // First paced frame (or the paced app changed): establish the deadline chain, no wait.
-        s_app_pacer.App = app;
-        s_app_pacer.NextDeadline = now + period;
-        s_app_pacer.LastEnter = now;
+        pacer.App = app;
+        pacer.NextDeadline = now + period;
+        pacer.LastEnter = now;
         return;
       }
 
-      p->LastFrameMs = (now - s_app_pacer.LastEnter) * 1000.0;
-      s_app_pacer.LastEnter = now;
+      p->LastFrameMs = (now - pacer.LastEnter) * 1000.0;
+      pacer.LastEnter = now;
 
       // Deadline chain (previous deadline + period), never now + period: chaining absorbs
       // jitter without drifting. Arriving late is a miss; re-anchor so one long frame
       // doesn't cascade into a chase.
-      double deadline = s_app_pacer.NextDeadline;
+      double deadline = pacer.NextDeadline;
       if (now > deadline)
       {
         p->MissedDeadlines++;
@@ -902,25 +933,25 @@ namespace ImGui
       const double sleep_until = deadline - slack;
       double t = now;
 #ifdef _WIN32
-      if (s_app_pacer_timer == nullptr && !s_app_pacer_timer_failed)
+      if (pacer.Timer == nullptr && !pacer.TimerFailed)
       {
-        s_app_pacer_timer = ::CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
-        if (s_app_pacer_timer == nullptr)
-          s_app_pacer_timer_failed = true;
+        pacer.Timer = ::CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+        if (pacer.Timer == nullptr)
+          pacer.TimerFailed = true;
       }
-      if (s_app_pacer_mmcss == nullptr && !s_app_pacer_mmcss_failed)
+      if (pacer.Mmcss == nullptr && !pacer.MmcssFailed)
       {
         DWORD mmcss_task_index = 0;
-        s_app_pacer_mmcss = ::AvSetMmThreadCharacteristicsW(L"Games", &mmcss_task_index);
-        if (s_app_pacer_mmcss == nullptr)
-          s_app_pacer_mmcss_failed = true;
+        pacer.Mmcss = ::AvSetMmThreadCharacteristicsW(L"Games", &mmcss_task_index);
+        if (pacer.Mmcss == nullptr)
+          pacer.MmcssFailed = true;
       }
-      if (s_app_pacer_timer != nullptr && t < sleep_until)
+      if (pacer.Timer != nullptr && t < sleep_until)
       {
         LARGE_INTEGER due;
         due.QuadPart = -(LONGLONG)((sleep_until - t) * 1e7);   // negative = relative, 100ns units
-        if (due.QuadPart < 0 && ::SetWaitableTimer(s_app_pacer_timer, &due, 0, nullptr, nullptr, FALSE))
-          ::WaitForSingleObject(s_app_pacer_timer, INFINITE);
+        if (due.QuadPart < 0 && ::SetWaitableTimer(pacer.Timer, &due, 0, nullptr, nullptr, FALSE))
+          ::WaitForSingleObject(pacer.Timer, INFINITE);
         t = AppClockNowSec();
       }
       while (t < sleep_until)   // fallback (timer unavailable) or residual: coarse sleep
@@ -940,7 +971,7 @@ namespace ImGui
         t = AppClockNowSec();
 
       p->LastWaitMs = (t - now) * 1000.0;
-      s_app_pacer.NextDeadline = deadline + period;
+      pacer.NextDeadline = deadline + period;
   }
 
   IMGUI_API bool AppPacerViewportShouldPresent(ImGuiApp* app, ImGuiViewport* viewport)
@@ -956,25 +987,26 @@ namespace ImGui
       const double period = 1.0 / (double)(hz > 1.0f ? hz : 60.0f);
       const double now = AppClockNowSec();
 
+      ImVector<ImGuiAppViewportPace>& vp_pace = AppPacer().ViewportPace;
       ImGuiAppViewportPace* pace = nullptr;
-      for (int i = 0; i < s_app_vp_pace.Size; i++)
-        if (s_app_vp_pace.Data[i].ViewportId == viewport->ID)
+      for (int i = 0; i < vp_pace.Size; i++)
+        if (vp_pace.Data[i].ViewportId == viewport->ID)
         {
-          pace = &s_app_vp_pace.Data[i];
+          pace = &vp_pace.Data[i];
           break;
         }
       if (pace == nullptr)
       {
         // Lazy prune: entries unseen for ~10s at 60fps are vanished viewports.
-        if (s_app_vp_pace.Size > 8)
-          for (int i = s_app_vp_pace.Size - 1; i >= 0; i--)
-            if (s_app_vp_pace.Data[i].LastSeenFrame + 600 < app->FrameID.FrameIndex)
-              s_app_vp_pace.erase(s_app_vp_pace.begin() + i);
+        if (vp_pace.Size > 8)
+          for (int i = vp_pace.Size - 1; i >= 0; i--)
+            if (vp_pace.Data[i].LastSeenFrame + 600 < app->FrameID.FrameIndex)
+              vp_pace.erase(vp_pace.begin() + i);
         ImGuiAppViewportPace fresh;
         fresh.ViewportId = viewport->ID;
         fresh.NextDeadline = now + period;
         fresh.LastSeenFrame = app->FrameID.FrameIndex;
-        s_app_vp_pace.push_back(fresh);
+        vp_pace.push_back(fresh);
         return true;   // first sighting presents and starts the deadline chain
       }
 
@@ -25449,11 +25481,9 @@ static void AvDrainCapture(ImGuiAppRecorder* rec)
 namespace ImGui
 {
 
-// Assert forensics (F15): every live ring recorder registers here so ImGuiAppAssertFail can dump them
-// all before the process exits -- the flight recording lands beside the assert WAL. Non-ring recorders
-// (linear takes) do not register; they have no ring to snapshot.
-static ImVector<ImGuiAppRecorder*> g_assert_recorders;
-
+// Assert forensics (F15): every live ring recorder registers in AppAssert().RingRecorders so
+// ImGuiAppAssertFail can dump them all before the process exits -- the flight recording lands
+// beside the assert WAL. Non-ring recorders (linear takes) do not register; no ring to snapshot.
 static ImGuiAppRecorder* AvBeginCommon(ImGuiApp* app, ImGuiAppAVEncoder* encoder, const ImGuiAppAVEncodeConfig* config)
 {
   IM_ASSERT(app != nullptr && encoder != nullptr && config != nullptr && config->OutputPath != nullptr);
@@ -25740,9 +25770,10 @@ IMGUI_API void AppRecordEnd(ImGuiAppRecorder* rec)
   rec->Queue.clear();
   if (rec->App != nullptr && rec->App->Recorder == rec)
     rec->App->Recorder = nullptr;   // OnEncodeFrame must never pump a freed recorder
-  for (int i = g_assert_recorders.Size - 1; i >= 0; i--)
-    if (g_assert_recorders.Data[i] == rec)
-      g_assert_recorders.erase(g_assert_recorders.Data + i);   // no dangling recorder in the assert dump list
+  ImVector<ImGuiAppRecorder*>& assert_recorders = AppAssert().RingRecorders;
+  for (int i = assert_recorders.Size - 1; i >= 0; i--)
+    if (assert_recorders.Data[i] == rec)
+      assert_recorders.erase(assert_recorders.Data + i);   // no dangling recorder in the assert dump list
   IM_DELETE(rec);
 }
 
@@ -25761,7 +25792,7 @@ IMGUI_API ImGuiAppRecorder* AppRecordBeginRing(ImGuiApp* app, ImGuiAppAVEncoder*
   rec->Active = true;
   if (app->Recorder == nullptr)
     app->Recorder = rec;   // OnEncodeFrame pumps it; explicit AppRecordPump remains valid
-  g_assert_recorders.push_back(rec);   // dump-on-assert (F15); removed in AppRecordEnd
+  AppAssert().RingRecorders.push_back(rec);   // dump-on-assert (F15); removed in AppRecordEnd
   AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "av: flight recorder armed (%.1fs / %dMB @ %.0f fps)",
               rec->Ring.Seconds, rec->Ring.MaxMemoryMB, rec->Ring.Fps);
   return rec;
@@ -25881,8 +25912,9 @@ IMGUI_API bool AppRecordDumpRing(ImGuiAppRecorder* rec, const char* reason)
 IMGUI_API int AppDumpAssertRings(const char* reason)
 {
   int dumped = 0;
-  for (int i = 0; i < g_assert_recorders.Size; i++)
-    if (AppRecordDumpRing(g_assert_recorders.Data[i], reason))
+  const ImVector<ImGuiAppRecorder*>& assert_recorders = AppAssert().RingRecorders;
+  for (int i = 0; i < assert_recorders.Size; i++)
+    if (AppRecordDumpRing(assert_recorders.Data[i], reason))
       dumped++;
   return dumped;
 }
