@@ -22,9 +22,8 @@ Index of this file:
 #include "imgui.h"          // IMGUI_API, ImGuiID, ImGuiStorage, ImBitArray, ImGuiTextIndex, ImChunkStream
 #include "imgui_internal.h" // ImStrncpy
 #include "imapp_config.h"
-#include "imguiapp_static.h" // ImFuncSig/IM_LABEL_SIZE/ImParseType* macros + ImGuiAppStatic<>/ImGuiAppType<>
 // windows.h's min/max macros (leaked by platform-backend TUs) break imguiapp_reflect.h's std::min.
-#include "imguiapp_reflect.h" // compile-time reflection (qlibs/reflect port): live-mirror field walk, IMGUIAPP_HAS_REFLECT, ImGuiAppLiveFieldDesc/ImGuiAppTypeSchema
+#include "imguiapp_reflect.h" // compile-time type-identity + reflection (qlibs/reflect port): ImGuiAppStatic/Type, ImApp{GenerateLabel,TypeDisplayName,NulTerminate}, field walk (AppReflectFields), ImGuiAppLiveFieldDesc/ImGuiAppTypeSchema
 
 // Keep VERSION and VERSION_NUM in sync.
 #define IMGUI_APPLAYER_VERSION "0.4.1"
@@ -46,10 +45,6 @@ Index of this file:
 //-----------------------------------------------------------------------------
 // [SECTION] Forward declarations and basic types
 //-----------------------------------------------------------------------------
-
-// Forward declarations: ImGuiAppStatic layer
-template <typename T>
-struct ImGuiAppStatic;
 
 // Forward declarations: ImGuiApp layer
 struct ImGuiApp;
@@ -226,9 +221,6 @@ namespace ImGui
     // (strictly read-only there: time scrub is disabled for the host -- restoring its
     // state from inside its own render would mutate mid-frame).
     IMGUI_API void        ShowAppDemo(bool* p_open = nullptr, ImGuiApp* host = nullptr);
-
-    // NOTE: the Composer introspection accessors (AppComposer*) moved to imguiapp_internal.h (tool-coupled,
-    // gated behind IMGUIX_DISABLE_TOOLS).
 }
 
 //-----------------------------------------------------------------------------
@@ -285,7 +277,6 @@ enum ImGuiAppWALLevel_
     ImGuiAppWALLevel_Lifecycle, // composition changes, storage, command dispatch
     ImGuiAppWALLevel_Frame,     // + per-frame per-layer phase begins (crash hunts; large files)
 };
-
 
 // What time the video claims. A video is honest about realtime only under Realtime.
 typedef int ImGuiAppAVTimingMode;
@@ -660,8 +651,9 @@ IMGUI_API const ImGuiAppPlatformBackend* ImGuiApp_GetPlatformBackend();
 // [SECTION] Helpers (interface base, state-delta events, RNG, diagnostics, style/color/data descs)
 //-----------------------------------------------------------------------------
 
-// The ImFuncSig / IM_LABEL_SIZE / ImParseType* macros + ImGuiAppStatic<> / ImGuiAppType<> moved
-// to imguiapp_static.h (leaf compile-time type-identity layer, included at the top of this file).
+// The compile-time type-identity + reflection layer (ImFuncSig / IM_LABEL_SIZE / ImParseType* macros,
+// ImGuiAppStatic<> / ImGuiAppType<> / ImAppNulTerminate / ImAppGenerateLabel / ImAppTypeDisplayName, and
+// the AppReflectFields walk) lives in imguiapp_reflect.h, included at the top of this file.
 
 struct ImGuiInterface
 {
@@ -670,7 +662,6 @@ struct ImGuiInterface
     virtual ~ImGuiInterface() = default;
 };
 
-// ImGuiAppStatic<> / ImGuiAppType<> now live in imguiapp_static.h; ImAppGenerateLabel / ImAppTypeDisplayName + the reflection walk moved up to this file (after the reflect include).
 
 // State-delta event helpers over (this frame, last frame): rising = started, falling = ended, changed = either.
 inline static bool ImAppRising(bool now, bool last) { return now && !last; }
@@ -697,13 +688,6 @@ inline static int ImAppRandomInt(ImU64* seed, int mn, int mx) // uniform in [mn,
     return mx <= mn ? mn : mn + (int)(ImAppRandom(seed) % (ImU64)(mx - mn + 1));
 }
 
-// Best-effort symbolized backtrace of the caller as "  #N name (file:line)" lines; returns characters
-// written. skip_frames drops innermost frames (0 = caller). Win32 only; other platforms write "".
-IMGUI_API int ImStackTrace(char* out, int out_size, int skip_frames = 0);
-
-// IM_ASSERT sink (wired via IMGUI_USER_CONFIG): logs expr/file/line + ImStackTrace to the SetAppAssertWAL
-// sink and stderr, flushes, then __debugbreak()s under a debugger or exits with code 3 -- never the CRT popup.
-IMGUI_API void ImAppAssertFail(const char* expr, const char* file, int line);
 
 // One authorable style-var override: Value.x for float vars, both lanes for ImVec2 vars; Active is
 // runtime-toggleable.
@@ -739,125 +723,6 @@ struct ImGuiAppDataBinding
 // number to key a control's instance data in ImGuiApp::Data. instance 0 keeps the bare type id
 // (the type singleton); any other instance qualifies it.
 IMGUI_API ImGuiID ImAppHashType(ImGuiID type_id, ImGuiID instance);
-
-// Label from a type's compile-time display name (the Push* helpers name items after their class).
-template <typename T>
-inline void ImAppGenerateLabel(char* label, size_t size) { std::string_view sv = ImGuiAppType<T>::Name; ImFormatString(label, size, "%.*s", (int)sv.size(), sv.data()); }
-
-// Display name in static null-terminated storage. Uses ImGuiAppType's signature parser (not
-// reflect's, which cannot parse function-local types), so registry keys match
-// GetControlDataTypeName by construction.
-template <typename T>
-inline const char* ImAppTypeDisplayName()
-{
-  static constexpr auto storage = ImAppNulTerminate<ImGuiAppType<T>::Name.size()>(ImGuiAppType<T>::Name);
-  return storage.data();
-}
-
-namespace ImGui
-{
-template <typename T>
-inline int AppReflectFields(ImGuiAppLiveFieldDesc* out, int cap);
-
-// Transitive automatic registration: materializes T's manifest into the runtime registry
-// and, through the field walk, the manifest of every visible aggregate T reaches (members
-// and ImVector elements). Reentrancy-safe: the entry registers before its fields fill.
-template <typename T>
-inline void AppEnsureTypeRegistered()
-{
-  if constexpr (ImGuiAppFieldsVisible<T>)
-  {
-    constexpr int n = (int)ImGui::size<T>();
-    const char* type_name = ImAppTypeDisplayName<T>();
-    if (AppFindTypeSchema(type_name) != nullptr)
-      return;
-    static ImGuiAppLiveFieldDesc fields[n > 0 ? n : 1];
-    static ImGuiAppTypeSchema schema;
-    schema.TypeName = type_name;
-    schema.Fields = fields;
-    schema.Count = 0;
-    schema.Size = (int)sizeof(T);
-    AppRegisterTypeSchema(&schema);
-    schema.Count = AppReflectFields<T>(fields, n > 0 ? n : 1);
-  }
-}
-
-// Aggregate walk shared by every ImGuiAppControl<> instantiation. Types outside the
-// visibility contract yield zero fields rather than failing to compile.
-template <typename T>
-inline int AppReflectFields(ImGuiAppLiveFieldDesc* out, int cap)
-{
-  if constexpr (ImGuiAppFieldsVisible<T>)
-  {
-    constexpr int n = (int)ImGui::size<T>();
-    if (out == nullptr || cap <= 0)
-      return n;
-    int written = 0;
-    ImGui::for_each<T>([&](auto I)
-    {
-      constexpr auto i = decltype(I)::value;
-      using M = std::remove_cvref_t<decltype(ImGui::get<i>(std::declval<T&>()))>;
-      using E = typename ImGuiAppVecElemOf<M>::Type;
-      if (written >= cap)
-        return;
-      ImGuiAppLiveFieldDesc* d = &out[written++];
-      d->Name = ImGui::member_name<i, T>().data();
-      d->ElemTypeName = nullptr;
-      d->Exact = true;
-      d->Offset = (int)ImGui::offset_of<i, T>();
-      d->Size = (int)sizeof(M);
-      if constexpr (std::is_same_v<M, bool>)                                        { d->Kind = ImGuiAppLiveFieldKind_Bool;      d->TypeName = "bool"; }
-      else if constexpr (std::is_same_v<M, float>)                                  { d->Kind = ImGuiAppLiveFieldKind_F32;       d->TypeName = "float"; }
-      else if constexpr (std::is_same_v<M, double>)                                 { d->Kind = ImGuiAppLiveFieldKind_F64;       d->TypeName = "double"; }
-      else if constexpr (std::is_same_v<M, ImVec2>)                                 { d->Kind = ImGuiAppLiveFieldKind_Vec2;      d->TypeName = "ImVec2"; }
-      else if constexpr (std::is_same_v<M, ImVec4>)                                 { d->Kind = ImGuiAppLiveFieldKind_Vec4;      d->TypeName = "ImVec4"; }
-      else if constexpr (std::is_array_v<M> && std::is_same_v<std::remove_extent_t<M>, char>) { d->Kind = ImGuiAppLiveFieldKind_CharArray; d->TypeName = "char"; }
-      else if constexpr (std::is_enum_v<M> && sizeof(M) == 4)                       { d->Kind = ImGuiAppLiveFieldKind_S32;       d->TypeName = "int"; }
-      else if constexpr (std::is_integral_v<M> && std::is_signed_v<M> && sizeof(M) == 4)   { d->Kind = ImGuiAppLiveFieldKind_S32; d->TypeName = "int"; }
-      else if constexpr (std::is_integral_v<M> && std::is_unsigned_v<M> && sizeof(M) == 4) { d->Kind = ImGuiAppLiveFieldKind_U32; d->TypeName = "unsigned int"; }
-      else if constexpr (!std::is_same_v<E, void>)
-      {
-        // ImVector member: exact spelling; a non-pointer element is registered so codegen can
-        // recurse into it (a pointer element's pointee is not owned -- never mirrored).
-        d->Kind = ImGuiAppLiveFieldKind_Opaque;
-        d->TypeName = ImGuiAppVecSpelling<E>::Value.data();
-        if constexpr (!std::is_pointer_v<E>)
-        {
-          d->ElemTypeName = ImAppTypeDisplayName<E>();
-          AppEnsureTypeRegistered<E>();
-        }
-      }
-      else if constexpr (std::is_pointer_v<M>)
-      {
-        d->Kind = ImGuiAppLiveFieldKind_Opaque;
-        d->TypeName = ImGuiAppPtrSpelling<std::remove_cv_t<std::remove_pointer_t<M>>>::Value.data();
-      }
-      else if constexpr (ImGuiAppFieldsVisible<M>)
-      {
-        // Nested visible aggregate: registered transitively, mirrored by codegen.
-        d->Kind = ImGuiAppLiveFieldKind_Opaque;
-        d->TypeName = ImAppTypeDisplayName<M>();
-        AppEnsureTypeRegistered<M>();
-      }
-      else
-      {
-        // Leaf outside every contract: bytes, honestly labelled.
-        d->Kind = ImGuiAppLiveFieldKind_Opaque;
-        d->TypeName = ImAppTypeDisplayName<M>();
-        d->Exact = false;
-      }
-    });
-    return written;
-  }
-  else
-  {
-    IM_UNUSED(out);
-    IM_UNUSED(cap);
-    return 0;
-  }
-}
-} // namespace ImGui
-
 //-----------------------------------------------------------------------------
 // [SECTION] App object model (layers, items, controls, ImGuiApp, adapter/control templates)
 //-----------------------------------------------------------------------------
@@ -994,7 +859,7 @@ struct ImGuiAppControlBase : ImGuiAppItemBase
 // NOTE: the reflectability contracts + type-schema registry + the reflection field-walk
 // (ImGuiAppDataReflectable, ImGuiAppTypeSchema + ImGuiAppRegister/FindTypeSchema, ImGuiAppFieldsVisible)
 // live in imguiapp_reflect.h, included at the top. The type-name helpers + reflection walk that consume
-// them (ImAppGenerateLabel, ImAppTypeDisplayName, AppReflectFields, AppEnsureTypeRegistered) are defined
+// them (ImAppGenerateLabel, ImAppTypeDisplayName, AppReflectFields, AppEnsureTypeRegistered) live in imguiapp_reflect.h; defined
 // near the top of this file, right after that include.
 
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
@@ -1441,14 +1306,13 @@ namespace ImGui
     inline void PushAppLayer(ImGuiApp* app)
     {
         IM_ASSERT(app);
-
-        char name[IM_LABEL_SIZE];
-        ImAppGenerateLabel<T>(name, sizeof(name));
-        AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push layer %s", name);
+        char label[IM_LABEL_SIZE];
+        ImAppGenerateLabel<T>(label, sizeof(label));
+        AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push layer %s", label);
 
         app->Layers.push_back(IM_NEW(T)());
         if (app->Layers.back()->Label[0] == 0) // default Label to the type name
-            ImStrncpy(app->Layers.back()->Label, name, IM_ARRAYSIZE(app->Layers.back()->Label));
+            ImStrncpy(app->Layers.back()->Label, label, IM_ARRAYSIZE(app->Layers.back()->Label));
         app->Layers.back()->OnAttach(app);
     }
 
@@ -1458,9 +1322,10 @@ namespace ImGui
     inline void PushAppWindow(ImGuiApp* app)
     {
         IM_ASSERT(app);
-        char name[IM_LABEL_SIZE];
-        ImAppGenerateLabel<T>(name, sizeof(name));
-        AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push window %s", name);
+        char label[IM_LABEL_SIZE];
+        ImAppGenerateLabel<T>(label, sizeof(label));
+        AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push window %s", label);
+
         T* window = IM_NEW(T)();
         IM_ASSERT(window);
         AppDeduplicateItemLabel(window->Label, IM_ARRAYSIZE(window->Label), &app->Windows, &app->Sidebars);
@@ -1472,9 +1337,10 @@ namespace ImGui
     inline void PushAppSidebar(ImGuiApp* app, ImGuiViewport* vp, ImGuiDir dir, float size, ImGuiWindowFlags flags)
     {
         IM_ASSERT(app);
-        char name[IM_LABEL_SIZE];
-        ImAppGenerateLabel<T>(name, sizeof(name));
-        AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push sidebar %s", name);
+        char label[IM_LABEL_SIZE];
+        ImAppGenerateLabel<T>(label, sizeof(label));
+        AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push sidebar %s", label);
+
         T* sidebar = IM_NEW(T)();
         IM_ASSERT(sidebar);
         AppDeduplicateItemLabel(sidebar->Label, IM_ARRAYSIZE(sidebar->Label), &app->Windows, &app->Sidebars);
@@ -1490,9 +1356,9 @@ namespace ImGui
     inline void PushAppControl(ImGuiApp* app, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count)
     {
         IM_ASSERT(app);
+        char label[IM_LABEL_SIZE];
+        ImAppGenerateLabel<T>(label, sizeof(label));
 
-        char name[IM_LABEL_SIZE];
-        ImAppGenerateLabel<T>(name, sizeof(name));
         // Instance data is keyed by the instance-qualified data type id so dependents can resolve it.
         const ImGuiID id = ImAppHashType(ImGuiAppType<typename T::ControlDataType>::ID, instance);
         IM_ASSERT(app->Data.GetVoidPtr(id) == nullptr);   // one instance per (control data type, instance id)
@@ -1504,7 +1370,7 @@ namespace ImGui
         IM_ASSERT(instance_data);
 
         // Trivially-copyable instance data is snapshottable (size + TempData byte range); heap-owning data is opaque.
-        AppControlRegisterStorage(app, control, name, id, instance, instance_data,
+        AppControlRegisterStorage(app, control, label, id, instance, instance_data,
                                   std::is_trivially_copyable_v<Inst>, (int)sizeof(Inst),
                                   (int)((char*)&instance_data->TempData - (char*)instance_data),
                                   (int)sizeof(instance_data->TempData), DestroyAppStorageValue<Inst>, nullptr, nullptr);
@@ -1520,9 +1386,9 @@ namespace ImGui
     IMGUI_API inline void PushWindowControl(ImGuiApp* app, ImGuiAppWindowBase* window, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count)
     {
         IM_ASSERT(app && window);
+        char label[IM_LABEL_SIZE];
+        ImAppGenerateLabel<T>(label, sizeof(label));
 
-        char name[IM_LABEL_SIZE];
-        ImAppGenerateLabel<T>(name, sizeof(name));
         // Instance data is keyed by the instance-qualified data type id so dependents can resolve it.
         const ImGuiID id = ImAppHashType(ImGuiAppType<typename T::ControlDataType>::ID, instance);
         IM_ASSERT(app->Data.GetVoidPtr(id) == nullptr);   // one instance per (control data type, instance id)
@@ -1534,7 +1400,7 @@ namespace ImGui
         IM_ASSERT(instance_data);
 
         // Trivially-copyable instance data is snapshottable (size + TempData byte range); heap-owning data is opaque.
-        AppControlRegisterStorage(app, control, name, id, instance, instance_data,
+        AppControlRegisterStorage(app, control, label, id, instance, instance_data,
                                   std::is_trivially_copyable_v<Inst>, (int)sizeof(Inst),
                                   (int)((char*)&instance_data->TempData - (char*)instance_data),
                                   (int)sizeof(instance_data->TempData), DestroyAppStorageValue<Inst>, "window", window->Label);

@@ -1198,6 +1198,15 @@ struct ImGuiAppTestHarnessConfig
 //-----------------------------------------------------------------------------
 // [SECTION] ImGui applayer internal API (core)
 //-----------------------------------------------------------------------------
+
+// Best-effort symbolized backtrace of the caller as "  #N name (file:line)" lines; returns characters
+// written. skip_frames drops innermost frames (0 = caller). Win32 only; other platforms write "".
+IMGUI_API int ImStackTrace(char* out, int out_size, int skip_frames = 0);
+
+// IM_ASSERT sink (wired via IMGUI_USER_CONFIG): logs expr/file/line + ImStackTrace to the SetAppAssertWAL
+// sink and stderr, flushes, then __debugbreak()s under a debugger or exits with code 3 -- never the CRT popup.
+IMGUI_API void ImAppAssertFail(const char* expr, const char* file, int line);
+
 namespace ImGui
 {
   // Controls sorted by the resolved dependency wiring: every producer before its consumers, composition
@@ -1341,7 +1350,7 @@ namespace ImGui
   IMGUI_API void                  AppMetaRecordEnd(ImGuiAppMetaRecorder* mr, ImVector<char>* out_meta);
 
   // Reflection field UI: read-only render + type-dispatched editor for one reflected field. Dispatches
-  // on the ImGuiAppIsCharArray / ImGuiAppIsFormattable traits (imguiapp_static.h) and enumerates members through
+  // on the ImGuiAppIsCharArray / ImGuiAppIsFormattable traits (imguiapp_reflect.h) and enumerates members through
   // ImGui::VisitAppFields (imguiapp_reflect.h).
   // Read-only render of one reflected field value.
   template <typename T>
