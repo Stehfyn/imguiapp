@@ -21,8 +21,15 @@
 #include <mfreadwrite.h>
 #include <mferror.h>
 
-// MFStartup/MFShutdown pair once per process across all live MF encoders.
-static int g_mf_startup_refs = 0;
+// MFStartup/MFShutdown pair once per process across all live MF encoders: one shared
+// refcount, NOT per-encoder state (folding it into ImGuiAppMfEncoderData would give each
+// instance its own counter and unbalance the pairing). Function-local static keeps the
+// single process-wide slot off file scope.
+static int& MfStartupRefs()
+{
+    static int refs = 0;
+    return refs;
+}
 
 struct ImGuiAppMfEncoderData
 {
@@ -149,7 +156,7 @@ static bool ImGuiAppMf_Open(ImGuiAppAVEncoder* self, const ImGuiAppAVEncodeConfi
       return false;
     }
     bd->MfStarted = true;
-    g_mf_startup_refs++;
+    MfStartupRefs()++;
   }
 
   snprintf(bd->OutputPath, sizeof(bd->OutputPath), "%s", config->OutputPath);
@@ -295,8 +302,8 @@ static void ImGuiAppMf_Destroy(ImGuiAppAVEncoder* self)
   ImGuiAppMfEncoderData* bd = (ImGuiAppMfEncoderData*)self->UserData;
   if (bd != nullptr && bd->MfStarted)
   {
-    g_mf_startup_refs--;
-    if (g_mf_startup_refs == 0)
+    MfStartupRefs()--;
+    if (MfStartupRefs() == 0)
       MFShutdown();
     if (bd->CoInited)
       ::CoUninitialize();

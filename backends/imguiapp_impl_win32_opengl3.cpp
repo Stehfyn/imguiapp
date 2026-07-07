@@ -33,6 +33,14 @@ namespace
         bool  PlatformBackendInitialized;
         bool  RendererBackendInitialized;
 
+        // Per-viewport pacing (secondary platform windows): the decision is made ONCE per
+        // viewport per frame in Platform_RenderWindow (the first per-viewport hook
+        // RenderPlatformWindowsDefault runs) and consumed by the draw + swap hooks. A skipped
+        // viewport does no GL work and no swap; its window keeps its last contents.
+        ImGuiApp*      App;                  // pacer app (source of per-viewport pacing decisions)
+        ImGuiStorage   VpSkip;               // viewport ID -> skip present this frame
+        void         (*UnderlyingRendererRenderWindow)(ImGuiViewport*, void*);
+
         // Frame capture (AV readback).
         ImU64          CaptureLastReturned; // highest FrameID.FrameIndex handed out; a repeat call with no new frame returns false
         ImVector<char> CaptureRead;         // glReadPixels scratch, GL's bottom-up row order
@@ -107,20 +115,15 @@ namespace
         }
     }
 
-    // Per-viewport pacing: the decision is made ONCE per viewport per frame (the deadline
-    // chain advances on each consult) in Platform_RenderWindow -- the first per-viewport
-    // hook RenderPlatformWindowsDefault runs -- and consumed by the draw + swap hooks. A
-    // skipped viewport does no GL work and no swap; its window keeps its last contents.
-    static ImGuiApp*    g_pacer_app = nullptr;
-    static ImGuiStorage g_vp_skip;
-    static void (*g_underlying_renderer_render_window)(ImGuiViewport* viewport, void* render_arg) = nullptr;
-
+    // Per-viewport pacing wrappers: installed into platform_io, so they run as context-free
+    // callbacks and reach backend state through the GBackend singleton. See the pacing fields
+    // on ImGuiApp_ImplWin32OpenGL3_Data.
     static void Hook_Platform_RenderWindow(ImGuiViewport* viewport, void*)
     {
         if (GState == nullptr)
             return;
-        const bool present = ImGui::AppPacerViewportShouldPresent(g_pacer_app, viewport);
-        g_vp_skip.SetBool(viewport->ID, !present);
+        const bool present = ImGui::AppPacerViewportShouldPresent(GBackend.App, viewport);
+        GBackend.VpSkip.SetBool(viewport->ID, !present);
         if (!present)
             return;
         if (ImGuiAppPlatformState::WGLWindowData* data = (ImGuiAppPlatformState::WGLWindowData*)viewport->RendererUserData)
@@ -129,15 +132,15 @@ namespace
 
     static void Pace_Renderer_RenderWindow(ImGuiViewport* viewport, void* render_arg)
     {
-        if (g_vp_skip.GetBool(viewport->ID))
+        if (GBackend.VpSkip.GetBool(viewport->ID))
             return;
-        if (g_underlying_renderer_render_window != nullptr)
-            g_underlying_renderer_render_window(viewport, render_arg);
+        if (GBackend.UnderlyingRendererRenderWindow != nullptr)
+            GBackend.UnderlyingRendererRenderWindow(viewport, render_arg);
     }
 
     static void Hook_Renderer_SwapBuffers(ImGuiViewport* viewport, void*)
     {
-        if (g_vp_skip.GetBool(viewport->ID))
+        if (GBackend.VpSkip.GetBool(viewport->ID))
             return;
         if (ImGuiAppPlatformState::WGLWindowData* data = (ImGuiAppPlatformState::WGLWindowData*)viewport->RendererUserData)
             ::SwapBuffers(data->hDC);
@@ -389,8 +392,8 @@ bool ImGuiApp_ImplWin32OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& confi
 
         // Wrap the upstream GL renderer's per-viewport draw (registered by
         // ImGui_ImplOpenGL3_Init above) so a pacing-skipped viewport draws nothing.
-        g_pacer_app = app;
-        g_underlying_renderer_render_window = platform_io.Renderer_RenderWindow;
+        GBackend.App = app;
+        GBackend.UnderlyingRendererRenderWindow = platform_io.Renderer_RenderWindow;
         platform_io.Renderer_RenderWindow = Pace_Renderer_RenderWindow;
     }
 
@@ -426,9 +429,9 @@ void ImGuiApp_ImplWin32OpenGL3_ShutdownPlatform(ImGuiApp* app)
     }
     if (GState == state)
         GState = nullptr;
-    g_pacer_app = nullptr;
-    g_underlying_renderer_render_window = nullptr;
-    g_vp_skip.Clear();
+    GBackend.App = nullptr;
+    GBackend.UnderlyingRendererRenderWindow = nullptr;
+    GBackend.VpSkip.Clear();
 
     IM_DELETE(state);
     app->PlatformData = nullptr;
