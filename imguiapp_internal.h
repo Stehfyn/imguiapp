@@ -1490,7 +1490,8 @@ namespace ImGui
   // fixes the operand-pin arity; the result DataOut is stamped DataTypeId=0 (opts out of one-producer-per-type).
   IMGUI_API ImGuiAppNode*     AppGraphAddOp(ImGuiAppGraph* g, const char* op_token);
   IMGUI_API void              AppGraphRemoveNode(ImGuiAppGraph* g, int node_id);
-  IMGUI_API ImGuiAppNode*     AppGraphFindNode(ImGuiAppGraph* g, int node_id);
+  IMGUI_API const ImGuiAppNode* AppGraphFindNode(const ImGuiAppGraph* g, int node_id);
+  IMGUI_API int                 AppGraphFindNodeIndex(const ImGuiAppGraph* g, int node_id); // write path: index into g->Nodes
   IMGUI_API const ImGuiAppNodePort* AppGraphFindPort(const ImGuiAppGraph* g, int port_id, const ImGuiAppNode** out_owner);
   IMGUI_API bool              AppGraphHasLayerType(const ImGuiAppGraph* g, ImGuiAppLayerType type);
   IMGUI_API void              AppNodeAddCommand(ImGuiAppNode* n, const char* name);

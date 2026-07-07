@@ -5690,7 +5690,7 @@ namespace
         data->CodeNodeText.clear();
         data->HasNodeCode = false;
         data->CodeName[0] = 0;
-        if (ImGuiAppNode* seln = doc->Selection >= 0 ? ImGui::AppGraphFindNode(&doc->Graph, doc->Selection) : nullptr)
+        if (const ImGuiAppNode* seln = doc->Selection >= 0 ? ImGui::AppGraphFindNode(&doc->Graph, doc->Selection) : nullptr)
         {
           ImGui::GenerateAppNodeCode(&doc->Graph, seln, &data->CodeNodeText, doc->Mirror);
           ImStrncpy(data->CodeName, seln->Draft.Name, sizeof(data->CodeName));
@@ -8886,7 +8886,6 @@ namespace ImGui
   static const float kAppGraphWindowSectionGap = 16.0f;      // gap between stacked nodes and below the layer node (model units)
 
   static bool AppNodeHiddenByCollapse(const ImGuiAppGraph* g, int id);                     // fwd (defined with the scope helpers)
-  static const ImGuiAppNode* AppGraphFindNodeConst(const ImGuiAppGraph* g, int node_id);   // fwd
 
   // The nodes the section contains, in seat order: sidebars first (they execute first, consuming
   // viewport workrects), then windows, each population in graph order (stable across frames).
@@ -8920,7 +8919,7 @@ namespace ImGui
     float extent = 0.0f;
     for (int i = 0; i < ids->Size; i++)
     {
-      const ImGuiAppNode* n = AppGraphFindNodeConst(g, ids->Data[i]);
+      const ImGuiAppNode* n = AppGraphFindNode(g, ids->Data[i]);
       if (n == nullptr)
         continue;
       const ImVec2 sz = AppLayoutNodeSize(g, n);
@@ -9030,14 +9029,6 @@ namespace ImGui
     }
   }
 
-  static ImGuiAppNode* AppGraphFindNodeById(ImGuiAppGraph* g, int node_id)
-  {
-    for (int i = 0; i < g->Nodes.Size; i++)
-      if (g->Nodes.Data[i].Id == node_id)
-        return &g->Nodes.Data[i];
-    return nullptr;
-  }
-
   static float  AppCanvasZoom(const ImGuiAppGraph* g);                          // fwd (defined with the view state)
   static ImVec2 AppCanvasNodePos(const ImGuiAppGraph* g, int node_id);          // fwd: engine passthrough (model units)
   static void   AppCanvasSetNodePos(const ImGuiAppGraph* g, int node_id, const ImVec2& model);  // fwd: engine passthrough (model units)
@@ -9056,7 +9047,7 @@ namespace ImGui
   static float AppGraphLayerRowFootprint(const ImGuiAppGraph* g, bool show_live, int node_id)
   {
     float h = AppGraphLayerNodeHeight(g, node_id);
-    const ImGuiAppNode* n = AppGraphFindNodeConst(g, node_id);
+    const ImGuiAppNode* n = AppGraphFindNode(g, node_id);
     if (n != nullptr && n == AppGraphLayerOfType(g, ImGuiAppLayerType_Display))
     {
       ImVector<int> ids;
@@ -9086,9 +9077,10 @@ namespace ImGui
     AppGraphWindowSectionStack(g, &ids, origin, &slots);
     for (int i = 0; i < ids.Size; i++)
     {
-      ImGuiAppNode* n = AppGraphFindNodeById(g, ids.Data[i]);
-      if (n == nullptr)
+      const int ni = AppGraphFindNodeIndex(g, ids.Data[i]);
+      if (ni < 0)
         continue;
+      ImGuiAppNode* n = &g->Nodes.Data[ni];
       n->GridPos = slots.Data[i];
       n->HasGridPos = true;
       n->_NeedsPlace = true;
@@ -9110,7 +9102,7 @@ namespace ImGui
       g->_DragStick.resize(0);
       return;
     }
-    const ImGuiAppNode* dn = AppGraphFindNodeConst(g, dragged_id);
+    const ImGuiAppNode* dn = AppGraphFindNode(g, dragged_id);
     if (dn == nullptr || dn->Kind != ImGuiAppNodeKind_Layer)
       return;
     // Only the column's TOP or BOTTOM row drives the stick.
@@ -9145,7 +9137,7 @@ namespace ImGui
         {
           if (members.Data[m] == n->Id)
             continue;
-          const ImGuiAppNode* mm = AppGraphFindNodeConst(g, members.Data[m]);
+          const ImGuiAppNode* mm = AppGraphFindNode(g, members.Data[m]);
           if (mm == nullptr)
             continue;
           ImGuiAppDragStick st;
@@ -9190,7 +9182,7 @@ namespace ImGui
       {
         if (members.Data[m] == n->Id)
           continue;
-        const ImGuiAppNode* mm = AppGraphFindNodeConst(g, members.Data[m]);
+        const ImGuiAppNode* mm = AppGraphFindNode(g, members.Data[m]);
         if (mm == nullptr)
           continue;
         const float oy = orig_y(members.Data[m], mm->GridPos.y);
@@ -9217,9 +9209,10 @@ namespace ImGui
       {
         if (members.Data[m] == n->Id)
           continue;
-        ImGuiAppNode* mm = AppGraphFindNodeById(g, members.Data[m]);
-        if (mm == nullptr)
+        const int mmi = AppGraphFindNodeIndex(g, members.Data[m]);
+        if (mmi < 0)
           continue;
+        ImGuiAppNode* mm = &g->Nodes.Data[mmi];
         const float ny = orig_y(members.Data[m], mm->GridPos.y) + delta;
         if (ImAbs(ny - mm->GridPos.y) > 0.01f)
         {
@@ -9249,7 +9242,7 @@ namespace ImGui
     bool all_heights_known = true;
     for (int i = 0; i < ids.Size; i++)
     {
-      ImGuiAppNode* n = AppGraphFindNodeById(g, ids.Data[i]);
+      const ImGuiAppNode* n = AppGraphFindNode(g, ids.Data[i]);
       if (n != nullptr && !n->HasGridPos && ImGui::CanvasNodeSize(AppEditorCanvas(g), n->Id).y <= 1.0f)
       {
         all_heights_known = false;
@@ -9259,9 +9252,10 @@ namespace ImGui
     float pack_y = kAppGraphY0;
     for (int i = 0; i < ids.Size; i++)
     {
-      ImGuiAppNode* n = AppGraphFindNodeById(g, ids.Data[i]);
-      if (n == nullptr)
+      const int ni = AppGraphFindNodeIndex(g, ids.Data[i]);
+      if (ni < 0)
         continue;
+      ImGuiAppNode* n = &g->Nodes.Data[ni];
       if (!n->HasGridPos)
       {
         n->GridPos = ImVec2(x, pack_y);
@@ -9274,12 +9268,12 @@ namespace ImGui
     for (int i = 1; i < ids.Size; i++)
     {
       const int id = ids.Data[i];
-      ImGuiAppNode* n = AppGraphFindNodeById(g, id);
+      const ImGuiAppNode* n = AppGraphFindNode(g, id);
       const float y = n ? n->GridPos.y : 0.0f;
       int j = i - 1;
       while (j >= 0)
       {
-        ImGuiAppNode* prev = AppGraphFindNodeById(g, ids.Data[j]);
+        const ImGuiAppNode* prev = AppGraphFindNode(g, ids.Data[j]);
         if (prev == nullptr || prev->GridPos.y <= y)
           break;
         ids.Data[j + 1] = ids.Data[j];
@@ -9300,11 +9294,12 @@ namespace ImGui
           anchor_index = i;
           break;
         }
-      ImGuiAppNode* anchor = anchor_index >= 0 ? AppGraphFindNodeById(g, anchor_node_id) : nullptr;
-      if (anchor != nullptr)
+      const int anchor_i = anchor_index >= 0 ? AppGraphFindNodeIndex(g, anchor_node_id) : -1;
+      if (anchor_i >= 0)
       {
-        const ImGuiAppNode* prev = anchor_index > 0 ? AppGraphFindNodeById(g, ids.Data[anchor_index - 1]) : nullptr;
-        const ImGuiAppNode* next = anchor_index + 1 < ids.Size ? AppGraphFindNodeById(g, ids.Data[anchor_index + 1]) : nullptr;
+        ImGuiAppNode* anchor = &g->Nodes.Data[anchor_i];
+        const ImGuiAppNode* prev = anchor_index > 0 ? AppGraphFindNode(g, ids.Data[anchor_index - 1]) : nullptr;
+        const ImGuiAppNode* next = anchor_index + 1 < ids.Size ? AppGraphFindNode(g, ids.Data[anchor_index + 1]) : nullptr;
         const float min_y = prev != nullptr ? prev->GridPos.y + AppGraphLayerRowFootprint(g, show_live, prev->Id) + gap : -FLT_MAX;
         const float max_y = next != nullptr ? next->GridPos.y - AppGraphLayerRowFootprint(g, show_live, anchor->Id) - gap : FLT_MAX;
         float y = anchor_pos->y;
@@ -9322,10 +9317,11 @@ namespace ImGui
       // includes its section stack) pushes later rows down instead of overlapping them.
       for (int i = 1; i < ids.Size; i++)
       {
-        ImGuiAppNode* n = AppGraphFindNodeById(g, ids.Data[i]);
-        ImGuiAppNode* prev = AppGraphFindNodeById(g, ids.Data[i - 1]);
-        if (n == nullptr || prev == nullptr)
+        const int ni = AppGraphFindNodeIndex(g, ids.Data[i]);
+        const ImGuiAppNode* prev = AppGraphFindNode(g, ids.Data[i - 1]);
+        if (ni < 0 || prev == nullptr)
           continue;
+        ImGuiAppNode* n = &g->Nodes.Data[ni];
         const float min_y = prev->GridPos.y + AppGraphLayerRowFootprint(g, show_live, prev->Id) + gap;
         if (n->GridPos.y < min_y)
           n->GridPos.y = min_y;
@@ -9334,9 +9330,10 @@ namespace ImGui
 
     for (int i = 0; i < ids.Size; i++)
     {
-      ImGuiAppNode* n = AppGraphFindNodeById(g, ids.Data[i]);
-      if (n == nullptr)
+      const int ni = AppGraphFindNodeIndex(g, ids.Data[i]);
+      if (ni < 0)
         continue;
+      ImGuiAppNode* n = &g->Nodes.Data[ni];
       const ImVec2 pos(x, n->GridPos.y);
       n->GridPos = pos;
       // Do NOT force HasGridPos here: a node placed provisionally this frame (heights not yet known)
@@ -9507,7 +9504,6 @@ namespace ImGui
   static int    AppScopeCurrent(const ImGuiAppGraph* g);   // fwd (scope section)
   static bool   AppNodeInScope(const ImGuiAppGraph* g, int id);   // fwd
   static int    AppGraphParentOf(const ImGuiAppGraph* g, int child_node_id);   // fwd
-  static const ImGuiAppNode* AppGraphFindNodeConst(const ImGuiAppGraph* g, int node_id);   // fwd
   static ImVec2 AppNodeScopePos(const ImGuiAppGraph* g, const ImGuiAppNode* n);   // fwd
   static void   AppNodeScopePosStore(ImGuiAppGraph* g, int node_id, const ImVec2& pos);   // fwd
   static bool   AppGraphReparent(ImGuiAppGraph* g, int child_id, int parent_id);   // fwd
@@ -9532,7 +9528,7 @@ namespace ImGui
       ? AppGraphAddBuiltin(g, kind, type_name, data_type)
       : AppGraphAddNode(g, kind, draft_name);
     const int n_id = n->Id;
-    const ImGuiAppNode* s = AppGraphFindNodeConst(g, src_id);   // re-find after the reallocation
+    const ImGuiAppNode* s = AppGraphFindNode(g, src_id);   // re-find after the reallocation
 
     n->Draft = s->Draft;                 // name + PersistFields/TempFields (ImVector deep-copy)
     n->LayerType = s->LayerType;
@@ -9557,12 +9553,12 @@ namespace ImGui
     if (parent >= 0)
       AppGraphReparent(g, n_id, parent);
     if (AppScopeCurrent(g) >= 0 && AppNodeInScope(g, n_id))
-      AppNodeScopePosStore(g, n_id, AppNodeScopePos(g, AppGraphFindNodeConst(g, src_id)) + ImVec2(40.0f, 40.0f));
-    return AppGraphFindNode(g, n_id);
+      AppNodeScopePosStore(g, n_id, AppNodeScopePos(g, AppGraphFindNode(g, src_id)) + ImVec2(40.0f, 40.0f));
+    const int ni = AppGraphFindNodeIndex(g, n_id);
+    return ni >= 0 ? &g->Nodes.Data[ni] : nullptr;
   }
 
   static int AppGraphParentOf(const ImGuiAppGraph* g, int child_node_id);   // fwd
-  static const ImGuiAppNode* AppGraphFindNodeConst(const ImGuiAppGraph* g, int node_id);   // fwd
   static void AppNodeBaseName(const ImGuiAppNode* n, char* out, size_t out_size);   // fwd
   static void AppGraphCopySelection(const ImGuiAppGraph* g, const ImVector<int>& roots);   // fwd
   static int  AppGraphPasteClipboard(ImGuiAppGraph* g);   // fwd
@@ -9640,7 +9636,7 @@ namespace ImGui
   // inspector's add-while-exploded road. Returns the new Field node id (0 if the owner vanished).
   static int AppGraphAddExplodedField(ImGuiAppGraph* g, int owner_id, int list, const ImGuiAppFieldDesc& fd, int idx)
   {
-    ImGuiAppNode* owner = AppGraphFindNode(g, owner_id);
+    const ImGuiAppNode* owner = AppGraphFindNode(g, owner_id);
     if (owner == nullptr)
       return 0;
     // Snapshot off `owner` before AppGraphAddNode grows g->Nodes and dangles it.
@@ -9700,9 +9696,9 @@ namespace ImGui
     const ImVector<ImGuiAppFieldDesc> fields = *src;
     for (int i = 0; i < fields.Size; i++)
       AppGraphAddExplodedField(g, oid, list, fields.Data[i], i);
-    if (ImGuiAppNode* oo = AppGraphFindNode(g, oid))   // re-find: owner may have moved
+    if (const int ooi = AppGraphFindNodeIndex(g, oid); ooi >= 0)   // re-find: owner may have moved
     {
-      AppNodeFieldList(oo, list)->clear();
+      AppNodeFieldList(&g->Nodes.Data[ooi], list)->clear();
     }
   }
 
@@ -9732,7 +9728,7 @@ namespace ImGui
     ImVector<ImGuiAppFieldDesc> fields;
     for (int i = 0; i < field_ids.Size; i++)
     {
-      const ImGuiAppNode* fn = AppGraphFindNodeConst(g, field_ids.Data[i]);
+      const ImGuiAppNode* fn = AppGraphFindNode(g, field_ids.Data[i]);
       if (fn == nullptr || fn->Draft.PersistFields.Size == 0)
       {
         continue;
@@ -9746,9 +9742,9 @@ namespace ImGui
       AppGraphRemoveNode(g, field_ids.Data[i]);
     }
 
-    if (ImGuiAppNode* oo = AppGraphFindNode(g, oid))   // re-find after removals
+    if (const int ooi = AppGraphFindNodeIndex(g, oid); ooi >= 0)   // re-find after removals
     {
-      *AppNodeFieldList(oo, list) = fields;
+      *AppNodeFieldList(&g->Nodes.Data[ooi], list) = fields;
     }
   }
 
@@ -9782,9 +9778,10 @@ namespace ImGui
     const float em = ImGui::GetFontSize();
     for (int i = 0; i < ids.Size; i++)
     {
-      ImGuiAppNode* fn = AppGraphFindNode(g, ids.Data[i]);
-      if (fn == nullptr)
+      const int fni = AppGraphFindNodeIndex(g, ids.Data[i]);
+      if (fni < 0)
         continue;
+      ImGuiAppNode* fn = &g->Nodes.Data[fni];
       if (fn->Draft.PersistFields.Size == 0)
         fn->Draft.PersistFields.push_back(ImGuiAppFieldDesc());
       ImGui::PushID(ids.Data[i]);
@@ -9868,11 +9865,12 @@ namespace ImGui
       }
     }
 
-    ImGuiAppNode* cc = AppGraphFindNode(g, cid);   // re-find: `c` may have moved
-    if (cc == nullptr)
+    const int cci = AppGraphFindNodeIndex(g, cid);   // re-find: `c` may have moved
+    if (cci < 0)
     {
       return;
     }
+    ImGuiAppNode* cc = &g->Nodes.Data[cci];
     if (temp)
     {
       cc->TempStructId = sid;
@@ -9910,7 +9908,7 @@ namespace ImGui
 
     const int cid = c->Id;
     ImVector<ImGuiAppFieldDesc> fields;
-    if (const ImGuiAppNode* s = AppGraphFindNodeConst(g, sid))
+    if (const ImGuiAppNode* s = AppGraphFindNode(g, sid))
     {
       AppNodeEffectiveFields(g, s, 0, &fields);
     }
@@ -9932,11 +9930,12 @@ namespace ImGui
       AppGraphRemoveNode(g, sid);
     }
 
-    ImGuiAppNode* cc = AppGraphFindNode(g, cid);   // re-find after removals
-    if (cc == nullptr)
+    const int cci = AppGraphFindNodeIndex(g, cid);   // re-find after removals
+    if (cci < 0)
     {
       return;
     }
+    ImGuiAppNode* cc = &g->Nodes.Data[cci];
     if (temp)
     {
       cc->Draft.TempFields = fields;
@@ -9960,13 +9959,23 @@ namespace ImGui
     return id;
   }
 
-  ImGuiAppNode* AppGraphFindNode(ImGuiAppGraph* g, int node_id)
+  // Index of a node in g->Nodes by id, or -1. The write path: a mutator takes the index and
+  // writes through g->Nodes.Data[idx]; readers use the const AppGraphFindNode below. A lookup
+  // never hands back a writable node pointer.
+  int AppGraphFindNodeIndex(const ImGuiAppGraph* g, int node_id)
   {
     IM_ASSERT(g != nullptr);
     for (int i = 0; i < g->Nodes.Size; i++)
       if (g->Nodes.Data[i].Id == node_id)
-        return &g->Nodes.Data[i];
-    return nullptr;
+        return i;
+    return -1;
+  }
+
+  // Find = pure query: const in, const out.
+  const ImGuiAppNode* AppGraphFindNode(const ImGuiAppGraph* g, int node_id)
+  {
+    const int idx = AppGraphFindNodeIndex(g, node_id);
+    return idx >= 0 ? &g->Nodes.Data[idx] : nullptr;
   }
 
   const ImGuiAppNodePort* AppGraphFindPort(const ImGuiAppGraph* g, int port_id, const ImGuiAppNode** out_owner)
@@ -10358,7 +10367,7 @@ namespace ImGui
   {
     IM_ASSERT(g != nullptr);
 
-    ImGuiAppNode* n = AppGraphFindNode(g, node_id);
+    const ImGuiAppNode* n = AppGraphFindNode(g, node_id);
     if (n == nullptr)
       return;
 
@@ -10600,10 +10609,11 @@ namespace ImGui
   // completes an unset type -- never overwrites a choice the user already made.
   static void AppInferStructFieldType(ImGuiAppGraph* g, int src_port, int dst_port)
   {
-    ImGuiAppNode* prod = AppGraphFindNode(g, AppGraphPortOwnerId(g, src_port));
-    ImGuiAppNode* cons = AppGraphFindNode(g, AppGraphPortOwnerId(g, dst_port));
-    if (prod == nullptr || cons == nullptr || prod->Kind != ImGuiAppNodeKind_Struct)
+    const ImGuiAppNode* prod = AppGraphFindNode(g, AppGraphPortOwnerId(g, src_port));
+    const int consi = AppGraphFindNodeIndex(g, AppGraphPortOwnerId(g, dst_port));
+    if (prod == nullptr || consi < 0 || prod->Kind != ImGuiAppNodeKind_Struct)
       return;
+    ImGuiAppNode* cons = &g->Nodes.Data[consi];
 
     char tn[IM_LABEL_SIZE];
     AppNodeBaseName(prod, tn, IM_ARRAYSIZE(tn));
@@ -10646,12 +10656,12 @@ namespace ImGui
           AppInferStructFieldType(g, s, d);   // wiring a struct producer in fills an unset struct field type
         if (k == ImGuiAppEdgeKind_Containment)
         {
-          ImGuiAppNode* child = AppGraphFindNode(g, AppGraphPortOwnerId(g, s));
-          ImGuiAppNode* parent = AppGraphFindNode(g, AppGraphPortOwnerId(g, d));
-          if (child != nullptr && parent != nullptr)
+          const int childi = AppGraphFindNodeIndex(g, AppGraphPortOwnerId(g, s));
+          const ImGuiAppNode* parent = AppGraphFindNode(g, AppGraphPortOwnerId(g, d));
+          if (childi >= 0 && parent != nullptr)
           {
             const ImVec2 preferred = parent->GridPos + ImVec2(280.0f, 0.0f);
-            AppGraphPlaceNode(g, child, &preferred);
+            AppGraphPlaceNode(g, &g->Nodes.Data[childi], &preferred);
           }
         }
         changed = true;
@@ -11039,7 +11049,6 @@ namespace ImGui
   }
 
   static void AppNodeDataTypeName(const ImGuiAppNode* n, char* out, size_t out_size);   // fwd (defined below)
-  static const ImGuiAppNode* AppGraphFindNodeConst(const ImGuiAppGraph* g, int node_id);   // fwd
   static int AppGraphParentOf(const ImGuiAppGraph* g, int child_node_id);                   // fwd
 
   // One origin vocabulary shared by the canvas title-bar tint, the tree text tint, and the demo legend, so the
@@ -11462,7 +11471,7 @@ namespace ImGui
     const int hovered = ImGui::CanvasHoveredNode(AppEditorCanvas(g));   // last CanvasEnd's resolution
     if (g->_LayerDragId == 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hovered >= 0)
     {
-      ImGuiAppNode* n = AppGraphFindNodeById(g, hovered);
+      const ImGuiAppNode* n = AppGraphFindNode(g, hovered);
       if (n != nullptr && n->Kind == ImGuiAppNodeKind_Layer && (show_live || !n->IsLive))
       {
         g->_LayerDragId = n->Id;
@@ -11502,7 +11511,7 @@ namespace ImGui
 
     if (g->_LayerDragId != 0 && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f))
     {
-      ImGuiAppNode* n = AppGraphFindNodeById(g, g->_LayerDragId);
+      const ImGuiAppNode* n = AppGraphFindNode(g, g->_LayerDragId);
       if (n != nullptr)
       {
         float y = g->_LayerDragNodeY0 + (ImGui::GetIO().MousePos.y - g->_LayerDragMouseY0) / AppCanvasScale(g);
@@ -11796,7 +11805,7 @@ namespace ImGui
       ImGui::EndCombo();
     }
     const int parent = AppGraphParentOf(g, n->Id);
-    const ImGuiAppNode* pn = parent >= 0 ? AppGraphFindNodeConst(g, parent) : nullptr;
+    const ImGuiAppNode* pn = parent >= 0 ? AppGraphFindNode(g, parent) : nullptr;
     if (pn != nullptr && pn->Kind == ImGuiAppNodeKind_Layout && strcmp(AppLayoutVariant(pn), "Split") == 0)
     {
       int dc = 0;
@@ -12006,7 +12015,7 @@ namespace ImGui
     bool any_active = false;
     for (int i = 0; i < g->Selection.Size; i++)
     {
-      const ImGuiAppNode* n = AppGraphFindNodeConst(g, g->Selection.Data[i]);
+      const ImGuiAppNode* n = AppGraphFindNode(g, g->Selection.Data[i]);
       if (n == nullptr || n->IsLive)
         continue;
       design++;
@@ -12026,7 +12035,7 @@ namespace ImGui
       bool mixed_x = false, mixed_y = false, first = true;
       for (int i = 0; i < g->Selection.Size; i++)
       {
-        const ImGuiAppNode* n = AppGraphFindNodeConst(g, g->Selection.Data[i]);
+        const ImGuiAppNode* n = AppGraphFindNode(g, g->Selection.Data[i]);
         if (n == nullptr || n->IsLive || n->Kind == ImGuiAppNodeKind_Layer)
           continue;
         placed++;
@@ -12038,9 +12047,12 @@ namespace ImGui
         auto write_all = [&](bool do_x, float v)
         {
           for (int i = 0; i < g->Selection.Size; i++)
-            if (ImGuiAppNode* n = AppGraphFindNode(g, g->Selection.Data[i]))
+            if (const int ni = AppGraphFindNodeIndex(g, g->Selection.Data[i]); ni >= 0)
+            {
+              ImGuiAppNode* n = &g->Nodes.Data[ni];
               if (!n->IsLive && n->Kind != ImGuiAppNodeKind_Layer)
                 (do_x ? n->GridPos.x : n->GridPos.y) = v;
+            }
         };
         ImGui::SeparatorText(ICON_FA_UP_DOWN_LEFT_RIGHT "  Placement (all selected)");
         const float pw = ImGui::GetFontSize() * 5.0f;
@@ -12062,9 +12074,12 @@ namespace ImGui
     auto for_each_sel = [&](void (*fn)(ImGuiAppNode*, bool), bool arg)
     {
       for (int i = 0; i < g->Selection.Size; i++)
-        if (ImGuiAppNode* n = AppGraphFindNode(g, g->Selection.Data[i]))
+        if (const int ni = AppGraphFindNodeIndex(g, g->Selection.Data[i]); ni >= 0)
+        {
+          ImGuiAppNode* n = &g->Nodes.Data[ni];
           if (!n->IsLive)
             fn(n, arg);
+        }
     };
     if (styled > 0 && enable != any_active)
       for_each_sel([](ImGuiAppNode* n, bool on)
@@ -12078,12 +12093,15 @@ namespace ImGui
     {
       if (ImGui::MenuItem("Paste section to all", nullptr, false, AppGraphEditorState(g)->StyleClipHas))
         for (int i = 0; i < g->Selection.Size; i++)
-          if (ImGuiAppNode* n = AppGraphFindNode(g, g->Selection.Data[i]))
+          if (const int ni = AppGraphFindNodeIndex(g, g->Selection.Data[i]); ni >= 0)
+          {
+            ImGuiAppNode* n = &g->Nodes.Data[ni];
             if (!n->IsLive)
             {
               n->StyleMods = AppGraphEditorState(g)->StyleClipMods;
               n->ColorMods = AppGraphEditorState(g)->StyleClipCols;
             }
+          }
       ImGui::Separator();
       if (ImGui::MenuItem("Clear style on all", nullptr, false, styled > 0))
         for_each_sel([](ImGuiAppNode* n, bool)
@@ -12095,7 +12113,7 @@ namespace ImGui
     }
     if (open)
       for (int i = 0; i < g->Selection.Size; i++)
-        if (const ImGuiAppNode* n = AppGraphFindNodeConst(g, g->Selection.Data[i]))
+        if (const ImGuiAppNode* n = AppGraphFindNode(g, g->Selection.Data[i]))
           if (!n->IsLive)
             ImGui::TextDisabled("%s  --  %d style, %d color", n->Draft.Name[0] ? n->Draft.Name : "(unnamed)", n->StyleMods.Size, n->ColorMods.Size);
   }
@@ -12113,7 +12131,8 @@ namespace ImGui
   {
     IM_ASSERT(g != nullptr);
 
-    ImGuiAppNode* n = node_id >= 0 ? AppGraphFindNode(g, node_id) : nullptr;
+    const int ni = node_id >= 0 ? AppGraphFindNodeIndex(g, node_id) : -1;
+    ImGuiAppNode* n = ni >= 0 ? &g->Nodes.Data[ni] : nullptr;
     if (n == nullptr)
     {
       ImGui::TextDisabled("Select a node to inspect.");
@@ -12306,7 +12325,7 @@ namespace ImGui
     case ImGuiAppNodeKind_Field:
     {
       const int sid = AppGraphParentOf(g, n->Id);
-      const ImGuiAppNode* sn = sid >= 0 ? AppGraphFindNodeConst(g, sid) : nullptr;
+      const ImGuiAppNode* sn = sid >= 0 ? AppGraphFindNode(g, sid) : nullptr;
       if (n->Draft.PersistFields.Size == 0)
         n->Draft.PersistFields.push_back(ImGuiAppFieldDesc());
       ImGui::TextDisabled("type");
@@ -12358,7 +12377,7 @@ namespace ImGui
   // the struct case (a struct is tied to its control by a data edge, not a containment edge).
   static int AppGroupOwnerOf(const ImGuiAppGraph* g, int id)
   {
-    const ImGuiAppNode* n = AppGraphFindNodeConst(g, id);
+    const ImGuiAppNode* n = AppGraphFindNode(g, id);
     if (n == nullptr)
       return -1;
     if (n->Kind == ImGuiAppNodeKind_Field)
@@ -12391,7 +12410,7 @@ namespace ImGui
   // Scope parent: which composition scope a node lives in (the tree the breadcrumb walks). -1 = root.
   static int AppScopeParentOf(const ImGuiAppGraph* g, int id)
   {
-    const ImGuiAppNode* n = AppGraphFindNodeConst(g, id);
+    const ImGuiAppNode* n = AppGraphFindNode(g, id);
     if (n == nullptr)
       return -1;
     switch (n->Kind)
@@ -12410,7 +12429,7 @@ namespace ImGui
     case ImGuiAppNodeKind_Control:
     {
       const int p = AppGraphParentOf(g, id);
-      const ImGuiAppNode* pn = p >= 0 ? AppGraphFindNodeConst(g, p) : nullptr;
+      const ImGuiAppNode* pn = p >= 0 ? AppGraphFindNode(g, p) : nullptr;
       if (pn != nullptr && (pn->Kind == ImGuiAppNodeKind_Window || pn->Kind == ImGuiAppNodeKind_Sidebar))
         return p;
       const ImGuiAppNode* task = AppGraphFindLayerOfType(g, ImGuiAppLayerType_Task);
@@ -12432,7 +12451,7 @@ namespace ImGui
     {
       // Nested Region/Split/Tabs live under their parent Split/Tabs; a top-level region is Layout-layer domain.
       const int p = AppGraphParentOf(g, id);
-      const ImGuiAppNode* pn = p >= 0 ? AppGraphFindNodeConst(g, p) : nullptr;
+      const ImGuiAppNode* pn = p >= 0 ? AppGraphFindNode(g, p) : nullptr;
       if (pn != nullptr && pn->Kind == ImGuiAppNodeKind_Layout)
         return p;
       const ImGuiAppNode* ll = AppGraphFindLayerOfType(g, ImGuiAppLayerType_Layout);
@@ -12500,8 +12519,8 @@ namespace ImGui
       return true;
     if (id == top)
       return false;
-    const ImGuiAppNode* tn = AppGraphFindNodeConst(g, top);
-    const ImGuiAppNode* n = AppGraphFindNodeConst(g, id);
+    const ImGuiAppNode* tn = AppGraphFindNode(g, top);
+    const ImGuiAppNode* n = AppGraphFindNode(g, id);
     if (tn == nullptr || n == nullptr)
       return true;   // dangling scope entries are repaired by AppScopeValidate; fail open meanwhile
 
@@ -12520,7 +12539,7 @@ namespace ImGui
         const int p = AppScopeParentOf(g, cur);
         if (p < 0)
           return false;
-        const ImGuiAppNode* pn = AppGraphFindNodeConst(g, p);
+        const ImGuiAppNode* pn = AppGraphFindNode(g, p);
         if (pn == nullptr)
           return false;
         if (pn->Kind == ImGuiAppNodeKind_Layer)
@@ -12548,7 +12567,7 @@ namespace ImGui
   {
     for (int i = 0; i < g->ViewScope.Size; i++)
     {
-      const ImGuiAppNode* n = AppGraphFindNodeConst(g, g->ViewScope.Data[i]);
+      const ImGuiAppNode* n = AppGraphFindNode(g, g->ViewScope.Data[i]);
       if (n == nullptr || !AppScopeCanEnter(n))
       {
         g->ViewScope.resize(i);   // a deleted / no-longer-enterable entry ends the breadcrumb here
@@ -12595,7 +12614,7 @@ namespace ImGui
   // road may adopt. Live non-layer scopes take nothing (the mirror is read-only; Promote authors).
   bool AppScopeKindComposable(const ImGuiAppGraph* g, int scope_id, ImGuiAppNodeKind kind)
   {
-    const ImGuiAppNode* s = AppGraphFindNodeConst(g, scope_id);
+    const ImGuiAppNode* s = AppGraphFindNode(g, scope_id);
     if (s == nullptr)
       return false;
     if (s->IsLive && s->Kind != ImGuiAppNodeKind_Layer)
@@ -12631,14 +12650,14 @@ namespace ImGui
   // disabled look (AppNodeCanvasOff) instead of vanishing.
   static bool AppNodeHiddenByCollapse(const ImGuiAppGraph* g, int id)
   {
-    const ImGuiAppNode* self = AppGraphFindNodeConst(g, id);
+    const ImGuiAppNode* self = AppGraphFindNode(g, id);
     if (self == nullptr)
       return false;
     if (!AppNodeInScope(g, id))
       return true;
     for (int owner = AppGroupOwnerOf(g, id); owner >= 0; owner = AppGroupOwnerOf(g, owner))
     {
-      const ImGuiAppNode* o = AppGraphFindNodeConst(g, owner);
+      const ImGuiAppNode* o = AppGraphFindNode(g, owner);
       if (o != nullptr && o->GroupCollapsed)
         return true;
     }
@@ -12651,7 +12670,7 @@ namespace ImGui
   {
     for (int cur = id; cur >= 0; cur = AppGroupOwnerOf(g, cur))
     {
-      const ImGuiAppNode* o = AppGraphFindNodeConst(g, cur);
+      const ImGuiAppNode* o = AppGraphFindNode(g, cur);
       if (o == nullptr)
         return false;
       if (o->Hidden && o->Kind != ImGuiAppNodeKind_Layer)
@@ -12669,7 +12688,7 @@ namespace ImGui
   // struct -> fields). Skips hidden live nodes. Recursive. Bounds in MODEL units, no camera term.
   static void AppGroupAccumulate(const ImGuiAppGraph* g, int owner_id, bool show_live, ImVec2* mn, ImVec2* mx)
   {
-    const ImGuiAppNode* n = AppGraphFindNodeConst(g, owner_id);
+    const ImGuiAppNode* n = AppGraphFindNode(g, owner_id);
     if (n == nullptr || (!show_live && n->IsLive) || AppNodeHiddenByCollapse(g, owner_id))
       return;
     if (!n->HasGridPos && !AppEditorNodeWasSubmitted(g, owner_id))
@@ -12737,9 +12756,10 @@ namespace ImGui
   // each placed node's MEASURED height; *max_r (when given) tracks the stack's right edge.
   static void AppLayoutStack(ImGuiAppGraph* g, int id, int depth, float x0, float* y, float* max_r)
   {
-    ImGuiAppNode* n = AppGraphFindNode(g, id);
-    if (n == nullptr)
+    const int ni = AppGraphFindNodeIndex(g, id);
+    if (ni < 0)
       return;
+    ImGuiAppNode* n = &g->Nodes.Data[ni];
     const float kGapNodeY = 40.0f;
     const float kIndentX = 48.0f;
     const ImVec2 sz = AppLayoutPureSize(g, n);   // pure model size: tidy is zoom-idempotent
@@ -12804,13 +12824,13 @@ namespace ImGui
   // roots sharing a host form one group unit in the tidy flow.
   static int AppLayoutHostOf(const ImGuiAppGraph* g, int id)
   {
-    const ImGuiAppNode* n = AppGraphFindNodeConst(g, id);
+    const ImGuiAppNode* n = AppGraphFindNode(g, id);
     if (n == nullptr || n->Kind != ImGuiAppNodeKind_Control)
       return -1;
     const int parent = AppGraphParentOf(g, id);
     if (parent < 0)
       return -1;
-    const ImGuiAppNode* p = AppGraphFindNodeConst(g, parent);
+    const ImGuiAppNode* p = AppGraphFindNode(g, parent);
     return (p != nullptr && (p->Kind == ImGuiAppNodeKind_Window || p->Kind == ImGuiAppNodeKind_Sidebar)) ? parent : -1;
   }
 
@@ -12845,7 +12865,7 @@ namespace ImGui
         // With the section active, a window-hosted control's parent (the window) is off the tidy
         // tree -- so the control is a root, laid out as its own free tree instead of hung under the
         // window. Without the section, it hangs under its window as before.
-        const ImGuiAppNode* p = parent >= 0 ? AppGraphFindNodeConst(g, parent) : nullptr;
+        const ImGuiAppNode* p = parent >= 0 ? AppGraphFindNode(g, parent) : nullptr;
         const bool parent_is_sectioned_window = p != nullptr && p->Kind == ImGuiAppNodeKind_Window && section_active;
         is_root = parent < 0 || parent_is_sectioned_window;
       }
@@ -12966,7 +12986,7 @@ namespace ImGui
   {
     out->clear();
     const int top = AppScopeCurrent(g);
-    const ImGuiAppNode* tn = top >= 0 ? AppGraphFindNodeConst(g, top) : nullptr;
+    const ImGuiAppNode* tn = top >= 0 ? AppGraphFindNode(g, top) : nullptr;
     if (tn == nullptr)
       return;
 
@@ -13024,7 +13044,7 @@ namespace ImGui
     int prev_rank = -1;
     for (int k = 0; k < ids.Size; k++)
     {
-      const ImGuiAppNode* ln = AppGraphFindNodeConst(g, ids.Data[k]);
+      const ImGuiAppNode* ln = AppGraphFindNode(g, ids.Data[k]);
       if (ln == nullptr || ln->IsLive || ln->Kind != ImGuiAppNodeKind_Layer || !AppLayerIsCore(ln->LayerType))
         continue;
       const int rank = (int)ln->LayerType;
@@ -13185,9 +13205,10 @@ namespace ImGui
     float x = x0;
     for (int i = 0; i < seq.Size; i++)
     {
-      ImGuiAppNode* n = AppGraphFindNode(g, seq.Data[i]);
-      if (n == nullptr)
+      const int ni = AppGraphFindNodeIndex(g, seq.Data[i]);
+      if (ni < 0)
         continue;
+      ImGuiAppNode* n = &g->Nodes.Data[ni];
       const ImVec2 sz = AppLayoutPureSize(g, n);
       AppNodeScopePosStore(g, seq.Data[i], ImVec2(x, y0));   // interior placement only; GridPos untouched
       n->_NeedsPlace = true;
@@ -13199,7 +13220,7 @@ namespace ImGui
   static ImU32 AppScopeAccent(const ImGuiAppGraph* g)
   {
     const int top = AppScopeCurrent(g);
-    const ImGuiAppNode* tn = top >= 0 ? AppGraphFindNodeConst(g, top) : nullptr;
+    const ImGuiAppNode* tn = top >= 0 ? AppGraphFindNode(g, top) : nullptr;
     if (tn == nullptr)
       return AppComposerGetStyle()->AccentNeutral;
     return tn->Kind == ImGuiAppNodeKind_Layer ? AppLayerAccent(tn->LayerType) : AppKindColor(tn->Kind);
@@ -13210,7 +13231,7 @@ namespace ImGui
   static const char* AppScopeCaption(const ImGuiAppGraph* g)
   {
     const int top = AppScopeCurrent(g);
-    const ImGuiAppNode* tn = top >= 0 ? AppGraphFindNodeConst(g, top) : nullptr;
+    const ImGuiAppNode* tn = top >= 0 ? AppGraphFindNode(g, top) : nullptr;
     if (tn == nullptr)
       return "composition root -- the phase layers run left to right every frame";
     if (tn->Kind == ImGuiAppNodeKind_Layer)
@@ -13320,10 +13341,11 @@ namespace ImGui
   static void AppScopeComposeNewNode(ImGuiAppGraph* g, int added_id, const ImVec2* interior_pos)
   {
     const int top = AppScopeCurrent(g);
-    ImGuiAppNode* added = AppGraphFindNode(g, added_id);
-    const ImGuiAppNode* owner = top >= 0 ? AppGraphFindNodeConst(g, top) : nullptr;
-    if (added == nullptr || owner == nullptr)
+    const int addedi = AppGraphFindNodeIndex(g, added_id);
+    const ImGuiAppNode* owner = top >= 0 ? AppGraphFindNode(g, top) : nullptr;
+    if (addedi < 0 || owner == nullptr)
       return;
+    ImGuiAppNode* added = &g->Nodes.Data[addedi];
     if (!AppScopeKindComposable(g, top, added->Kind))
     {
       AppGraphNotify(g, "a %s cannot compose into %s -- created at the composition root",
@@ -13346,7 +13368,7 @@ namespace ImGui
   static void AppScopeComposeImported(ImGuiAppGraph* g, int first_index, const ImVec2* interior_anchor)
   {
     const int top = AppScopeCurrent(g);
-    const ImGuiAppNode* owner = top >= 0 ? AppGraphFindNodeConst(g, top) : nullptr;
+    const ImGuiAppNode* owner = top >= 0 ? AppGraphFindNode(g, top) : nullptr;
     if (owner == nullptr || first_index < 0 || first_index >= g->Nodes.Size)
       return;
 
@@ -13395,7 +13417,8 @@ namespace ImGui
   // silently drop every inline field from the effective set.
   static int AppScopeAddFieldToStruct(ImGuiAppGraph* g, int struct_id)
   {
-    ImGuiAppNode* sn = AppGraphFindNode(g, struct_id);
+    const int sni = AppGraphFindNodeIndex(g, struct_id);
+    ImGuiAppNode* sn = sni >= 0 ? &g->Nodes.Data[sni] : nullptr;
     if (sn == nullptr || sn->Kind != ImGuiAppNodeKind_Struct || sn->IsLive || sn->IsBuiltin)
       return -1;
     if (AppGraphFieldNodeCount(g, struct_id, 0) == 0 && sn->Draft.PersistFields.Size > 0)
@@ -13481,7 +13504,7 @@ namespace ImGui
   static bool AppScopeWallsWanted(const ImGuiAppGraph* g)
   {
     const int top = AppScopeCurrent(g);
-    const ImGuiAppNode* tn = top >= 0 ? AppGraphFindNodeConst(g, top) : nullptr;
+    const ImGuiAppNode* tn = top >= 0 ? AppGraphFindNode(g, top) : nullptr;
     if (tn == nullptr)
       return false;
     if (tn->Kind == ImGuiAppNodeKind_Window || tn->Kind == ImGuiAppNodeKind_Sidebar)
@@ -13517,7 +13540,7 @@ namespace ImGui
     if (!AppScopeWallsWanted(g))
       return;
     const int top = AppScopeCurrent(g);
-    const ImGuiAppNode* tn = AppGraphFindNodeConst(g, top);
+    const ImGuiAppNode* tn = AppGraphFindNode(g, top);
 
     // Members' model bounds -- the same filters the submission loop applies. Positions follow the
     // group-frame discipline (engine pos when submitted, else this scope's model placement); a
@@ -13584,7 +13607,7 @@ namespace ImGui
       const float arrow_w = em * 0.45f;   // draw-list chevron (the arrow glyph is not in the atlas)
       for (int i = 0; i < mseq.Size; i++)
       {
-        const ImGuiAppNode* n = AppGraphFindNodeConst(g, mseq.Data[i]);
+        const ImGuiAppNode* n = AppGraphFindNode(g, mseq.Data[i]);
         if (n == nullptr)
           continue;
         char mnum[8];
@@ -13729,7 +13752,7 @@ namespace ImGui
     const float arrow_w = em * 0.45f;   // draw-list chevron (the arrow glyph is not in the atlas)
     for (int i = 0; i < seq.Size; i++)
     {
-      const ImGuiAppNode* n = AppGraphFindNodeConst(g, seq.Data[i]);
+      const ImGuiAppNode* n = AppGraphFindNode(g, seq.Data[i]);
       if (n == nullptr)
         continue;
       const char* nm = n->Draft.Name[0] ? n->Draft.Name : "(unnamed)";
@@ -13825,7 +13848,7 @@ namespace ImGui
       chain[depth++] = cur;
     g->ViewScope.clear();
     for (int i = depth - 1; i >= 0; i--)
-      if (AppScopeCanEnter(AppGraphFindNodeConst(g, chain[i])))
+      if (AppScopeCanEnter(AppGraphFindNode(g, chain[i])))
         g->ViewScope.push_back(chain[i]);
     g->Selection.clear();
     g->Selection.push_back(node_id);
@@ -13862,7 +13885,7 @@ namespace ImGui
       const ImGuiAppScopePortal* p = &portals.Data[i];
       const ImGuiAppNode* inside_owner = nullptr;
       const ImGuiAppNodePort* inside_port = AppGraphFindPort(g, p->InsidePortId, &inside_owner);
-      const ImGuiAppNode* remote = AppGraphFindNodeConst(g, p->OutsideNodeId);
+      const ImGuiAppNode* remote = AppGraphFindNode(g, p->OutsideNodeId);
       if (inside_owner == nullptr || remote == nullptr || !AppEditorNodeWasSubmitted(g, inside_owner->Id))
         continue;
 
@@ -13968,7 +13991,7 @@ namespace ImGui
           ImStrncpy(label, ICON_FA_CIRCLE_NODES "  App", IM_ARRAYSIZE(label));
         else
         {
-          const ImGuiAppNode* n = AppGraphFindNodeConst(g, g->ViewScope.Data[i - 1]);
+          const ImGuiAppNode* n = AppGraphFindNode(g, g->ViewScope.Data[i - 1]);
           if (n == nullptr)
             break;
           const char* nm = n->Kind == ImGuiAppNodeKind_Layer ? AppLayerNodeName(n->LayerType) : (n->Draft.Name[0] ? n->Draft.Name : "(unnamed)");
@@ -14046,9 +14069,10 @@ namespace ImGui
   static void AppDrawScopeEmptyCTA(ImGuiAppGraph* g, bool show_live, ImVec2 editor_min, ImVec2 editor_size)
   {
     const int top = AppScopeCurrent(g);
-    ImGuiAppNode* tn = top >= 0 ? AppGraphFindNode(g, top) : nullptr;
-    if (tn == nullptr)
+    const int tni = top >= 0 ? AppGraphFindNodeIndex(g, top) : -1;
+    if (tni < 0)
       return;
+    ImGuiAppNode* tn = &g->Nodes.Data[tni];
     for (int i = 0; i < g->Nodes.Size; i++)   // any visible member -> no CTA
     {
       const ImGuiAppNode* n = &g->Nodes.Data[i];
@@ -14134,7 +14158,7 @@ namespace ImGui
     ImVector<Rec> recs;
     for (int i = 0; i < g->Selection.Size; i++)
     {
-      ImGuiAppNode* sn = AppGraphFindNode(g, g->Selection.Data[i]);
+      const ImGuiAppNode* sn = AppGraphFindNode(g, g->Selection.Data[i]);
       if (sn == nullptr || (!show_live && sn->IsLive) || AppNodeHiddenByCollapse(g, sn->Id))
         continue;
       Rec r;
@@ -14178,8 +14202,8 @@ namespace ImGui
         else       np.y = c - recs.Data[i].size.y * 0.5f;
         AppCanvasSetNodePos(g, recs.Data[i].id, np);
         if (at_root)
-          if (ImGuiAppNode* sn = AppGraphFindNode(g, recs.Data[i].id))
-            sn->GridPos = np;
+          if (const int sni = AppGraphFindNodeIndex(g, recs.Data[i].id); sni >= 0)
+            g->Nodes.Data[sni].GridPos = np;
       }
       return;
     }
@@ -14205,8 +14229,8 @@ namespace ImGui
       }
       AppCanvasSetNodePos(g, recs.Data[i].id, np);
       if (at_root)
-        if (ImGuiAppNode* sn = AppGraphFindNode(g, recs.Data[i].id))
-          sn->GridPos = np;
+        if (const int sni = AppGraphFindNodeIndex(g, recs.Data[i].id); sni >= 0)
+          g->Nodes.Data[sni].GridPos = np;
     }
   }
 
@@ -14349,12 +14373,12 @@ namespace ImGui
     return (key == ImGuiKey_Space && mods == 0) || (key == ImGuiKey_P && mods == ImGuiMod_Ctrl);
   }
 
-  static ImGuiAppKeyBinding* AppKeymapFindOverride(ImGuiAppGraph* g, int cmd_id)
+  static int AppKeymapFindOverrideIndex(const ImGuiAppGraph* g, int cmd_id)
   {
     for (int i = 0; i < g->Keymap.Size; i++)
       if (g->Keymap.Data[i].CmdId == cmd_id)
-        return &g->Keymap.Data[i];
-    return nullptr;
+        return i;
+    return -1;
   }
 
   void AppKeymapEffectiveChord(const ImGuiAppGraph* g, int cmd_id, ImGuiKey* out_key, int* out_mods)
@@ -14395,21 +14419,21 @@ namespace ImGui
     // A rebind back to the factory chord clears the override, keeping the keymap a sparse diff.
     ImGuiKey dk = ImGuiKey_None; int dm = 0;
     AppKeymapDefaultChord(cmd_id, &dk, &dm);
-    ImGuiAppKeyBinding* ov = AppKeymapFindOverride(g, cmd_id);
+    const int ovi = AppKeymapFindOverrideIndex(g, cmd_id);
     if (key == dk && mods == dm)
     {
-      if (ov) g->Keymap.erase(ov);
+      if (ovi >= 0) g->Keymap.erase(g->Keymap.Data + ovi);
       return true;
     }
-    if (ov) { ov->Key = key; ov->Mods = mods; }
-    else    { ImGuiAppKeyBinding kb; kb.CmdId = cmd_id; kb.Key = key; kb.Mods = mods; g->Keymap.push_back(kb); }
+    if (ovi >= 0) { g->Keymap.Data[ovi].Key = key; g->Keymap.Data[ovi].Mods = mods; }
+    else          { ImGuiAppKeyBinding kb; kb.CmdId = cmd_id; kb.Key = key; kb.Mods = mods; g->Keymap.push_back(kb); }
     return true;
   }
 
   void AppKeymapReset(ImGuiAppGraph* g, int cmd_id)
   {
-    if (ImGuiAppKeyBinding* ov = AppKeymapFindOverride(g, cmd_id))
-      g->Keymap.erase(ov);
+    if (const int ovi = AppKeymapFindOverrideIndex(g, cmd_id); ovi >= 0)
+      g->Keymap.erase(g->Keymap.Data + ovi);
   }
 
   void AppKeymapResetAll(ImGuiAppGraph* g)
@@ -14717,7 +14741,7 @@ namespace ImGui
         }
         if (mn.x > mx.x)
           return;
-        const ImGuiAppNode* owner = AppGraphFindNodeConst(g, owner_id);
+        const ImGuiAppNode* owner = AppGraphFindNode(g, owner_id);
         const float em = ImGui::GetFontSize();
         const float sc = AppCanvasScale(g);
         // Chrome in MODEL units: the zoom-free em (this scope runs under the zoomed canvas
@@ -14781,7 +14805,7 @@ namespace ImGui
             {
               if (owner_seated && members.Data[m] == owner_id)
                 continue;
-              const ImGuiAppNode* mm = AppGraphFindNodeConst(g, members.Data[m]);
+              const ImGuiAppNode* mm = AppGraphFindNode(g, members.Data[m]);
               if (mm == nullptr || (!show_live && mm->IsLive))
                 continue;
               // Drag origin at the altitude being dragged: engine position while seated, else the
@@ -14802,13 +14826,14 @@ namespace ImGui
           }
           if (ImGui::IsItemDeactivated() && !g->_GroupDragMoved)
           {
-            if (ImGuiAppNode* o = AppGraphFindNode(g, owner_id))
+            if (const int oi = AppGraphFindNodeIndex(g, owner_id); oi >= 0)
             {
+              ImGuiAppNode* o = &g->Nodes.Data[oi];
               o->GroupCollapsed = !o->GroupCollapsed;
               if (!o->GroupCollapsed)                  // expanding: re-seat descendants at their stored positions
                 for (int m = 0; m < members.Size; m++)
-                  if (ImGuiAppNode* mm = AppGraphFindNode(g, members.Data[m]))
-                    mm->_NeedsPlace = true;
+                  if (const int mmi = AppGraphFindNodeIndex(g, members.Data[m]); mmi >= 0)
+                    g->Nodes.Data[mmi]._NeedsPlace = true;
             }
           }
           if (hov || act)
@@ -15300,7 +15325,7 @@ namespace ImGui
             if (g->Links.Data[li].Kind != ImGuiAppEdgeKind_Data || g->Links.Data[li].EndAttr != port->Id)
               continue;
             const int pid = AppGraphPortOwnerId(g, g->Links.Data[li].StartAttr);
-            const ImGuiAppNode* pn = pid >= 0 ? AppGraphFindNodeConst(g, pid) : nullptr;
+            const ImGuiAppNode* pn = pid >= 0 ? AppGraphFindNode(g, pid) : nullptr;
             if (pn == nullptr)
               continue;
             ImGui::TextUnformatted(pn->Draft.Name[0] ? pn->Draft.Name : "(unnamed)");
@@ -15341,7 +15366,7 @@ namespace ImGui
             pending_list = list;
           }
           ImGui::SameLine();
-          const ImGuiAppNode* sn = AppGraphFindNodeConst(g, sid);
+          const ImGuiAppNode* sn = AppGraphFindNode(g, sid);
           ImGui::TextDisabled("%s -> %s", temp ? "TempData" : "PersistData", sn != nullptr ? sn->Draft.Name : "(struct)");
           ImGui::PopID();
           ImGui::CanvasEndPin(cv);
@@ -15407,7 +15432,7 @@ namespace ImGui
             if (AppGraphPortOwnerId(g, g->Links.Data[li].EndAttr) != n->Id) continue;
             const int pid = AppGraphPortOwnerId(g, g->Links.Data[li].StartAttr);
             if (pid == n->PersistStructId || pid == n->TempStructId) continue;   // own persist/temp tie -> no binding
-            const ImGuiAppNode* pn = pid >= 0 ? AppGraphFindNodeConst(g, pid) : nullptr;
+            const ImGuiAppNode* pn = pid >= 0 ? AppGraphFindNode(g, pid) : nullptr;
             if (pn != nullptr)
               ImGui::TextDisabled("from %s", pn->Draft.Name[0] ? pn->Draft.Name : "(unnamed)");
             EditAppDataEdgeBindings(g, g->Links.Data[li].Id);
@@ -15728,9 +15753,10 @@ namespace ImGui
       for (int m = 0; m < g->_GroupDragOrig.Size; m++)
       {
         const int mid = (int)g->_GroupDragOrig.Data[m].x;
-        ImGuiAppNode* mm = AppGraphFindNode(g, mid);
-        if (mm == nullptr)
+        const int mmi = AppGraphFindNodeIndex(g, mid);
+        if (mmi < 0)
           continue;
+        ImGuiAppNode* mm = &g->Nodes.Data[mmi];
         const ImVec2 np(g->_GroupDragOrig.Data[m].y + g->_GroupDragApplied.x, g->_GroupDragOrig.Data[m].z + g->_GroupDragApplied.y);
         if (AppNodeHiddenByCollapse(g, mid) || !AppEditorNodeWasSubmitted(g, mid))
         {
@@ -15965,7 +15991,7 @@ namespace ImGui
       int dbl_id = -1;
       if (ImGui::CanvasNodeDoubleClicked(cv, &dbl_id))
       {
-        const ImGuiAppNode* dn = AppGraphFindNodeConst(g, dbl_id);
+        const ImGuiAppNode* dn = AppGraphFindNode(g, dbl_id);
         if (dn != nullptr && AppScopeCanEnter(dn) && (dn->Kind == ImGuiAppNodeKind_Layer || dn->IsLive))
           g->ViewScope.push_back(dn->Id);
         else if (dn != nullptr && !dn->IsLive && (dn->Kind != ImGuiAppNodeKind_Layer || dn->LayerType == ImGuiAppLayerType_Custom))
@@ -16125,7 +16151,8 @@ namespace ImGui
       case 5:
       {
         const int fid = AppScopeAddFieldToStruct(g, pal_scope);
-        added = fid >= 0 ? AppGraphFindNode(g, fid) : nullptr;
+        const int addi = fid >= 0 ? AppGraphFindNodeIndex(g, fid) : -1;
+        added = addi >= 0 ? &g->Nodes.Data[addi] : nullptr;
         break;
       }
       case 46: added = AppGraphAddNode(g, ImGuiAppNodeKind_Note, "Note"); break;
@@ -16221,7 +16248,7 @@ namespace ImGui
         break;
       case 23:
       {
-        ImGuiAppNode* sel = (selected_node_id != nullptr && *selected_node_id >= 0) ? AppGraphFindNode(g, *selected_node_id) : nullptr;
+        const ImGuiAppNode* sel = (selected_node_id != nullptr && *selected_node_id >= 0) ? AppGraphFindNode(g, *selected_node_id) : nullptr;
         if (sel != nullptr && AppScopeCanEnter(sel) && !AppNodeHiddenByCollapse(g, sel->Id) && !(!show_live && sel->IsLive))
           g->ViewScope.push_back(sel->Id);
         break;
@@ -16238,7 +16265,8 @@ namespace ImGui
       case 25:
         for (int i = 0; i < g->Selection.Size; i++)
         {
-          ImGuiAppNode* sn = AppGraphFindNode(g, g->Selection.Data[i]);
+          const int sni = AppGraphFindNodeIndex(g, g->Selection.Data[i]);
+          ImGuiAppNode* sn = sni >= 0 ? &g->Nodes.Data[sni] : nullptr;
           if (sn != nullptr && !sn->IsLive && sn->Kind != ImGuiAppNodeKind_Layer)
             sn->Hidden = true;
         }
@@ -16256,7 +16284,7 @@ namespace ImGui
       case 31:
         if (selected_node_id != nullptr && *selected_node_id >= 0)
         {
-          const ImGuiAppNode* sel = AppGraphFindNodeConst(g, *selected_node_id);
+          const ImGuiAppNode* sel = AppGraphFindNode(g, *selected_node_id);
           if (sel != nullptr && !sel->IsLive && (sel->Kind != ImGuiAppNodeKind_Layer || sel->LayerType == ImGuiAppLayerType_Custom))
             g->EditingNodeId = sel->Id;
           else if (sel != nullptr && sel->IsLive)
@@ -16333,7 +16361,7 @@ namespace ImGui
       // next frame once the newly scoped nodes have been submitted.
       if (ImGui::IsKeyPressed(ImGuiKey_Tab, false))
       {
-        ImGuiAppNode* sel = (selected_node_id != nullptr && *selected_node_id >= 0) ? AppGraphFindNode(g, *selected_node_id) : nullptr;
+        const ImGuiAppNode* sel = (selected_node_id != nullptr && *selected_node_id >= 0) ? AppGraphFindNode(g, *selected_node_id) : nullptr;
         if (sel != nullptr && AppScopeCanEnter(sel) && !AppNodeHiddenByCollapse(g, sel->Id) && !(!show_live && sel->IsLive))
           g->ViewScope.push_back(sel->Id);
         else if (g->ViewScope.Size > 0)
@@ -16384,7 +16412,8 @@ namespace ImGui
         {
           for (int i = 0; i < g->Selection.Size; i++)
           {
-            ImGuiAppNode* sn = AppGraphFindNode(g, g->Selection.Data[i]);
+            const int sni = AppGraphFindNodeIndex(g, g->Selection.Data[i]);
+            ImGuiAppNode* sn = sni >= 0 ? &g->Nodes.Data[sni] : nullptr;
             if (sn == nullptr || (!show_live && sn->IsLive) || AppNodeHiddenByCollapse(g, sn->Id))
               continue;
             // Nudge in MODEL units (a grid unit is a grid unit at any zoom). The canvas write is
@@ -16418,8 +16447,9 @@ namespace ImGui
     // safe to add/remove nodes (the read-back already ran, so it never touches the un-submitted new nodes).
     if (pending_act != AppAct_None && pending_node >= 0)
     {
-      if (ImGuiAppNode* pn = AppGraphFindNode(g, pending_node))
+      if (const int pni = AppGraphFindNodeIndex(g, pending_node); pni >= 0)
       {
+        ImGuiAppNode* pn = &g->Nodes.Data[pni];
         const bool is_control = pn->Kind == ImGuiAppNodeKind_Control;
         switch (pending_act)
         {
@@ -16438,12 +16468,13 @@ namespace ImGui
 
     // Apply a deferred Op operator change (re-stamps pins when the arity changes) -- safe after the read-back.
     if (pending_op_node >= 0 && pending_op[0])
-      AppGraphSetOpOperator(g, AppGraphFindNode(g, pending_op_node), pending_op);
+      if (const int opi = AppGraphFindNodeIndex(g, pending_op_node); opi >= 0)
+        AppGraphSetOpOperator(g, &g->Nodes.Data[opi], pending_op);
 
     // Apply a deferred "build onto layer" request: add the window/sidebar to the right of the layer column.
     if (pending_build_kind != ImGuiAppNodeKind_COUNT && pending_build_owner >= 0)
     {
-      const ImGuiAppNode* owner = AppGraphFindNodeConst(g, pending_build_owner);
+      const ImGuiAppNode* owner = AppGraphFindNode(g, pending_build_owner);
       const ImVec2 base = owner != nullptr ? owner->GridPos : ImVec2(640.0f, 60.0f);
       ImVec2 spot(base.x + 620.0f, base.y);
       const char* nm = pending_build_type != nullptr ? pending_build_type
@@ -16487,7 +16518,8 @@ namespace ImGui
 
     if (ImGui::BeginPopup("##AppGraphNodeCtx"))
     {
-      ImGuiAppNode* cn = AppGraphEditorState(g)->CtxNodeId >= 0 ? AppGraphFindNode(g, AppGraphEditorState(g)->CtxNodeId) : nullptr;
+      const int cni = AppGraphEditorState(g)->CtxNodeId >= 0 ? AppGraphFindNodeIndex(g, AppGraphEditorState(g)->CtxNodeId) : -1;
+      ImGuiAppNode* cn = cni >= 0 ? &g->Nodes.Data[cni] : nullptr;
       if (cn == nullptr)
         ImGui::CloseCurrentPopup();
       else if (cn->IsLive)
@@ -16600,7 +16632,7 @@ namespace ImGui
     if (ImGui::BeginPopup("##AppGraphAdd"))
     {
       const int add_scope = AppScopeCurrent(g);
-      const ImGuiAppNode* add_owner = add_scope >= 0 ? AppGraphFindNodeConst(g, add_scope) : nullptr;
+      const ImGuiAppNode* add_owner = add_scope >= 0 ? AppGraphFindNode(g, add_scope) : nullptr;
       if (add_owner != nullptr && add_owner->IsLive && add_owner->Kind != ImGuiAppNodeKind_Layer)
       {
         // Read-only mirror interior: nothing composes here; Promote (node context menu) authors.
@@ -16754,8 +16786,8 @@ namespace ImGui
         // at root altitude, never from the interior click.
         if (add_scope >= 0)
           AppScopeComposeNewNode(g, added_id, &AppGraphEditorState(g)->AddPopupGrid);
-        else if (ImGuiAppNode* an = AppGraphFindNode(g, added_id))
-          AppGraphPlaceNode(g, an, &AppGraphEditorState(g)->AddPopupGrid);
+        else if (const int ani = AppGraphFindNodeIndex(g, added_id); ani >= 0)
+          AppGraphPlaceNode(g, &g->Nodes.Data[ani], &AppGraphEditorState(g)->AddPopupGrid);
       }
       ImGui::EndPopup();
       }
@@ -16880,7 +16912,7 @@ namespace ImGui
       {
         if (node_id < 0 || !AppEditorNodeWasSubmitted(g, node_id))
           return;
-        const ImGuiAppNode* hn = AppGraphFindNodeConst(g, node_id);
+        const ImGuiAppNode* hn = AppGraphFindNode(g, node_id);
         if (hn == nullptr)
           return;
         const ImU32 tint = AppGraphOriginColor(hn);
@@ -16946,7 +16978,7 @@ namespace ImGui
         ImStrncpy(AppGraphEditorState(g)->StatusHint, "drag end  rewire     click  select     Del  delete     RMB  menu", IM_ARRAYSIZE(AppGraphEditorState(g)->StatusHint));
       else if (over_node)
       {
-        const ImGuiAppNode* hn = AppGraphFindNodeConst(g, hovered_node);
+        const ImGuiAppNode* hn = AppGraphFindNode(g, hovered_node);
         if (hn != nullptr && hn->IsLive)
           ImStrncpy(AppGraphEditorState(g)->StatusHint, "live mirror (read-only)     dbl-click  enter     RMB  menu", IM_ARRAYSIZE(AppGraphEditorState(g)->StatusHint));
         else if (hn != nullptr && hn->Kind == ImGuiAppNodeKind_Layer)
@@ -17254,7 +17286,8 @@ namespace ImGui
               // The wire carries containment under the drag SOURCE; split the altitudes by hand:
               // interior seat at the drop point, root seat beside the parent's root cluster.
               const ImVec2 pref = sowner_gp + ImVec2(280.0f, 0.0f);
-              AppGraphPlaceNode(g, AppGraphFindNode(g, nw_id), &pref);
+              if (const int nwi = AppGraphFindNodeIndex(g, nw_id); nwi >= 0)
+                AppGraphPlaceNode(g, &g->Nodes.Data[nwi], &pref);
               AppNodeScopePosStore(g, nw_id, drop_grid);
             }
             else
@@ -17302,7 +17335,7 @@ namespace ImGui
       {
         // Apply only to a node actually submitted this frame: a hidden live node (tree still lists it)
         // was evicted from the pool, so SelectNode/MoveToNode on it would assert.
-        ImGuiAppNode* tn = (*selected_node_id >= 0) ? AppGraphFindNode(g, *selected_node_id) : nullptr;
+        const ImGuiAppNode* tn = (*selected_node_id >= 0) ? AppGraphFindNode(g, *selected_node_id) : nullptr;
         bool scope_revealing = false;
 
         // Tree-originated pick outside the current drill-down scope: the outliner is global, the canvas is
@@ -17389,12 +17422,12 @@ namespace ImGui
   {
     IM_ASSERT(g != nullptr && buf != nullptr && buf_size > 0);
 
-    const ImGuiAppNode* n = node_id >= 0 ? AppGraphFindNodeConst(g, node_id) : nullptr;
+    const ImGuiAppNode* n = node_id >= 0 ? AppGraphFindNode(g, node_id) : nullptr;
     if (n == nullptr) { ImStrncpy(buf, "sel: -", (size_t)buf_size); return; }
 
     const char* tag = n->IsLive ? "live" : n->IsPromoted ? "promoted" : "design";
     const int parent = AppGraphParentOf(g, n->Id);
-    const ImGuiAppNode* pn = parent >= 0 ? AppGraphFindNodeConst(g, parent) : nullptr;
+    const ImGuiAppNode* pn = parent >= 0 ? AppGraphFindNode(g, parent) : nullptr;
     if (pn != nullptr)
       ImFormatString(buf, buf_size, "sel: %s > %s [%s]", pn->Draft.Name, n->Draft.Name, tag);
     else
@@ -17477,9 +17510,9 @@ namespace ImGui
       }
       else if (n->Kind == ImGuiAppNodeKind_Control)
       {
-        if (n->PersistStructId >= 0 && AppGraphFindNodeConst(g, n->PersistStructId) == nullptr)
+        if (n->PersistStructId >= 0 && AppGraphFindNode(g, n->PersistStructId) == nullptr)
           AppValidatePushIssue(out, n->Id, 2, "control '%s': exploded PersistData struct is missing", n->Draft.Name);
-        if (n->TempStructId >= 0 && AppGraphFindNodeConst(g, n->TempStructId) == nullptr)
+        if (n->TempStructId >= 0 && AppGraphFindNode(g, n->TempStructId) == nullptr)
           AppValidatePushIssue(out, n->Id, 2, "control '%s': exploded TempData struct is missing", n->Draft.Name);
         for (int f = 0; f < n->Draft.PersistFields.Size; f++)
           AppValidateField(out, n, &n->Draft.PersistFields.Data[f], "persist");
@@ -17684,8 +17717,8 @@ namespace ImGui
         continue;   // dangling bindings are swept on load; only data edges carry a field mapping
       const int cons_id = AppGraphPortOwnerId(g, link->EndAttr);
       const int prod_id = AppGraphPortOwnerId(g, link->StartAttr);
-      const ImGuiAppNode* cons = AppGraphFindNodeConst(g, cons_id);
-      const ImGuiAppNode* prod = AppGraphFindNodeConst(g, prod_id);
+      const ImGuiAppNode* cons = AppGraphFindNode(g, cons_id);
+      const ImGuiAppNode* prod = AppGraphFindNode(g, prod_id);
       if (cons != nullptr && !cons->IsLive && !cons->IsBuiltin && b->DstField[0]
           && AppNodeEffectiveFieldType(g, cons, 0, b->DstField) < 0)
         AppValidatePushIssue(out, cons_id, 2, "%s: binding writes undeclared field '%s'", cons->Draft.Name, b->DstField);
@@ -17705,7 +17738,7 @@ namespace ImGui
       int prev_rank = -1;
       for (int k = 0; k < ord->NodeIds.Size; k++)
       {
-        const ImGuiAppNode* ln = AppGraphFindNodeConst(g, ord->NodeIds.Data[k]);
+        const ImGuiAppNode* ln = AppGraphFindNode(g, ord->NodeIds.Data[k]);
         if (ln == nullptr || ln->IsLive || ln->Kind != ImGuiAppNodeKind_Layer || !AppLayerIsCore(ln->LayerType))
           continue;
         const int rank = (int)ln->LayerType;
@@ -17728,7 +17761,7 @@ namespace ImGui
       for (int cj = 0; cj < ord->NodeIds.Size; cj++)
       {
         const int cons_id = ord->NodeIds.Data[cj];
-        const ImGuiAppNode* cons = AppGraphFindNodeConst(g, cons_id);
+        const ImGuiAppNode* cons = AppGraphFindNode(g, cons_id);
         if (cons == nullptr || cons->IsLive || cons->Kind != ImGuiAppNodeKind_Control)
           continue;
         for (int li = 0; li < g->Links.Size; li++)
@@ -17738,7 +17771,7 @@ namespace ImGui
           if (AppGraphPortOwnerId(g, g->Links.Data[li].EndAttr) != cons_id)
             continue;
           const int prod_id = AppGraphPortOwnerId(g, g->Links.Data[li].StartAttr);
-          const ImGuiAppNode* prod = AppGraphFindNodeConst(g, prod_id);
+          const ImGuiAppNode* prod = AppGraphFindNode(g, prod_id);
           if (prod == nullptr || prod->Kind != ImGuiAppNodeKind_Control)
             continue;
           int pi = -1;
@@ -17813,7 +17846,7 @@ namespace ImGui
   {
     IM_ASSERT(g != nullptr);
 
-    const ImGuiAppNode* n = node_id >= 0 ? AppGraphFindNodeConst(g, node_id) : nullptr;
+    const ImGuiAppNode* n = node_id >= 0 ? AppGraphFindNode(g, node_id) : nullptr;
     if (n == nullptr)
     {
       ImGui::TextDisabled("Select a Control to preview its UI.");
@@ -18045,7 +18078,7 @@ namespace ImGui
 
     for (int i = 0; i < ch.Size; i++)
     {
-      const ImGuiAppNode* c = AppGraphFindNodeConst(g, ch.Data[i]);
+      const ImGuiAppNode* c = AppGraphFindNode(g, ch.Data[i]);
       char cvar[80];
       AppLayoutDockVar(c, false, cvar, IM_ARRAYSIZE(cvar));
       if (tabs || ch.Size == 1)
@@ -18058,7 +18091,7 @@ namespace ImGui
     }
     for (int i = 0; i < ch.Size; i++)   // recurse into container children
     {
-      const ImGuiAppNode* c = AppGraphFindNodeConst(g, ch.Data[i]);
+      const ImGuiAppNode* c = AppGraphFindNode(g, ch.Data[i]);
       if (AppLayoutIsContainer(c))
       {
         char cvar[80];
@@ -18079,7 +18112,7 @@ namespace ImGui
       const ImGuiAppNode* n = &g->Nodes.Data[i];
       if (n->IsLive || n->Kind != ImGuiAppNodeKind_Layout) continue;
       const int p = AppGraphParentOf(g, n->Id);
-      const ImGuiAppNode* pn = p >= 0 ? AppGraphFindNodeConst(g, p) : nullptr;
+      const ImGuiAppNode* pn = p >= 0 ? AppGraphFindNode(g, p) : nullptr;
       if (pn == nullptr || pn->Kind != ImGuiAppNodeKind_Layout)
         root = n;   // first top-level region == the root dockspace
     }
@@ -18153,13 +18186,6 @@ namespace ImGui
     out->appendf("};\n\n");
   }
 
-  static const ImGuiAppNode* AppGraphFindNodeConst(const ImGuiAppGraph* g, int node_id)
-  {
-    for (int i = 0; i < g->Nodes.Size; i++)
-      if (g->Nodes.Data[i].Id == node_id) return &g->Nodes.Data[i];
-    return nullptr;
-  }
-
   bool AppGraphTopoOrder(const ImGuiAppGraph* g, ImVector<int>* out_control_ids, char* err, int err_size, bool include_live, ImVector<int>* out_cycle, const ImVector<int>* priority)
   {
     IM_ASSERT(g != nullptr && out_control_ids != nullptr);
@@ -18191,7 +18217,7 @@ namespace ImGui
       if (g->Links.Data[li].Kind != ImGuiAppEdgeKind_Data) continue;
       // Only control -> control edges order controls. Struct / Field / persist-temp-tie producers are emitted
       // before controls (separately), so they must NOT add in-degree (else the control never reaches zero).
-      const ImGuiAppNode* prod = AppGraphFindNodeConst(g, AppGraphPortOwnerId(g, g->Links.Data[li].StartAttr));
+      const ImGuiAppNode* prod = AppGraphFindNode(g, AppGraphPortOwnerId(g, g->Links.Data[li].StartAttr));
       if (prod == nullptr || prod->Kind != ImGuiAppNodeKind_Control || (!include_live && prod->IsLive)) continue;
       const int consumer = AppGraphPortOwnerId(g, g->Links.Data[li].EndAttr);
       const int ci = ctrl_index(consumer);
@@ -18237,7 +18263,7 @@ namespace ImGui
         for (int i = 0; i < ctrl.Size; i++)
           if (!done.Data[i])
           {
-            if (!named) { const ImGuiAppNode* nn = AppGraphFindNodeConst(g, ctrl.Data[i]); if (nn) who = nn->Draft.Name; named = true; }
+            if (!named) { const ImGuiAppNode* nn = AppGraphFindNode(g, ctrl.Data[i]); if (nn) who = nn->Draft.Name; named = true; }
             if (out_cycle != nullptr) out_cycle->push_back(ctrl.Data[i]);
           }
         char msg[160];
@@ -18277,7 +18303,7 @@ namespace ImGui
 
     if (out_name != nullptr && name_size > 0)
     {
-      const ImGuiAppNode* nn = cycle.Size > 0 ? AppGraphFindNodeConst(g, cycle.Data[0]) : nullptr;
+      const ImGuiAppNode* nn = cycle.Size > 0 ? AppGraphFindNode(g, cycle.Data[0]) : nullptr;
       ImStrncpy(out_name, nn != nullptr ? nn->Draft.Name : "control", name_size);
     }
     if (out_nodes != nullptr)
@@ -18289,7 +18315,7 @@ namespace ImGui
   static void AppGraphConsumerDeps(const ImGuiAppGraph* g, int consumer_node_id, ImVector<int>* out_producers)
   {
     out_producers->clear();
-    const ImGuiAppNode* consumer = AppGraphFindNodeConst(g, consumer_node_id);
+    const ImGuiAppNode* consumer = AppGraphFindNode(g, consumer_node_id);
     const int own_persist = consumer != nullptr ? consumer->PersistStructId : -1;   // the control's OWN exploded
     const int own_temp    = consumer != nullptr ? consumer->TempStructId    : -1;   // data structs are not deps
     for (int i = 0; i < g->Nodes.Size; i++)   // iterate nodes for stable order
@@ -18302,7 +18328,7 @@ namespace ImGui
         if (AppGraphPortOwnerId(g, g->Links.Data[li].StartAttr) != producer_id) continue;
         // A Field producer contributes its PARENT owner (Struct/Control) as the dependency (many fields -> one dep).
         int dep_id = producer_id;
-        const ImGuiAppNode* pn = AppGraphFindNodeConst(g, producer_id);
+        const ImGuiAppNode* pn = AppGraphFindNode(g, producer_id);
         if (pn != nullptr && pn->Kind == ImGuiAppNodeKind_Op)
           continue;   // F55: an Op folds into the consumer's expression -- it is not a template dependency
         if (pn != nullptr && pn->Kind == ImGuiAppNodeKind_Field)
@@ -18494,7 +18520,7 @@ namespace ImGui
       AppGraphConsumerDeps(c->Graph, c->Node->Id, &deps);
       for (int d = 0; d < deps.Size && owner == nullptr; d++)
       {
-        const ImGuiAppNode* dn = AppGraphFindNodeConst(c->Graph, deps.Data[d]);
+        const ImGuiAppNode* dn = AppGraphFindNode(c->Graph, deps.Data[d]);
         if (dn == nullptr) continue;
         char param[IM_LABEL_SIZE];
         AppToSnake(param, IM_ARRAYSIZE(param), dn->Draft.Name);
@@ -18796,7 +18822,7 @@ namespace ImGui
       {
         if (g->Links.Data[li].Kind != ImGuiAppEdgeKind_Data || g->Links.Data[li].EndAttr != port->Id) continue;
         const int pid = AppGraphPortOwnerId(g, g->Links.Data[li].StartAttr);
-        wired = pid >= 0 ? AppGraphFindNodeConst(g, pid) : nullptr;
+        wired = pid >= 0 ? AppGraphFindNode(g, pid) : nullptr;
         break;
       }
       if (wired != nullptr && wired->Kind == ImGuiAppNodeKind_Op)
@@ -18841,8 +18867,8 @@ namespace ImGui
 
     // Data structs. When PersistData/TempData is exploded into a Struct node (named <base>Data / <base>TempData),
     // that node emits the type -- skip the inline def here to avoid a duplicate. Else emit from inline fields.
-    const bool persist_exploded = n->PersistStructId >= 0 && AppGraphFindNodeConst(g, n->PersistStructId) != nullptr;
-    const bool temp_exploded    = n->TempStructId    >= 0 && AppGraphFindNodeConst(g, n->TempStructId)    != nullptr;
+    const bool persist_exploded = n->PersistStructId >= 0 && AppGraphFindNode(g, n->PersistStructId) != nullptr;
+    const bool temp_exploded    = n->TempStructId    >= 0 && AppGraphFindNode(g, n->TempStructId)    != nullptr;
 
     // Edge-triggered EmitCommand events need a persist latch: OnUpdate (which sees last_temp_data) sets it on
     // the edge, OnGetCommand (which does not) emits it the same frame -- the Task layer updates before the
@@ -18912,7 +18938,7 @@ namespace ImGui
     char temp_type[IM_LABEL_SIZE];
     if (persist_exploded)
     {
-      AppNodeBaseName(AppGraphFindNodeConst(g, n->PersistStructId), persist_type, IM_ARRAYSIZE(persist_type));
+      AppNodeBaseName(AppGraphFindNode(g, n->PersistStructId), persist_type, IM_ARRAYSIZE(persist_type));
     }
     else
     {
@@ -18920,7 +18946,7 @@ namespace ImGui
     }
     if (temp_exploded)
     {
-      AppNodeBaseName(AppGraphFindNodeConst(g, n->TempStructId), temp_type, IM_ARRAYSIZE(temp_type));
+      AppNodeBaseName(AppGraphFindNode(g, n->TempStructId), temp_type, IM_ARRAYSIZE(temp_type));
     }
     else
     {
@@ -18940,7 +18966,7 @@ namespace ImGui
       if (g->Links.Data[li].Kind != ImGuiAppEdgeKind_Data) continue;
       if (AppGraphPortOwnerId(g, g->Links.Data[li].EndAttr) != n->Id) continue;
       const int pid = AppGraphPortOwnerId(g, g->Links.Data[li].StartAttr);
-      const ImGuiAppNode* pn = pid >= 0 ? AppGraphFindNodeConst(g, pid) : nullptr;
+      const ImGuiAppNode* pn = pid >= 0 ? AppGraphFindNode(g, pid) : nullptr;
       if (pn != nullptr && pn->Kind == ImGuiAppNodeKind_Op) op_wires.push_back(pid);
     }
     ImVector<int> event_op;
@@ -18952,7 +18978,7 @@ namespace ImGui
     out->appendf("struct %s : ImGuiAppControl<%s, %s", base, persist_type, temp_type);
     for (int d = 0; d < deps.Size; d++)
     {
-      const ImGuiAppNode* dn = AppGraphFindNodeConst(g, deps.Data[d]);
+      const ImGuiAppNode* dn = AppGraphFindNode(g, deps.Data[d]);
       char dtype[IM_LABEL_SIZE]; AppNodeDataTypeName(dn, dtype, IM_ARRAYSIZE(dtype));
       out->appendf(", %s", dtype);
     }
@@ -18963,7 +18989,7 @@ namespace ImGui
     {
       for (int d = 0; d < deps.Size; d++)
       {
-        const ImGuiAppNode* dn = AppGraphFindNodeConst(g, deps.Data[d]);
+        const ImGuiAppNode* dn = AppGraphFindNode(g, deps.Data[d]);
         char dtype[IM_LABEL_SIZE]; AppNodeDataTypeName(dn, dtype, IM_ARRAYSIZE(dtype));
         char dparam[IM_LABEL_SIZE]; AppToSnake(dparam, IM_ARRAYSIZE(dparam), dn->Draft.Name);
         o->appendf(", const %s* %s", dtype, dparam);
@@ -19006,7 +19032,7 @@ namespace ImGui
       {
         char guard[512];
         if (ev->TempField[0] == 0 && event_op[e] >= 0
-         && AppOpFoldExpr(g, AppGraphFindNodeConst(g, event_op[e]), guard, IM_ARRAYSIZE(guard)))
+         && AppOpFoldExpr(g, AppGraphFindNode(g, event_op[e]), guard, IM_ARRAYSIZE(guard)))
           out->appendf("    if (%s)\n      *cmd = (ImGuiAppCommand)%s;\n", guard, enum_value);   // F55: the op chain folds into the level-form gate
         else
         {
@@ -19056,7 +19082,7 @@ namespace ImGui
     // Field bindings -> assignment lines.
     for (int d = 0; d < deps.Size; d++)
     {
-      const ImGuiAppNode* dn = AppGraphFindNodeConst(g, deps.Data[d]);
+      const ImGuiAppNode* dn = AppGraphFindNode(g, deps.Data[d]);
       char dparam[IM_LABEL_SIZE]; AppToSnake(dparam, IM_ARRAYSIZE(dparam), dn->Draft.Name);
       // Find the data link producer==dn -> consumer==n, then its bindings.
       for (int li = 0; li < g->Links.Size; li++)
@@ -19116,10 +19142,10 @@ namespace ImGui
       if (g->Links.Data[li].Kind != ImGuiAppEdgeKind_Data) continue;
       if (AppGraphPortOwnerId(g, g->Links.Data[li].EndAttr) != n->Id) continue;
       const int pid = AppGraphPortOwnerId(g, g->Links.Data[li].StartAttr);
-      const ImGuiAppNode* fn = pid >= 0 ? AppGraphFindNodeConst(g, pid) : nullptr;
+      const ImGuiAppNode* fn = pid >= 0 ? AppGraphFindNode(g, pid) : nullptr;
       if (fn == nullptr || fn->Kind != ImGuiAppNodeKind_Field) continue;
       const int sid = AppGraphParentOf(g, fn->Id);
-      const ImGuiAppNode* sn = sid >= 0 ? AppGraphFindNodeConst(g, sid) : nullptr;
+      const ImGuiAppNode* sn = sid >= 0 ? AppGraphFindNode(g, sid) : nullptr;
       if (sn == nullptr)
       {
         out->appendf("    // WARNING: field '%s' has no parent struct -- cannot bind\n", fn->Draft.Name);
@@ -19159,7 +19185,7 @@ namespace ImGui
         {
           char guard[512];
           if (ev->Action == ImGuiAppEventAction_SetField && ev->DstField[0]
-           && AppOpFoldExpr(g, AppGraphFindNodeConst(g, event_op[e]), guard, IM_ARRAYSIZE(guard)))
+           && AppOpFoldExpr(g, AppGraphFindNode(g, event_op[e]), guard, IM_ARRAYSIZE(guard)))
           {
             char dst_id[IM_LABEL_SIZE];
             AppSanitizeIdentifier(dst_id, IM_ARRAYSIZE(dst_id), ev->DstField);
@@ -19331,8 +19357,8 @@ namespace ImGui
       const ImGuiAppNodeLink* l = &g->Links.Data[li];
       const int oa = AppGraphPortOwnerId(g, l->StartAttr);
       const int ob = AppGraphPortOwnerId(g, l->EndAttr);
-      const ImGuiAppNode* na = oa >= 0 ? AppGraphFindNodeConst(g, oa) : nullptr;
-      const ImGuiAppNode* nb = ob >= 0 ? AppGraphFindNodeConst(g, ob) : nullptr;
+      const ImGuiAppNode* na = oa >= 0 ? AppGraphFindNode(g, oa) : nullptr;
+      const ImGuiAppNode* nb = ob >= 0 ? AppGraphFindNode(g, ob) : nullptr;
       if (na == nullptr || nb == nullptr || na->IsLive || nb->IsLive) continue;   // authored links only
       h = ImHashData(&l->StartAttr, sizeof(l->StartAttr), h);   // stable port ids: capture connectivity changes
       h = ImHashData(&l->EndAttr, sizeof(l->EndAttr), h);
@@ -19823,7 +19849,7 @@ namespace ImGui
     out->appendf("// definitions live in the running binary\nstruct %s : ImGuiAppControl<%s, %s", cls, pname, temp_type);
     for (int d = 0; d < deps.Size; d++)
     {
-      const ImGuiAppNode* dn = AppGraphFindNodeConst(g, deps.Data[d]);
+      const ImGuiAppNode* dn = AppGraphFindNode(g, deps.Data[d]);
       char dtype[IM_LABEL_SIZE];
       AppNodeDataTypeName(dn, dtype, IM_ARRAYSIZE(dtype));
       out->appendf(", %s", dtype);
@@ -19834,7 +19860,7 @@ namespace ImGui
     {
       for (int d = 0; d < deps.Size; d++)
       {
-        const ImGuiAppNode* dn = AppGraphFindNodeConst(g, deps.Data[d]);
+        const ImGuiAppNode* dn = AppGraphFindNode(g, deps.Data[d]);
         char dtype[IM_LABEL_SIZE];
         AppNodeDataTypeName(dn, dtype, IM_ARRAYSIZE(dtype));
         char dparam[IM_LABEL_SIZE];
@@ -19976,7 +20002,7 @@ namespace ImGui
     ImGuiStorage mirrored_types;   // schema'd types already mirrored into this document
     for (int i = 0; i < order.Size; i++)
     {
-      const ImGuiAppNode* n = AppGraphFindNodeConst(g, order.Data[i]);
+      const ImGuiAppNode* n = AppGraphFindNode(g, order.Data[i]);
       if (n == nullptr)
         continue;
       const int begin = line_now();
@@ -20048,7 +20074,7 @@ namespace ImGui
     }
     for (int i = 0; i < order.Size; i++)
     {
-      const ImGuiAppNode* n = AppGraphFindNodeConst(g, order.Data[i]);
+      const ImGuiAppNode* n = AppGraphFindNode(g, order.Data[i]);
       if (n == nullptr) continue;
       const int begin = line_now();
       char base[IM_LABEL_SIZE];
@@ -20057,7 +20083,7 @@ namespace ImGui
       else
         AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
       const int parent = AppGraphParentOf(g, n->Id);
-      const ImGuiAppNode* pn = parent >= 0 ? AppGraphFindNodeConst(g, parent) : nullptr;
+      const ImGuiAppNode* pn = parent >= 0 ? AppGraphFindNode(g, parent) : nullptr;
       if (pn && pn->Kind == ImGuiAppNodeKind_Sidebar)
       {
         char pbase[IM_LABEL_SIZE]; AppNodeBaseName(pn, pbase, IM_ARRAYSIZE(pbase));
@@ -21364,7 +21390,7 @@ namespace ImGui
     };
     for (int i = 0; i < ctrls.Size; i++)
     {
-      const ImGuiAppNode* consumer = AppGraphFindNodeConst(g, ctrls.Data[i].NodeId);
+      const ImGuiAppNode* consumer = AppGraphFindNode(g, ctrls.Data[i].NodeId);
       if (consumer == nullptr) continue;
       for (int d = 0; d < ctrls.Data[i].DepCount; d++)
       {
@@ -21372,7 +21398,7 @@ namespace ImGui
         for (int j = 0; j < ctrls.Size && producer_id < 0; j++)
           if (j != i && strcmp(ctrls.Data[j].PersistType, ctrls.Data[i].Deps[d]) == 0)
             producer_id = ctrls.Data[j].NodeId;
-        const ImGuiAppNode* producer = producer_id >= 0 ? AppGraphFindNodeConst(g, producer_id) : nullptr;
+        const ImGuiAppNode* producer = producer_id >= 0 ? AppGraphFindNode(g, producer_id) : nullptr;
         if (producer == nullptr) continue;   // unresolved dep (external/builtin) -- skip, no dangling edge
         const int out_port = port_of(producer, ImGuiAppPortKind_DataOut);
         const int in_port  = port_of(consumer, ImGuiAppPortKind_DataIn);
@@ -21653,9 +21679,9 @@ namespace ImGui
     const ImGuiAppNode* added = nullptr;   int n_added = 0;
     const ImGuiAppNode* removed = nullptr; int n_removed = 0;
     for (int i = 0; i < now->Nodes.Size; i++)
-      if (AppGraphFindNodeConst(prev, now->Nodes.Data[i].Id) == nullptr) { added = &now->Nodes.Data[i]; n_added++; }
+      if (AppGraphFindNode(prev, now->Nodes.Data[i].Id) == nullptr) { added = &now->Nodes.Data[i]; n_added++; }
     for (int i = 0; i < prev->Nodes.Size; i++)
-      if (AppGraphFindNodeConst(now, prev->Nodes.Data[i].Id) == nullptr) { removed = &prev->Nodes.Data[i]; n_removed++; }
+      if (AppGraphFindNode(now, prev->Nodes.Data[i].Id) == nullptr) { removed = &prev->Nodes.Data[i]; n_removed++; }
 
     if (n_added > 0 && n_removed == 0)
     {
@@ -21702,7 +21728,7 @@ namespace ImGui
     ImGuiTextBuffer rec_a, rec_b;
     for (int i = 0; i < now->Nodes.Size; i++)
     {
-      const ImGuiAppNode* a = AppGraphFindNodeConst(prev, now->Nodes.Data[i].Id);
+      const ImGuiAppNode* a = AppGraphFindNode(prev, now->Nodes.Data[i].Id);
       const ImGuiAppNode* b = &now->Nodes.Data[i];
       if (a == nullptr)
         continue;
@@ -21723,12 +21749,12 @@ namespace ImGui
       const char* name = changed->Draft.Name[0] ? changed->Draft.Name : "node";
       if (renamed_now != nullptr)
         ImFormatString(out, out_size, "Rename %s \xE2\x86\x92 %s", renamed_prev->Draft.Name, renamed_now->Draft.Name);
-      else if (changed->StyleMods.Size != AppGraphFindNodeConst(prev, changed->Id)->StyleMods.Size
-            || changed->ColorMods.Size != AppGraphFindNodeConst(prev, changed->Id)->ColorMods.Size
-            || memcmp(changed->StyleMods.Data, AppGraphFindNodeConst(prev, changed->Id)->StyleMods.Data, (size_t)changed->StyleMods.Size * sizeof(ImGuiAppStyleModDesc)) != 0
-            || memcmp(changed->ColorMods.Data, AppGraphFindNodeConst(prev, changed->Id)->ColorMods.Data, (size_t)changed->ColorMods.Size * sizeof(ImGuiAppColorModDesc)) != 0)
+      else if (changed->StyleMods.Size != AppGraphFindNode(prev, changed->Id)->StyleMods.Size
+            || changed->ColorMods.Size != AppGraphFindNode(prev, changed->Id)->ColorMods.Size
+            || memcmp(changed->StyleMods.Data, AppGraphFindNode(prev, changed->Id)->StyleMods.Data, (size_t)changed->StyleMods.Size * sizeof(ImGuiAppStyleModDesc)) != 0
+            || memcmp(changed->ColorMods.Data, AppGraphFindNode(prev, changed->Id)->ColorMods.Data, (size_t)changed->ColorMods.Size * sizeof(ImGuiAppColorModDesc)) != 0)
         ImFormatString(out, out_size, "Style %s", name);
-      else if (changed->Events.Size != AppGraphFindNodeConst(prev, changed->Id)->Events.Size)
+      else if (changed->Events.Size != AppGraphFindNode(prev, changed->Id)->Events.Size)
         ImFormatString(out, out_size, "Events %s", name);
       else
         ImFormatString(out, out_size, "Edit %s", name);
@@ -21874,7 +21900,7 @@ namespace ImGui
   {
     if (AppIdInSet(*ids, root_id))
       return;
-    const ImGuiAppNode* n = AppGraphFindNodeConst(g, root_id);
+    const ImGuiAppNode* n = AppGraphFindNode(g, root_id);
     if (n == nullptr)
       return;
     ids->push_back(root_id);
@@ -21909,7 +21935,7 @@ namespace ImGui
     ImVector<int> ids;
     for (int i = 0; i < roots.Size; i++)
     {
-      const ImGuiAppNode* r = AppGraphFindNodeConst(g, roots.Data[i]);
+      const ImGuiAppNode* r = AppGraphFindNode(g, roots.Data[i]);
       if (r == nullptr || r->IsLive || r->Kind == ImGuiAppNodeKind_Layer)
         continue;
       AppGraphCollectSubtree(g, roots.Data[i], &ids);
@@ -22500,7 +22526,7 @@ namespace ImGui
     case ImGuiAppNodeKind_Control:
     {
       const int p = AppGraphParentOf(g, n->Id);
-      const ImGuiAppNode* pn = p >= 0 ? AppGraphFindNodeConst(g, p) : nullptr;
+      const ImGuiAppNode* pn = p >= 0 ? AppGraphFindNode(g, p) : nullptr;
       return (pn != nullptr && (pn->Kind == ImGuiAppNodeKind_Window || pn->Kind == ImGuiAppNodeKind_Sidebar)) ? p : -1;
     }
     case ImGuiAppNodeKind_Struct:
@@ -22524,8 +22550,8 @@ namespace ImGui
   // Struct. Removes the child's old containment edge, adds a new one (child ChildOut -> parent ChildIn).
   static bool AppGraphReparent(ImGuiAppGraph* g, int child_id, int parent_id)
   {
-    ImGuiAppNode* child  = AppGraphFindNode(g, child_id);
-    ImGuiAppNode* parent = AppGraphFindNode(g, parent_id);
+    const ImGuiAppNode* child = AppGraphFindNode(g, child_id);
+    const ImGuiAppNode* parent = AppGraphFindNode(g, parent_id);
     if (child == nullptr || parent == nullptr || child == parent)
       return false;
     if (child->IsLive || parent->IsLive)   // a live mirror can be neither reparented nor host a reparent
@@ -22591,7 +22617,7 @@ namespace ImGui
     if (!n->IsLive)
       return nullptr;
     bool hosts_composer = false;
-    for (const ImGuiAppNode* p = AppGraphFindNodeConst(g, AppNodeTreeParent(g, n)); p != nullptr; p = AppGraphFindNodeConst(g, AppNodeTreeParent(g, p)))
+    for (const ImGuiAppNode* p = AppGraphFindNode(g, AppNodeTreeParent(g, n)); p != nullptr; p = AppGraphFindNode(g, AppNodeTreeParent(g, p)))
     {
       ImGuiAppWindowBase* pw = AppTreeLiveWindow(g, p, host_root, &hosts_composer);
       if (pw != nullptr)
@@ -22789,8 +22815,11 @@ namespace ImGui
 
   static void AppTreeRenderNode(ImGuiAppGraph* g, int node_id, AppTreeCtx* c)
   {
-    ImGuiAppNode* n = AppGraphFindNode(g, node_id);
-    if (n == nullptr || !c->KindVisible[n->Kind])
+    const int ni = AppGraphFindNodeIndex(g, node_id);
+    if (ni < 0)
+      return;
+    ImGuiAppNode* n = &g->Nodes.Data[ni];
+    if (!c->KindVisible[n->Kind])
       return;
     if (!c->ShowLive && n->IsLive)
       return;   // live mirror hidden: the outliner obeys the same toggle as the canvas
@@ -22999,7 +23028,7 @@ namespace ImGui
         {
           for (int d = 0; d < deps.Size; d++)
           {
-            const ImGuiAppNode* dn = AppGraphFindNodeConst(g, deps.Data[d]);
+            const ImGuiAppNode* dn = AppGraphFindNode(g, deps.Data[d]);
             ImGui::BulletText("%s", dn != nullptr ? dn->Draft.Name : "(dep)");
           }
           ImGui::TreePop();
@@ -23179,7 +23208,8 @@ namespace ImGui
     // Apply the deferred row action (now safe to mutate g->Nodes).
     if (ctx.Act != 0 && ctx.ActNode >= 0)
     {
-      ImGuiAppNode* an = AppGraphFindNode(g, ctx.ActNode);
+      const int ani = AppGraphFindNodeIndex(g, ctx.ActNode);
+      ImGuiAppNode* an = ani >= 0 ? &g->Nodes.Data[ani] : nullptr;
       if (an != nullptr)
       {
         if (ctx.Act == 1)
