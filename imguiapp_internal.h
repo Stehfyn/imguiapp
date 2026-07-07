@@ -893,22 +893,22 @@ struct ImGuiAppCodeSpan
 // model object they describe, like Selection/ViewScope/ScopeCams. All transient, not serialized.
 struct ImGuiAppEditorState
 {
-  mutable ImGuiCanvasState*      Canvas = nullptr;                   // this graph's canvas engine (created on first editor frame; freed with the process)
+  ImGuiCanvasState*              Canvas = nullptr;                   // this graph's canvas engine (created on first editor frame; freed with the process)
   bool                           DragWasDetach = false;
-  mutable int                    HoverNode = -1;                     // brushing bus: render-phase reports (TempData), read next frame
-  mutable int                    HoverLink = -1;
-  mutable int                    HoverNodeSrc = 0;
-  mutable int                    HoverLinkSrc = 0;
-  mutable int                    HoverPrevNode = -1;                 // ... and last frame's, what readers see
-  mutable int                    HoverPrevLink = -1;
-  mutable int                    HoverPrevNodeSrc = 0;
-  mutable int                    HoverPrevLinkSrc = 0;
-  mutable int                    HoverFrame = -1;
+  int                            HoverNode = -1;                     // brushing bus: render-phase reports (TempData), read next frame
+  int                            HoverLink = -1;
+  int                            HoverNodeSrc = 0;
+  int                            HoverLinkSrc = 0;
+  int                            HoverPrevNode = -1;                 // ... and last frame's, what readers see
+  int                            HoverPrevLink = -1;
+  int                            HoverPrevNodeSrc = 0;
+  int                            HoverPrevLinkSrc = 0;
+  int                            HoverFrame = -1;
   ImGuiAppGraphViewState         View = { false, true, true, true, true, true, true, 1.0f };  // snap off; overlays + sidebars on; 1:1
-  mutable ImVector<ImGuiAppGraphIssue> IssuesCache;
-  mutable ImGuiID                IssuesSig = 0;
-  mutable bool                   IssuesValid = false;
-  mutable ImGuiStorage           IssuesSeverity;                     // node id -> worst severity
+  ImVector<ImGuiAppGraphIssue>   IssuesCache;
+  ImGuiID                        IssuesSig = 0;
+  bool                           IssuesValid = false;
+  ImGuiStorage                   IssuesSeverity;                     // node id -> worst severity
   ImVector<int>                  PoolIds;                            // node ids the canvas holds
   ImVector<int>                  PrevPoolIds;
   char                           StatusHint[256] = "";
@@ -920,14 +920,14 @@ struct ImGuiAppEditorState
   ImVec2                         EditorRectMax = ImVec2(0.0f, 0.0f);
   ImVec2                         GizmoCenters[8] = {};               // F40: viewport gizmo centres (screen), in draw order, for the click-path test
   int                            GizmoCount = 0;
-  mutable const ImGuiAppGraphHostCmd* HostCmds = nullptr;     // registered per frame; host-owned
-  mutable int                    HostCmdCount = 0;
-  mutable int                    HostCmdPicked = -1;
-  mutable bool                   AddPaletteRequest = false;          // one-shot
-  mutable bool                   CmdPaletteRequest = false;          // one-shot: open the Space operator palette (F34)
+  const ImGuiAppGraphHostCmd*    HostCmds = nullptr;                 // registered per frame; host-owned
+  int                            HostCmdCount = 0;
+  int                            HostCmdPicked = -1;
+  bool                           AddPaletteRequest = false;          // one-shot
+  bool                           CmdPaletteRequest = false;          // one-shot: open the Space operator palette (F34)
   int                            KeymapCapture = -1;                 // F75: command id whose chord the keymap editor is capturing, or -1
-  mutable bool                   AlignMenuRequest = false;           // one-shot: open the Shift+A align/distribute submenu (F48/R3)
-  mutable bool                   FitAllRequest = false;              // one-shot
+  bool                           AlignMenuRequest = false;           // one-shot: open the Shift+A align/distribute submenu (F48/R3)
+  bool                           FitAllRequest = false;              // one-shot
   int                            AutoLayoutCountdown = 2;            // launch default is a TIDIED layout: fires once real sizes exist (frame 2)
   float                          UniformCardW = 0.0f;                // one normalized width for every non-layer node (model units; grows to fit the widest need, deadbanded)
   bool                           HelpOverlay = false;                // F1 shortcut cheat sheet
@@ -973,18 +973,18 @@ struct ImGuiAppEditorState
   int                            TelegraphPin = -1;                  // F50: pin hovered as a wire-drag target this frame (-1 = none)
   bool                           TelegraphOk = false;                // F50: would the hovered target connect legally to the drag source
   int                            StripDragNode = -1;                 // F60: order-strip chip being drag-reordered (node id; -1 = idle). Latched pre-submission, hit-tested against last frame's ScopeStripRects
-  mutable ImGuiAppPreview*       Preview = nullptr;                  // F68: live preview interpreter session for this document (heap; opaque; freed with the process / rebuilt on Reinit)
+  ImGuiAppPreview*               Preview = nullptr;                  // F68: live preview interpreter session for this document (heap; opaque; freed with the process / rebuilt on Reinit)
   bool                           PreviewRun = true;                  // F68: run vs pause the previewed model (widgets stay interactive while paused)
-  mutable ImGuiID                PreviewSig = 0;                     // F68: AppGraphSignature the preview was last reconciled at; a change reconciles (preserve-by-field) next frame
+  ImGuiID                        PreviewSig = 0;                     // F68: AppGraphSignature the preview was last reconciled at; a change reconciles (preserve-by-field) next frame
   ImGuiAppMetaRecorder*          PreviewRec = nullptr;               // F70: active preview-session take (meta-only run container), or null
   ImGuiAppInputLog               PreviewRecInput;                    // F70: opt-in replay layer recorded alongside this take (AppInputRecord per driven frame)
   ImU64                          PreviewRecTick = 0;                 // F70: ticks recorded this take (== the exported run's tick spine)
   int                            PreviewRecSnapEvery = 30;           // F70: StateSnapshot cadence in ticks (a nearest-snapshot restore point every N)
   char                           PreviewRecPath[256] = "headless-artifacts/preview-session.meta";  // F70: exported container path
   bool                           PreviewUseDll = false;              // F78.5: preview backend selector -- DLL (compiled real program) vs the interpreter (default)
-  mutable ImGuiAppPreviewDll*    PreviewDll = nullptr;               // F78.5: compiled-DLL preview session (heap; opaque; created lazily, freed on Reinit / process exit)
-  mutable ImGuiID                PreviewDllSig = 0;                  // F78.5: AppGraphSignature the DLL preview was last compiled at; a change recompiles + hot-swaps
-  mutable ImTextureData*         PreviewDllTex = nullptr;            // F78.5: host texture holding the CPU-rasterized DLL frame (created per panel size)
+  ImGuiAppPreviewDll*            PreviewDll = nullptr;               // F78.5: compiled-DLL preview session (heap; opaque; created lazily, freed on Reinit / process exit)
+  ImGuiID                        PreviewDllSig = 0;                  // F78.5: AppGraphSignature the DLL preview was last compiled at; a change recompiles + hot-swaps
+  ImTextureData*                 PreviewDllTex = nullptr;            // F78.5: host texture holding the CPU-rasterized DLL frame (created per panel size)
   int                            PreviewDllTexW = 0;                 // F78.5: PreviewDllTex width
   int                            PreviewDllTexH = 0;                 // F78.5: PreviewDllTex height
   ImVector<unsigned char>        PreviewDllRgba;                     // F78.5: reused RGBA32 scratch the DLL frame rasterizes into
@@ -1491,7 +1491,7 @@ namespace ImGui
   IMGUI_API ImGuiAppNode*     AppGraphAddOp(ImGuiAppGraph* g, const char* op_token);
   IMGUI_API void              AppGraphRemoveNode(ImGuiAppGraph* g, int node_id);
   IMGUI_API ImGuiAppNode*     AppGraphFindNode(ImGuiAppGraph* g, int node_id);
-  IMGUI_API ImGuiAppNodePort* AppGraphFindPort(ImGuiAppGraph* g, int port_id, ImGuiAppNode** out_owner);
+  IMGUI_API const ImGuiAppNodePort* AppGraphFindPort(const ImGuiAppGraph* g, int port_id, const ImGuiAppNode** out_owner);
   IMGUI_API bool              AppGraphHasLayerType(const ImGuiAppGraph* g, ImGuiAppLayerType type);
   IMGUI_API void              AppNodeAddCommand(ImGuiAppNode* n, const char* name);
   IMGUI_API void              AppNodeRemoveCommand(ImGuiAppNode* n, int index);

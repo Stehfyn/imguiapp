@@ -689,24 +689,24 @@ int ImGui::PushAppColorMods(const ImGuiAppColorModDesc* mods, int count)
     return pushed;
 }
 
-void ImGuiAppItemBase::OnStylePush(const ImGuiApp* app) const
+ImGuiAppStyleScope ImGuiAppItemBase::OnStylePush(const ImGuiApp* app) const
 {
     IM_UNUSED(app);
 
-    _StylePushCount = ImGui::PushAppStyleMods(StyleMods.Data, StyleMods.Size);
-    _ColorPushCount = ImGui::PushAppColorMods(ColorMods.Data, ColorMods.Size);
+    ImGuiAppStyleScope scope;
+    scope.StyleCount = ImGui::PushAppStyleMods(StyleMods.Data, StyleMods.Size);
+    scope.ColorCount = ImGui::PushAppColorMods(ColorMods.Data, ColorMods.Size);
+    return scope;
 }
 
-void ImGuiAppItemBase::OnStylePop(const ImGuiApp* app) const
+void ImGuiAppItemBase::OnStylePop(const ImGuiApp* app, ImGuiAppStyleScope scope) const
 {
     IM_UNUSED(app);
 
-    if (_StylePushCount > 0)
-      ImGui::PopStyleVar(_StylePushCount);
-    if (_ColorPushCount > 0)
-      ImGui::PopStyleColor(_ColorPushCount);
-    _StylePushCount = 0;
-    _ColorPushCount = 0;
+    if (scope.StyleCount > 0)
+      ImGui::PopStyleVar(scope.StyleCount);
+    if (scope.ColorCount > 0)
+      ImGui::PopStyleColor(scope.ColorCount);
 }
 
 //-----------------------------------------------------------------------------
@@ -775,7 +775,7 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
 {
     for (auto& sidebar : app->Sidebars)
     {
-      sidebar->OnStylePush(app);
+      const ImGuiAppStyleScope sidebar_scope = sidebar->OnStylePush(app);
 
       if (sidebar->Window && (sidebar->Flags & ImGuiWindowFlags_AlwaysAutoResize))
       {
@@ -803,14 +803,14 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
       }
       ImGui::End();
 
-      sidebar->OnStylePop(app);
+      sidebar->OnStylePop(app, sidebar_scope);
 
       // Controls render their own windows; submit them outside the sidebar's Begin/End.
       for (auto& control : sidebar->Controls)
       {
-        control->OnStylePush(app);
+        const ImGuiAppStyleScope control_scope = control->OnStylePush(app);
         control->OnRender(app);
-        control->OnStylePop(app);
+        control->OnStylePop(app, control_scope);
       }
     }
 
@@ -821,7 +821,7 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
       if (!window->Open)
         continue;
 
-      window->OnStylePush(app);
+      const ImGuiAppStyleScope window_scope = window->OnStylePush(app);
 
       // Never fight a dock binding: SetNextWindowPos undocks a docked window by design
       // (BeginDocked's PosUndock), so placement only applies to windows with no dock home
@@ -850,21 +850,21 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
         // Style mods bracket OnRender only: they style the control's region but not its popups.
         for (auto& control : window->Controls)
         {
-          control->OnStylePush(app);
+          const ImGuiAppStyleScope control_scope = control->OnStylePush(app);
           control->OnRender(app);
-          control->OnStylePop(app);
+          control->OnStylePop(app, control_scope);
         }
       }
       ImGui::End();
 
-      window->OnStylePop(app);
+      window->OnStylePop(app, window_scope);
     }
 
     for (auto& control : app->Controls)
     {
-      control->OnStylePush(app);
+      const ImGuiAppStyleScope control_scope = control->OnStylePush(app);
       control->OnRender(app);
-      control->OnStylePop(app);
+      control->OnStylePop(app, control_scope);
     }
 }
 
@@ -1745,22 +1745,29 @@ static inline ImU32 CanvasColMulAlpha(ImU32 col, float a)
   return (col & ~IM_COL32_A_MASK) | (ca << IM_COL32_A_SHIFT);
 }
 
-static ImGuiCanvasNodeRec* CanvasFindNode(ImGuiCanvasState* c, int node_id)
+// Pool index of a node/pin by id, or -1. Pure lookup: a writer takes the index and mutates
+// through the pool it already holds; a reader uses the Find wrappers below. No lookup ever
+// hands back a writable pointer.
+static int CanvasNodeIndex(const ImGuiCanvasState* c, int node_id) { return c->NodeIdx.GetInt((ImGuiID)node_id, 0) - 1; }
+static int CanvasPinIndex(const ImGuiCanvasState* c, int pin_id)   { return c->PinIdx.GetInt((ImGuiID)pin_id, 0) - 1; }
+
+// Find = pure query: const in, const out. Never a handle to mutate through.
+static const ImGuiCanvasNodeRec* CanvasFindNode(const ImGuiCanvasState* c, int node_id)
 {
-  const int idx = c->NodeIdx.GetInt((ImGuiID)node_id, 0) - 1;
+  const int idx = CanvasNodeIndex(c, node_id);
   return idx >= 0 ? &c->Nodes.Data[idx] : nullptr;
 }
 
-static ImGuiCanvasPinRec* CanvasFindPin(ImGuiCanvasState* c, int pin_id)
+static const ImGuiCanvasPinRec* CanvasFindPin(const ImGuiCanvasState* c, int pin_id)
 {
-  const int idx = c->PinIdx.GetInt((ImGuiID)pin_id, 0) - 1;
+  const int idx = CanvasPinIndex(c, pin_id);
   return idx >= 0 ? &c->Pins.Data[idx] : nullptr;
 }
 
 static ImGuiCanvasPinRec* CanvasFindOrCreatePin(ImGuiCanvasState* c, int pin_id)
 {
-  if (ImGuiCanvasPinRec* p = CanvasFindPin(c, pin_id))
-    return p;
+  if (const int idx = CanvasPinIndex(c, pin_id); idx >= 0)
+    return &c->Pins.Data[idx];
   ImGuiCanvasPinRec rec;
   memset(&rec, 0, sizeof(rec));
   rec.Id = pin_id;
@@ -1843,8 +1850,8 @@ static float CanvasWireDistanceSq(ImVec2 p, ImVec2 a, ImVec2 c0, ImVec2 c1, ImVe
 
 static ImGuiCanvasNodeRec* CanvasFindOrCreateNode(ImGuiCanvasState* c, int node_id)
 {
-  if (ImGuiCanvasNodeRec* n = CanvasFindNode(c, node_id))
-    return n;
+  if (const int idx = CanvasNodeIndex(c, node_id); idx >= 0)
+    return &c->Nodes.Data[idx];
   ImGuiCanvasNodeRec rec;
   memset(&rec, 0, sizeof(rec));
   rec.Id = node_id;
@@ -2345,13 +2352,13 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
         delta_model = c->DragAppliedDisp;
       }
       for (int i = 0; i < c->DragNodes.Size; i++)
-        if (ImGuiCanvasNodeRec* n = CanvasFindNode(c, c->DragNodes.Data[i]))
+        if (const int idx = CanvasNodeIndex(c, c->DragNodes.Data[i]); idx >= 0)
         {
           ImVec2 p = c->DragStartPos.Data[i] + delta_model;
           if (!solid_drag && c->Style.GridSnap && c->Style.GridSpacing > 0.0f)
             p = ImVec2(ImFloor(p.x / c->Style.GridSpacing + 0.5f) * c->Style.GridSpacing,
                        ImFloor(p.y / c->Style.GridSpacing + 0.5f) * c->Style.GridSpacing);
-          n->Pos = p;
+          c->Nodes.Data[idx].Pos = p;
         }
     }
     else
@@ -2537,7 +2544,7 @@ namespace ImGui
 
   float CanvasNodeNeededWidth(const ImGuiCanvasState* c, int node_id)
   {
-    const ImGuiCanvasNodeRec* n = CanvasFindNode(const_cast<ImGuiCanvasState*>(c), node_id);
+    const ImGuiCanvasNodeRec* n = CanvasFindNode(c, node_id);
     return n != nullptr ? n->NeededW : 0.0f;
   }
 
@@ -2904,8 +2911,8 @@ namespace ImGui
     rec.Dashed = c->NextWireDashed;
     c->NextWireDashed = false;
     c->Wires.push_back(rec);
-    if (ImGuiCanvasPinRec* pa = CanvasFindPin(c, pin_a)) pa->WiredCount++;
-    if (ImGuiCanvasPinRec* pb = CanvasFindPin(c, pin_b)) pb->WiredCount++;
+    if (const int ia = CanvasPinIndex(c, pin_a); ia >= 0) c->Pins.Data[ia].WiredCount++;
+    if (const int ib = CanvasPinIndex(c, pin_b); ib >= 0) c->Pins.Data[ib].WiredCount++;
   }
 
   bool CanvasWireExists(const ImGuiCanvasState* c, int wire_id)
@@ -2918,7 +2925,7 @@ namespace ImGui
 
   ImVec2 CanvasPinPos(const ImGuiCanvasState* c, int pin_id)
   {
-    const ImGuiCanvasPinRec* p = CanvasFindPin(const_cast<ImGuiCanvasState*>(c), pin_id);
+    const ImGuiCanvasPinRec* p = CanvasFindPin(c, pin_id);
     return p != nullptr ? p->Anchor : ImVec2(0.0f, 0.0f);
   }
 
@@ -3227,7 +3234,7 @@ namespace ImGui
 
   ImVec2 CanvasNodePos(const ImGuiCanvasState* c, int node_id)
   {
-    const ImGuiCanvasNodeRec* n = CanvasFindNode(const_cast<ImGuiCanvasState*>(c), node_id);
+    const ImGuiCanvasNodeRec* n = CanvasFindNode(c, node_id);
     return n != nullptr ? n->Pos : ImVec2(0.0f, 0.0f);
   }
 
@@ -3238,13 +3245,13 @@ namespace ImGui
 
   ImVec2 CanvasNodeSize(const ImGuiCanvasState* c, int node_id)
   {
-    const ImGuiCanvasNodeRec* n = CanvasFindNode(const_cast<ImGuiCanvasState*>(c), node_id);
+    const ImGuiCanvasNodeRec* n = CanvasFindNode(c, node_id);
     return n != nullptr ? n->Size : ImVec2(0.0f, 0.0f);
   }
 
   const char* CanvasNodeTitleBadge(const ImGuiCanvasState* c, int node_id)
   {
-    const ImGuiCanvasNodeRec* n = CanvasFindNode(const_cast<ImGuiCanvasState*>(c), node_id);
+    const ImGuiCanvasNodeRec* n = CanvasFindNode(c, node_id);
     return n != nullptr ? n->Badge : "";
   }
 
@@ -9962,12 +9969,12 @@ namespace ImGui
     return nullptr;
   }
 
-  ImGuiAppNodePort* AppGraphFindPort(ImGuiAppGraph* g, int port_id, ImGuiAppNode** out_owner)
+  const ImGuiAppNodePort* AppGraphFindPort(const ImGuiAppGraph* g, int port_id, const ImGuiAppNode** out_owner)
   {
     IM_ASSERT(g != nullptr);
     for (int i = 0; i < g->Nodes.Size; i++)
     {
-      ImGuiAppNode* n = &g->Nodes.Data[i];
+      const ImGuiAppNode* n = &g->Nodes.Data[i];
       for (int p = 0; p < n->Ports.Size; p++)
         if (n->Ports.Data[p].Id == port_id)
         {
@@ -10470,15 +10477,15 @@ namespace ImGui
   // Writes the output port id to out_src, input port id to out_dst, and the derived edge kind. err on reject.
   static bool AppGraphResolveLink(ImGuiAppGraph* g, int a, int b, int* out_src, int* out_dst, ImGuiAppEdgeKind* out_kind, char* err, int err_size)
   {
-    ImGuiAppNode* na = nullptr; ImGuiAppNode* nb = nullptr;
-    ImGuiAppNodePort* pa = AppGraphFindPort(g, a, &na);
-    ImGuiAppNodePort* pb = AppGraphFindPort(g, b, &nb);
+    const ImGuiAppNode* na = nullptr; const ImGuiAppNode* nb = nullptr;
+    const ImGuiAppNodePort* pa = AppGraphFindPort(g, a, &na);
+    const ImGuiAppNodePort* pb = AppGraphFindPort(g, b, &nb);
     if (pa == nullptr || pb == nullptr) { AppSetErr(err, err_size, "unknown port"); return false; }
     if (na == nb) { AppSetErr(err, err_size, "cannot link a node to itself"); return false; }
 
     // Normalize so src is the output side, dst the input side.
-    ImGuiAppNodePort* src = nullptr; ImGuiAppNodePort* dst = nullptr;
-    ImGuiAppNode* src_owner = nullptr; ImGuiAppNode* dst_owner = nullptr;
+    const ImGuiAppNodePort* src = nullptr; const ImGuiAppNodePort* dst = nullptr;
+    const ImGuiAppNode* src_owner = nullptr; const ImGuiAppNode* dst_owner = nullptr;
     if (AppPortIsOutput(pa->Kind) && AppPortIsInput(pb->Kind)) { src = pa; dst = pb; src_owner = na; dst_owner = nb; }
     else if (AppPortIsOutput(pb->Kind) && AppPortIsInput(pa->Kind)) { src = pb; dst = pa; src_owner = nb; dst_owner = na; }
     else { AppSetErr(err, err_size, "must connect an output port to an input port"); return false; }
@@ -10496,7 +10503,7 @@ namespace ImGui
       {
         if (g->Links.Data[li].Kind != ImGuiAppEdgeKind_Data) continue;
         if (AppGraphPortOwnerId(g, g->Links.Data[li].EndAttr) != dst_owner->Id) continue;
-        ImGuiAppNode* existing_producer = nullptr;
+        const ImGuiAppNode* existing_producer = nullptr;
         AppGraphFindPort(g, g->Links.Data[li].StartAttr, &existing_producer);
         if (existing_producer && existing_producer->Ports.Size > 0)
         {
@@ -13853,7 +13860,7 @@ namespace ImGui
     for (int i = 0; i < portals.Size; i++)
     {
       const ImGuiAppScopePortal* p = &portals.Data[i];
-      ImGuiAppNode* inside_owner = nullptr;
+      const ImGuiAppNode* inside_owner = nullptr;
       const ImGuiAppNodePort* inside_port = AppGraphFindPort(g, p->InsidePortId, &inside_owner);
       const ImGuiAppNode* remote = AppGraphFindNodeConst(g, p->OutsideNodeId);
       if (inside_owner == nullptr || remote == nullptr || !AppEditorNodeWasSubmitted(g, inside_owner->Id))
@@ -15605,7 +15612,7 @@ namespace ImGui
     // owners.)
     for (int li = 0; li < g->Links.Size; li++)
     {
-      ImGuiAppNode* oa = nullptr; ImGuiAppNode* ob = nullptr;
+      const ImGuiAppNode* oa = nullptr; const ImGuiAppNode* ob = nullptr;
       AppGraphFindPort(g, g->Links.Data[li].StartAttr, &oa);
       AppGraphFindPort(g, g->Links.Data[li].EndAttr, &ob);
       if (!show_live && ((oa && oa->IsLive) || (ob && ob->IsLive)))
@@ -15795,8 +15802,8 @@ namespace ImGui
       const int hov_pin = ImGui::CanvasHoveredPin(cv);
       if (hov_pin >= 0)
       {
-        ImGuiAppNode* owner = nullptr;
-        ImGuiAppNodePort* port = AppGraphFindPort(g, hov_pin, &owner);
+        const ImGuiAppNode* owner = nullptr;
+        const ImGuiAppNodePort* port = AppGraphFindPort(g, hov_pin, &owner);
         if (port != nullptr && owner != nullptr)
         {
           if (port->Kind == ImGuiAppPortKind_DataOut)
@@ -17048,7 +17055,7 @@ namespace ImGui
         for (int i = 0; i < g->Nodes.Size; i++)
         {
           const ImGuiAppNode* sn = &g->Nodes.Data[i];
-          if (sn->Kind != ImGuiAppNodeKind_Layer || (!show_live && sn->IsLive) || !AppScopeCanEnter(const_cast<ImGuiAppNode*>(sn)))
+          if (sn->Kind != ImGuiAppNodeKind_Layer || (!show_live && sn->IsLive) || !AppScopeCanEnter(sn))
             continue;
           const char* nm = sn->Kind == ImGuiAppNodeKind_Layer && AppLayerIsCore(sn->LayerType) ? AppLayerNodeName(sn->LayerType) : sn->Draft.Name;
           if (ImGui::MenuItem(nm, nullptr, AppScopeCurrent(g) == sn->Id))
@@ -17173,8 +17180,8 @@ namespace ImGui
     }
     if (ImGui::BeginPopup("##AppGraphDropCreate"))
     {
-      ImGuiAppNode* sowner = nullptr;
-      ImGuiAppNodePort* sp = (AppGraphEditorState(g)->DropSrcAttr > 0) ? AppGraphFindPort(g, AppGraphEditorState(g)->DropSrcAttr, &sowner) : nullptr;
+      const ImGuiAppNode* sowner = nullptr;
+      const ImGuiAppNodePort* sp = (AppGraphEditorState(g)->DropSrcAttr > 0) ? AppGraphFindPort(g, AppGraphEditorState(g)->DropSrcAttr, &sowner) : nullptr;
       if (sp == nullptr || sowner == nullptr)
       {
         ImGui::CloseCurrentPopup();
@@ -17555,10 +17562,10 @@ namespace ImGui
     for (int li = 0; li < g->Links.Size; li++)
     {
       const ImGuiAppNodeLink* l = &g->Links.Data[li];
-      ImGuiAppNode* oa = nullptr;
-      ImGuiAppNode* ob = nullptr;
-      const ImGuiAppNodePort* pa = AppGraphFindPort(const_cast<ImGuiAppGraph*>(g), l->StartAttr, &oa);
-      const ImGuiAppNodePort* pb = AppGraphFindPort(const_cast<ImGuiAppGraph*>(g), l->EndAttr, &ob);
+      const ImGuiAppNode* oa = nullptr;
+      const ImGuiAppNode* ob = nullptr;
+      const ImGuiAppNodePort* pa = AppGraphFindPort(g, l->StartAttr, &oa);
+      const ImGuiAppNodePort* pb = AppGraphFindPort(g, l->EndAttr, &ob);
       if (pa == nullptr || pb == nullptr)
       {
         AppValidatePushIssue(out, -1, 2, "link %d references a missing port (dangling edge)", l->Id);
@@ -20633,7 +20640,7 @@ namespace ImGui
     // port matches), so the loaded model is always self-consistent.
     for (int li = g->Links.Size - 1; li >= 0; li--)
     {
-      ImGuiAppNode* dummy = nullptr;
+      const ImGuiAppNode* dummy = nullptr;
       const bool ok = AppGraphFindPort(g, g->Links.Data[li].StartAttr, &dummy) != nullptr
                    && AppGraphFindPort(g, g->Links.Data[li].EndAttr, &dummy) != nullptr;
       if (!ok)
@@ -22406,7 +22413,7 @@ namespace ImGui
     // 4) Rebuild live data edges (between two live nodes). Tear down old, re-derive from control deps.
     for (int li = g->Links.Size - 1; li >= 0; li--)
     {
-      ImGuiAppNode* a = nullptr; ImGuiAppNode* b = nullptr;
+      const ImGuiAppNode* a = nullptr; const ImGuiAppNode* b = nullptr;
       AppGraphFindPort(g, g->Links.Data[li].StartAttr, &a);
       AppGraphFindPort(g, g->Links.Data[li].EndAttr, &b);
       if (a && b && a->IsLive && b->IsLive)

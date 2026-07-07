@@ -339,7 +339,7 @@ struct ImGuiAppAVEncodeConfig
     const char*          OutputPath; // container path, or directory for sequence providers
     float                Fps;        // Constant mode: the frame rate. Realtime mode: nominal rate hint only
     ImGuiAppAVTimingMode Timing;
-    int                  Width; // 0 = first frame's size (fixed thereafter; resize aborts recording)
+    int                  Width;       // 0 = first frame's size (fixed thereafter; resize aborts recording)
     int                  Height;
     int                  BitrateKbps; // hint; lossless providers ignore
                                       // Metadata lives IN the video: while recording, the meta record stream (40-byte
@@ -756,22 +756,30 @@ struct ImGuiAppLayerBase : ImGuiInterface
     virtual void OnRender(const ImGuiApp*) const  = 0;
 };
 
+// Number of style/color stack entries OnStylePush pushed, handed back to the paired
+// OnStylePop so the pops balance exactly. Call-stack scratch, NOT item state: an item is
+// authored data; the push balance belongs to the one submission in flight, so passing it
+// through the caller keeps OnStylePush/Pop honestly const and re-entrancy-safe (toggling
+// Active mid-frame cannot stomp a shared count).
+struct ImGuiAppStyleScope
+{
+    int StyleCount = 0;
+    int ColorCount = 0;
+};
+
 struct ImGuiAppItemBase : ImGuiInterface
 {
-    // Authored style/color overrides applied around the item's submission. OnStylePush latches the pushed
-    // counts and OnStylePop pops those counts, so toggling Active mid-frame cannot unbalance the stacks.
+    // Authored style/color overrides applied around the item's submission.
     ImVector<ImGuiAppStyleModDesc> StyleMods;
     ImVector<ImGuiAppColorModDesc> ColorMods;
-    mutable int                    _StylePushCount = 0;
-    mutable int                    _ColorPushCount = 0;
 
     virtual void OnInitialize(ImGuiApp*) const                         = 0;
     virtual void OnShutdown(ImGuiApp*) const                           = 0;
     virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*) const = 0;
     virtual void OnUpdate(const ImGuiApp* app, float dt) const         = 0;
     virtual void OnRender(const ImGuiApp*) const                       = 0;
-    virtual void OnStylePush(const ImGuiApp*) const;
-    virtual void OnStylePop(const ImGuiApp*) const;
+    virtual ImGuiAppStyleScope OnStylePush(const ImGuiApp*) const;
+    virtual void               OnStylePop(const ImGuiApp*, ImGuiAppStyleScope) const;
 };
 
 struct ImGuiAppWindowBase : ImGuiAppItemBase
