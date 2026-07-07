@@ -1509,7 +1509,7 @@ namespace ImGui
   // What kinds compose into a drilled scope (F28): the single truth behind the interior palette and the
   // empty-scope wall caption. A live non-layer scope (window/sidebar/control/struct mirror) takes nothing
   // -- read-only -- so this returns false for every kind; the authored twin admits its members.
-  IMGUI_API bool              AppScopeKindComposable(const ImGuiAppGraph* g, int scope_id, ImGuiAppNodeKind kind);
+  IMGUI_API bool              AppScopeIsKindComposable(const ImGuiAppGraph* g, int scope_id, ImGuiAppNodeKind kind);
 
   // Origin vocabulary (F26): the one colour shared by the canvas title-bar dot, the outliner row tint and
   // the demo legend. Live and Promoted (a design control whose emitted data type matches a live node) each
@@ -1524,8 +1524,8 @@ namespace ImGui
   // (reset on load), so a freshly loaded graph reads as never-generated.
   IMGUI_API int               AppGraphSyncRevision(ImGuiAppGraph* g);
   IMGUI_API void              AppGraphMarkGenerated(ImGuiAppGraph* g);
-  IMGUI_API bool              AppGraphCodeStale(const ImGuiAppGraph* g);
-  IMGUI_API bool              AppGraphCodeFresh(const ImGuiAppGraph* g);
+  IMGUI_API bool              AppGraphIsCodeStale(const ImGuiAppGraph* g);
+  IMGUI_API bool              AppGraphIsCodeFresh(const ImGuiAppGraph* g);
 
   // Count the codegen self-diagnostics embedded in generated text (F19): the "// WARNING" comments the
   // emitter drops for degenerate constructs and the "// codegen aborted" banner. Scans the emitted C++
@@ -1559,7 +1559,7 @@ namespace ImGui
 
   IMGUI_API int                                 AppGraphEditorCommandCount();
   IMGUI_API const ImGuiAppEditorCommand*        AppGraphEditorCommandAt(int index);
-  IMGUI_API bool                                AppGraphEditorCommandAvailable(const ImGuiAppGraph* g, const ImGuiAppEditorCommand* c);
+  IMGUI_API bool                                AppGraphIsEditorCommandAvailable(const ImGuiAppGraph* g, const ImGuiAppEditorCommand* c);
 
   // Remappable input->command binding (F74, post-100 horizon). The registry Key/Mods are the factory DEFAULT
   // chord; the graph's Keymap holds sparse user overrides. Dispatch resolves a pressed chord to a command Id
@@ -1568,8 +1568,8 @@ namespace ImGui
   // and are not rebindable this phase; Space / Ctrl+P (the palette openers) are reserved.
   IMGUI_API void                                AppKeymapDefaultChord(int cmd_id, ImGuiKey* out_key, int* out_mods);
   IMGUI_API void                                AppKeymapEffectiveChord(const ImGuiAppGraph* g, int cmd_id, ImGuiKey* out_key, int* out_mods);
-  IMGUI_API bool                                AppKeymapCommandRebindable(int cmd_id);
-  IMGUI_API bool                                AppKeymapChordReserved(ImGuiKey key, int mods);
+  IMGUI_API bool                                AppKeymapIsCommandRebindable(int cmd_id);
+  IMGUI_API bool                                AppKeymapIsChordReserved(ImGuiKey key, int mods);
   IMGUI_API bool                                AppKeymapRebind(ImGuiAppGraph* g, int cmd_id, ImGuiKey key, int mods);   // false if not rebindable or the chord is reserved
   IMGUI_API void                                AppKeymapReset(ImGuiAppGraph* g, int cmd_id);                            // drop the override (back to the default)
   IMGUI_API void                                AppKeymapResetAll(ImGuiAppGraph* g);
@@ -2249,7 +2249,7 @@ namespace ImGui
   IMGUI_API void              CanvasEdgePin(ImGuiCanvasState* c, int pin_id, int kind /*In|Out*/, int shape, int side);
   IMGUI_API void              CanvasNextWireDashed(ImGuiCanvasState* c);   // the next CanvasWire draws dashed (optional dependency)
   IMGUI_API void              CanvasWire(ImGuiCanvasState* c, int wire_id, int pin_a, int pin_b, ImU32 color /*= 0 -> style*/);
-  IMGUI_API bool              CanvasWireExists(const ImGuiCanvasState* c, int wire_id);      // wire submitted this frame (query after CanvasEnd)
+  IMGUI_API bool              CanvasHasWire(const ImGuiCanvasState* c, int wire_id);      // wire submitted this frame (query after CanvasEnd)
   IMGUI_API ImVec2            CanvasPinPos(const ImGuiCanvasState* c, int pin_id);           // model
 
   // ---- selection + hover ------------------------------------------------------------------------
@@ -2277,7 +2277,7 @@ namespace ImGui
   // DLL preview surface (F78)
   // True when a pinned cl.exe + its environment were located on this box (cached). When false,
   // AppPreviewDllCreate returns null with a note and the composer uses the interpreter.
-  IMGUI_API bool                AppPreviewDllToolsetAvailable();
+  IMGUI_API bool                AppPreviewDllIsToolsetAvailable();
 
   // Emit the module for `graph`, compile it into `scratch_dir` (created if absent) as a self-contained DLL,
   // load it, verify its ImGuiAppPreview_ABI() matches the host, and create the running instance. Returns

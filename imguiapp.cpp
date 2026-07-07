@@ -2915,7 +2915,7 @@ namespace ImGui
     if (const int ib = CanvasPinIndex(c, pin_b); ib >= 0) c->Pins.Data[ib].WiredCount++;
   }
 
-  bool CanvasWireExists(const ImGuiCanvasState* c, int wire_id)
+  bool CanvasHasWire(const ImGuiCanvasState* c, int wire_id)
   {
     for (int i = 0; i < c->Wires.Size; i++)
       if (c->Wires.Data[i].Id == wire_id)
@@ -3965,7 +3965,7 @@ namespace
       // Publish the frame's derived values once; GraphDoc updates first (push order), so all consumers see the same values.
       ImGui::AppGraphSyncRevision(&data->Graph);   // one signature fold per frame -> Revision pulse + _SigCache
       data->FrameSig = data->Graph._SigCache;
-      if (data->WriteMsg[0] && ImGui::AppGraphCodeStale(&data->Graph))
+      if (data->WriteMsg[0] && ImGui::AppGraphIsCodeStale(&data->Graph))
         data->WriteMsg[0] = 0;   // the "wrote/copied" confirmation stops being true the frame the graph diverges from disk
       {
         const ImVector<ImGuiAppGraphIssue>* issues = ImGui::AppGraphIssuesCached(&data->Graph);
@@ -4701,7 +4701,7 @@ namespace
         // -- produce: green = header matches graph; amber = graph changed; red = errors (writing stays allowed).
         cap_x[3] = ImGui::GetCursorPosX();
         const int   nerr  = doc->NumErrors;
-        const bool  fresh = ImGui::AppGraphCodeFresh(&doc->Graph);
+        const bool  fresh = ImGui::AppGraphIsCodeFresh(&doc->Graph);
         // Stable ### id: the visible label swings Generate/Generated with health, but the widget keeps one
         // identity (no focus/press churn across states; test-addressable).
         const char* gen_label = nerr > 0 ? ICON_FA_TRIANGLE_EXCLAMATION "  Generate###generate" : fresh ? ICON_FA_CHECK "  Generated###generate" : ICON_FA_FILE_EXPORT "  Generate###generate";
@@ -4847,7 +4847,7 @@ namespace
 
         // -- observe (right-aligned): bootstrap-state readout + panel toggles. The Live eye
         // always reflects THE running app -- there is exactly one.
-        const bool  unwritten = doc->Graph.GenSignature != 0 && ImGui::AppGraphCodeStale(&doc->Graph);
+        const bool  unwritten = doc->Graph.GenSignature != 0 && ImGui::AppGraphIsCodeStale(&doc->Graph);
         const bool  stale     = doc->NumUnbuilt > 0 || unwritten;
         char        sync_lbl[64];
         if (stale)
@@ -5257,7 +5257,7 @@ namespace
                               data->HasMirror ? (data->MirrorInit ? "composed" : "uncomposed") : "no mirror");
 
         // freshness -> generate.
-        const bool fresh = ImGui::AppGraphCodeFresh(&doc_dep->Graph);
+        const bool fresh = ImGui::AppGraphIsCodeFresh(&doc_dep->Graph);
         char frz[48];
         ImFormatString(frz, IM_ARRAYSIZE(frz), "%s  %s", fresh ? ICON_FA_CIRCLE_CHECK : ICON_FA_FILE_EXPORT, fresh ? "fresh" : "generate");
         if (zone(A_fresh, slot, "###zfresh", frz, ComposerPillColor(fresh ? ComposerPill_Ok : ComposerPill_Warn)))
@@ -5439,7 +5439,7 @@ namespace
 
     if (ImGui::AppInspectorSection("##psec_doc", ICON_FA_FILE_LINES, "Document", nullptr, nullptr))
     {
-      const bool fresh = ImGui::AppGraphCodeFresh(&doc->Graph);
+      const bool fresh = ImGui::AppGraphIsCodeFresh(&doc->Graph);
       ImGui::TextDisabled("graph");
       ImGui::SameLine(label_w);
       ImGui::TextUnformatted(doc->GraphPath);
@@ -5957,7 +5957,7 @@ namespace
                 ImGui::AlignTextToFramePadding();
                 // Header context label. Amber when the shown code is ahead of the file on disk (never
                 // written, or diverged since); neutral when fresh, empty, or diffing.
-                const bool code_fresh = ImGui::AppGraphCodeFresh(&doc->Graph);
+                const bool code_fresh = ImGui::AppGraphIsCodeFresh(&doc->Graph);
                 const bool code_ahead = !code_fresh && data->HasCode && !data->DiffMode;
                 if (data->DiffMode)
                   ImGui::TextDisabled("Diff vs saved graph");
@@ -6026,7 +6026,7 @@ namespace
                   ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthStretch, 0.15f);
                   ImGui::TableSetupColumn("##act", ImGuiTableColumnFlags_WidthStretch, 0.25f);
                   ImGui::TableHeadersRow();
-                  const bool fresh = ImGui::AppGraphCodeFresh(&doc->Graph);
+                  const bool fresh = ImGui::AppGraphIsCodeFresh(&doc->Graph);
                   for (int i = 0; i < data->ProjFiles.Size; i++)
                   {
                     const EditorBodyData::ProjFile& f = data->ProjFiles.Data[i];
@@ -6090,7 +6090,7 @@ namespace
                 // F78.5 DLL backend: the compiled real program. Created lazily when selected AND a toolset
                 // exists; a signature change recompiles + hot-swaps (preserve-by-label). A compile/load failure
                 // leaves PreviewDllErr set and the panel renders the interpreter surface instead.
-                const bool dll_toolset = ImGui::AppPreviewDllToolsetAvailable();
+                const bool dll_toolset = ImGui::AppPreviewDllIsToolsetAvailable();
                 if (ed->PreviewUseDll && dll_toolset)
                 {
                   if (ed->PreviewDll == nullptr)
@@ -6969,7 +6969,7 @@ namespace ImGui
     s->Dll = nullptr;
   }
 
-  bool AppPreviewDllToolsetAvailable()
+  bool AppPreviewDllIsToolsetAvailable()
   {
     return AppPreviewDllVcvars()[0] != 0;
   }
@@ -6979,7 +6979,7 @@ namespace ImGui
     IM_ASSERT(graph != nullptr);
     if (err != nullptr && err_size > 0)
       err[0] = 0;
-    if (!AppPreviewDllToolsetAvailable())
+    if (!AppPreviewDllIsToolsetAvailable())
     {
       if (err != nullptr) ImFormatString(err, err_size, "no MSVC toolset -- interpreter fallback");
       return nullptr;
@@ -7277,7 +7277,7 @@ namespace ImGui
 
 #else   // !IMGUIX_PREVIEW_DLL_ENABLED -- no toolset baked in; the composer uses the interpreter.
 
-  bool                AppPreviewDllToolsetAvailable() { return false; }
+  bool                AppPreviewDllIsToolsetAvailable() { return false; }
   ImGuiAppPreviewDll* AppPreviewDllCreate(const ImGuiAppGraph*, const char*, char* err, int err_size)
   {
     if (err != nullptr && err_size > 0)
@@ -7842,7 +7842,7 @@ namespace ImGui
 
   // True if the mouse is over [mn,mx] within the current window. Manual hit-test so the flat
   // buttons cannot be blocked by an overlapping ImGui item.
-  static bool AppPtInRectHovered(ImVec2 mn, ImVec2 mx)
+  static bool AppIsPtInRectHovered(ImVec2 mn, ImVec2 mx)
   {
     // AllowWhenBlockedByActiveItem: a press makes the item under the cursor active before this runs, and
     // plain IsWindowHovered() reports false while any item is active -- exactly the click frame. Stray
@@ -7858,7 +7858,7 @@ namespace ImGui
     const ImVec2 mn = ImGui::GetCursorScreenPos();
     const ImVec2 mx(mn.x + sz, mn.y + sz);
     ImGui::Dummy(ImVec2(sz, sz));   // reserve layout only -- interaction is a manual hit-test below
-    const bool hovered = AppPtInRectHovered(mn, mx);
+    const bool hovered = AppIsPtInRectHovered(mn, mx);
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float r = sz * 0.22f;
@@ -7887,7 +7887,7 @@ namespace ImGui
     const ImVec2 mn = ImGui::GetCursorScreenPos();
     const ImVec2 mx(mn.x + w, mn.y + h);
     ImGui::Dummy(ImVec2(w, h));   // reserve layout only -- interaction is a manual hit-test below
-    const bool hov = AppPtInRectHovered(mn, mx);
+    const bool hov = AppIsPtInRectHovered(mn, mx);
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float r = h * 0.24f;
@@ -8670,7 +8670,7 @@ namespace ImGui
   }
 
   // Does a source scalar type fit an operand class? Reuses the AppEventExprCheck predicates (Unknown fits all).
-  static bool AppOpTypeFits(int cls, int t)
+  static bool AppOpIsTypeCompatible(int cls, int t)
   {
     switch (cls)
     {
@@ -8789,7 +8789,7 @@ namespace ImGui
   // [SECTION] Phase-coherent geometry cache
   //-----------------------------------------------------------------------------
 
-  static bool AppEditorNodeWasSubmitted(const ImGuiAppGraph* g, int node_id);
+  static bool AppEditorNodeIsSubmitted(const ImGuiAppGraph* g, int node_id);
 
   // The Composer's single canvas instance, created on first use. The engine stores node geometry in
   // MODEL units and measures it the same frame it renders (imguiapp_canvas.h).
@@ -8885,7 +8885,7 @@ namespace ImGui
   static const float kAppGraphWindowSectionIndent = 24.0f;   // section inset from the layer column's left edge (model units)
   static const float kAppGraphWindowSectionGap = 16.0f;      // gap between stacked nodes and below the layer node (model units)
 
-  static bool AppNodeHiddenByCollapse(const ImGuiAppGraph* g, int id);                     // fwd (defined with the scope helpers)
+  static bool AppNodeIsHiddenByCollapse(const ImGuiAppGraph* g, int id);                     // fwd (defined with the scope helpers)
 
   // The nodes the section contains, in seat order: sidebars first (they execute first, consuming
   // viewport workrects), then windows, each population in graph order (stable across frames).
@@ -8902,7 +8902,7 @@ namespace ImGui
           continue;
         if (!show_live && n->IsLive)
           continue;
-        if (AppNodeHiddenByCollapse(g, n->Id))
+        if (AppNodeIsHiddenByCollapse(g, n->Id))
           continue;
         out_node_ids->push_back(n->Id);
       }
@@ -8940,7 +8940,7 @@ namespace ImGui
   }
 
 #ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
-  static bool AppGraphPlacementOccupied(const ImGuiAppGraph* g, const ImGuiAppNode* self, const ImVec2& pos)
+  static bool AppGraphIsPlacementOccupied(const ImGuiAppGraph* g, const ImGuiAppNode* self, const ImVec2& pos)
   {
     const float margin = 28.0f;
     const ImVec2 ss = AppLayoutNodeSize(g, self);
@@ -9004,7 +9004,7 @@ namespace ImGui
       for (int row = 0; row < 96; row++)
       {
         const ImVec2 pos = ImVec2(start.x + (float)pass * 240.0f, start.y + (float)row * step);
-        if (!AppGraphPlacementOccupied(g, n, pos))
+        if (!AppGraphIsPlacementOccupied(g, n, pos))
           return pos;
       }
     }
@@ -9432,7 +9432,7 @@ namespace ImGui
     return n;
   }
 
-  static int AppNodePortByName(const ImGuiAppNode* n, const char* name);   // fwd
+  static int AppNodeFindPortByName(const ImGuiAppNode* n, const char* name);   // fwd
   static bool AppLayerIsCore(ImGuiAppLayerType t);                         // fwd (defined by the editor section)
 
   // The five core layers are the guaranteed framework foundation every app builds on. Add any
@@ -9484,8 +9484,8 @@ namespace ImGui
       const ImGuiAppNode* c = AppGraphFindNode(g, ctrl_id);
       if (s != nullptr && c != nullptr)
       {
-        const int sout = AppNodePortByName(s, "type");
-        const int cin  = AppNodePortByName(c, "deps");
+        const int sout = AppNodeFindPortByName(s, "type");
+        const int cin  = AppNodeFindPortByName(c, "deps");
         if (sout != 0 && cin != 0)
         {
           ImGuiAppNodeLink l;
@@ -9502,7 +9502,7 @@ namespace ImGui
   // Duplicate a design node (Control / Window / Sidebar / Custom layer): clone its authored props into a fresh
   // node, offset from the source. Core layers (the frame's phases, one each) and live mirrors are not duplicable.
   static int    AppScopeCurrent(const ImGuiAppGraph* g);   // fwd (scope section)
-  static bool   AppNodeInScope(const ImGuiAppGraph* g, int id);   // fwd
+  static bool   AppNodeIsInScope(const ImGuiAppGraph* g, int id);   // fwd
   static int    AppGraphParentOf(const ImGuiAppGraph* g, int child_node_id);   // fwd
   static ImVec2 AppNodeScopePos(const ImGuiAppGraph* g, const ImGuiAppNode* n);   // fwd
   static void   AppNodeScopePosStore(ImGuiAppGraph* g, int node_id, const ImVec2& pos);   // fwd
@@ -9552,7 +9552,7 @@ namespace ImGui
     const int parent = AppGraphParentOf(g, src_id);
     if (parent >= 0)
       AppGraphReparent(g, n_id, parent);
-    if (AppScopeCurrent(g) >= 0 && AppNodeInScope(g, n_id))
+    if (AppScopeCurrent(g) >= 0 && AppNodeIsInScope(g, n_id))
       AppNodeScopePosStore(g, n_id, AppNodeScopePos(g, AppGraphFindNode(g, src_id)) + ImVec2(40.0f, 40.0f));
     const int ni = AppGraphFindNodeIndex(g, n_id);
     return ni >= 0 ? &g->Nodes.Data[ni] : nullptr;
@@ -9565,7 +9565,7 @@ namespace ImGui
   static bool AppGraphClipboardHasData(const ImGuiAppGraph* g);   // fwd
   static void AppGraphCollectSubtree(const ImGuiAppGraph* g, int root_id, ImVector<int>* ids);   // fwd
   static int  AppNodeFirstPortKind(const ImGuiAppNode* n, ImGuiAppPortKind kind);   // fwd
-  static bool AppIdInSet(const ImVector<int>& s, int id);   // fwd
+  static bool AppIsIdInSet(const ImVector<int>& s, int id);   // fwd
 
   // PersistData and TempData are both structs. A "field list" is one of them on any owner -- list 0 = PersistData
   // (Struct nodes + Control), list 1 = TempData (Control only). Everything below is generic over (owner, list).
@@ -9575,7 +9575,7 @@ namespace ImGui
   }
 
   // A node's port id matching a name (0 if none). Used for the control's named persist/temp tie pins.
-  static int AppNodePortByName(const ImGuiAppNode* n, const char* name)
+  static int AppNodeFindPortByName(const ImGuiAppNode* n, const char* name)
   {
     for (int p = 0; p < n->Ports.Size; p++)
     {
@@ -9845,7 +9845,7 @@ namespace ImGui
     // Anchor per altitude (root cluster in GridPos, interior cluster in the scope's placements).
     const int exp_scope = AppScopeCurrent(g);
     const ImVec2 cspos = exp_scope >= 0 ? AppNodeScopePos(g, c) : cpos;
-    const int control_in = AppNodePortByName(c, temp ? "temp" : "persist");   // dedicated tie pin, not "deps"
+    const int control_in = AppNodeFindPortByName(c, temp ? "temp" : "persist");   // dedicated tie pin, not "deps"
 
     ImGuiAppNode* s = AppGraphAddNode(g, ImGuiAppNodeKind_Struct, sname);
     s->Draft.PersistFields = fields;
@@ -10057,7 +10057,7 @@ namespace ImGui
     return nullptr;
   }
 
-  static bool AppNodeCommandNameUsed(const ImGuiAppNode* n, const char* name, int ignore_index = -1)
+  static bool AppNodeHasCommandName(const ImGuiAppNode* n, const char* name, int ignore_index = -1)
   {
     if (n == nullptr || name == nullptr || name[0] == 0)
       return false;
@@ -10079,11 +10079,11 @@ namespace ImGui
   {
     char name[IM_LABEL_SIZE];
     ImStrncpy(name, (base_name && base_name[0]) ? base_name : "NewCommand", IM_ARRAYSIZE(name));
-    if (AppNodeCommandNameUsed(n, name))
+    if (AppNodeHasCommandName(n, name))
       for (int suffix = 2; suffix < 1000; suffix++)
       {
         ImFormatString(name, IM_ARRAYSIZE(name), "%s%d", (base_name && base_name[0]) ? base_name : "NewCommand", suffix);
-        if (!AppNodeCommandNameUsed(n, name))
+        if (!AppNodeHasCommandName(n, name))
           break;
       }
     AppNodeAddCommand(n, name);
@@ -10108,7 +10108,7 @@ namespace ImGui
     {
       ImGui::PushID(i);
       AppBlInputText("##cmd", n->Commands.Data[i].Name, IM_ARRAYSIZE(n->Commands.Data[i].Name), ImGui::GetFontSize() * 16.0f);
-      if (AppNodeCommandNameUsed(n, n->Commands.Data[i].Name, i))
+      if (AppNodeHasCommandName(n, n->Commands.Data[i].Name, i))
       {
         ImGui::SameLine();
         ImGui::TextDisabled("duplicate");
@@ -10159,7 +10159,7 @@ namespace ImGui
           if (def == nullptr)
             continue;
           const bool selected = strcmp(current, def->Name) == 0;
-          const bool taken = AppNodeCommandNameUsed(n, def->Name, i);
+          const bool taken = AppNodeHasCommandName(n, def->Name, i);
           if (taken) ImGui::BeginDisabled();
           if (ImGui::Selectable(def->Name, selected) && !taken)
             ImStrncpy(n->Commands.Data[i].Name, def->Name, IM_ARRAYSIZE(n->Commands.Data[i].Name));
@@ -10179,7 +10179,7 @@ namespace ImGui
     for (int d = 0; d < def_count; d++)
     {
       const ImGuiAppCommandDesc* def = AppGraphCommandDefinitionAt(g, d);
-      if (def != nullptr && !AppNodeCommandNameUsed(n, def->Name))
+      if (def != nullptr && !AppNodeHasCommandName(n, def->Name))
       {
         first_available = def;
         break;
@@ -10441,7 +10441,7 @@ namespace ImGui
 
   // Does 'from' reach 'to' along existing data edges (producer -> consumer)? Used to reject a new edge
   // that would close a cycle. Iteration capped in case the model is ever inconsistent.
-  static bool AppGraphDataReaches(const ImGuiAppGraph* g, int from_node, int to_node)
+  static bool AppGraphIsReachable(const ImGuiAppGraph* g, int from_node, int to_node)
   {
     if (from_node == to_node)
       return true;
@@ -10525,7 +10525,7 @@ namespace ImGui
         }
       }
       // Cycle guard: edge is producer->consumer. Illegal if consumer already reaches producer.
-      if (AppGraphDataReaches(g, dst_owner->Id, src_owner->Id))
+      if (AppGraphIsReachable(g, dst_owner->Id, src_owner->Id))
       { AppSetErr(err, err_size, "would create a dependency cycle"); return false; }
 
       // Op operand pins are typed (F54): the source's scalar type must fit the operator's operand class -- the
@@ -10540,7 +10540,7 @@ namespace ImGui
           if (dst_owner->Ports.Data[pp].Kind == ImGuiAppPortKind_DataIn)
             idx++;
         }
-        if (!AppOpTypeFits(AppOpOperandClass(dst_owner->TypeName, idx), AppOpSourceType(src_owner, src)))
+        if (!AppOpIsTypeCompatible(AppOpOperandClass(dst_owner->TypeName, idx), AppOpSourceType(src_owner, src)))
         { AppSetErr(err, err_size, "operand type does not fit this operator"); return false; }
       }
 
@@ -11040,7 +11040,7 @@ namespace ImGui
   }
 
   // The data link feeding a given consumer node (its DataIn), if any -- used to host its binding editor.
-  static int AppGraphIncomingDataLink(const ImGuiAppGraph* g, int consumer_node_id)
+  static int AppGraphFindIncomingDataLink(const ImGuiAppGraph* g, int consumer_node_id)
   {
     for (int li = 0; li < g->Links.Size; li++)
       if (g->Links.Data[li].Kind == ImGuiAppEdgeKind_Data && AppGraphPortOwnerId(g, g->Links.Data[li].EndAttr) == consumer_node_id)
@@ -11102,7 +11102,7 @@ namespace ImGui
   // meaningful (the engine keeps last-known geometry for evicted nodes, but decorations must not frame
   // nodes that are currently hidden). Single editor instance, same assumption as the other statics.
 
-  static bool AppEditorNodeWasSubmitted(const ImGuiAppGraph* g, int node_id)
+  static bool AppEditorNodeIsSubmitted(const ImGuiAppGraph* g, int node_id)
   {
     for (int i = 0; i < AppGraphEditorState(g)->PoolIds.Size; i++)
       if (AppGraphEditorState(g)->PoolIds.Data[i] == node_id)
@@ -11111,7 +11111,7 @@ namespace ImGui
   }
 
   static bool AppTreeRowIcon(const char* icon, ImVec2 center, float r, ImU32 col, ImDrawList* dl_override = nullptr);   // fwd (defined with the outliner)
-  static bool AppNodeHiddenByCollapse(const ImGuiAppGraph* g, int id);                                                  // fwd (defined with the scope helpers)
+  static bool AppNodeIsHiddenByCollapse(const ImGuiAppGraph* g, int id);                                                  // fwd (defined with the scope helpers)
 
   // Status hint written by ShowAppGraphEditor, rendered by the host's status bar (AppGraphStatusHint).
 
@@ -11281,7 +11281,7 @@ namespace ImGui
         continue;
       if (!show_live && n->IsLive)
         continue;
-      if (!n->HasGridPos && !AppEditorNodeWasSubmitted(g, n->Id))
+      if (!n->HasGridPos && !AppEditorNodeIsSubmitted(g, n->Id))
         continue;   // neither a settled model position nor a first measurement yet
       const ImVec2 pos = ImGui::CanvasToScreen(cv, n->GridPos);
       ImVec2 m;
@@ -11331,9 +11331,9 @@ namespace ImGui
         const ImGuiAppNode* n = &g->Nodes.Data[i];
         if (n->Kind != ImGuiAppNodeKind_Window && n->Kind != ImGuiAppNodeKind_Sidebar)
           continue;
-        if ((!show_live && n->IsLive) || AppNodeHiddenByCollapse(g, n->Id))
+        if ((!show_live && n->IsLive) || AppNodeIsHiddenByCollapse(g, n->Id))
           continue;
-        if (!n->HasGridPos && !AppEditorNodeWasSubmitted(g, n->Id))
+        if (!n->HasGridPos && !AppEditorNodeIsSubmitted(g, n->Id))
           continue;
         const ImVec2 pos = ImGui::CanvasToScreen(cv, n->GridPos);
         ImVec2 m;
@@ -12353,7 +12353,7 @@ namespace ImGui
   }
 
 #endif // IMGUIX_DISABLE_TOOLS
-  static bool AppGraphHostsControl(const ImGuiAppGraph* g, int host_id);   // fwd
+  static bool AppGraphHasControl(const ImGuiAppGraph* g, int host_id);   // fwd
 
   // Node color by kind, shared by the outliner rows and the canvas group frames.
   static ImU32 AppKindColor(ImGuiAppNodeKind k)
@@ -12512,7 +12512,7 @@ namespace ImGui
   // tree). At root everything is in scope; the owner itself is NOT a member (entering a group shows its contents,
   // not the group node). A layer scope matches by layer TYPE, so a live-mirror layer and an authored twin open
   // the same scope. The Command layer is a cross-cutting view: its members are the controls emitting commands.
-  static bool AppNodeInScope(const ImGuiAppGraph* g, int id)
+  static bool AppNodeIsInScope(const ImGuiAppGraph* g, int id)
   {
     const int top = AppScopeCurrent(g);
     if (top < 0)
@@ -12581,7 +12581,7 @@ namespace ImGui
         const int id = g->ViewScope.Data[i];
         const int saved = g->ViewScope.Size;
         g->ViewScope.Size = i;
-        const bool member = AppNodeInScope(g, id);
+        const bool member = AppNodeIsInScope(g, id);
         g->ViewScope.Size = saved;
         if (!member)
         {
@@ -12612,7 +12612,7 @@ namespace ImGui
 
   // Kinds that compose into a drilled scope: what the interior palettes offer, and what a creation
   // road may adopt. Live non-layer scopes take nothing (the mirror is read-only; Promote authors).
-  bool AppScopeKindComposable(const ImGuiAppGraph* g, int scope_id, ImGuiAppNodeKind kind)
+  bool AppScopeIsKindComposable(const ImGuiAppGraph* g, int scope_id, ImGuiAppNodeKind kind)
   {
     const ImGuiAppNode* s = AppGraphFindNode(g, scope_id);
     if (s == nullptr)
@@ -12647,13 +12647,13 @@ namespace ImGui
 
   // True if this node should NOT be submitted to the canvas: outside the current drill-down scope,
   // or an ancestor group is collapsed. Eye-hidden nodes STAY submitted -- they render with the
-  // disabled look (AppNodeCanvasOff) instead of vanishing.
-  static bool AppNodeHiddenByCollapse(const ImGuiAppGraph* g, int id)
+  // disabled look (AppNodeIsCanvasOff) instead of vanishing.
+  static bool AppNodeIsHiddenByCollapse(const ImGuiAppGraph* g, int id)
   {
     const ImGuiAppNode* self = AppGraphFindNode(g, id);
     if (self == nullptr)
       return false;
-    if (!AppNodeInScope(g, id))
+    if (!AppNodeIsInScope(g, id))
       return true;
     for (int owner = AppGroupOwnerOf(g, id); owner >= 0; owner = AppGroupOwnerOf(g, owner))
     {
@@ -12666,7 +12666,7 @@ namespace ImGui
 
   // Disabled look: the node (or a containment ancestor) is eye-hidden, or its enclosing live
   // window is closed (the display layer renders none of it).
-  static bool AppNodeCanvasOff(const ImGuiAppGraph* g, int id)
+  static bool AppNodeIsCanvasOff(const ImGuiAppGraph* g, int id)
   {
     for (int cur = id; cur >= 0; cur = AppGroupOwnerOf(g, cur))
     {
@@ -12689,12 +12689,12 @@ namespace ImGui
   static void AppGroupAccumulate(const ImGuiAppGraph* g, int owner_id, bool show_live, ImVec2* mn, ImVec2* mx)
   {
     const ImGuiAppNode* n = AppGraphFindNode(g, owner_id);
-    if (n == nullptr || (!show_live && n->IsLive) || AppNodeHiddenByCollapse(g, owner_id))
+    if (n == nullptr || (!show_live && n->IsLive) || AppNodeIsHiddenByCollapse(g, owner_id))
       return;
-    if (!n->HasGridPos && !AppEditorNodeWasSubmitted(g, owner_id))
+    if (!n->HasGridPos && !AppEditorNodeIsSubmitted(g, owner_id))
       return;   // neither a settled model position nor a measurement yet (first-ever frame)
     // Engine position: the input FSM moves it before submission; GridPos is last frame's read-back.
-    const ImVec2 p = AppEditorNodeWasSubmitted(g, owner_id) ? AppCanvasNodePos(g, owner_id) : n->GridPos;
+    const ImVec2 p = AppEditorNodeIsSubmitted(g, owner_id) ? AppCanvasNodePos(g, owner_id) : n->GridPos;
     ImVec2 d;
     if (!AppNodeModelSize(g, owner_id, &d))
       d = AppLayoutNodeSize(g, n);
@@ -12855,7 +12855,7 @@ namespace ImGui
         continue;                                 // windows are owned by the section packer
       if (!show_live && n->IsLive)
         continue;
-      if (!AppNodeInScope(g, n->Id))              // scoped tidy arranges only what the scope shows
+      if (!AppNodeIsInScope(g, n->Id))              // scoped tidy arranges only what the scope shows
         continue;
 
       bool is_root = true;
@@ -12996,7 +12996,7 @@ namespace ImGui
         for (int i = 0; i < g->Nodes.Size; i++)
         {
           const ImGuiAppNodeKind want = pass == 0 ? ImGuiAppNodeKind_Window : ImGuiAppNodeKind_Sidebar;
-          if (g->Nodes.Data[i].Kind == want && AppNodeInScope(g, g->Nodes.Data[i].Id))
+          if (g->Nodes.Data[i].Kind == want && AppNodeIsInScope(g, g->Nodes.Data[i].Id))
             out->push_back(g->Nodes.Data[i].Id);
         }
     }
@@ -13007,16 +13007,16 @@ namespace ImGui
       char err[8];
       if (AppGraphTopoOrder(g, &order, err, IM_ARRAYSIZE(err)))
         for (int i = 0; i < order.Size; i++)
-          if (AppNodeInScope(g, order.Data[i]))
+          if (AppNodeIsInScope(g, order.Data[i]))
             out->push_back(order.Data[i]);
       for (int i = 0; i < g->Nodes.Size; i++)
-        if (g->Nodes.Data[i].IsLive && g->Nodes.Data[i].Kind == ImGuiAppNodeKind_Control && AppNodeInScope(g, g->Nodes.Data[i].Id))
+        if (g->Nodes.Data[i].IsLive && g->Nodes.Data[i].Kind == ImGuiAppNodeKind_Control && AppNodeIsInScope(g, g->Nodes.Data[i].Id))
           out->push_back(g->Nodes.Data[i].Id);
     }
     else if (tn->Kind == ImGuiAppNodeKind_Layer && tn->LayerType == ImGuiAppLayerType_Command)
     {
       for (int i = 0; i < g->Nodes.Size; i++)
-        if (g->Nodes.Data[i].Kind == ImGuiAppNodeKind_Control && AppNodeInScope(g, g->Nodes.Data[i].Id))
+        if (g->Nodes.Data[i].Kind == ImGuiAppNodeKind_Control && AppNodeIsInScope(g, g->Nodes.Data[i].Id))
           out->push_back(g->Nodes.Data[i].Id);
     }
     else if (tn->Kind == ImGuiAppNodeKind_Window || tn->Kind == ImGuiAppNodeKind_Sidebar)
@@ -13039,7 +13039,7 @@ namespace ImGui
 
   // F60: does this member id list place the core phase layers out of their fixed enum order? Same rule the
   // load-time validation (f) enforces -- the write gestures refuse a move that would trip it.
-  static bool AppScopeOrderPermutesCore(const ImGuiAppGraph* g, const ImVector<int>& ids)
+  static bool AppScopeOrderIsCorePermuted(const ImGuiAppGraph* g, const ImVector<int>& ids)
   {
     int prev_rank = -1;
     for (int k = 0; k < ids.Size; k++)
@@ -13095,7 +13095,7 @@ namespace ImGui
     const int id = seq.Data[cur];
     seq.erase(seq.Data + cur);
     seq.insert(seq.Data + new_slot, id);
-    if (AppScopeOrderPermutesCore(g, seq))
+    if (AppScopeOrderIsCorePermuted(g, seq))
       return false;   // core-layer invariant: refuse, leave the record untouched
     AppScopeOrderStore(g, scope, seq);
     return true;
@@ -13346,7 +13346,7 @@ namespace ImGui
     if (addedi < 0 || owner == nullptr)
       return;
     ImGuiAppNode* added = &g->Nodes.Data[addedi];
-    if (!AppScopeKindComposable(g, top, added->Kind))
+    if (!AppScopeIsKindComposable(g, top, added->Kind))
     {
       AppGraphNotify(g, "a %s cannot compose into %s -- created at the composition root",
                      AppNodeKindName(added->Kind), owner->Draft.Name[0] ? owner->Draft.Name : AppNodeKindName(owner->Kind));
@@ -13386,7 +13386,7 @@ namespace ImGui
       const ImGuiAppNodeKind kind = g->Nodes.Data[i].Kind;
       if (AppGraphParentOf(g, id) >= 0)
         continue;   // interior of the imported subtree: containment came with it
-      if (!AppScopeKindComposable(g, top, kind))
+      if (!AppScopeIsKindComposable(g, top, kind))
       {
         refused++;
         continue;
@@ -13402,7 +13402,7 @@ namespace ImGui
     for (int i = first_index; i < g->Nodes.Size; i++)
     {
       ImGuiAppNode* n = &g->Nodes.Data[i];
-      if (AppNodeInScope(g, n->Id))
+      if (AppNodeIsInScope(g, n->Id))
         AppNodeScopePosStore(g, n->Id, anchor + (n->GridPos - mn));
       n->GridPos += root_shift;
       n->_NeedsPlace = true;
@@ -13501,7 +13501,7 @@ namespace ImGui
 
   // Walls render only for scopes whose owner has a card silhouette to become the room
   // (window/sidebar first slice; layer scopes keep their phase bands).
-  static bool AppScopeWallsWanted(const ImGuiAppGraph* g)
+  static bool AppScopeIsWallsShown(const ImGuiAppGraph* g)
   {
     const int top = AppScopeCurrent(g);
     const ImGuiAppNode* tn = top >= 0 ? AppGraphFindNode(g, top) : nullptr;
@@ -13537,7 +13537,7 @@ namespace ImGui
     const bool was_valid = ed->ScopeWallValid;
     ed->ScopeWallValid = false;
     ed->ScopeVoidValid = false;
-    if (!AppScopeWallsWanted(g))
+    if (!AppScopeIsWallsShown(g))
       return;
     const int top = AppScopeCurrent(g);
     const ImGuiAppNode* tn = AppGraphFindNode(g, top);
@@ -13551,13 +13551,13 @@ namespace ImGui
     for (int i = 0; i < g->Nodes.Size; i++)
     {
       const ImGuiAppNode* n = &g->Nodes.Data[i];
-      if ((!show_live && n->IsLive) || AppNodeHiddenByCollapse(g, n->Id))
+      if ((!show_live && n->IsLive) || AppNodeIsHiddenByCollapse(g, n->Id))
         continue;
-      if (layer_scope && !AppNodeInScope(g, n->Id))
+      if (layer_scope && !AppNodeIsInScope(g, n->Id))
         continue;   // a layer's walls bound only the layer's members (cross-cutting membership, not a subtree)
       if (n->_NeedsPlace)
         return;
-      const ImVec2 p = AppEditorNodeWasSubmitted(g, n->Id) ? AppCanvasNodePos(g, n->Id) : AppNodeScopePos(g, n);
+      const ImVec2 p = AppEditorNodeIsSubmitted(g, n->Id) ? AppCanvasNodePos(g, n->Id) : AppNodeScopePos(g, n);
       ImVec2 m;
       if (!AppNodeModelSize(g, n->Id, &m))
         m = AppLayoutNodeSize(g, n);
@@ -13785,7 +13785,7 @@ namespace ImGui
       dl->AddRectFilled(cmn, cmx, AppThemeNeutral(hov ? 0.20f : 0.13f, 0.95f), 3.0f * z);
       dl->AddRect(cmn, cmx, hov ? AppColWithAlpha(accent, 0.65f) : AppThemeNeutral(0.32f, 0.8f), 3.0f * z, 0, 1.0f);
       dl->AddText(ImVec2(x + em * 0.4f, cy - th * 0.5f), accent, num);
-      dl->AddText(ImVec2(x + em * 0.4f + num_w + em * 0.35f, cy - th * 0.5f), ImGui::GetColorU32(ImGuiCol_Text, AppNodeHiddenByCollapse(g, n->Id) ? 0.5f : 0.9f), nm);
+      dl->AddText(ImVec2(x + em * 0.4f + num_w + em * 0.35f, cy - th * 0.5f), ImGui::GetColorU32(ImGuiCol_Text, AppNodeIsHiddenByCollapse(g, n->Id) ? 0.5f : 0.9f), nm);
       ed->ScopeStripRects.push_back(ImVec4(cmn.x, cmn.y, cmx.x, cmx.y));
       ed->ScopeStripNodes.push_back(n->Id);
       if (hov)
@@ -13824,8 +13824,8 @@ namespace ImGui
       const int consumer = AppGraphPortOwnerId(g, l->EndAttr);
       if (producer < 0 || consumer < 0)
         continue;
-      const bool producer_in = AppNodeInScope(g, producer);
-      const bool consumer_in = AppNodeInScope(g, consumer);
+      const bool producer_in = AppNodeIsInScope(g, producer);
+      const bool consumer_in = AppNodeIsInScope(g, consumer);
       if (producer_in == consumer_in)
         continue;   // fully inside (normal wire) or fully outside (not this scope's concern)
       ImGuiAppScopePortal p;
@@ -13886,7 +13886,7 @@ namespace ImGui
       const ImGuiAppNode* inside_owner = nullptr;
       const ImGuiAppNodePort* inside_port = AppGraphFindPort(g, p->InsidePortId, &inside_owner);
       const ImGuiAppNode* remote = AppGraphFindNode(g, p->OutsideNodeId);
-      if (inside_owner == nullptr || remote == nullptr || !AppEditorNodeWasSubmitted(g, inside_owner->Id))
+      if (inside_owner == nullptr || remote == nullptr || !AppEditorNodeIsSubmitted(g, inside_owner->Id))
         continue;
 
       const ImVec2 pin_m = ImGui::CanvasPinPos(cv, p->InsidePortId);
@@ -14078,7 +14078,7 @@ namespace ImGui
       const ImGuiAppNode* n = &g->Nodes.Data[i];
       if ((!show_live && n->IsLive) || n->Id == top)
         continue;
-      if (!AppNodeHiddenByCollapse(g, n->Id) && AppNodeInScope(g, n->Id))
+      if (!AppNodeIsHiddenByCollapse(g, n->Id) && AppNodeIsInScope(g, n->Id))
         return;
     }
 
@@ -14159,7 +14159,7 @@ namespace ImGui
     for (int i = 0; i < g->Selection.Size; i++)
     {
       const ImGuiAppNode* sn = AppGraphFindNode(g, g->Selection.Data[i]);
-      if (sn == nullptr || (!show_live && sn->IsLive) || AppNodeHiddenByCollapse(g, sn->Id))
+      if (sn == nullptr || (!show_live && sn->IsLive) || AppNodeIsHiddenByCollapse(g, sn->Id))
         continue;
       Rec r;
       r.id = sn->Id;
@@ -14317,15 +14317,15 @@ namespace ImGui
 
   // Availability predicate: add verbs gate on the drilled scope's composability; undo/redo gate on history;
   // everything else is always available.
-  bool AppGraphEditorCommandAvailable(const ImGuiAppGraph* g, const ImGuiAppEditorCommand* c)
+  bool AppGraphIsEditorCommandAvailable(const ImGuiAppGraph* g, const ImGuiAppEditorCommand* c)
   {
     IM_ASSERT(g != nullptr && c != nullptr);
     if (c->AddKind != ImGuiAppNodeKind_COUNT)
     {
       const int scope = AppScopeCurrent(g);
       if (c->AddKind == ImGuiAppNodeKind_Field)
-        return scope >= 0 && AppScopeKindComposable(g, scope, c->AddKind);
-      return scope < 0 || AppScopeKindComposable(g, scope, c->AddKind);
+        return scope >= 0 && AppScopeIsKindComposable(g, scope, c->AddKind);
+      return scope < 0 || AppScopeIsKindComposable(g, scope, c->AddKind);
     }
     if (c->Id == 14) return AppGraphCanUndo(g);   // Undo
     if (c->Id == 15) return AppGraphCanRedo(g);   // Redo
@@ -14356,7 +14356,7 @@ namespace ImGui
     if (out_mods) *out_mods = c ? c->Mods : 0;
   }
 
-  bool AppKeymapCommandRebindable(int cmd_id)
+  bool AppKeymapIsCommandRebindable(int cmd_id)
   {
     const ImGuiAppEditorCommand* c = AppFindEditorCommand(cmd_id);
     if (c == nullptr || !(c->Surfaces & ImGuiAppCmdSurface_Shortcut))
@@ -14366,7 +14366,7 @@ namespace ImGui
     return cmd_id != 19 && cmd_id != 23 && cmd_id != 24;
   }
 
-  bool AppKeymapChordReserved(ImGuiKey key, int mods)
+  bool AppKeymapIsChordReserved(ImGuiKey key, int mods)
   {
     // Space / Ctrl+P always open the command palette -- the escape hatch to every verb -- so they can never
     // be rebound onto another verb.
@@ -14400,7 +14400,7 @@ namespace ImGui
     for (int i = 0; i < IM_ARRAYSIZE(s_editor_commands); i++)
     {
       const int id = s_editor_commands[i].Id;
-      if (id == except_cmd_id || !AppKeymapCommandRebindable(id))
+      if (id == except_cmd_id || !AppKeymapIsCommandRebindable(id))
         continue;
       ImGuiKey k = ImGuiKey_None; int m = 0;
       AppKeymapEffectiveChord(g, id, &k, &m);
@@ -14412,9 +14412,9 @@ namespace ImGui
 
   bool AppKeymapRebind(ImGuiAppGraph* g, int cmd_id, ImGuiKey key, int mods)
   {
-    if (!AppKeymapCommandRebindable(cmd_id))
+    if (!AppKeymapIsCommandRebindable(cmd_id))
       return false;
-    if (key != ImGuiKey_None && AppKeymapChordReserved(key, mods))
+    if (key != ImGuiKey_None && AppKeymapIsChordReserved(key, mods))
       return false;
     // A rebind back to the factory chord clears the override, keeping the keymap a sparse diff.
     ImGuiKey dk = ImGuiKey_None; int dm = 0;
@@ -14448,7 +14448,7 @@ namespace ImGui
     for (int i = 0; i < IM_ARRAYSIZE(s_editor_commands); i++)   // registry order == precedence on a chord conflict
     {
       const int id = s_editor_commands[i].Id;
-      if (!AppKeymapCommandRebindable(id))
+      if (!AppKeymapIsCommandRebindable(id))
         continue;
       ImGuiKey k = ImGuiKey_None; int m = 0;
       AppKeymapEffectiveChord(g, id, &k, &m);
@@ -14507,7 +14507,7 @@ namespace ImGui
     for (int i = 0; i < AppGraphEditorCommandCount(); i++)
     {
       const ImGuiAppEditorCommand* c = AppGraphEditorCommandAt(i);
-      if (!AppKeymapCommandRebindable(c->Id))
+      if (!AppKeymapIsCommandRebindable(c->Id))
         continue;
 
       ImGui::AlignTextToFramePadding();
@@ -14624,7 +14624,7 @@ namespace ImGui
       if (g->_ScopeSig != -1)   // skip the very first frame (initial layout owns the camera)
       {
         for (int i = 0; i < g->Nodes.Size; i++)
-          if (!(!show_live && g->Nodes.Data[i].IsLive) && !AppNodeHiddenByCollapse(g, g->Nodes.Data[i].Id))
+          if (!(!show_live && g->Nodes.Data[i].IsLive) && !AppNodeIsHiddenByCollapse(g, g->Nodes.Data[i].Id))
             g->Nodes.Data[i]._NeedsPlace = true;
         // Camera memory is PER BRANCH (keyed by the scope NODE, not the depth): leaving a scope
         // saves the view the user left it with; re-entering one -- forward or back -- restores
@@ -14810,7 +14810,7 @@ namespace ImGui
                 continue;
               // Drag origin at the altitude being dragged: engine position while seated, else the
               // scope-effective model position (GridPos alone is stale inside a drilled interior).
-              const ImVec2 op = AppEditorNodeWasSubmitted(g, members.Data[m]) ? AppCanvasNodePos(g, members.Data[m]) : AppNodeScopePos(g, mm);
+              const ImVec2 op = AppEditorNodeIsSubmitted(g, members.Data[m]) ? AppCanvasNodePos(g, members.Data[m]) : AppNodeScopePos(g, mm);
               g->_GroupDragOrig.push_back(ImVec4((float)members.Data[m], op.x, op.y, 0.0f));
             }
           }
@@ -14867,7 +14867,7 @@ namespace ImGui
 
           // Trunk connector: an owner excluded from its own frame gets ONE wire, owner right edge
           // -> this title bar, standing in for the per-control containment fan.
-          if (!include_owner && (owner->HasGridPos || AppEditorNodeWasSubmitted(g, owner_id)))
+          if (!include_owner && (owner->HasGridPos || AppEditorNodeIsSubmitted(g, owner_id)))
           {
             const float z = AppCanvasScale(g);
             const ImVec2 opos = ImGui::CanvasToScreen(cv, owner->GridPos);
@@ -15107,7 +15107,7 @@ namespace ImGui
       for (int i = 0; i < g->Nodes.Size; i++)
       {
         const ImGuiAppNode* n = &g->Nodes.Data[i];
-        if ((n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar) && !(!show_live && n->IsLive) && AppGraphHostsControl(g, n->Id))
+        if ((n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar) && !(!show_live && n->IsLive) && AppGraphHasControl(g, n->Id))
           group_box(n->Id, AppKindColor(n->Kind), 2, !at_root || n->GroupCollapsed);
       }
       // Pass 2: control data clusters (a control with an exploded Persist/Temp struct). Their
@@ -15148,7 +15148,7 @@ namespace ImGui
       if (!show_live && n->IsLive)
         continue;
       // Folded behind a collapsed ancestor group: same deal -- never submit, so the read-back skips it too.
-      if (AppNodeHiddenByCollapse(g, n->Id))
+      if (AppNodeIsHiddenByCollapse(g, n->Id))
         continue;
       // Below-the-breadcrumb kinds never submit at the composition root (altitude law).
       if (altitude_root && (n->Kind == ImGuiAppNodeKind_Struct || n->Kind == ImGuiAppNodeKind_Field))
@@ -15158,7 +15158,7 @@ namespace ImGui
       // Rejoining the canvas after a frame of eviction (unhidden via the outliner eye / show-all / H, a group
       // expand, or any other path with no explicit re-arm): the engine kept the last-known geometry, but the
       // stored GridPos is authoritative for a node the MODEL moved while it was off-canvas -- re-seat it.
-      if (n->HasGridPos && !n->_NeedsPlace && !AppIdInSet(AppGraphEditorState(g)->PrevPoolIds, n->Id))
+      if (n->HasGridPos && !n->_NeedsPlace && !AppIsIdInSet(AppGraphEditorState(g)->PrevPoolIds, n->Id))
         n->_NeedsPlace = true;
 
       // Layer nodes (column packer) and window/sidebar nodes (section packer) are position-owned:
@@ -15275,7 +15275,7 @@ namespace ImGui
       }
       // Eye-hidden nodes and members of a closed live window stay on the canvas with the
       // disabled look -- never removed.
-      if (AppNodeCanvasOff(g, n->Id))
+      if (AppNodeIsCanvasOff(g, n->Id))
         ImGui::CanvasNextNodeAlpha(cv, 0.35f);
       ImGui::CanvasBeginNode(cv, n->Id);
 
@@ -15355,7 +15355,7 @@ namespace ImGui
           const int sid = AppControlStructId(g, n, temp);
           if (sid < 0)
             continue;
-          const int pin = AppNodePortByName(n, temp ? "temp" : "persist");
+          const int pin = AppNodeFindPortByName(n, temp ? "temp" : "persist");
           ImGui::CanvasNextPinColor(cv, AppPinTieColor());
           ImGui::CanvasBeginPin(cv, pin, ImGui::ImGuiCanvasPin_In, ImGui::ImGuiCanvasPinShape_Circle);
           ImGui::PushID(100 + list);
@@ -15643,7 +15643,7 @@ namespace ImGui
       if (!show_live && ((oa && oa->IsLive) || (ob && ob->IsLive)))
         continue;
       // Skip links into a node folded behind a collapsed group: its attribute was not submitted this frame.
-      if ((oa && AppNodeHiddenByCollapse(g, oa->Id)) || (ob && AppNodeHiddenByCollapse(g, ob->Id)))
+      if ((oa && AppNodeIsHiddenByCollapse(g, oa->Id)) || (ob && AppNodeIsHiddenByCollapse(g, ob->Id)))
         continue;
       // A trunked owner's containment fan is replaced by its group-frame trunk connector.
       if (g->Links.Data[li].Kind == ImGuiAppEdgeKind_Containment && trunked_owners.Size > 0)
@@ -15758,7 +15758,7 @@ namespace ImGui
           continue;
         ImGuiAppNode* mm = &g->Nodes.Data[mmi];
         const ImVec2 np(g->_GroupDragOrig.Data[m].y + g->_GroupDragApplied.x, g->_GroupDragOrig.Data[m].z + g->_GroupDragApplied.y);
-        if (AppNodeHiddenByCollapse(g, mid) || !AppEditorNodeWasSubmitted(g, mid))
+        if (AppNodeIsHiddenByCollapse(g, mid) || !AppEditorNodeIsSubmitted(g, mid))
         {
           if (at_root) { mm->GridPos = np; mm->HasGridPos = true; }
           else         { AppNodeScopePosStore(g, mid, np); }
@@ -15783,7 +15783,7 @@ namespace ImGui
       for (int i = 0; i < g->Nodes.Size; i++)
       {
         const ImGuiAppNode* n = &g->Nodes.Data[i];
-        if ((!show_live && n->IsLive) || AppNodeHiddenByCollapse(g, n->Id) || !AppEditorNodeWasSubmitted(g, n->Id))
+        if ((!show_live && n->IsLive) || AppNodeIsHiddenByCollapse(g, n->Id) || !AppEditorNodeIsSubmitted(g, n->Id))
           continue;
 
         ImU32 dot = 0;
@@ -15859,7 +15859,7 @@ namespace ImGui
     for (int i = 0; i < g->Nodes.Size; i++)
     {
       if (!show_live && g->Nodes.Data[i].IsLive) continue;
-      if (AppNodeHiddenByCollapse(g, g->Nodes.Data[i].Id)) continue;
+      if (AppNodeIsHiddenByCollapse(g, g->Nodes.Data[i].Id)) continue;
       ImGuiAppNode* n = &g->Nodes.Data[i];
       const ImVec2 pos = AppCanvasNodePos(g, n->Id);   // model units, like GridPos (drags land here)
       if (!at_root)
@@ -15899,7 +15899,7 @@ namespace ImGui
         if (c->Kind == ImGuiAppNodeKind_Note || c->Kind == ImGuiAppNodeKind_Layer
             || c->Kind == ImGuiAppNodeKind_Window || c->Kind == ImGuiAppNodeKind_Sidebar)
           continue;
-        if ((!show_live && c->IsLive) || AppNodeHiddenByCollapse(g, c->Id))
+        if ((!show_live && c->IsLive) || AppNodeIsHiddenByCollapse(g, c->Id))
           continue;
         ImVec2 sz;
         if (!AppNodeModelSize(g, c->Id, &sz))
@@ -16090,10 +16090,10 @@ namespace ImGui
         const ImGuiAppNode* n = &g->Nodes.Data[i];
         if (!show_live && n->IsLive)
           continue;
-        if (AppNodeHiddenByCollapse(g, n->Id))
+        if (AppNodeIsHiddenByCollapse(g, n->Id))
           continue;
         // Effective position: a drilled interior renders from its placements, not GridPos.
-        const ImVec2 p = AppEditorNodeWasSubmitted(g, n->Id) ? AppCanvasNodePos(g, n->Id) : AppNodeScopePos(g, n);
+        const ImVec2 p = AppEditorNodeIsSubmitted(g, n->Id) ? AppCanvasNodePos(g, n->Id) : AppNodeScopePos(g, n);
         ImVec2 d;
         if (!AppNodeModelSize(g, n->Id, &d))
           d = AppLayoutNodeSize(g, n);
@@ -16115,10 +16115,10 @@ namespace ImGui
       for (int i = 0; i < ids.Size; i++)
       {
         const ImGuiAppNode* sn = AppGraphFindNode(g, ids.Data[i]);
-        if (sn == nullptr || (!show_live && sn->IsLive) || AppNodeHiddenByCollapse(g, ids.Data[i]))
+        if (sn == nullptr || (!show_live && sn->IsLive) || AppNodeIsHiddenByCollapse(g, ids.Data[i]))
           continue;
         // Effective position: a drilled interior renders from its placements, not GridPos.
-        const ImVec2 p = AppEditorNodeWasSubmitted(g, sn->Id) ? AppCanvasNodePos(g, sn->Id) : AppNodeScopePos(g, sn);
+        const ImVec2 p = AppEditorNodeIsSubmitted(g, sn->Id) ? AppCanvasNodePos(g, sn->Id) : AppNodeScopePos(g, sn);
         ImVec2 d;
         if (!AppNodeModelSize(g, sn->Id, &d))
           d = AppLayoutNodeSize(g, sn);
@@ -16223,7 +16223,7 @@ namespace ImGui
         for (int i = 0; i < g->Nodes.Size; i++)
         {
           ImGuiAppNode* n = &g->Nodes.Data[i];
-          const bool owner = (n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar) ? AppGraphHostsControl(g, n->Id)
+          const bool owner = (n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar) ? AppGraphHasControl(g, n->Id)
                            : n->Kind == ImGuiAppNodeKind_Control ? (n->PersistStructId >= 0 || n->TempStructId >= 0)
                            : n->Kind == ImGuiAppNodeKind_Struct ? (AppGraphFieldNodeCount(g, n->Id, 0) > 0) : false;
           if (owner)
@@ -16249,7 +16249,7 @@ namespace ImGui
       case 23:
       {
         const ImGuiAppNode* sel = (selected_node_id != nullptr && *selected_node_id >= 0) ? AppGraphFindNode(g, *selected_node_id) : nullptr;
-        if (sel != nullptr && AppScopeCanEnter(sel) && !AppNodeHiddenByCollapse(g, sel->Id) && !(!show_live && sel->IsLive))
+        if (sel != nullptr && AppScopeCanEnter(sel) && !AppNodeIsHiddenByCollapse(g, sel->Id) && !(!show_live && sel->IsLive))
           g->ViewScope.push_back(sel->Id);
         break;
       }
@@ -16301,7 +16301,7 @@ namespace ImGui
           for (int pass = 0; pass < 2; pass++)
             for (int i = 0; i < g->Nodes.Size; i++)
             {
-              const bool in_sel = AppIdInSet(g->Selection, g->Nodes.Data[i].Id);
+              const bool in_sel = AppIsIdInSet(g->Selection, g->Nodes.Data[i].Id);
               if ((pass == 0) == (to_front ? !in_sel : in_sel))
                 reordered.push_back(g->Nodes.Data[i]);
             }
@@ -16362,7 +16362,7 @@ namespace ImGui
       if (ImGui::IsKeyPressed(ImGuiKey_Tab, false))
       {
         const ImGuiAppNode* sel = (selected_node_id != nullptr && *selected_node_id >= 0) ? AppGraphFindNode(g, *selected_node_id) : nullptr;
-        if (sel != nullptr && AppScopeCanEnter(sel) && !AppNodeHiddenByCollapse(g, sel->Id) && !(!show_live && sel->IsLive))
+        if (sel != nullptr && AppScopeCanEnter(sel) && !AppNodeIsHiddenByCollapse(g, sel->Id) && !(!show_live && sel->IsLive))
           g->ViewScope.push_back(sel->Id);
         else if (g->ViewScope.Size > 0)
         {
@@ -16393,7 +16393,7 @@ namespace ImGui
           for (int i = 0; i < g->Nodes.Size; i++)
           {
             const ImGuiAppNode* n = &g->Nodes.Data[i];
-            if ((!show_live && n->IsLive) || AppNodeHiddenByCollapse(g, n->Id))
+            if ((!show_live && n->IsLive) || AppNodeIsHiddenByCollapse(g, n->Id))
               continue;
             ImGui::CanvasSelectNode(cv, n->Id, true);
           }
@@ -16414,7 +16414,7 @@ namespace ImGui
           {
             const int sni = AppGraphFindNodeIndex(g, g->Selection.Data[i]);
             ImGuiAppNode* sn = sni >= 0 ? &g->Nodes.Data[sni] : nullptr;
-            if (sn == nullptr || (!show_live && sn->IsLive) || AppNodeHiddenByCollapse(g, sn->Id))
+            if (sn == nullptr || (!show_live && sn->IsLive) || AppNodeIsHiddenByCollapse(g, sn->Id))
               continue;
             // Nudge in MODEL units (a grid unit is a grid unit at any zoom). The canvas write is
             // enough while drilled: the interior read-back routes it to this scope's placements;
@@ -16543,7 +16543,7 @@ namespace ImGui
             AppGraphEditorState(g)->CtxNodeId = d->Id;
             // The twin lives app-level, invisible from a drilled mirror interior -- jump to its
             // scope (the portal-chip idiom) instead of appearing to do nothing.
-            if (AppScopeCurrent(g) >= 0 && !AppNodeInScope(g, d->Id))
+            if (AppScopeCurrent(g) >= 0 && !AppNodeIsInScope(g, d->Id))
               AppScopeJumpToNode(g, d->Id, selected_node_id);
           }
         }
@@ -16656,8 +16656,8 @@ namespace ImGui
       auto addable = [&](ImGuiAppNodeKind k)
       {
         if (k == ImGuiAppNodeKind_Field)
-          return add_scope >= 0 && AppScopeKindComposable(g, add_scope, k);   // fields never live at root
-        return add_scope < 0 || AppScopeKindComposable(g, add_scope, k);
+          return add_scope >= 0 && AppScopeIsKindComposable(g, add_scope, k);   // fields never live at root
+        return add_scope < 0 || AppScopeIsKindComposable(g, add_scope, k);
       };
 
       // Animation builtins (F56): compiled dt-driven controls (imguiapp_anim.h), added as builtin Controls so
@@ -16832,7 +16832,7 @@ namespace ImGui
       for (int i = 0; i < AppGraphEditorCommandCount(); i++)
       {
         const ImGuiAppEditorCommand* c = AppGraphEditorCommandAt(i);
-        if (!(c->Surfaces & ImGuiAppCmdSurface_Palette) || !AppGraphEditorCommandAvailable(g, c))
+        if (!(c->Surfaces & ImGuiAppCmdSurface_Palette) || !AppGraphIsEditorCommandAvailable(g, c))
           continue;
         if (!AppGraphEditorState(g)->CmdFilter.PassFilter(c->Label))
           continue;
@@ -16910,7 +16910,7 @@ namespace ImGui
       const float em = ImGui::GetFontSize();
       auto halo = [&](int node_id)
       {
-        if (node_id < 0 || !AppEditorNodeWasSubmitted(g, node_id))
+        if (node_id < 0 || !AppEditorNodeIsSubmitted(g, node_id))
           return;
         const ImGuiAppNode* hn = AppGraphFindNode(g, node_id);
         if (hn == nullptr)
@@ -17108,9 +17108,9 @@ namespace ImGui
       const int qi_sel = selected_node_id != nullptr ? *selected_node_id : -1;
       // Pinned to a still-live node -> hold there; otherwise (or once the pin's node leaves the pool) follow
       // the selection.
-      int qi_node = (ed->QuickInspectorPin && ed->QuickInspectorNode >= 0 && AppEditorNodeWasSubmitted(g, ed->QuickInspectorNode))
+      int qi_node = (ed->QuickInspectorPin && ed->QuickInspectorNode >= 0 && AppEditorNodeIsSubmitted(g, ed->QuickInspectorNode))
                     ? ed->QuickInspectorNode : qi_sel;
-      if (ed->QuickInspector && qi_node >= 0 && AppEditorNodeWasSubmitted(g, qi_node))
+      if (ed->QuickInspector && qi_node >= 0 && AppEditorNodeIsSubmitted(g, qi_node))
       {
         const float em_qi = ImGui::GetFontSize();
         const ImVec2 np = ImGui::CanvasToScreen(cv, AppCanvasNodePos(g, qi_node));
@@ -17257,7 +17257,7 @@ namespace ImGui
         {
           int keep = 0;
           for (int c = 0; c < cand_count; c++)
-            if (sp_kind == ImGuiAppPortKind_ChildIn || AppScopeKindComposable(g, drop_scope, cands[c].Kind))
+            if (sp_kind == ImGuiAppPortKind_ChildIn || AppScopeIsKindComposable(g, drop_scope, cands[c].Kind))
               cands[keep++] = cands[c];
           cand_count = keep;
           if (cand_count == 0)
@@ -17341,7 +17341,7 @@ namespace ImGui
         // Tree-originated pick outside the current drill-down scope: the outliner is global, the canvas is
         // scoped -- so navigate the scope chain to the node's home composition. Leave AppGraphEditorState(g)->AppliedSel unlatched;
         // the select + reveal re-runs next frame once the node submits inside its scope.
-        if (tn != nullptr && !canvas_originated && g->ViewScope.Size > 0 && !AppNodeInScope(g, *selected_node_id))
+        if (tn != nullptr && !canvas_originated && g->ViewScope.Size > 0 && !AppNodeIsInScope(g, *selected_node_id))
         {
           int chain[64];
           int cn = 0;
@@ -17354,7 +17354,7 @@ namespace ImGui
           tn = nullptr;
         }
 
-        const bool submitted = tn != nullptr && !(!show_live && tn->IsLive) && !AppNodeHiddenByCollapse(g, *selected_node_id);
+        const bool submitted = tn != nullptr && !(!show_live && tn->IsLive) && !AppNodeIsHiddenByCollapse(g, *selected_node_id);
         if (submitted && !canvas_originated)
         {
           ImGui::CanvasSelectNode(cv, *selected_node_id, false);
@@ -17399,13 +17399,13 @@ namespace ImGui
       for (int i = 0; i < AppGraphEditorCommandCount(); i++)
       {
         const ImGuiAppEditorCommand* c = AppGraphEditorCommandAt(i);
-        if (!AppKeymapCommandRebindable(c->Id))
+        if (!AppKeymapIsCommandRebindable(c->Id))
           continue;
         ImGuiKey key = ImGuiKey_None; int mods = 0;
         AppKeymapEffectiveChord(g, c->Id, &key, &mods);
         if (key == ImGuiKey_None || !ImGui::IsKeyChordPressed((ImGuiKeyChord)(key | mods)))
           continue;
-        if (!AppGraphEditorCommandAvailable(g, c))
+        if (!AppGraphIsEditorCommandAvailable(g, c))
           continue;
         run_command(c->Id, view_center);
         break;   // one verb per frame; registry order is precedence on a chord collision
@@ -17548,7 +17548,7 @@ namespace ImGui
       }
       else if (n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar)
       {
-        if (!AppGraphHostsControl(g, n->Id))
+        if (!AppGraphHasControl(g, n->Id))
           AppValidatePushIssue(out, n->Id, 1, "%s '%s' hosts no controls", AppNodeKindName(n->Kind), n->Draft.Name);
 
         // A region reference must name an existing Layout node (F57).
@@ -18427,7 +18427,7 @@ namespace ImGui
 
   // `ident` in owner's effective (list) fields, matched by the sanitized name codegen emits. Returns the
   // field type (Struct fields also copy out their StructType) or -1.
-  static int AppExprLookupField(const ImGuiAppGraph* g, const ImGuiAppNode* owner, int list, const char* ident, char* struct_type, int struct_type_size)
+  static int AppExprFindField(const ImGuiAppGraph* g, const ImGuiAppNode* owner, int list, const char* ident, char* struct_type, int struct_type_size)
   {
     ImVector<ImGuiAppFieldDesc> fields;
     AppNodeEffectiveFields(g, owner, list, &fields);
@@ -18537,7 +18537,7 @@ namespace ImGui
 
     char stype[IM_LABEL_SIZE];
     stype[0] = 0;
-    int t = AppExprLookupField(c->Graph, owner, list, field, stype, IM_ARRAYSIZE(stype));
+    int t = AppExprFindField(c->Graph, owner, list, field, stype, IM_ARRAYSIZE(stype));
     if (t < 0)
     {
       if (!unverifiable)
@@ -18562,7 +18562,7 @@ namespace ImGui
       if (sn == nullptr) { t = AppExprType_Unknown; continue; }   // missing struct type is its own validate issue
       char inner[IM_LABEL_SIZE];
       inner[0] = 0;
-      t = AppExprLookupField(c->Graph, sn, 0, member, inner, IM_ARRAYSIZE(inner));
+      t = AppExprFindField(c->Graph, sn, 0, member, inner, IM_ARRAYSIZE(inner));
       if (t < 0)
         return AppExprFail(c, "struct '%s' has no field '%s'", stype, member);
       ImStrncpy(stype, inner, IM_ARRAYSIZE(stype));
@@ -18774,7 +18774,7 @@ namespace ImGui
       AppSanitizeIdentifier(dst_id, IM_ARRAYSIZE(dst_id), ev->DstField);
       char dst_struct[IM_LABEL_SIZE];
       dst_struct[0] = 0;
-      const int dt = AppExprLookupField(g, n, 0, dst_id, dst_struct, IM_ARRAYSIZE(dst_struct));
+      const int dt = AppExprFindField(g, n, 0, dst_id, dst_struct, IM_ARRAYSIZE(dst_struct));
       if (dt == ImGuiAppFieldType_Bool && t != ImGuiAppFieldType_Bool)
         AppExprFail(&c, "expr is %s but data->%s is bool -- compare explicitly", AppExprTypeName(t), dst_id);
       else if ((dt == ImGuiAppFieldType_Float || dt == ImGuiAppFieldType_Int || dt == ImGuiAppFieldType_Double) && !AppExprIsNumeric(t))
@@ -18799,7 +18799,7 @@ namespace ImGui
   // not as Op nodes: the .graph file, not the C++, is the Op structure's home). Each operand renders from
   // its wire (a nested Op result recurses, parenthesized) or, unwired, from its inline token. Returns false
   // if malformed (missing operand or unknown operator). depth caps a corrupt graph; real cycles are refused
-  // at wire time by AppGraphDataReaches.
+  // at wire time by AppGraphIsReachable.
   static bool AppOpFoldExprRec(const ImGuiAppGraph* g, const ImGuiAppNode* op, char* out, int out_size, int depth)
   {
     if (g == nullptr || op == nullptr || op->Kind != ImGuiAppNodeKind_Op || out_size <= 0 || depth > 64)
@@ -19271,7 +19271,7 @@ namespace ImGui
 
   // Does any control node (authored or live) name this host (Window/Sidebar) as its containment parent? Used by
   // codegen to decide whether to capture a named local for the host (so it isn't emitted unused).
-  static bool AppGraphHostsControl(const ImGuiAppGraph* g, int host_id)
+  static bool AppGraphHasControl(const ImGuiAppGraph* g, int host_id)
   {
     for (int i = 0; i < g->Nodes.Size; i++)
     {
@@ -19394,13 +19394,13 @@ namespace ImGui
     g->GenSignature = AppGraphSignature(g);
   }
 
-  bool AppGraphCodeStale(const ImGuiAppGraph* g)
+  bool AppGraphIsCodeStale(const ImGuiAppGraph* g)
   {
     IM_ASSERT(g != nullptr);
     return AppGraphSignature(g) != g->GenSignature;
   }
 
-  bool AppGraphCodeFresh(const ImGuiAppGraph* g)
+  bool AppGraphIsCodeFresh(const ImGuiAppGraph* g)
   {
     IM_ASSERT(g != nullptr);
     return g->GenSignature != 0 && AppGraphSignature(g) == g->GenSignature;
@@ -20046,7 +20046,7 @@ namespace ImGui
         if (n->IsLive)
           AppEmitLivePlacementLines(n, "app->Windows.back()", out);
         AppEmitStyleModLines(n, "app->Windows.back()", "  ", out);
-        if (AppGraphHostsControl(g, n->Id))
+        if (AppGraphHasControl(g, n->Id))
           out->appendf("  ImGuiAppWindowBase* win_%s = app->Windows.back();\n", base);   // name-based local: stable across import
         span(n->Id, begin);
       }
@@ -20067,7 +20067,7 @@ namespace ImGui
         if (n->IsLive)
           AppEmitLivePlacementLines(n, "app->Sidebars.back()", out);
         AppEmitStyleModLines(n, "app->Sidebars.back()", "  ", out);
-        if (AppGraphHostsControl(g, n->Id))
+        if (AppGraphHasControl(g, n->Id))
           out->appendf("  ImGuiAppSidebarBase* sb_%s = app->Sidebars.back();\n", base);   // name-based local: stable across import
         span(n->Id, begin);
       }
@@ -20481,7 +20481,7 @@ namespace ImGui
     AppGraphStampPorts(g, n);
   }
 
-  static bool AppNodeKeepsPortKind(const ImGuiAppNode* n, ImGuiAppPortKind kind)
+  static bool AppNodeIsPortKindStable(const ImGuiAppNode* n, ImGuiAppPortKind kind)
   {
     switch (n->Kind)
     {
@@ -20509,7 +20509,7 @@ namespace ImGui
     {
       ImGuiAppNode* n = &g->Nodes.Data[i];
       for (int p = n->Ports.Size - 1; p >= 0; p--)
-        if (!AppNodeKeepsPortKind(n, n->Ports.Data[p].Kind))
+        if (!AppNodeIsPortKindStable(n, n->Ports.Data[p].Kind))
           n->Ports.erase(n->Ports.Data + p);
     }
   }
@@ -21879,7 +21879,7 @@ namespace ImGui
   // port / body-attr / link, offsets positions, and moves the records into the live graph. Works across graphs.
 
 
-  static bool AppIdInSet(const ImVector<int>& s, int id)
+  static bool AppIsIdInSet(const ImVector<int>& s, int id)
   {
     for (int i = 0; i < s.Size; i++)
       if (s.Data[i] == id)
@@ -21887,7 +21887,7 @@ namespace ImGui
     return false;
   }
 
-  static int AppMapLookup(const ImVector<int>& olds, const ImVector<int>& news, int old_id)
+  static int AppMapFind(const ImVector<int>& olds, const ImVector<int>& news, int old_id)
   {
     for (int i = 0; i < olds.Size; i++)
       if (olds.Data[i] == old_id)
@@ -21898,7 +21898,7 @@ namespace ImGui
   // Add root + its containment descendants to `ids` (no duplicates). Mirrors AppGroupAccumulate's hierarchy.
   static void AppGraphCollectSubtree(const ImGuiAppGraph* g, int root_id, ImVector<int>* ids)
   {
-    if (AppIdInSet(*ids, root_id))
+    if (AppIsIdInSet(*ids, root_id))
       return;
     const ImGuiAppNode* n = AppGraphFindNode(g, root_id);
     if (n == nullptr)
@@ -21946,13 +21946,13 @@ namespace ImGui
     ImGuiTextBuffer buf;
     buf.appendf("[Graph]\n");
     for (int i = 0; i < g->Nodes.Size; i++)
-      if (AppIdInSet(ids, g->Nodes.Data[i].Id))
+      if (AppIsIdInSet(ids, g->Nodes.Data[i].Id))
         AppEmitNodeRecord(&buf, &g->Nodes.Data[i]);
     for (int i = 0; i < g->Links.Size; i++)
     {
       const int a = AppGraphPortOwnerId(g, g->Links.Data[i].StartAttr);
       const int b = AppGraphPortOwnerId(g, g->Links.Data[i].EndAttr);
-      if (AppIdInSet(ids, a) && AppIdInSet(ids, b))
+      if (AppIsIdInSet(ids, a) && AppIsIdInSet(ids, b))
         buf.appendf("Link=%d,%d,%d,%d\n", g->Links.Data[i].Id, g->Links.Data[i].StartAttr, g->Links.Data[i].EndAttr, (int)g->Links.Data[i].Kind);
     }
     for (int i = 0; i < g->Bindings.Size; i++)
@@ -21963,7 +21963,7 @@ namespace ImGui
           continue;
         const int a = AppGraphPortOwnerId(g, g->Links.Data[li].StartAttr);
         const int b = AppGraphPortOwnerId(g, g->Links.Data[li].EndAttr);
-        if (AppIdInSet(ids, a) && AppIdInSet(ids, b))
+        if (AppIsIdInSet(ids, a) && AppIsIdInSet(ids, b))
           buf.appendf("Bind=%d,%s,%s\n", g->Bindings.Data[i].LinkId, g->Bindings.Data[i].DstField, g->Bindings.Data[i].SrcField);
         break;
       }
@@ -22027,8 +22027,8 @@ namespace ImGui
     for (int i = 0; i < tmp.Nodes.Size; i++)
     {
       ImGuiAppNode* tn = &tmp.Nodes.Data[i];
-      if (tn->PersistStructId >= 0) tn->PersistStructId = AppMapLookup(old_node, new_node, tn->PersistStructId);
-      if (tn->TempStructId >= 0)    tn->TempStructId = AppMapLookup(old_node, new_node, tn->TempStructId);
+      if (tn->PersistStructId >= 0) tn->PersistStructId = AppMapFind(old_node, new_node, tn->PersistStructId);
+      if (tn->TempStructId >= 0)    tn->TempStructId = AppMapFind(old_node, new_node, tn->TempStructId);
       tn->GridPos += offset;
       tn->HasGridPos = true;
       tn->_NeedsPlace = true;
@@ -22040,8 +22040,8 @@ namespace ImGui
 
     for (int i = 0; i < tmp.Links.Size; i++)
     {
-      const int s = AppMapLookup(old_port, new_port, tmp.Links.Data[i].StartAttr);
-      const int e = AppMapLookup(old_port, new_port, tmp.Links.Data[i].EndAttr);
+      const int s = AppMapFind(old_port, new_port, tmp.Links.Data[i].StartAttr);
+      const int e = AppMapFind(old_port, new_port, tmp.Links.Data[i].EndAttr);
       if (s < 0 || e < 0)
         continue;
       ImGuiAppNodeLink l = tmp.Links.Data[i];
@@ -22661,7 +22661,7 @@ namespace ImGui
     }
   }
 
-  static bool AppSelContains(const ImGuiAppGraph* g, int id)
+  static bool AppSelHasNode(const ImGuiAppGraph* g, int id)
   {
     for (int i = 0; i < g->Selection.Size; i++)
       if (g->Selection.Data[i] == id)
@@ -22705,7 +22705,7 @@ namespace ImGui
   {
     // AllowWhenBlockedByActiveItem: the icon overlays the row's TreeNode item, and the mouse press makes
     // that item active BEFORE this hit-test runs -- plain IsWindowHovered() is false on exactly the click
-    // frame (hover highlight worked, clicks never landed). See AppPtInRectHovered.
+    // frame (hover highlight worked, clicks never landed). See AppIsPtInRectHovered.
     // ChildWindows: the canvas gizmo column overlays the canvas's INNER child window -- without the flag the
     // hover test asks about the outer window, is always false there, and every gizmo is dead chrome.
     const ImVec2 m = ImGui::GetIO().MousePos;
@@ -22804,7 +22804,7 @@ namespace ImGui
       AppGraphCollectSubtree(g, n->Id, &keep);
       for (int i = 0; i < g->Nodes.Size; i++)
         if (!g->Nodes.Data[i].IsLive && g->Nodes.Data[i].Kind != ImGuiAppNodeKind_Layer)   // foundation layers stay visible
-          g->Nodes.Data[i].Hidden = !AppIdInSet(keep, g->Nodes.Data[i].Id);
+          g->Nodes.Data[i].Hidden = !AppIsIdInSet(keep, g->Nodes.Data[i].Id);
     }
     if (ImGui::MenuItem(ICON_FA_EYE "  Show all"))
       for (int i = 0; i < g->Nodes.Size; i++)
@@ -22861,7 +22861,7 @@ namespace ImGui
     ImGuiTreeNodeFlags f = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_DefaultOpen;
     if (!has_children)
       f |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_Bullet;
-    if (AppSelContains(g, n->Id) || (c->Sel != nullptr && *c->Sel == n->Id))
+    if (AppSelHasNode(g, n->Id) || (c->Sel != nullptr && *c->Sel == n->Id))
       f |= ImGuiTreeNodeFlags_Selected;
 
     if (c->SetOpen >= 0 && has_children)
@@ -23176,7 +23176,7 @@ namespace ImGui
         ImGui::PushStyleColor(ImGuiCol_Text, row_col);
         char label[IM_LABEL_SIZE + 32];
         ImFormatString(label, IM_ARRAYSIZE(label), "%s  %s  (%s)", AppNodeIcon(n), n->Draft.Name[0] ? n->Draft.Name : "(unnamed)", AppNodeKindName(n->Kind));
-        if (ImGui::Selectable(label, AppSelContains(g, n->Id) || (selected_node_id && *selected_node_id == n->Id)))
+        if (ImGui::Selectable(label, AppSelHasNode(g, n->Id) || (selected_node_id && *selected_node_id == n->Id)))
           AppTreeClick(g, n, &ctx);
         ImGui::PopStyleColor();
         AppTreeContextMenu(g, n, &ctx);
@@ -23216,7 +23216,7 @@ namespace ImGui
         {
           // Delete the whole multi-selection if the acted node is part of it; else just that node.
           ImVector<int> victims;
-          if (AppSelContains(g, ctx.ActNode) && g->Selection.Size > 1)
+          if (AppSelHasNode(g, ctx.ActNode) && g->Selection.Size > 1)
             victims = g->Selection;
           else
             victims.push_back(ctx.ActNode);
