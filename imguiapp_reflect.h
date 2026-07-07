@@ -17,7 +17,7 @@ Index of this file:
 // [SECTION] Header mess                 (pragmas, includes, ImFuncSig / IM_LABEL_SIZE / ImParseType* / IMAPP_REFLECT_ENUM_* + IMGUIAPP_HAS_REFLECT macros)
 // [SECTION] Forward declarations        (types + the reflection API surface, defs below)
 // [SECTION] Compile-time type identity   (ImGuiAppStatic<>, ImGuiAppType<>, ImAppNulTerminate)
-// [SECTION] Type traits + name utilities (ImGuiAppIsFormattable/IsCharArray, ImAppGenerateLabel, ImAppTypeDisplayName)
+// [SECTION] Type traits + name utilities (ImGuiAppIsFormattable/IsCharArray, ImAppFormatLabel, ImAppTypeDisplayName)
 // [SECTION] Reflection engine + public API (qlibs/reflect port; namespace ImGui::detail + ImGui: size/for_each/get/member_name/type_name/offset_of/enum_name)
 // [SECTION] ImGuiApp manifest types      (ImGuiAppLiveFieldKind/Desc, ImGuiAppTypeSchema)
 // [SECTION] Reflection contracts         (ImAppDataReflectable, ImGuiAppFieldsVisible)
@@ -143,7 +143,7 @@ template <typename P> struct ImGuiAppPtrSpelling;   // compile-time "Pointee*" s
 // Free type-name utilities (definitions below; using-alias ImGuiAppType<> + the trait variable-templates
 // ImGuiAppIsFormattable / IsCharArray / FieldsVisible + ImAppDataReflectable cannot be forward-declared).
 template <std::size_t Cap> constexpr std::array<char, Cap + 1> ImAppNulTerminate(std::string_view sv);
-template <typename T> inline void                              ImAppGenerateLabel(char* label, size_t size);
+template <typename T> inline void                              ImAppFormatLabel(char* label, size_t size);
 template <typename T> inline const char*                       ImAppTypeDisplayName();
 
 namespace ImGui
@@ -251,7 +251,7 @@ inline constexpr bool ImGuiAppIsCharArray = std::is_array_v<U> && std::is_same_v
 
 // Label from a type's compile-time display name (the Push* helpers name items after their class).
 template <typename T>
-inline void ImAppGenerateLabel(char* label, size_t size) { std::string_view sv = ImGuiAppType<T>::Name; ImFormatString(label, size, "%.*s", (int)sv.size(), sv.data()); }
+inline void ImAppFormatLabel(char* label, size_t size) { std::string_view sv = ImGuiAppType<T>::Name; ImFormatString(label, size, "%.*s", (int)sv.size(), sv.data()); }
 
 // Display name in static null-terminated storage. Uses ImGuiAppType's signature parser (not
 // reflect's, which cannot parse function-local types), so registry keys match

@@ -657,7 +657,7 @@ IMGUI_API const ImGuiAppPlatformBackend* ImGuiApp_GetPlatformBackend();
 //-----------------------------------------------------------------------------
 
 // The compile-time type-identity + reflection layer (ImFuncSig / IM_LABEL_SIZE / ImParseType* macros,
-// ImGuiAppStatic<> / ImGuiAppType<> / ImAppNulTerminate / ImAppGenerateLabel / ImAppTypeDisplayName, and
+// ImGuiAppStatic<> / ImGuiAppType<> / ImAppNulTerminate / ImAppFormatLabel / ImAppTypeDisplayName, and
 // the AppReflectFields walk) lives in imguiapp_reflect.h, included at the top of this file.
 
 struct ImGuiInterface
@@ -864,7 +864,7 @@ struct ImGuiAppControlBase : ImGuiAppItemBase
 // NOTE: the reflectability contracts + type-schema registry + the reflection field-walk
 // (ImGuiAppDataReflectable, ImGuiAppTypeSchema + ImGuiAppRegister/FindTypeSchema, ImGuiAppFieldsVisible)
 // live in imguiapp_reflect.h, included at the top. The type-name helpers + reflection walk that consume
-// them (ImAppGenerateLabel, ImAppTypeDisplayName, AppReflectFields, AppEnsureTypeRegistered) live in imguiapp_reflect.h; defined
+// them (ImAppFormatLabel, ImAppTypeDisplayName, AppReflectFields, AppEnsureTypeRegistered) live in imguiapp_reflect.h; defined
 // near the top of this file, right after that include.
 
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
@@ -1162,8 +1162,8 @@ struct ImGuiAppControl : ImGuiInterfaceAdapter<ImGuiAppControlBase, PersistDataT
         return n;
     }
 
-    virtual void GetControlDataTypeName(char* out, int out_size) const override final { ImAppGenerateLabel<PersistDataT>(out, (size_t)out_size); }
-    virtual void GetControlTempDataTypeName(char* out, int out_size) const override final { ImAppGenerateLabel<TempDataT>(out, (size_t)out_size); }
+    virtual void GetControlDataTypeName(char* out, int out_size) const override final { ImAppFormatLabel<PersistDataT>(out, (size_t)out_size); }
+    virtual void GetControlTempDataTypeName(char* out, int out_size) const override final { ImAppFormatLabel<TempDataT>(out, (size_t)out_size); }
 
     virtual int GetControlFields(ImGuiAppLiveFieldDesc* out, int cap, bool temp_data) const override final
     {
@@ -1244,7 +1244,7 @@ struct ImGuiAppControl : ImGuiInterfaceAdapter<ImGuiAppControlBase, PersistDataT
 template <typename T>
 struct ImGuiAppWindow : ImGuiAppWindowBase
 {
-    ImGuiAppWindow() { ImAppGenerateLabel<T>(this->Label, sizeof(this->Label)); } // bare class name; PushAppWindow suffixes only real duplicates
+    ImGuiAppWindow() { ImAppFormatLabel<T>(this->Label, sizeof(this->Label)); } // bare class name; PushAppWindow suffixes only real duplicates
 
     virtual void OnInitialize(ImGuiApp*) const override {};
     virtual void OnShutdown(ImGuiApp*) const override {};
@@ -1256,7 +1256,7 @@ struct ImGuiAppWindow : ImGuiAppWindowBase
 template <typename T>
 struct ImGuiAppSidebar : ImGuiAppSidebarBase
 {
-    ImGuiAppSidebar() { ImAppGenerateLabel<T>(this->Label, sizeof(this->Label)); } // bare class name; PushAppSidebar suffixes only real duplicates
+    ImGuiAppSidebar() { ImAppFormatLabel<T>(this->Label, sizeof(this->Label)); } // bare class name; PushAppSidebar suffixes only real duplicates
 
     virtual void OnInitialize(ImGuiApp*) const override {};
     virtual void OnShutdown(ImGuiApp*) const override {};
@@ -1282,7 +1282,7 @@ namespace ImGui
     {
         IM_ASSERT(app);
         char label[IM_LABEL_SIZE];
-        ImAppGenerateLabel<T>(label, sizeof(label));
+        ImAppFormatLabel<T>(label, sizeof(label));
         T* layer = IM_NEW(T)();
         AppRegisterLayer(app, layer, label);
     }
@@ -1294,7 +1294,7 @@ namespace ImGui
     {
         IM_ASSERT(app);
         char label[IM_LABEL_SIZE];
-        ImAppGenerateLabel<T>(label, sizeof(label));
+        ImAppFormatLabel<T>(label, sizeof(label));
         T* window = IM_NEW(T)();
         AppRegisterWindow(app, window, label);
     }
@@ -1304,7 +1304,7 @@ namespace ImGui
     {
         IM_ASSERT(app);
         char label[IM_LABEL_SIZE];
-        ImAppGenerateLabel<T>(label, sizeof(label));
+        ImAppFormatLabel<T>(label, sizeof(label));
         T* sidebar = IM_NEW(T)();
         AppRegisterSidebar(app, sidebar, label, vp, dir, size, flags);
     }
@@ -1318,7 +1318,7 @@ namespace ImGui
     inline T* AppControlCreate(ImGuiApp* app, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count, const char* host_kind, const char* host_label)
     {
         char label[IM_LABEL_SIZE];
-        ImAppGenerateLabel<T>(label, sizeof(label));
+        ImAppFormatLabel<T>(label, sizeof(label));
 
         T* control = IM_NEW(T)();
         using Inst = typename T::ControlInstanceDataType;
