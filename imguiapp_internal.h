@@ -497,7 +497,7 @@ struct ImGuiAppNodePort
   int              Id                  = 0; // from ImGuiAppGraph::NextId; == canvas pin id
   ImGuiAppPortKind Kind                = ImGuiAppPortKind_DataOut;
   char             Name[IM_LABEL_SIZE] = "";
-  ImGuiID          DataTypeId          = 0; // ImGuiType<PersistData>::ID for DataOut/DataIn (the data-flow key); 0 otherwise
+  ImGuiID          DataTypeId          = 0; // ImGuiAppType<PersistData>::ID for DataOut/DataIn (the data-flow key); 0 otherwise
 };
 
 struct ImGuiAppCommandDesc
@@ -1305,11 +1305,11 @@ namespace ImGui
   // Encode the ring's contents to disk NOW (assert hook, test failure, hotkey, user
   // code); reason lands in the WAL and a stream marker record. The ring keeps recording;
   // repeated dumps get "-2", "-3" path suffixes. When a ring recorder exists, the
-  // IM_ASSERT sink (ImGuiAppAssertFail) dumps it with the failed expression as reason.
+  // IM_ASSERT sink (ImAppAssertFail) dumps it with the failed expression as reason.
   IMGUI_API bool              AppRecordDumpRing(ImGuiAppRecorder* rec, const char* reason);
 
   // Assert forensics (F15): dump every live ring recorder (each auto-registered by AppRecordBeginRing)
-  // with `reason`. ImGuiAppAssertFail calls this before exit so the flight recording lands beside the
+  // with `reason`. ImAppAssertFail calls this before exit so the flight recording lands beside the
   // assert WAL. Returns the number of rings successfully dumped.
   IMGUI_API int               AppDumpAssertRings(const char* reason);
 
@@ -1341,7 +1341,7 @@ namespace ImGui
   IMGUI_API void                  AppMetaRecordEnd(ImGuiAppMetaRecorder* mr, ImVector<char>* out_meta);
 
   // Reflection field UI: read-only render + type-dispatched editor for one reflected field. Dispatches
-  // on the ImIsCharArray / ImIsFormattable traits (imguiapp_static.h) and enumerates members through
+  // on the ImGuiAppIsCharArray / ImGuiAppIsFormattable traits (imguiapp_static.h) and enumerates members through
   // ImGui::VisitAppFields (imguiapp_reflect.h).
   // Read-only render of one reflected field value.
   template <typename T>
@@ -1349,11 +1349,11 @@ namespace ImGui
   {
     IM_ASSERT(value != nullptr);
 
-    if constexpr (ImIsCharArray<T>)
+    if constexpr (ImGuiAppIsCharArray<T>)
     {
       ImGui::Text("%s: %s", label, *value);
     }
-    else if constexpr (ImIsFormattable<T>)
+    else if constexpr (ImGuiAppIsFormattable<T>)
     {
       char buf[IM_LABEL_SIZE];
       std::string s = std::format("{}", *value);
@@ -1362,7 +1362,7 @@ namespace ImGui
     }
     else
     {
-      std::string_view tn = ImAppReflect::type_name(*value);
+      std::string_view tn = ImGui::type_name(*value);
       ImGui::Text("%s: <%.*s>", label, (int)tn.size(), tn.data());
     }
   }
@@ -1374,7 +1374,7 @@ namespace ImGui
   {
     IM_ASSERT(value != nullptr);
 
-    if constexpr (ImIsCharArray<T>)
+    if constexpr (ImGuiAppIsCharArray<T>)
       return ImGui::InputText(label, *value, std::extent_v<T>);
     else if constexpr (std::is_same_v<T, bool>)
       return ImGui::Checkbox(label, value);
@@ -1498,7 +1498,7 @@ namespace ImGui
   IMGUI_API void              AppNodeRemoveCommand(ImGuiAppNode* n, int index);
 
   // Runtime data-flow key for a node named <node_name>: ConstantHash of the sanitized "<Name>Data"
-  // codegen emits == ImGuiType<<Name>Data>::ID, so a design DataOut port shares the live storage key.
+  // codegen emits == ImGuiAppType<<Name>Data>::ID, so a design DataOut port shares the live storage key.
   IMGUI_API ImGuiID           AppNodeStructTypeId(const char* node_name);
 
   // Stable fold of the codegen-determining authored (!IsLive) state: changes iff the emitted C++ would

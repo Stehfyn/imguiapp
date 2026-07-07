@@ -1,17 +1,18 @@
 #pragma once
 
-// [SECTION] Compile-time type-identity layer (ImGuiStatic<>, ImGuiType<>).
+// [SECTION] Compile-time type-identity layer (ImGuiAppStatic<>, ImGuiAppType<>).
 //
-// The ImGuiStatic layer: constexpr type name/id derivation from the compiler's function signature, plus
-// GenerateLabel. A LEAF header (depends only on imgui + std); imguiapp.h includes it near the top. A
+// The ImGuiAppStatic layer: constexpr type name/id derivation from the compiler's function signature.
+// A LEAF header (depends only on imgui + std); imguiapp.h includes it near the top. A
 // consumer that needs only compile-time type identity (codegen, a reflect test) can include this alone
 // without the whole runtime. Behavior-neutral extraction from imguiapp.h.
 
 #include "imgui.h"                        // ImGuiID, ImFormatString
-#include <format>                         // std::formatter (ImIsFormattable)
+#include <format>                         // std::formatter (ImGuiAppIsFormattable)
 #include <mutex>                          // std::call_once
 #include <string_view>
-#include <type_traits>                    // std::remove_cvref_t (ImGuiType alias)
+#include <array>                          // ImAppNulTerminate storage
+#include <type_traits>                    // std::remove_cvref_t (ImGuiAppType alias)
 
 #ifndef ImFuncSig
 #ifdef _MSC_VER
@@ -47,7 +48,7 @@
 #endif
 
 template <typename T>
-struct ImGuiStatic
+struct ImGuiAppStatic
 {
   inline static constexpr const char*      _FunctionSignature()                { return ImFuncSig; }
   inline static constexpr bool             _StartsWith(std::string_view sv, std::string_view prefix) { return sv.size() >= prefix.size() && sv.substr(0, prefix.size()) == prefix; }
@@ -80,7 +81,7 @@ struct ImGuiStatic
       return _StripDisplayScope(sv.substr(start, end - start));
     }
 
-    constexpr std::string_view msvc_marker = "ImGuiStatic<";
+    constexpr std::string_view msvc_marker = "ImGuiAppStatic<";
     start = sv.find(msvc_marker);
     if (start != std::string_view::npos)
     {
@@ -110,17 +111,25 @@ struct ImGuiStatic
 };
 
 template <typename T>
-using ImGuiType = ImGuiStatic<std::remove_cvref_t<std::remove_pointer_t<T>>>;
+using ImGuiAppType = ImGuiAppStatic<std::remove_cvref_t<std::remove_pointer_t<T>>>;
 
-template <typename T>
-inline static void GenerateLabel(char* label, size_t size) { std::string_view sv = ImGuiType<T>::Name; ImFormatString(label, size, "%.*s", (int)sv.size(), sv.data()); }
+// NUL-terminated char array holding a compile-time string_view (Cap = the view's length).
+template <std::size_t Cap>
+constexpr std::array<char, Cap + 1> ImAppNulTerminate(std::string_view sv)
+{
+  std::array<char, Cap + 1> a{};
+  for (std::size_t i = 0; i < sv.size() && i < Cap; ++i)
+    a[i] = sv[i];
+  return a;
+}
+
 
 // Field-type predicates (leaf traits; the reflect-driven field UI in imguiapp_internal.h dispatches on them).
 // True when std::format can stringify U with "{}": the disabled primary std::formatter is not
 // default-constructible; enabled specializations are.
 template <typename U>
-inline constexpr bool ImIsFormattable = std::is_default_constructible_v<std::formatter<std::remove_cvref_t<U>, char>>;
+inline constexpr bool ImGuiAppIsFormattable = std::is_default_constructible_v<std::formatter<std::remove_cvref_t<U>, char>>;
 
 // True for a fixed-size char buffer member (e.g. char Label[128]) -> edited as text.
 template <typename U>
-inline constexpr bool ImIsCharArray = std::is_array_v<U> && std::is_same_v<std::remove_cv_t<std::remove_extent_t<U>>, char>;
+inline constexpr bool ImGuiAppIsCharArray = std::is_array_v<U> && std::is_same_v<std::remove_cv_t<std::remove_extent_t<U>>, char>;

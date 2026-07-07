@@ -22,7 +22,9 @@ Index of this file:
 #include "imgui.h"          // IMGUI_API, ImGuiID, ImGuiStorage, ImBitArray, ImGuiTextIndex, ImChunkStream
 #include "imgui_internal.h" // ImStrncpy
 #include "imapp_config.h"
-#include "imguiapp_static.h" // ImFuncSig/IM_LABEL_SIZE/ImParseType* macros + ImGuiStatic<>/ImGuiType<>/GenerateLabel
+#include "imguiapp_static.h" // ImFuncSig/IM_LABEL_SIZE/ImParseType* macros + ImGuiAppStatic<>/ImGuiAppType<>
+// windows.h's min/max macros (leaked by platform-backend TUs) break imguiapp_reflect.h's std::min.
+#include "imguiapp_reflect.h" // compile-time reflection (qlibs/reflect port): live-mirror field walk, IMGUIAPP_HAS_REFLECT, ImGuiAppLiveFieldDesc/ImGuiAppTypeSchema
 
 // Keep VERSION and VERSION_NUM in sync.
 #define IMGUI_APPLAYER_VERSION "0.4.1"
@@ -36,12 +38,6 @@ Index of this file:
 #include <condition_variable> // ImGuiAppRecorder bounded-queue signalling
 #include <cstring>            // memset (ImGuiAppRecorder ctor)
 
-// Compile-time reflection (imguiapp_reflect.h, the applayer's port of qlibs/reflect): powers the live
-// mirror's field introspection. Also defines IMGUIAPP_HAS_REFLECT and the ImGuiApp manifest binding
-// (ImGuiAppLiveFieldDesc / ImGuiAppTypeSchema / AppReflectFields).
-// windows.h's min/max macros (leaked by platform-backend TUs) break its std::min.
-#include "imguiapp_reflect.h"
-
 
 #ifdef _MSC_VER
 #pragma warning(push)
@@ -51,9 +47,9 @@ Index of this file:
 // [SECTION] Forward declarations and basic types
 //-----------------------------------------------------------------------------
 
-// Forward declarations: ImGuiStatic layer
+// Forward declarations: ImGuiAppStatic layer
 template <typename T>
-struct ImGuiStatic;
+struct ImGuiAppStatic;
 
 // Forward declarations: ImGuiApp layer
 struct ImGuiApp;
@@ -152,6 +148,13 @@ namespace ImGui
     // Register a control's instance data (id-keyed). snapshottable => registers inst_size + TempData byte range
     // (snapshot/replay); otherwise registers opaque (caller passes the type-derived sizes/offset/destroy).
     IMGUI_API void        RegisterAppControlStorage(ImGuiApp* app, ImGuiID id, void* instance_data, bool snapshottable, int inst_size, int temp_offset, int temp_size, void (*destroy)(void*));
+    // Type-erased front of PushAppControl / PushWindowControl / PushSidebarControl: WAL-logs the push
+    // (host_kind/host_label describe the owning window/sidebar, or null for a top-level control), labels
+    // the control, and registers its instance storage. The (typed) template caller then wires
+    // _InstanceID/_InstanceData + ResolveDependencies (which need the concrete type) and calls AppControlPush.
+    IMGUI_API void        AppControlRegisterStorage(ImGuiApp* app, ImGuiAppControlBase* control, const char* name, ImGuiID id, ImGuiID instance, void* instance_data, bool snapshottable, int inst_size, int temp_offset, int temp_size, void (*destroy)(void*), const char* host_kind, const char* host_label);
+    // Type-erased tail: append the wired control to its owning list and initialize it.
+    IMGUI_API void        AppControlPush(ImGuiApp* app, ImVector<ImGuiAppControlBase*>* list, ImGuiAppControlBase* control);
     IMGUI_API void        UnregisterAppStorage(ImGuiApp* app, ImGuiID id);                                                                            // destroys + removes one entry
     IMGUI_API void        ClearAppStorage(ImGuiApp* app);
 
@@ -210,7 +213,7 @@ namespace ImGui
     IMGUI_API void        AppWALClose(ImGuiAppWAL* wal);
     IMGUI_API void        AppWALWrite(ImGuiAppWAL* wal, ImGuiAppWALLevel level, const char* fmt, ...) IM_FMTARGS(3);
 
-    // WAL sink for IM_ASSERT failures routed to ImGuiAppAssertFail.
+    // WAL sink for IM_ASSERT failures routed to ImAppAssertFail.
     IMGUI_API void        SetAppAssertWAL(ImGuiAppWAL* wal);
 
     // Authored style/color overrides
@@ -605,10 +608,9 @@ struct ImGuiAppPacer
     ImGuiAppPacerMode Mode;
     float             TargetHz;     // <= 0 with Mode_Target = pace to primary monitor refresh
     float             SleepSlackMs; // spin the last N ms (OS sleep granularity guard)
-                                    // read-only telemetry
-    double LastFrameMs;
-    double LastWaitMs;
-    ImU64  MissedDeadlines; // frames that arrived after their deadline
+    double            LastFrameMs;
+    double            LastWaitMs;
+    ImU64             MissedDeadlines; // frames that arrived after their deadline
 
     ImGuiAppPacer()
     {
@@ -631,14 +633,7 @@ struct ImGuiAppWAL
     const ImGuiAppFrameID* FrameID; // optional (point at ImGuiApp::FrameID): prefixes records "[tick:N tsc:T]"
     char                   Path[256];
 
-    ImGuiAppWAL()
-    {
-        File    = nullptr;
-        Seq     = 0;
-        Level   = ImGuiAppWALLevel_Off;
-        FrameID = nullptr;
-        Path[0] = 0;
-    }
+    ImGuiAppWAL() { memset(this, 0, sizeof(*this)); }
 };
 
 // Platform backend interface. The core app layer depends only on this vtable. Exactly one backend
@@ -665,7 +660,7 @@ IMGUI_API const ImGuiAppPlatformBackend* ImGuiApp_GetPlatformBackend();
 // [SECTION] Helpers (interface base, state-delta events, RNG, diagnostics, style/color/data descs)
 //-----------------------------------------------------------------------------
 
-// The ImFuncSig / IM_LABEL_SIZE / ImParseType* macros + ImGuiStatic<> / ImGuiType<> / GenerateLabel moved
+// The ImFuncSig / IM_LABEL_SIZE / ImParseType* macros + ImGuiAppStatic<> / ImGuiAppType<> moved
 // to imguiapp_static.h (leaf compile-time type-identity layer, included at the top of this file).
 
 struct ImGuiInterface
@@ -675,7 +670,7 @@ struct ImGuiInterface
     virtual ~ImGuiInterface() = default;
 };
 
-// ImGuiStatic<> / ImGuiType<> / GenerateLabel now live in imguiapp_static.h (see the include near the top).
+// ImGuiAppStatic<> / ImGuiAppType<> now live in imguiapp_static.h; ImAppGenerateLabel / ImAppTypeDisplayName + the reflection walk moved up to this file (after the reflect include).
 
 // State-delta event helpers over (this frame, last frame): rising = started, falling = ended, changed = either.
 inline static bool ImAppRising(bool now, bool last) { return now && !last; }
@@ -708,7 +703,7 @@ IMGUI_API int ImStackTrace(char* out, int out_size, int skip_frames = 0);
 
 // IM_ASSERT sink (wired via IMGUI_USER_CONFIG): logs expr/file/line + ImStackTrace to the SetAppAssertWAL
 // sink and stderr, flushes, then __debugbreak()s under a debugger or exits with code 3 -- never the CRT popup.
-IMGUI_API void ImGuiAppAssertFail(const char* expr, const char* file, int line);
+IMGUI_API void ImAppAssertFail(const char* expr, const char* file, int line);
 
 // One authorable style-var override: Value.x for float vars, both lanes for ImVec2 vars; Active is
 // runtime-toggleable.
@@ -734,15 +729,134 @@ struct ImGuiAppColorModDesc
 // TypeID names WHICH dependency of the pack is routed; Instance names the producer.
 struct ImGuiAppDataBinding
 {
-    ImGuiID TypeID;           // ImGuiType<Dep>::ID of the dependency being routed
+    ImGuiID TypeID;           // ImGuiAppType<Dep>::ID of the dependency being routed
     ImGuiID Instance;         // producer's instance id (0 = the type singleton)
     bool    Optional = false; // absent producer resolves to null instead of asserting; the consumer
                               // handles null (and is rebound live when the producer is pushed/popped)
 };
 
-// Storage key for a control's instance data in ImGuiApp::Data: instance 0 keeps the bare
-// data type id (the type singleton), any other instance qualifies it.
-IMGUI_API ImGuiID ImGuiAppInstanceKey(ImGuiID type_id, ImGuiID instance);
+// Instance-qualified type id (ImHash* family): hash-combines a data type id with an instance
+// number to key a control's instance data in ImGuiApp::Data. instance 0 keeps the bare type id
+// (the type singleton); any other instance qualifies it.
+IMGUI_API ImGuiID ImAppHashType(ImGuiID type_id, ImGuiID instance);
+
+// Label from a type's compile-time display name (the Push* helpers name items after their class).
+template <typename T>
+inline void ImAppGenerateLabel(char* label, size_t size) { std::string_view sv = ImGuiAppType<T>::Name; ImFormatString(label, size, "%.*s", (int)sv.size(), sv.data()); }
+
+// Display name in static null-terminated storage. Uses ImGuiAppType's signature parser (not
+// reflect's, which cannot parse function-local types), so registry keys match
+// GetControlDataTypeName by construction.
+template <typename T>
+inline const char* ImAppTypeDisplayName()
+{
+  static constexpr auto storage = ImAppNulTerminate<ImGuiAppType<T>::Name.size()>(ImGuiAppType<T>::Name);
+  return storage.data();
+}
+
+namespace ImGui
+{
+template <typename T>
+inline int AppReflectFields(ImGuiAppLiveFieldDesc* out, int cap);
+
+// Transitive automatic registration: materializes T's manifest into the runtime registry
+// and, through the field walk, the manifest of every visible aggregate T reaches (members
+// and ImVector elements). Reentrancy-safe: the entry registers before its fields fill.
+template <typename T>
+inline void AppEnsureTypeRegistered()
+{
+  if constexpr (ImGuiAppFieldsVisible<T>)
+  {
+    constexpr int n = (int)ImGui::size<T>();
+    const char* type_name = ImAppTypeDisplayName<T>();
+    if (AppFindTypeSchema(type_name) != nullptr)
+      return;
+    static ImGuiAppLiveFieldDesc fields[n > 0 ? n : 1];
+    static ImGuiAppTypeSchema schema;
+    schema.TypeName = type_name;
+    schema.Fields = fields;
+    schema.Count = 0;
+    schema.Size = (int)sizeof(T);
+    AppRegisterTypeSchema(&schema);
+    schema.Count = AppReflectFields<T>(fields, n > 0 ? n : 1);
+  }
+}
+
+// Aggregate walk shared by every ImGuiAppControl<> instantiation. Types outside the
+// visibility contract yield zero fields rather than failing to compile.
+template <typename T>
+inline int AppReflectFields(ImGuiAppLiveFieldDesc* out, int cap)
+{
+  if constexpr (ImGuiAppFieldsVisible<T>)
+  {
+    constexpr int n = (int)ImGui::size<T>();
+    if (out == nullptr || cap <= 0)
+      return n;
+    int written = 0;
+    ImGui::for_each<T>([&](auto I)
+    {
+      constexpr auto i = decltype(I)::value;
+      using M = std::remove_cvref_t<decltype(ImGui::get<i>(std::declval<T&>()))>;
+      using E = typename ImGuiAppVecElemOf<M>::Type;
+      if (written >= cap)
+        return;
+      ImGuiAppLiveFieldDesc* d = &out[written++];
+      d->Name = ImGui::member_name<i, T>().data();
+      d->ElemTypeName = nullptr;
+      d->Exact = true;
+      d->Offset = (int)ImGui::offset_of<i, T>();
+      d->Size = (int)sizeof(M);
+      if constexpr (std::is_same_v<M, bool>)                                        { d->Kind = ImGuiAppLiveFieldKind_Bool;      d->TypeName = "bool"; }
+      else if constexpr (std::is_same_v<M, float>)                                  { d->Kind = ImGuiAppLiveFieldKind_F32;       d->TypeName = "float"; }
+      else if constexpr (std::is_same_v<M, double>)                                 { d->Kind = ImGuiAppLiveFieldKind_F64;       d->TypeName = "double"; }
+      else if constexpr (std::is_same_v<M, ImVec2>)                                 { d->Kind = ImGuiAppLiveFieldKind_Vec2;      d->TypeName = "ImVec2"; }
+      else if constexpr (std::is_same_v<M, ImVec4>)                                 { d->Kind = ImGuiAppLiveFieldKind_Vec4;      d->TypeName = "ImVec4"; }
+      else if constexpr (std::is_array_v<M> && std::is_same_v<std::remove_extent_t<M>, char>) { d->Kind = ImGuiAppLiveFieldKind_CharArray; d->TypeName = "char"; }
+      else if constexpr (std::is_enum_v<M> && sizeof(M) == 4)                       { d->Kind = ImGuiAppLiveFieldKind_S32;       d->TypeName = "int"; }
+      else if constexpr (std::is_integral_v<M> && std::is_signed_v<M> && sizeof(M) == 4)   { d->Kind = ImGuiAppLiveFieldKind_S32; d->TypeName = "int"; }
+      else if constexpr (std::is_integral_v<M> && std::is_unsigned_v<M> && sizeof(M) == 4) { d->Kind = ImGuiAppLiveFieldKind_U32; d->TypeName = "unsigned int"; }
+      else if constexpr (!std::is_same_v<E, void>)
+      {
+        // ImVector member: exact spelling; a non-pointer element is registered so codegen can
+        // recurse into it (a pointer element's pointee is not owned -- never mirrored).
+        d->Kind = ImGuiAppLiveFieldKind_Opaque;
+        d->TypeName = ImGuiAppVecSpelling<E>::Value.data();
+        if constexpr (!std::is_pointer_v<E>)
+        {
+          d->ElemTypeName = ImAppTypeDisplayName<E>();
+          AppEnsureTypeRegistered<E>();
+        }
+      }
+      else if constexpr (std::is_pointer_v<M>)
+      {
+        d->Kind = ImGuiAppLiveFieldKind_Opaque;
+        d->TypeName = ImGuiAppPtrSpelling<std::remove_cv_t<std::remove_pointer_t<M>>>::Value.data();
+      }
+      else if constexpr (ImGuiAppFieldsVisible<M>)
+      {
+        // Nested visible aggregate: registered transitively, mirrored by codegen.
+        d->Kind = ImGuiAppLiveFieldKind_Opaque;
+        d->TypeName = ImAppTypeDisplayName<M>();
+        AppEnsureTypeRegistered<M>();
+      }
+      else
+      {
+        // Leaf outside every contract: bytes, honestly labelled.
+        d->Kind = ImGuiAppLiveFieldKind_Opaque;
+        d->TypeName = ImAppTypeDisplayName<M>();
+        d->Exact = false;
+      }
+    });
+    return written;
+  }
+  else
+  {
+    IM_UNUSED(out);
+    IM_UNUSED(cap);
+    return 0;
+  }
+}
+} // namespace ImGui
 
 //-----------------------------------------------------------------------------
 // [SECTION] App object model (layers, items, controls, ImGuiApp, adapter/control templates)
@@ -878,8 +992,10 @@ struct ImGuiAppControlBase : ImGuiAppItemBase
 };
 
 // NOTE: the reflectability contracts + type-schema registry + the reflection field-walk
-// (ImGuiAppDataReflectable, ImGuiAppTypeSchema + ImGuiAppRegister/FindTypeSchema, ImGuiAppFieldsVisible,
-// AppReflectFields, AppEnsureTypeRegistered) live in imguiapp_reflect.h, included at the top.
+// (ImGuiAppDataReflectable, ImGuiAppTypeSchema + ImGuiAppRegister/FindTypeSchema, ImGuiAppFieldsVisible)
+// live in imguiapp_reflect.h, included at the top. The type-name helpers + reflection walk that consume
+// them (ImAppGenerateLabel, ImAppTypeDisplayName, AppReflectFields, AppEnsureTypeRegistered) are defined
+// near the top of this file, right after that include.
 
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
 struct ImGuiInterfaceAdapterBase : ImGuiInterface
@@ -1055,11 +1171,11 @@ struct ImGuiInterfaceAdapter : Base, ImGuiInterfaceAdapterBase<PersistDataT, Tem
     template <typename Dep>
     inline Dep* ResolveDependency(const ImGuiApp* app, const ImGuiAppDataBinding* binds, int binds_count, int slot)
     {
-        const ImGuiID type_id = ImGuiType<Dep>::ID;
+        const ImGuiID type_id = ImGuiAppType<Dep>::ID;
         for (int i = 0; i < binds_count; i++)
             if (binds[i].TypeID == type_id)
             {
-                _DependencyKeys[slot]     = ImGuiAppInstanceKey(type_id, binds[i].Instance);
+                _DependencyKeys[slot]     = ImAppHashType(type_id, binds[i].Instance);
                 _DependencyOptional[slot] = binds[i].Optional;
                 Dep* data                 = static_cast<Dep*>(app->Data.GetVoidPtr(_DependencyKeys[slot]));
                 IM_ASSERT(data != nullptr || binds[i].Optional);
@@ -1067,7 +1183,7 @@ struct ImGuiInterfaceAdapter : Base, ImGuiInterfaceAdapterBase<PersistDataT, Tem
             }
         if (_InstanceID != 0)
         {
-            const ImGuiID own_key = ImGuiAppInstanceKey(type_id, _InstanceID);
+            const ImGuiID own_key = ImAppHashType(type_id, _InstanceID);
             Dep*          data    = static_cast<Dep*>(app->Data.GetVoidPtr(own_key));
             if (data != nullptr)
             {
@@ -1163,7 +1279,7 @@ struct ImGuiAppControl : ImGuiInterfaceAdapter<ImGuiAppControlBase, PersistDataT
 
     // Instance-qualified storage keys -- the same keys app->Data uses. Dependency ids are the
     // RESOLVED producer keys (push-time routing), so mirrors draw the actual wiring.
-    virtual ImGuiID GetControlDataID() const override final { return ImGuiAppInstanceKey(ImGuiType<PersistDataT>::ID, this->_InstanceID); }
+    virtual ImGuiID GetControlDataID() const override final { return ImAppHashType(ImGuiAppType<PersistDataT>::ID, this->_InstanceID); }
 
     virtual int GetControlDependencyIDs(ImGuiID* out, int cap) const override final
     {
@@ -1176,8 +1292,8 @@ struct ImGuiAppControl : ImGuiInterfaceAdapter<ImGuiAppControlBase, PersistDataT
         return n;
     }
 
-    virtual void GetControlDataTypeName(char* out, int out_size) const override final { GenerateLabel<PersistDataT>(out, (size_t)out_size); }
-    virtual void GetControlTempDataTypeName(char* out, int out_size) const override final { GenerateLabel<TempDataT>(out, (size_t)out_size); }
+    virtual void GetControlDataTypeName(char* out, int out_size) const override final { ImAppGenerateLabel<PersistDataT>(out, (size_t)out_size); }
+    virtual void GetControlTempDataTypeName(char* out, int out_size) const override final { ImAppGenerateLabel<TempDataT>(out, (size_t)out_size); }
 
     virtual int GetControlFields(ImGuiAppLiveFieldDesc* out, int cap, bool temp_data) const override final
     {
@@ -1206,7 +1322,7 @@ struct ImGuiAppControl : ImGuiInterfaceAdapter<ImGuiAppControlBase, PersistDataT
         const int count = (int)(sizeof...(DataDependencies));
         if (out == nullptr || cap <= 0)
             return count;
-        const ImGuiID ids[] = {(ImGuiID)0, ImGuiType<DataDependencies>::ID...}; // leading 0 -> never zero-size
+        const ImGuiID ids[] = {(ImGuiID)0, ImGuiAppType<DataDependencies>::ID...}; // leading 0 -> never zero-size
         const int     n     = count < cap ? count : cap;
         for (int i = 0; i < n; i++)
             out[i] = ids[i + 1];
@@ -1229,12 +1345,12 @@ struct ImGuiAppControl : ImGuiInterfaceAdapter<ImGuiAppControlBase, PersistDataT
         if (app == nullptr || bind == nullptr)
             return false;
         constexpr int count = (int)(sizeof...(DataDependencies));
-        const ImGuiID ids[] = {(ImGuiID)0, ImGuiType<DataDependencies>::ID...};
+        const ImGuiID ids[] = {(ImGuiID)0, ImGuiAppType<DataDependencies>::ID...};
         for (int slot = 0; slot < count; slot++)
         {
             if (ids[slot + 1] != bind->TypeID)
                 continue;
-            this->_DependencyKeys[slot]     = ImGuiAppInstanceKey(bind->TypeID, bind->Instance);
+            this->_DependencyKeys[slot]     = ImAppHashType(bind->TypeID, bind->Instance);
             this->_DependencyOptional[slot] = bind->Optional;
             this->RebindDependencies(app);
             app->CompositionRevision++; // rewiring changes the dependency DAG: update order must rebuild
@@ -1258,7 +1374,7 @@ struct ImGuiAppControl : ImGuiInterfaceAdapter<ImGuiAppControlBase, PersistDataT
 template <typename T>
 struct ImGuiAppWindow : ImGuiAppWindowBase
 {
-    ImGuiAppWindow() { GenerateLabel<T>(this->Label, sizeof(this->Label)); } // bare class name; PushAppWindow suffixes only real duplicates
+    ImGuiAppWindow() { ImAppGenerateLabel<T>(this->Label, sizeof(this->Label)); } // bare class name; PushAppWindow suffixes only real duplicates
 
     virtual void OnInitialize(ImGuiApp*) const override {};
     virtual void OnShutdown(ImGuiApp*) const override {};
@@ -1270,7 +1386,7 @@ struct ImGuiAppWindow : ImGuiAppWindowBase
 template <typename T>
 struct ImGuiAppSidebar : ImGuiAppSidebarBase
 {
-    ImGuiAppSidebar() { GenerateLabel<T>(this->Label, sizeof(this->Label)); } // bare class name; PushAppSidebar suffixes only real duplicates
+    ImGuiAppSidebar() { ImAppGenerateLabel<T>(this->Label, sizeof(this->Label)); } // bare class name; PushAppSidebar suffixes only real duplicates
 
     virtual void OnInitialize(ImGuiApp*) const override {};
     virtual void OnShutdown(ImGuiApp*) const override {};
@@ -1327,7 +1443,7 @@ namespace ImGui
         IM_ASSERT(app);
 
         char name[IM_LABEL_SIZE];
-        GenerateLabel<T>(name, sizeof(name));
+        ImAppGenerateLabel<T>(name, sizeof(name));
         AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push layer %s", name);
 
         app->Layers.push_back(IM_NEW(T)());
@@ -1343,7 +1459,7 @@ namespace ImGui
     {
         IM_ASSERT(app);
         char name[IM_LABEL_SIZE];
-        GenerateLabel<T>(name, sizeof(name));
+        ImAppGenerateLabel<T>(name, sizeof(name));
         AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push window %s", name);
         T* window = IM_NEW(T)();
         IM_ASSERT(window);
@@ -1357,7 +1473,7 @@ namespace ImGui
     {
         IM_ASSERT(app);
         char name[IM_LABEL_SIZE];
-        GenerateLabel<T>(name, sizeof(name));
+        ImAppGenerateLabel<T>(name, sizeof(name));
         AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push sidebar %s", name);
         T* sidebar = IM_NEW(T)();
         IM_ASSERT(sidebar);
@@ -1376,37 +1492,26 @@ namespace ImGui
         IM_ASSERT(app);
 
         char name[IM_LABEL_SIZE];
-        GenerateLabel<T>(name, sizeof(name));
-        AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push control %s (instance %u)", name, (unsigned)instance);
-
+        ImAppGenerateLabel<T>(name, sizeof(name));
         // Instance data is keyed by the instance-qualified data type id so dependents can resolve it.
-        ImGuiID id = ImGuiAppInstanceKey(ImGuiType<typename T::ControlDataType>::ID, instance);
-
-        // One instance per (control data type, instance id).
-        typename T::ControlInstanceDataType* instance_data = static_cast<typename T::ControlInstanceDataType*>(app->Data.GetVoidPtr(id));
-        IM_ASSERT(nullptr == instance_data);
+        const ImGuiID id = ImAppHashType(ImGuiAppType<typename T::ControlDataType>::ID, instance);
+        IM_ASSERT(app->Data.GetVoidPtr(id) == nullptr);   // one instance per (control data type, instance id)
 
         T* control = IM_NEW(T)();
         IM_ASSERT(control);
-        ImGuiAppControlBase* control_base = control;
-        ImStrncpy(control_base->Label, name, sizeof(control_base->Label));
-
-        instance_data = IM_NEW(typename T::ControlInstanceDataType)();
+        using Inst = typename T::ControlInstanceDataType;
+        Inst* instance_data = IM_NEW(Inst)();
         IM_ASSERT(instance_data);
 
-        app->Data.SetVoidPtr(id, instance_data);
         // Trivially-copyable instance data is snapshottable (size + TempData byte range); heap-owning data is opaque.
-        using Inst = typename T::ControlInstanceDataType;
-        RegisterAppControlStorage(app, id, instance_data, std::is_trivially_copyable_v<Inst>,
-                                  (int)sizeof(Inst),
+        AppControlRegisterStorage(app, control, name, id, instance, instance_data,
+                                  std::is_trivially_copyable_v<Inst>, (int)sizeof(Inst),
                                   (int)((char*)&instance_data->TempData - (char*)instance_data),
-                                  (int)sizeof(instance_data->TempData),
-                                  DestroyAppStorageValue<Inst>);
+                                  (int)sizeof(instance_data->TempData), DestroyAppStorageValue<Inst>, nullptr, nullptr);
         control->_InstanceID   = instance;
         control->_InstanceData = instance_data;
         control->ResolveDependencies(app, binds, binds_count);
-        app->Controls.push_back(control);
-        app->Controls.back()->OnInitialize(app);
+        AppControlPush(app, &app->Controls, control);
     }
 
     // Host a control inside a window: instance data registers in app->Data as usual, but the control joins
@@ -1417,80 +1522,54 @@ namespace ImGui
         IM_ASSERT(app && window);
 
         char name[IM_LABEL_SIZE];
-        GenerateLabel<T>(name, sizeof(name));
-        AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push control %s (instance %u) into window '%s'", name, (unsigned)instance, window->Label);
-
+        ImAppGenerateLabel<T>(name, sizeof(name));
         // Instance data is keyed by the instance-qualified data type id so dependents can resolve it.
-        ImGuiID id = ImGuiAppInstanceKey(ImGuiType<typename T::ControlDataType>::ID, instance);
-
-        // One instance per (control data type, instance id).
-        typename T::ControlInstanceDataType* instance_data = static_cast<typename T::ControlInstanceDataType*>(app->Data.GetVoidPtr(id));
-        IM_ASSERT(nullptr == instance_data);
+        const ImGuiID id = ImAppHashType(ImGuiAppType<typename T::ControlDataType>::ID, instance);
+        IM_ASSERT(app->Data.GetVoidPtr(id) == nullptr);   // one instance per (control data type, instance id)
 
         T* control = IM_NEW(T)();
         IM_ASSERT(control);
-        ImGuiAppControlBase* control_base = control;
-        ImStrncpy(control_base->Label, name, sizeof(control_base->Label));
-
-        instance_data = IM_NEW(typename T::ControlInstanceDataType)();
+        using Inst = typename T::ControlInstanceDataType;
+        Inst* instance_data = IM_NEW(Inst)();
         IM_ASSERT(instance_data);
 
-        app->Data.SetVoidPtr(id, instance_data);
         // Trivially-copyable instance data is snapshottable (size + TempData byte range); heap-owning data is opaque.
-        using Inst = typename T::ControlInstanceDataType;
-        RegisterAppControlStorage(app, id, instance_data, std::is_trivially_copyable_v<Inst>,
-                                  (int)sizeof(Inst),
+        AppControlRegisterStorage(app, control, name, id, instance, instance_data,
+                                  std::is_trivially_copyable_v<Inst>, (int)sizeof(Inst),
                                   (int)((char*)&instance_data->TempData - (char*)instance_data),
-                                  (int)sizeof(instance_data->TempData),
-                                  DestroyAppStorageValue<Inst>);
+                                  (int)sizeof(instance_data->TempData), DestroyAppStorageValue<Inst>, "window", window->Label);
         control->_InstanceID   = instance;
         control->_InstanceData = instance_data;
         control->ResolveDependencies(app, binds, binds_count);
-        window->Controls.push_back(control);
-        window->Controls.back()->OnInitialize(app);
+        AppControlPush(app, &window->Controls, control);
     }
 
     template <typename T>
     IMGUI_API inline void PushSidebarControl(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count)
     {
-        ImGuiID                              id;
-        T*                                   control;
-        typename T::ControlInstanceDataType* instance_data;
-
-        IM_ASSERT(app);
+        IM_ASSERT(app && sidebar);
 
         char name[IM_LABEL_SIZE];
-        GenerateLabel<T>(name, sizeof(name));
-        AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push control %s (instance %u) into sidebar '%s'", name, (unsigned)instance, sidebar ? sidebar->Label : "(null)");
-
+        ImAppGenerateLabel<T>(name, sizeof(name));
         // Instance data is keyed by the instance-qualified data type id so dependents can resolve it.
-        id = ImGuiAppInstanceKey(ImGuiType<typename T::ControlDataType>::ID, instance);
+        const ImGuiID id = ImAppHashType(ImGuiAppType<typename T::ControlDataType>::ID, instance);
+        IM_ASSERT(app->Data.GetVoidPtr(id) == nullptr);   // one instance per (control data type, instance id)
 
-        // One instance per (control data type, instance id).
-        instance_data = static_cast<decltype(instance_data)>(app->Data.GetVoidPtr(id));
-        IM_ASSERT(nullptr == instance_data);
-
-        control = IM_NEW(T)();
+        T* control = IM_NEW(T)();
         IM_ASSERT(control);
-        ImGuiAppControlBase* control_base = control;
-        ImStrncpy(control_base->Label, name, sizeof(control_base->Label));
-
-        instance_data = IM_NEW(typename T::ControlInstanceDataType)();
+        using Inst = typename T::ControlInstanceDataType;
+        Inst* instance_data = IM_NEW(Inst)();
         IM_ASSERT(instance_data);
 
-        app->Data.SetVoidPtr(id, instance_data);
         // Trivially-copyable instance data is snapshottable (size + TempData byte range); heap-owning data is opaque.
-        using Inst = typename T::ControlInstanceDataType;
-        RegisterAppControlStorage(app, id, instance_data, std::is_trivially_copyable_v<Inst>,
-                                  (int)sizeof(Inst),
+        AppControlRegisterStorage(app, control, name, id, instance, instance_data,
+                                  std::is_trivially_copyable_v<Inst>, (int)sizeof(Inst),
                                   (int)((char*)&instance_data->TempData - (char*)instance_data),
-                                  (int)sizeof(instance_data->TempData),
-                                  DestroyAppStorageValue<Inst>);
+                                  (int)sizeof(instance_data->TempData), DestroyAppStorageValue<Inst>, "sidebar", sidebar->Label);
         control->_InstanceID   = instance;
         control->_InstanceData = instance_data;
         control->ResolveDependencies(app, binds, binds_count);
-        sidebar->Controls.push_back(control);
-        sidebar->Controls.back()->OnInitialize(app);
+        AppControlPush(app, &sidebar->Controls, control);
     }
 }
 

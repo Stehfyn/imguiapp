@@ -44,7 +44,7 @@
 // [SECTION] Assert forensics (symbolized backtrace + WAL sink). See imguix_imconfig.h for IM_ASSERT routing.
 //-----------------------------------------------------------------------------
 
-// Assert-time forensics state. Read from the assert handler (ImGuiAppAssertFail) -- a
+// Assert-time forensics state. Read from the assert handler (ImAppAssertFail) -- a
 // context-free callback with no `this`, so this must be reachable as a process-wide slot.
 // Function-local static: constructed on first use, no TU-scope global, no static-init-order
 // hazard for the recorder vector.
@@ -114,7 +114,7 @@ IMGUI_API int ImStackTrace(char* out, int out_size, int skip_frames)
 #endif
 }
 
-IMGUI_API void ImGuiAppAssertFail(const char* expr, const char* file, int line)
+IMGUI_API void ImAppAssertFail(const char* expr, const char* file, int line)
 {
     // Re-entrancy guard: an assert inside the logging path must not recurse.
     static bool in_assert = false;
@@ -146,9 +146,10 @@ IMGUI_API void ImGuiAppAssertFail(const char* expr, const char* file, int line)
     exit(3);
 }
 
-// Storage key for a control's instance data in ImGuiApp::Data: instance 0 keeps the bare
-// data type id (the type singleton), any other instance qualifies it.
-IMGUI_API ImGuiID ImGuiAppInstanceKey(ImGuiID type_id, ImGuiID instance)
+// Instance-qualified type id (ImHash* family): hash-combines a data type id with an instance
+// number to key a control's instance data in ImGuiApp::Data. instance 0 keeps the bare type id
+// (the type singleton); any other instance qualifies it.
+IMGUI_API ImGuiID ImAppHashType(ImGuiID type_id, ImGuiID instance)
 {
     if (instance == 0)
       return type_id;
@@ -1122,6 +1123,23 @@ namespace ImGui
                          snapshottable ? temp_offset : 0,
                          snapshottable ? temp_size : 0,
                          destroy);
+  }
+
+  IMGUI_API void AppControlRegisterStorage(ImGuiApp* app, ImGuiAppControlBase* control, const char* name, ImGuiID id, ImGuiID instance, void* instance_data, bool snapshottable, int inst_size, int temp_offset, int temp_size, void (*destroy)(void*), const char* host_kind, const char* host_label)
+  {
+      if (host_label == nullptr)
+        AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push control %s (instance %u)", name, (unsigned)instance);
+      else
+        AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push control %s (instance %u) into %s '%s'", name, (unsigned)instance, host_kind, host_label);
+      ImStrncpy(control->Label, name, sizeof(control->Label));
+      app->Data.SetVoidPtr(id, instance_data);
+      RegisterAppControlStorage(app, id, instance_data, snapshottable, inst_size, temp_offset, temp_size, destroy);
+  }
+
+  IMGUI_API void AppControlPush(ImGuiApp* app, ImVector<ImGuiAppControlBase*>* list, ImGuiAppControlBase* control)
+  {
+      list->push_back(control);
+      control->OnInitialize(app);
   }
 
   IMGUI_API void AppStateHistoryClear(ImGuiAppStateHistory* h)
@@ -3435,7 +3453,7 @@ namespace
     {
       std::string_view sv;
 
-      sv = ImGuiType<decltype(this)>::Name;
+      sv = ImGuiAppType<decltype(this)>::Name;
 
       ImStrncpy(data->type, sv.data(), sv.length() + 1); // +1: ImStrncpy copies count-1 chars
       ImFormatString(data->label, sizeof(data->label), "%s", data->type);
@@ -3502,7 +3520,7 @@ namespace
 
       std::string_view sv;
 
-      sv = ImGuiType<decltype(this)>::Name;
+      sv = ImGuiAppType<decltype(this)>::Name;
 
       ImStrncpy(data->type, sv.data(), sv.length() + 1); // +1: ImStrncpy copies count-1 chars
       ImFormatString(data->label, sizeof(data->label), "%s", data->type);
@@ -3727,7 +3745,7 @@ namespace
   // PersistData aliases the start of InstanceData.
   static GraphDocData* GetGraphDoc(ImGuiApp* app)
   {
-    return static_cast<GraphDocData*>(app->Data.GetVoidPtr(ImGuiType<GraphDocData>::ID));
+    return static_cast<GraphDocData*>(app->Data.GetVoidPtr(ImGuiAppType<GraphDocData>::ID));
   }
 
   //-----------------------------------------------------------------------------
@@ -6497,7 +6515,7 @@ namespace
 
   static DemoMenuData* GetDemoMenu(ImGuiApp* app)
   {
-    return static_cast<DemoMenuData*>(app->Data.GetVoidPtr(ImGuiType<DemoMenuData>::ID));
+    return static_cast<DemoMenuData*>(app->Data.GetVoidPtr(ImGuiAppType<DemoMenuData>::ID));
   }
 
   struct DemoPanelWindow : ImGuiAppWindow<DemoPanelWindow>
@@ -6517,7 +6535,7 @@ namespace ImGui
       return nullptr;
     // Instance data is keyed by data type id in app->Data regardless of which window hosts
     // the control (GraphDocControl is Composer-window-hosted, never in host->Controls).
-    GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiType<GraphDocData>::ID);
+    GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiAppType<GraphDocData>::ID);
     if (doc == nullptr)
       return nullptr;
     return &doc->Graph;
@@ -6529,7 +6547,7 @@ namespace ImGui
   {
     if (host == nullptr)
       return 0;
-    GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiType<GraphDocData>::ID);
+    GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiAppType<GraphDocData>::ID);
     if (doc == nullptr || doc->Transport == nullptr)
       return 0;
     return doc->Transport->History.Count;
@@ -6540,7 +6558,7 @@ namespace ImGui
   {
     if (host == nullptr)
       return ImGuiAppTransportSource_LiveRing;
-    GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiType<GraphDocData>::ID);
+    GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiAppType<GraphDocData>::ID);
     if (doc == nullptr || doc->Transport == nullptr)
       return ImGuiAppTransportSource_LiveRing;
     return doc->Transport->Source;
@@ -6552,7 +6570,7 @@ namespace ImGui
   {
     if (host == nullptr)
       return 0;
-    GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiType<GraphDocData>::ID);
+    GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiAppType<GraphDocData>::ID);
     if (doc == nullptr || doc->Transport == nullptr || doc->Transport->Run == nullptr)
       return 0;
     return doc->Transport->FileView.ShownTick;
@@ -6563,7 +6581,7 @@ namespace ImGui
   {
     if (host == nullptr)
       return 0.0f;
-    GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiType<GraphDocData>::ID);
+    GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiAppType<GraphDocData>::ID);
     return doc != nullptr ? doc->TreeW : 0.0f;
   }
 
@@ -6572,7 +6590,7 @@ namespace ImGui
   {
     if (host == nullptr)
       return 0;
-    GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiType<GraphDocData>::ID);
+    GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiAppType<GraphDocData>::ID);
     return doc != nullptr ? ComposerLayoutVisFlags(doc) : 0;
   }
 
@@ -6699,7 +6717,7 @@ namespace ImGui
           {
             // Soft-wired to the Random Time example: reads its roll when it is on, falls back
             // to the default otherwise (Random Time pushes first when both are enabled).
-            const ImGuiAppDataBinding binds[] = { { ImGuiType<RandomTimeData>::ID, 0, true } };
+            const ImGuiAppDataBinding binds[] = { { ImGuiAppType<RandomTimeData>::ID, 0, true } };
             PushWindowControl<BreathingControlDemo>(app, w, 0, binds, IM_ARRAYSIZE(binds));
           }
         }
@@ -8553,7 +8571,7 @@ namespace ImGui
   //-----------------------------------------------------------------------------
 
   // Mirror of ImGuiStatic::_ConstantHash (imguiapp.h): a design port must carry the exact runtime
-  // data-flow key ImGuiType<PersistData>::ID.
+  // data-flow key ImGuiAppType<PersistData>::ID.
   static ImGuiID AppConstantHash(const char* s)
   {
     return *s ? (ImGuiID)(unsigned char)*s + 33u * AppConstantHash(s + 1) : 5381u;
@@ -25519,7 +25537,7 @@ namespace ImGui
 {
 
 // Assert forensics (F15): every live ring recorder registers in AppAssert().RingRecorders so
-// ImGuiAppAssertFail can dump them all before the process exits -- the flight recording lands
+// ImAppAssertFail can dump them all before the process exits -- the flight recording lands
 // beside the assert WAL. Non-ring recorders (linear takes) do not register; no ring to snapshot.
 static ImGuiAppRecorder* AvBeginCommon(ImGuiApp* app, ImGuiAppAVEncoder* encoder, const ImGuiAppAVEncodeConfig* config)
 {
@@ -25945,7 +25963,7 @@ IMGUI_API bool AppRecordDumpRing(ImGuiAppRecorder* rec, const char* reason)
 }
 
 // F15: dump every registered ring recorder before the process exits on an assert. Called by
-// ImGuiAppAssertFail after it writes the assert WAL, so the flight recording lands beside it.
+// ImAppAssertFail after it writes the assert WAL, so the flight recording lands beside it.
 IMGUI_API int AppDumpAssertRings(const char* reason)
 {
   int dumped = 0;
