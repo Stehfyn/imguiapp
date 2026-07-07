@@ -6364,7 +6364,7 @@ namespace
             const ImGuiAppNode* seln = ImGui::AppGraphFindNode(graph, selection);
             if (seln != nullptr && !seln->IsLive)
               if (ImGui::AppInspectorSection("##sec_preview", ICON_FA_PLAY, "Preview", nullptr, nullptr))
-                ImGui::AppGraphRenderMockPanel(graph, selection, doc->Mirror);
+                ImGui::AppGraphDrawMockPanel(graph, selection, doc->Mirror);
             if (data->HasNodeCode)
             {
               if (ImGui::AppInspectorSection("##sec_code", ICON_FA_CODE, "Generated C++", nullptr, nullptr))
@@ -10418,7 +10418,7 @@ namespace ImGui
   }
 
   // Erase a single link by id, plus any field binding keyed to it.
-  static void AppGraphEraseLink(ImGuiAppGraph* g, int link_id)
+  static void AppGraphRemoveLink(ImGuiAppGraph* g, int link_id)
   {
     for (int li = g->Links.Size - 1; li >= 0; li--)
     {
@@ -16062,7 +16062,7 @@ namespace ImGui
       const int sel_wire = ImGui::CanvasSelectedWire(cv);
       if (sel_wire >= 0)
       {
-        AppGraphEraseLink(g, sel_wire);
+        AppGraphRemoveLink(g, sel_wire);
         ImGui::CanvasClearWireSelection(cv);
       }
     }
@@ -16624,7 +16624,7 @@ namespace ImGui
         ImGui::CloseCurrentPopup();
       else if (ImGui::MenuItem("Delete link"))
       {
-        AppGraphEraseLink(g, AppGraphEditorState(g)->CtxLinkId);
+        AppGraphRemoveLink(g, AppGraphEditorState(g)->CtxLinkId);
         AppGraphEditorState(g)->CtxLinkId = -1;
       }
       ImGui::EndPopup();
@@ -17787,7 +17787,7 @@ namespace ImGui
   // Render one field list as live mock widgets. Numeric state is kept in the window's ImGuiStorage keyed by the
   // field id, so scrubbed values persist across frames; strings show a read-only box (mock layout, not wired).
 #ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
-  static void AppMockRenderFields(const ImVector<ImGuiAppFieldDesc>& fields)
+  static void AppMockDrawFields(const ImVector<ImGuiAppFieldDesc>& fields)
   {
     ImGuiStorage* st = ImGui::GetStateStorage();
     for (int i = 0; i < fields.Size; i++)
@@ -17842,7 +17842,7 @@ namespace ImGui
     }
   }
 
-  void AppGraphRenderMockPanel(ImGuiAppGraph* g, int node_id, ImGuiApp* live_app)
+  void AppGraphDrawMockPanel(ImGuiAppGraph* g, int node_id, ImGuiApp* live_app)
   {
     IM_ASSERT(g != nullptr);
 
@@ -17882,11 +17882,11 @@ namespace ImGui
       return;
     }
     if (persist.Size > 0)
-      AppMockRenderFields(persist);
+      AppMockDrawFields(persist);
     if (temp.Size > 0)
     {
       ImGui::SeparatorText("temp");
-      AppMockRenderFields(temp);
+      AppMockDrawFields(temp);
     }
     if (n->Events.Size > 0)
     {
@@ -22723,7 +22723,7 @@ namespace ImGui
     return hov && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
   }
 
-  static void AppTreeRenderNode(ImGuiAppGraph* g, int node_id, AppTreeCtx* c);   // fwd (recursive)
+  static void AppTreeDrawNode(ImGuiAppGraph* g, int node_id, AppTreeCtx* c);   // fwd (recursive)
 
   // The right-click menu for a tree row -- records a deferred action (mutating g while iterating it is unsafe).
   static void AppTreeContextMenu(ImGuiAppGraph* g, ImGuiAppNode* n, AppTreeCtx* c)
@@ -22813,7 +22813,7 @@ namespace ImGui
     ImGui::EndPopup();
   }
 
-  static void AppTreeRenderNode(ImGuiAppGraph* g, int node_id, AppTreeCtx* c)
+  static void AppTreeDrawNode(ImGuiAppGraph* g, int node_id, AppTreeCtx* c)
   {
     const int ni = AppGraphFindNodeIndex(g, node_id);
     if (ni < 0)
@@ -23014,7 +23014,7 @@ namespace ImGui
       const float guide_y0 = ImGui::GetCursorScreenPos().y - ImGui::GetStyle().ItemSpacing.y * 0.5f;
 
       for (int i = 0; i < kids.Size; i++)
-        AppTreeRenderNode(g, kids.Data[i], c);
+        AppTreeDrawNode(g, kids.Data[i], c);
 
       if (is_control)
       {
@@ -23201,7 +23201,7 @@ namespace ImGui
             ImGui::TextDisabled(ICON_FA_EYE "  live mirror");
             ImGui::Separator();
           }
-          AppTreeRenderNode(g, g->Nodes.Data[i].Id, &ctx);
+          AppTreeDrawNode(g, g->Nodes.Data[i].Id, &ctx);
         }
     }
 
@@ -24243,11 +24243,11 @@ namespace
   }
 
   // Manifest-bound widget panel (design 8.1) with selection brushing (design 8.2): the field switch of
-  // AppMockRenderFields, rewritten to read/write manifest offsets in live storage, wrapped in one titled
+  // AppMockDrawFields, rewritten to read/write manifest offsets in live storage, wrapped in one titled
   // group so the panel is a single hit-target. The surface reports the hovered/clicked node back to the
   // composer, and haloes the group when the composer's selection/hover names this node. Runs for a hosted or
   // surface control inside the current window; app-level headless controls (the CORE path) issue no ImGui.
-  void AppPvRenderFields(ImGuiAppPreview* s, const AppPvInstance* inst, char* buffer, const char* label)
+  void AppPvDrawFields(ImGuiAppPreview* s, const AppPvInstance* inst, char* buffer, const char* label)
   {
     ImGui::PushID(inst->NodeId);
     ImGui::BeginGroup();
@@ -24323,7 +24323,7 @@ void ImGuiAppPreviewControl::OnRender(const ImGuiApp* app) const
   // headless CORE (app-level controls, no window/NewFrame) makes no ImGui calls.
 #ifndef IMGUIX_DISABLE_TOOLS   // TOOL: surface widget input (Phase A3) -- core->UI call site
   if (Hosted || Session->Surface.Enabled)
-    AppPvRenderFields(Session, Inst, buffer, Label);
+    AppPvDrawFields(Session, Inst, buffer, Label);
 #endif // IMGUIX_DISABLE_TOOLS
 }
 

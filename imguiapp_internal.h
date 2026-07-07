@@ -1580,7 +1580,7 @@ namespace ImGui
   // Render a design Control's effective Persist/Temp fields as a mock panel of real ImGui widgets
   // (values are scratch), or -- for a LIVE node with live_app -- the running control's reflected
   // members with their current values. node_id < 0 -> hint.
-  IMGUI_API void                                AppGraphRenderMockPanel(ImGuiAppGraph* g, int node_id, ImGuiApp* live_app = nullptr);
+  IMGUI_API void                                AppGraphDrawMockPanel(ImGuiAppGraph* g, int node_id, ImGuiApp* live_app = nullptr);
 
   // Inspector for one node's authored data. Live nodes are read-only. node_id < 0 -> hint. Edits
   // mutate the graph in place.
