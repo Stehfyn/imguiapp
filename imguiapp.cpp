@@ -1125,8 +1125,11 @@ namespace ImGui
                          destroy);
   }
 
-  IMGUI_API void AppControlRegisterStorage(ImGuiApp* app, ImGuiAppControlBase* control, const char* name, ImGuiID id, ImGuiID instance, void* instance_data, bool snapshottable, int inst_size, int temp_offset, int temp_size, void (*destroy)(void*), const char* host_kind, const char* host_label)
+  IMGUI_API void AppControlRegisterStorage(ImGuiApp* app, ImGuiAppControlBase* control, const char* name, ImGuiID data_type_id, ImGuiID instance, void* instance_data, bool snapshottable, int inst_size, int temp_offset, int temp_size, void (*destroy)(void*), const char* host_kind, const char* host_label)
   {
+      // Instance data is keyed by the instance-qualified data type id so dependents can resolve it.
+      const ImGuiID id = ImAppHashType(data_type_id, instance);
+      IM_ASSERT(app->Data.GetVoidPtr(id) == nullptr);   // one instance per (control data type, instance id)
       if (host_label == nullptr)
         AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push control %s (instance %u)", name, (unsigned)instance);
       else
@@ -1140,6 +1143,35 @@ namespace ImGui
   {
       list->push_back(control);
       control->OnInitialize(app);
+  }
+
+  IMGUI_API void AppRegisterLayer(ImGuiApp* app, ImGuiAppLayerBase* layer, const char* name)
+  {
+      AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push layer %s", name);
+      app->Layers.push_back(layer);
+      if (layer->Label[0] == 0) // default Label to the type name
+          ImStrncpy(layer->Label, name, IM_ARRAYSIZE(layer->Label));
+      layer->OnAttach(app);
+  }
+
+  IMGUI_API void AppRegisterWindow(ImGuiApp* app, ImGuiAppWindowBase* window, const char* name)
+  {
+      AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push window %s", name);
+      AppDeduplicateItemLabel(window->Label, IM_ARRAYSIZE(window->Label), &app->Windows, &app->Sidebars);
+      app->Windows.push_back(window);
+      window->OnInitialize(app);
+  }
+
+  IMGUI_API void AppRegisterSidebar(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, const char* name, ImGuiViewport* vp, ImGuiDir dir, float size, ImGuiWindowFlags flags)
+  {
+      AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push sidebar %s", name);
+      AppDeduplicateItemLabel(sidebar->Label, IM_ARRAYSIZE(sidebar->Label), &app->Windows, &app->Sidebars);
+      sidebar->Viewport = vp;
+      sidebar->DockDir  = dir;
+      sidebar->Size     = size;
+      sidebar->Flags    = flags;
+      app->Sidebars.push_back(sidebar);
+      sidebar->OnInitialize(app);
   }
 
   IMGUI_API void AppStateHistoryClear(ImGuiAppStateHistory* h)

@@ -15,12 +15,12 @@
 
 Index of this file:
 // [SECTION] Header mess                 (pragmas, includes, ImFuncSig / IM_LABEL_SIZE / ImParseType* / IMAPP_REFLECT_ENUM_* + IMGUIAPP_HAS_REFLECT macros)
+// [SECTION] Forward declarations        (types + the reflection API surface, defs below)
 // [SECTION] Compile-time type identity   (ImGuiAppStatic<>, ImGuiAppType<>, ImAppNulTerminate)
 // [SECTION] Type traits + name utilities (ImGuiAppIsFormattable/IsCharArray, ImAppGenerateLabel, ImAppTypeDisplayName)
 // [SECTION] Reflection engine + public API (qlibs/reflect port; namespace ImGui::detail + ImGui: size/for_each/get/member_name/type_name/offset_of/enum_name)
 // [SECTION] ImGuiApp manifest types      (ImGuiAppLiveFieldKind/Desc, ImGuiAppTypeSchema)
 // [SECTION] Reflection contracts         (ImAppDataReflectable, ImGuiAppFieldsVisible)
-// [SECTION] Type-schema registry         (ImGui::AppRegisterTypeSchema / AppFindTypeSchema)
 // [SECTION] Member type spellings        (ImGuiAppVecElemOf / VecSpelling / PtrSpelling)
 // [SECTION] Field walk + registration    (ImGui::AppReflectFields, AppEnsureTypeRegistered, VisitAppFields)
 
@@ -127,6 +127,33 @@ Index of this file:
 
 // Feature flag: this header provides compile-time reflection (probe with #ifdef).
 #define IMGUIAPP_HAS_REFLECT 1
+
+//-----------------------------------------------------------------------------
+// [SECTION] Forward declarations
+//-----------------------------------------------------------------------------
+
+// Types (definitions in the sections below)
+template <typename T> struct ImGuiAppStatic;        // compile-time type name/id derived from the function signature
+struct                       ImGuiAppLiveFieldDesc; // one reflected member of a control's Persist/Temp aggregate
+struct                       ImGuiAppTypeSchema;    // per-type field manifest (a type-schema registry entry)
+template <typename M> struct ImGuiAppVecElemOf;     // ImVector<E> element-type extractor
+template <typename E> struct ImGuiAppVecSpelling;   // compile-time "ImVector<Elem>" spelling
+template <typename P> struct ImGuiAppPtrSpelling;   // compile-time "Pointee*" spelling
+
+// Free type-name utilities (definitions below; using-alias ImGuiAppType<> + the trait variable-templates
+// ImGuiAppIsFormattable / IsCharArray / FieldsVisible + ImAppDataReflectable cannot be forward-declared).
+template <std::size_t Cap> constexpr std::array<char, Cap + 1> ImAppNulTerminate(std::string_view sv);
+template <typename T> inline void                              ImAppGenerateLabel(char* label, size_t size);
+template <typename T> inline const char*                       ImAppTypeDisplayName();
+
+namespace ImGui
+{
+IMGUI_API void                                     AppRegisterTypeSchema(const ImGuiAppTypeSchema* schema); // register a type's field manifest (imguiapp.cpp)
+IMGUI_API const ImGuiAppTypeSchema*                AppFindTypeSchema(const char* type_name);                // look one up by display name (imguiapp.cpp)
+template <typename T> inline int                   AppReflectFields(ImGuiAppLiveFieldDesc* out, int cap);   // materialize T's field manifest
+template <typename T> inline void                  AppEnsureTypeRegistered();                               // transitively register T + reachable aggregates
+template <typename T, typename Visitor> inline void VisitAppFields(T* obj, Visitor visitor);                // visit each reflected field of an aggregate
+}
 
 //-----------------------------------------------------------------------------
 // [SECTION] Compile-time type identity
@@ -887,16 +914,6 @@ template <typename T>
 inline constexpr bool ImGuiAppFieldsVisible = ImGuiAppFieldsVisibleFn<T>();
 
 //-----------------------------------------------------------------------------
-// [SECTION] Type-schema registry
-//-----------------------------------------------------------------------------
-
-namespace ImGui
-{
-IMGUI_API void                        AppRegisterTypeSchema(const ImGuiAppTypeSchema* schema);
-IMGUI_API const ImGuiAppTypeSchema*   AppFindTypeSchema(const char* type_name);
-}
-
-//-----------------------------------------------------------------------------
 // [SECTION] Member type spellings
 //-----------------------------------------------------------------------------
 
@@ -948,9 +965,6 @@ struct ImGuiAppPtrSpelling
 
 namespace ImGui
 {
-template <typename T>
-inline int AppReflectFields(ImGuiAppLiveFieldDesc* out, int cap);
-
 // Transitive automatic registration: materializes T's manifest into the runtime registry
 // and, through the field walk, the manifest of every visible aggregate T reaches (members
 // and ImVector elements). Reentrancy-safe: the entry registers before its fields fill.

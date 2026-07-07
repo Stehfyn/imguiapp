@@ -147,7 +147,7 @@ namespace ImGui
     // (host_kind/host_label describe the owning window/sidebar, or null for a top-level control), labels
     // the control, and registers its instance storage. The (typed) template caller then wires
     // _InstanceID/_InstanceData + ResolveDependencies (which need the concrete type) and calls AppControlPush.
-    IMGUI_API void        AppControlRegisterStorage(ImGuiApp* app, ImGuiAppControlBase* control, const char* name, ImGuiID id, ImGuiID instance, void* instance_data, bool snapshottable, int inst_size, int temp_offset, int temp_size, void (*destroy)(void*), const char* host_kind, const char* host_label);
+    IMGUI_API void        AppControlRegisterStorage(ImGuiApp* app, ImGuiAppControlBase* control, const char* name, ImGuiID data_type_id, ImGuiID instance, void* instance_data, bool snapshottable, int inst_size, int temp_offset, int temp_size, void (*destroy)(void*), const char* host_kind, const char* host_label);
     // Type-erased tail: append the wired control to its owning list and initialize it.
     IMGUI_API void        AppControlPush(ImGuiApp* app, ImVector<ImGuiAppControlBase*>* list, ImGuiAppControlBase* control);
     IMGUI_API void        UnregisterAppStorage(ImGuiApp* app, ImGuiID id);                                                                            // destroys + removes one entry
@@ -156,6 +156,11 @@ namespace ImGui
     // Internal helper for the inline Push templates below (defined in imguiapp.cpp; must stay here because
     // those public templates call it). ShutdownAppControls -- cpp-only -- lives in imguiapp_internal.h.
     IMGUI_API void        AppDeduplicateItemLabel(char* label, int label_size, const ImVector<ImGuiAppWindowBase*>* windows, const ImVector<ImGuiAppSidebarBase*>* sidebars);
+    // Non-template tail of PushAppLayer/Window/Sidebar (WAL-log the push + dedup label + append + attach/init).
+    // The template caller constructs the item (IM_NEW<T>) and its type name; these do everything else, in imguiapp.cpp.
+    IMGUI_API void        AppRegisterLayer(ImGuiApp* app, ImGuiAppLayerBase* layer, const char* name);
+    IMGUI_API void        AppRegisterWindow(ImGuiApp* app, ImGuiAppWindowBase* window, const char* name);
+    IMGUI_API void        AppRegisterSidebar(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, const char* name, ImGuiViewport* vp, ImGuiDir dir, float size, ImGuiWindowFlags flags);
 
     // State snapshot / time-travel
     // Snapshot appends snapshottable state to the ring (layout rebuilt + history cleared on composition
@@ -1272,6 +1277,94 @@ namespace ImGui
         IM_DELETE(static_cast<T*>(ptr));
     }
 
+    template <typename T>
+    inline void PushAppLayer(ImGuiApp* app)
+    {
+        IM_ASSERT(app);
+        char label[IM_LABEL_SIZE];
+        ImAppGenerateLabel<T>(label, sizeof(label));
+        T* layer = IM_NEW(T)();
+        AppRegisterLayer(app, layer, label);
+    }
+
+    // The sole instance of a window type keeps its bare class name; a second live instance of the
+    // same type gets "##N" so imgui window ids stay distinct.
+    template <typename T>
+    inline void PushAppWindow(ImGuiApp* app)
+    {
+        IM_ASSERT(app);
+        char label[IM_LABEL_SIZE];
+        ImAppGenerateLabel<T>(label, sizeof(label));
+        T* window = IM_NEW(T)();
+        AppRegisterWindow(app, window, label);
+    }
+
+    template <typename T>
+    inline void PushAppSidebar(ImGuiApp* app, ImGuiViewport* vp, ImGuiDir dir, float size, ImGuiWindowFlags flags)
+    {
+        IM_ASSERT(app);
+        char label[IM_LABEL_SIZE];
+        ImAppGenerateLabel<T>(label, sizeof(label));
+        T* sidebar = IM_NEW(T)();
+        AppRegisterSidebar(app, sidebar, label, vp, dir, size, flags);
+    }
+
+    // Shared body of PushAppControl / PushWindowControl / PushSidebarControl: generate the label, key the
+    // instance data by (control data type, instance), construct control T + its instance data, register its
+    // storage (snapshottable when the instance data is trivially-copyable; opaque otherwise), wire
+    // _InstanceID/_InstanceData, and resolve bindings. host_kind/host_label describe the owning
+    // window/sidebar, or null for a top-level control. The caller appends the returned control to its list.
+    template <typename T>
+    inline T* AppControlCreate(ImGuiApp* app, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count, const char* host_kind, const char* host_label)
+    {
+        char label[IM_LABEL_SIZE];
+        ImAppGenerateLabel<T>(label, sizeof(label));
+
+        T* control = IM_NEW(T)();
+        using Inst = typename T::ControlInstanceDataType;
+        Inst* instance_data = IM_NEW(Inst)();
+        ImGuiID data_type_id = ImGuiAppType<typename T::ControlDataType>::ID;
+
+        // Instance data is keyed by (control data type, instance); AppControlRegisterStorage hashes + asserts uniqueness.
+        // Trivially-copyable instance data is snapshottable (size + TempData byte range); heap-owning data is opaque.
+        AppControlRegisterStorage(app, control, label, data_type_id, instance, instance_data,
+                                  std::is_trivially_copyable_v<Inst>, (int)sizeof(Inst),
+                                  (int)offsetof(Inst, TempData),
+                                  (int)sizeof(instance_data->TempData),
+                                  DestroyAppStorageValue<Inst>,
+                                  host_kind,
+                                  host_label);
+        control->_InstanceID   = instance;
+        control->_InstanceData = instance_data;
+        control->ResolveDependencies(app, binds, binds_count);
+        return control;
+    }
+
+    template <typename T>
+    inline void PushAppControl(ImGuiApp* app, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count)
+    {
+        IM_ASSERT(app);
+        AppControlPush(app, &app->Controls, AppControlCreate<T>(app, instance, binds, binds_count, nullptr, nullptr));
+    }
+
+    // Host a control inside a window: instance data registers in app->Data as usual, but the control joins
+    // window->Controls and renders between the host window's Begin/End (no Begin of its own).
+    template <typename T>
+    IMGUI_API inline void PushWindowControl(ImGuiApp* app, ImGuiAppWindowBase* window, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count)
+    {
+        IM_ASSERT(app);
+        IM_ASSERT(window);
+        AppControlPush(app, &window->Controls, AppControlCreate<T>(app, instance, binds, binds_count, "window", window->Label));
+    }
+
+    template <typename T>
+    IMGUI_API inline void PushSidebarControl(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count)
+    {
+        IM_ASSERT(app);
+        IM_ASSERT(sidebar);
+        AppControlPush(app, &sidebar->Controls, AppControlCreate<T>(app, instance, binds, binds_count, "sidebar", sidebar->Label));
+    }
+
     // Visit every pushed control in update order: app-level, then sidebar-hosted, then window-hosted.
     // visitor(control, host) with host == nullptr for app-level. The single shared enumeration of "all controls".
     template <typename Visitor>
@@ -1300,142 +1393,6 @@ namespace ImGui
         for (int w = 0; w < app->Windows.Size; w++)
             for (int i = 0; i < app->Windows.Data[w]->Controls.Size; i++)
                 visitor((const ImGuiAppControlBase*)app->Windows.Data[w]->Controls.Data[i], (const ImGuiAppWindowBase*)app->Windows.Data[w]);
-    }
-
-    template <typename T>
-    inline void PushAppLayer(ImGuiApp* app)
-    {
-        IM_ASSERT(app);
-        char label[IM_LABEL_SIZE];
-        ImAppGenerateLabel<T>(label, sizeof(label));
-        AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push layer %s", label);
-
-        app->Layers.push_back(IM_NEW(T)());
-        if (app->Layers.back()->Label[0] == 0) // default Label to the type name
-            ImStrncpy(app->Layers.back()->Label, label, IM_ARRAYSIZE(app->Layers.back()->Label));
-        app->Layers.back()->OnAttach(app);
-    }
-
-    // The sole instance of a window type keeps its bare class name; a second live instance of the
-    // same type gets "##N" so imgui window ids stay distinct.
-    template <typename T>
-    inline void PushAppWindow(ImGuiApp* app)
-    {
-        IM_ASSERT(app);
-        char label[IM_LABEL_SIZE];
-        ImAppGenerateLabel<T>(label, sizeof(label));
-        AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push window %s", label);
-
-        T* window = IM_NEW(T)();
-        IM_ASSERT(window);
-        AppDeduplicateItemLabel(window->Label, IM_ARRAYSIZE(window->Label), &app->Windows, &app->Sidebars);
-        app->Windows.push_back(window);
-        app->Windows.back()->OnInitialize(app);
-    }
-
-    template <typename T>
-    inline void PushAppSidebar(ImGuiApp* app, ImGuiViewport* vp, ImGuiDir dir, float size, ImGuiWindowFlags flags)
-    {
-        IM_ASSERT(app);
-        char label[IM_LABEL_SIZE];
-        ImAppGenerateLabel<T>(label, sizeof(label));
-        AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push sidebar %s", label);
-
-        T* sidebar = IM_NEW(T)();
-        IM_ASSERT(sidebar);
-        AppDeduplicateItemLabel(sidebar->Label, IM_ARRAYSIZE(sidebar->Label), &app->Windows, &app->Sidebars);
-        sidebar->Viewport = vp;
-        sidebar->DockDir  = dir;
-        sidebar->Size     = size;
-        sidebar->Flags    = flags;
-        app->Sidebars.push_back(sidebar);
-        app->Sidebars.back()->OnInitialize(app);
-    }
-
-    template <typename T>
-    inline void PushAppControl(ImGuiApp* app, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count)
-    {
-        IM_ASSERT(app);
-        char label[IM_LABEL_SIZE];
-        ImAppGenerateLabel<T>(label, sizeof(label));
-
-        // Instance data is keyed by the instance-qualified data type id so dependents can resolve it.
-        const ImGuiID id = ImAppHashType(ImGuiAppType<typename T::ControlDataType>::ID, instance);
-        IM_ASSERT(app->Data.GetVoidPtr(id) == nullptr);   // one instance per (control data type, instance id)
-
-        T* control = IM_NEW(T)();
-        IM_ASSERT(control);
-        using Inst = typename T::ControlInstanceDataType;
-        Inst* instance_data = IM_NEW(Inst)();
-        IM_ASSERT(instance_data);
-
-        // Trivially-copyable instance data is snapshottable (size + TempData byte range); heap-owning data is opaque.
-        AppControlRegisterStorage(app, control, label, id, instance, instance_data,
-                                  std::is_trivially_copyable_v<Inst>, (int)sizeof(Inst),
-                                  (int)((char*)&instance_data->TempData - (char*)instance_data),
-                                  (int)sizeof(instance_data->TempData), DestroyAppStorageValue<Inst>, nullptr, nullptr);
-        control->_InstanceID   = instance;
-        control->_InstanceData = instance_data;
-        control->ResolveDependencies(app, binds, binds_count);
-        AppControlPush(app, &app->Controls, control);
-    }
-
-    // Host a control inside a window: instance data registers in app->Data as usual, but the control joins
-    // window->Controls and renders between the host window's Begin/End (no Begin of its own).
-    template <typename T>
-    IMGUI_API inline void PushWindowControl(ImGuiApp* app, ImGuiAppWindowBase* window, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count)
-    {
-        IM_ASSERT(app && window);
-        char label[IM_LABEL_SIZE];
-        ImAppGenerateLabel<T>(label, sizeof(label));
-
-        // Instance data is keyed by the instance-qualified data type id so dependents can resolve it.
-        const ImGuiID id = ImAppHashType(ImGuiAppType<typename T::ControlDataType>::ID, instance);
-        IM_ASSERT(app->Data.GetVoidPtr(id) == nullptr);   // one instance per (control data type, instance id)
-
-        T* control = IM_NEW(T)();
-        IM_ASSERT(control);
-        using Inst = typename T::ControlInstanceDataType;
-        Inst* instance_data = IM_NEW(Inst)();
-        IM_ASSERT(instance_data);
-
-        // Trivially-copyable instance data is snapshottable (size + TempData byte range); heap-owning data is opaque.
-        AppControlRegisterStorage(app, control, label, id, instance, instance_data,
-                                  std::is_trivially_copyable_v<Inst>, (int)sizeof(Inst),
-                                  (int)((char*)&instance_data->TempData - (char*)instance_data),
-                                  (int)sizeof(instance_data->TempData), DestroyAppStorageValue<Inst>, "window", window->Label);
-        control->_InstanceID   = instance;
-        control->_InstanceData = instance_data;
-        control->ResolveDependencies(app, binds, binds_count);
-        AppControlPush(app, &window->Controls, control);
-    }
-
-    template <typename T>
-    IMGUI_API inline void PushSidebarControl(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count)
-    {
-        IM_ASSERT(app && sidebar);
-
-        char name[IM_LABEL_SIZE];
-        ImAppGenerateLabel<T>(name, sizeof(name));
-        // Instance data is keyed by the instance-qualified data type id so dependents can resolve it.
-        const ImGuiID id = ImAppHashType(ImGuiAppType<typename T::ControlDataType>::ID, instance);
-        IM_ASSERT(app->Data.GetVoidPtr(id) == nullptr);   // one instance per (control data type, instance id)
-
-        T* control = IM_NEW(T)();
-        IM_ASSERT(control);
-        using Inst = typename T::ControlInstanceDataType;
-        Inst* instance_data = IM_NEW(Inst)();
-        IM_ASSERT(instance_data);
-
-        // Trivially-copyable instance data is snapshottable (size + TempData byte range); heap-owning data is opaque.
-        AppControlRegisterStorage(app, control, name, id, instance, instance_data,
-                                  std::is_trivially_copyable_v<Inst>, (int)sizeof(Inst),
-                                  (int)((char*)&instance_data->TempData - (char*)instance_data),
-                                  (int)sizeof(instance_data->TempData), DestroyAppStorageValue<Inst>, "sidebar", sidebar->Label);
-        control->_InstanceID   = instance;
-        control->_InstanceData = instance_data;
-        control->ResolveDependencies(app, binds, binds_count);
-        AppControlPush(app, &sidebar->Controls, control);
     }
 }
 
