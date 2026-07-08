@@ -564,6 +564,11 @@ OS/harness glue is NOT a licensed layer: libc/STL with an Im* equivalent must us
 strippable via `IMGUIAPP_DISABLE_DEFAULT_FILESYSTEM_FUNCS`). No direct std::filesystem callsites
 may appear outside that default block.
 
+Not licensed anywhere: STL types as public struct members visible to every consumer. The
+recorder's encoder-thread state lives behind the opaque `ImGuiAppRecorderThread*` pimpl over the
+`ImGuiAppThreadFuncs` seam (`SetAppThreadFuncs`, default = std::thread, strippable via
+`IMGUIAPP_DISABLE_DEFAULT_THREAD_FUNCS`); `imguiapp.h` includes no threading or filesystem headers.
+
 ---
 
 ## 11. Notable Version-Specific Facts

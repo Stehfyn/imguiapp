@@ -875,6 +875,7 @@ struct ImGuiAppEditorState
 {
     ImGuiAppCanvasState*              Canvas = nullptr;                   // this graph's canvas engine (created on first editor frame; freed with the process)
     bool                           DragWasDetach = false;
+    ImVec2                         DropGrid = ImVec2(0.0f, 0.0f);      // pin-drag drop point (model units), consumed by the palette pick that follows
     int                            HoverNode = -1;                     // brushing bus: render-phase reports (TempData), read next frame
     int                            HoverLink = -1;
     int                            HoverNodeSrc = 0;

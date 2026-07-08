@@ -623,15 +623,9 @@ struct ImGuiAppFrameConfig
     }
 };
 
-struct ImGuiAppPlatform
-{
-    const char* Name;
-    void*       NativeWindowHandle;
-};
-
 struct ImGuiAppConfig
 {
-    ImGuiAppPlatform     Platform;        // = { NULL, NULL }
+    const char*          PlatformName;    // = NULL   app label for diagnostics (status overlay)
     ImGuiConfigFlags     ConfigFlags;     // = 0
     ImGuiAppStyle        Style;           // = ImGuiAppStyle_Dark
     ImVec4               ClearColor;      // = (0, 0, 0, 1)
@@ -991,7 +985,8 @@ struct ImGuiApp : ImGuiAppBase
     ImVector<ImGuiAppControlBase*> UpdateOrder;                   // dependency-sorted OnUpdate iteration (AppRebuildUpdateOrder)
     int                            CompositionRevision = 0;       // bumped by every storage register/unregister (pop+repush of the same type still advances it)
     int                            UpdateOrderRevision = -1;      // revision UpdateOrder + the cached dependency bindings were built at
-    ImGuiAppPlatform               Platform            = {};      // zeroed so a not-yet-Initialize()'d app is safe to render (StatusLayer null-guards Platform.Name)
+    const char*                    PlatformName        = nullptr; // app label for diagnostics (StatusLayer null-guards it); from config
+    void*                          PlatformWindowHandle = nullptr; // main window handle (set by the host's InitPlatform; read by the sibling platform host's run loop)
     ImVec4                         ClearColor;
     void*                          PlatformData        = nullptr; // platform host window/loop state (io userdata-slot analog; owned by the backend's InitPlatform/ShutdownPlatform)
     void*                          BackendData         = nullptr; // host backend data (io.BackendXxxUserData analog; owned by ImGuiApp_ImplXXX_Init/Shutdown)

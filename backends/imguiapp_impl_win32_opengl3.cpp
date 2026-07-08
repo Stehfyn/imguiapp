@@ -444,8 +444,8 @@ bool ImGuiApp_ImplWin32OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& confi
     if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
         ImGuiApp_ImplWin32OpenGL3_InitMultiViewportSupport(bd);
 
-    app->Platform.Name               = config.Platform.Name;
-    app->Platform.NativeWindowHandle = state->Hwnd;
+    app->PlatformName         = config.PlatformName;
+    app->PlatformWindowHandle = state->Hwnd;
     ::SetWindowLongPtr(state->Hwnd, GWLP_USERDATA, (LONG_PTR)app);
     return true;
 }

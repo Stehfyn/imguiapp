@@ -1337,8 +1337,8 @@ bool ImGuiApp_ImplWin32Vulkan_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config
 
     ImGui::GetIO().ConfigFlags |= config.ConfigFlags;
 
-    app->Platform.Name               = config.Platform.Name;
-    app->Platform.NativeWindowHandle = state->Hwnd;
+    app->PlatformName         = config.PlatformName;
+    app->PlatformWindowHandle = state->Hwnd;
     ::SetWindowLongPtr(state->Hwnd, GWLP_USERDATA, (LONG_PTR)app);
     return true;
 }

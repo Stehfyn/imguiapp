@@ -56,7 +56,7 @@ int ImGuiApp_ImplSDL2_RunLoop(ImGuiApp* app)
         if (app->PlatformData == nullptr) // not initialized, or already shut down
             return;
 
-        SDL_Window* window = (SDL_Window*)app->Platform.NativeWindowHandle;
+        SDL_Window* window = (SDL_Window*)app->PlatformWindowHandle;
         SDL_Event event;
         while (SDL_PollEvent(&event))
         {

@@ -93,18 +93,6 @@ throughout — audit confirms 0 raw allocation, 0 std::min/max). Two bounded lay
   `imguiapp_internal.h`): `<format>/<string_view>/<type_traits>` — constexpr metaprogramming is
   the point of the layer.
 
-OS/harness glue is NOT a licensed layer; the Im*-equivalent + client-overridable-seam rule lives
-in [imgui-house-style.md](imgui-house-style.md) §10.
-
-Naming note (the seam-vs-front grammar): PascalCase verb-first names the template FRONT
-(`PushAppControl`), noun-first names the C seam TAIL beneath it (`AppControlPush`); the
-linked-backend accessor `ImGuiAppGetPlatformBackend()` follows the front grammar.
-
-**Not licensed anywhere**: STL types as public struct members visible to every consumer. The
-recorder's encoder-thread state lives behind the opaque `ImGuiAppRecorderThread*` pimpl over the
-`ImGuiAppThreadFuncs` seam (`SetAppThreadFuncs`, default = std::thread, strippable via
-`IMGUIAPP_DISABLE_DEFAULT_THREAD_FUNCS`); `imguiapp.h` includes no threading or filesystem headers.
-
 ### Δ3 — `g` names the graph, not the ImGui context (departs I1-I3/N17)
 
 imguiapp threads its document explicitly: `ImGuiAppGraph* g` parameters (~283 sites) with editor
@@ -127,8 +115,3 @@ region-local `[SECTION]` index kept 1:1 with body banners (A2), definitions orde
 header declaration order within the region (A16/refactor-plan Phase C pass 4), forward decls
 collected per region (A17). A future re-split to satellites stays open; this delta removes the
 obligation, not the option.
-
-### Pending (not yet ratified — audit T5/T6 recommendations)
-
-- Δ6 (proposed): Meyers-singleton accessors for process-wide services (`AppAssert()`,
-  `AppPacer()`, `AppTypeSchemas()`); ad-hoc mutable function-local statics remain violations.

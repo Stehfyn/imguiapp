@@ -64,7 +64,7 @@ LRESULT WINAPI ImGuiApp_ImplWin32_WndProc(HWND hWnd, UINT msg, WPARAM wParam, LP
 
 int ImGuiApp_ImplWin32_RunLoop(ImGuiApp* app)
 {
-    HWND hwnd = (HWND)app->Platform.NativeWindowHandle;
+    HWND hwnd = (HWND)app->PlatformWindowHandle;
     bool done = false;
     while (!done)
     {

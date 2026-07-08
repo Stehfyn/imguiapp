@@ -118,9 +118,16 @@ struct ImGuiAppProcessState
     ImGuiApp*                           DemoHost            = nullptr; // ShowAppDemo's current host
     ImGuiApp*                           DemoFallbackApp     = nullptr; // demo-owned app for host-less callers
     ImGuiApp*                           DemoComposed        = nullptr; // the one composed app per process
+    ImGuiAppComposerStyle               ComposerStyle;                  // derived theme cache, gated by ComposerStyleVersion
+    int                                 ComposerStyleVersion = 0;       // 0 = not yet derived; bumped by each global re-derive
+    ImGuiAppComposerMotion              ComposerMotion;                 // F38 motion table (struct defaults)
+    ImGuiAppChromeTheme                 ChromeTheme;                    // inspector-editable; reseeded when ComposerStyleVersion moves
+    int                                 ChromeThemeSeededVersion = -1;
+    char                                PreviewVcvars[1024] = { 1 };    // vcvars64.bat path; [0]==1 => not yet searched, empty = no toolset
 };
 
 static ImGuiAppProcessState* GImGuiAppState = nullptr; // constant-initialized: safe before main
+static bool                  GImGuiAppInAssert = false; // assert-handler re-entry guard; file scope so the crash path touches no accessor
 
 static ImGuiAppProcessState& AppState()
 {
@@ -180,10 +187,9 @@ IMGUI_API int ImAppStackTrace(char* out, int out_size, int skip_frames)
 IMGUI_API void ImAppAssertFail(const char* expr, const char* file, int line)
 {
     // Re-entrancy guard: an assert inside the logging path must not recurse.
-    static bool in_assert = false;
-    if (in_assert)
+    if (GImGuiAppInAssert)
         exit(3);
-    in_assert = true;
+    GImGuiAppInAssert = true;
 
     char stack[3072];
     ImAppStackTrace(stack, IM_ARRAYSIZE(stack), 1);
@@ -202,7 +208,7 @@ IMGUI_API void ImAppAssertFail(const char* expr, const char* file, int line)
     if (IsDebuggerPresent())
     {
         __debugbreak();
-        in_assert = false;   // debugger may continue past the break; let later asserts report too
+        GImGuiAppInAssert = false;   // debugger may continue past the break; let later asserts report too
         return;
     }
 #endif
@@ -356,9 +362,10 @@ void ImGuiApp::Shutdown()
     ImGui::ShutdownApp(this);
     OnShutdownPlatform();
 
-    Platform        = ImGuiAppPlatform();
-    Initialized     = false;
-    ShutdownPending = false;
+    PlatformName         = nullptr;
+    PlatformWindowHandle = nullptr;
+    Initialized          = false;
+    ShutdownPending      = false;
 }
 
 // Monotonic wall clock in seconds; self-contained (must work without an ImGui context).
@@ -596,7 +603,7 @@ void ImGuiAppStatusLayer::OnRender(const ImGuiApp* app) const
         return;
 
     const ImGuiIO& io = ImGui::GetIO();
-    const char* app_platform = app->Platform.Name != nullptr ? app->Platform.Name : "unknown";
+    const char* app_platform = app->PlatformName != nullptr ? app->PlatformName : "unknown";
     const char* imgui_platform = io.BackendPlatformName != nullptr ? io.BackendPlatformName : "unknown";
     const char* renderer = io.BackendRendererName != nullptr ? io.BackendRendererName : "unknown";
 
@@ -660,8 +667,7 @@ static void AppDisplayLayerSettingsHandler_WriteAll(ImGuiContext*, ImGuiSettings
 // value is documented in the // = value column next to each member).
 ImGuiAppConfig::ImGuiAppConfig()
 {
-    Platform.Name               = nullptr;
-    Platform.NativeWindowHandle = nullptr;
+    PlatformName                = nullptr;
     ConfigFlags                 = 0;
     Style                       = ImGuiAppStyle_Dark;
     ClearColor                  = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);
@@ -6926,7 +6932,7 @@ namespace ImGui
 // vcvars64.bat located once via vswhere, cached. Empty = search failed (no toolset).
 static const char* AppPreviewDllVcvars()
 {
-    static char s_vcvars[1024] = { 1 };   // [0]==1 => not yet searched
+    char (&s_vcvars)[1024] = AppState().PreviewVcvars;   // [0]==1 => not yet searched
     if (s_vcvars[0] != 1)
         return s_vcvars;
     s_vcvars[0] = 0;
@@ -7743,19 +7749,10 @@ static ImU32 AppColWithAlpha(ImU32 col, float alpha)
     return (col & 0x00FFFFFF) | ((ImU32)(ImClamp(alpha, 0.0f, 1.0f) * 255.0f + 0.5f) << 24);
 }
 
-// Derived theme cache, one per process behind an accessor -- the same idiom as the type-schema
-// registry (imguiapp.cpp AppTypeSchemas). Input = the process-global ImGuiStyle; the version
-// gates re-derives (0 = not yet derived; bumped by each global re-derive).
-static ImGuiAppComposerStyle* AppComposerStyleStore()
-{
-    static ImGuiAppComposerStyle style;
-    return &style;
-}
-static int* AppComposerStyleVersion()
-{
-    static int version = 0;
-    return &version;
-}
+// Derived theme cache in the process state root (ImGuiAppProcessState, like the type-schema
+// registry). Input = the process-global ImGuiStyle; the version gates re-derives.
+static ImGuiAppComposerStyle* AppComposerStyleStore() { return &AppState().ComposerStyle; }
+static int* AppComposerStyleVersion()                 { return &AppState().ComposerStyleVersion; }
 
 ImGuiAppComposerStyle* AppComposerGetStyle()
 {
@@ -7815,8 +7812,7 @@ void AppComposerStyleFromTheme(ImGuiAppComposerStyle* style)
 // color style) so every overlay reads the same ladder instead of hard-coding an alpha.
 ImGuiAppComposerMotion* AppComposerGetMotion()
 {
-    static ImGuiAppComposerMotion motion;
-    return &motion;
+    return &AppState().ComposerMotion;
 }
 
 //-----------------------------------------------------------------------------
@@ -9407,8 +9403,8 @@ static void AppEmitControlWithDeps(const ImGuiAppGraph* g, const ImGuiAppNode* n
 // style; a global AppComposerStyleFromTheme re-derive reseeds it (inspector edits reset).
 ImGuiAppChromeTheme* AppGraphChromeTheme()
 {
-    static ImGuiAppChromeTheme t;
-    static int seeded_version = -1;
+    ImGuiAppChromeTheme& t = AppState().ChromeTheme;
+    int& seeded_version = AppState().ChromeThemeSeededVersion;
     const ImGuiAppComposerStyle* s = AppComposerGetStyle();
     if (seeded_version != (*AppComposerStyleVersion()))
     {
@@ -15256,7 +15252,7 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
     // Pin-drag-to-create: releasing a wire drag on empty canvas opens a kind-filtered palette (only kinds that
     // can legally connect to that pin) and, on pick, creates + auto-wires the node at the drop point. A detach
     // re-drag dropped on empty means "delete", not palette (DragWasDetach, set when the detach event fired at grab time).
-    static ImVec2 drop_grid(0.0f, 0.0f);
+    ImVec2& drop_grid = AppGraphEditorState(g)->DropGrid;   // survives to the palette pick frames later
     {
         int    da = -1;
         ImVec2 dpos(0.0f, 0.0f);
@@ -27288,7 +27284,7 @@ IMGUI_API int ImGui::AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessC
     app->Pacer.TargetHz = config->Fps;
 
     ImGuiAppConfig app_config;
-    app_config.Platform.Name   = config->Name;
+    app_config.PlatformName    = config->Name;
     app_config.ConfigFlags     = ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;   // no viewports: deterministic single target
     app_config.Headless        = config->Headless;
     app_config.PersistSettings = false;   // a test run must never touch the user's ini

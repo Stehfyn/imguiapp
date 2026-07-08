@@ -225,8 +225,8 @@ bool ImGuiApp_ImplSDL2OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config
 
     ImGui::GetIO().ConfigFlags |= config.ConfigFlags;
 
-    app->Platform.Name               = config.Platform.Name;
-    app->Platform.NativeWindowHandle = state->Window;
+    app->PlatformName         = config.PlatformName;
+    app->PlatformWindowHandle = state->Window;
     return true;
 }
 
