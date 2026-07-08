@@ -5,12 +5,14 @@
 //  [X] Platform: Paced message-pump main loop; minimized app sleeps unless recording.
 
 #pragma once
-#include <windows.h>
-
-struct ImGuiApp;
-
-// Shared win32 window procedure; sibling renderer hosts install it in their WNDCLASSEX.
-LRESULT WINAPI ImGuiApp_ImplWin32_WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+#include "imguiapp.h"      // ImGuiApp
 
 // Shared win32 message-pump main loop (renderer-agnostic).
 int ImGuiApp_ImplWin32_RunLoop(ImGuiApp* app);
+
+// Shared win32 window procedure; sibling renderer hosts install it in their WNDCLASSEX.
+// - Intentionally commented out in a '#if 0' block to avoid dragging dependencies on <windows.h> from this header.
+// - You should COPY the line below into your .cpp code to forward declare the function.
+#if 0
+extern LRESULT WINAPI ImGuiApp_ImplWin32_WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+#endif

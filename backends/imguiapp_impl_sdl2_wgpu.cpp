@@ -22,16 +22,11 @@
 struct ImGuiAppPlatformData
 {
     SDL_Window* Window;
+    bool        OwnsImGuiContext; // this host created the ImGui context (none existed)
 };
 
 namespace
 {
-    struct ImGuiApp_ImplSDL2WGPU_InitInfo
-    {
-        void*       Window;
-        const char* CanvasSelector;
-    };
-
     struct ImGuiApp_ImplSDL2WGPU_Data
     {
         SDL_Window*              Window;
@@ -49,8 +44,10 @@ namespace
         ImGuiApp_ImplSDL2WGPU_Data() { memset((void*)this, 0, sizeof(*this)); }
     };
 
-    // IM_NEW'd at Init, freed by ShutdownBackend (docs/house-style-audit.md Δ4).
+    // IM_NEW'd at Init, freed by Shutdown; reached through the accessor (docs/house-style-audit.md Δ4).
     ImGuiApp_ImplSDL2WGPU_Data* GBackend = nullptr;
+
+    ImGuiApp_ImplSDL2WGPU_Data* ImGuiApp_ImplSDL2WGPU_GetBackendData() { return GBackend; }
 
     bool IsInitInfoValid(const ImGuiApp_ImplSDL2WGPU_InitInfo* init_info)
     {
@@ -241,131 +238,127 @@ namespace
         return bd->Queue != nullptr;
     }
 
-    void ShutdownBackend(void* user_data)
-    {
-        ImGuiApp_ImplSDL2WGPU_Data* bd = (ImGuiApp_ImplSDL2WGPU_Data*)user_data;
-        IM_ASSERT(bd != nullptr);
-        if (bd == nullptr)
-            return;
-
-        if (bd->RendererBackendInitialized)
-            ImGui_ImplWGPU_Shutdown();
-        if (bd->PlatformBackendInitialized)
-            ImGui_ImplSDL2_Shutdown();
-
-        if (bd->Surface != nullptr)
-        {
-            wgpuSurfaceUnconfigure(bd->Surface);
-            wgpuSurfaceRelease(bd->Surface);
-        }
-        if (bd->Queue != nullptr)
-            wgpuQueueRelease(bd->Queue);
-        if (bd->Device != nullptr)
-            wgpuDeviceRelease(bd->Device);
-        if (bd->Instance != nullptr)
-            wgpuInstanceRelease(bd->Instance);
-
-        if (GBackend == bd)
-            GBackend = nullptr;
-        IM_DELETE(bd);
-    }
-
-    void NewFrame(void* user_data)
-    {
-        ImGuiApp_ImplSDL2WGPU_Data* bd = (ImGuiApp_ImplSDL2WGPU_Data*)user_data;
-        IM_ASSERT(bd != nullptr);
-        if (bd == nullptr)
-            return;
-
-        int width = 1;
-        int height = 1;
-        ReadCanvasSize(bd, &width, &height);
-        ResizeSurface(bd, width, height);
-
-        ImGui_ImplWGPU_NewFrame();
-        ImGui_ImplSDL2_NewFrame();
-    }
-
-    void RenderDrawData(ImDrawData* draw_data, const ImGuiAppFrameConfig* config, void* user_data)
-    {
-        ImGuiApp_ImplSDL2WGPU_Data* bd = (ImGuiApp_ImplSDL2WGPU_Data*)user_data;
-        IM_ASSERT(bd != nullptr);
-        if (bd == nullptr || draw_data == nullptr || config == nullptr || bd->Surface == nullptr)
-            return;
-
-        int width = 1;
-        int height = 1;
-        ReadCanvasSize(bd, &width, &height);
-        ResizeSurface(bd, width, height);
-
-        WGPUSurfaceTexture surface_texture = {};
-        wgpuSurfaceGetCurrentTexture(bd->Surface, &surface_texture);
-        if (ImGui_ImplWGPU_IsSurfaceStatusError(surface_texture.status))
-        {
-            std::fprintf(stderr, "WebGPU unrecoverable surface status: %#.8x\n", surface_texture.status);
-            if (surface_texture.texture != nullptr)
-                wgpuTextureRelease(surface_texture.texture);
-            return;
-        }
-        if (ImGui_ImplWGPU_IsSurfaceStatusSubOptimal(surface_texture.status))
-        {
-            if (surface_texture.texture != nullptr)
-                wgpuTextureRelease(surface_texture.texture);
-            ResizeSurface(bd, width, height);
-            return;
-        }
-
-        WGPUTextureViewDescriptor view_desc = {};
-        view_desc.format = bd->SurfaceConfiguration.format;
-        view_desc.dimension = WGPUTextureViewDimension_2D;
-        view_desc.mipLevelCount = WGPU_MIP_LEVEL_COUNT_UNDEFINED;
-        view_desc.arrayLayerCount = WGPU_ARRAY_LAYER_COUNT_UNDEFINED;
-        view_desc.aspect = WGPUTextureAspect_All;
-        WGPUTextureView texture_view = wgpuTextureCreateView(surface_texture.texture, &view_desc);
-        if (texture_view == nullptr)
-            return;
-
-        WGPURenderPassColorAttachment color_attachment = {};
-        color_attachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-        color_attachment.loadOp = (config->Flags & ImGuiAppFrameFlags_NoClear) ? WGPULoadOp_Load : WGPULoadOp_Clear;
-        color_attachment.storeOp = WGPUStoreOp_Store;
-        color_attachment.clearValue = { config->ClearColor.x * config->ClearColor.w, config->ClearColor.y * config->ClearColor.w, config->ClearColor.z * config->ClearColor.w, config->ClearColor.w };
-        color_attachment.view = texture_view;
-
-        WGPURenderPassDescriptor render_pass_desc = {};
-        render_pass_desc.colorAttachmentCount = 1;
-        render_pass_desc.colorAttachments = &color_attachment;
-        render_pass_desc.depthStencilAttachment = nullptr;
-
-        WGPUCommandEncoderDescriptor encoder_desc = {};
-        WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(bd->Device, &encoder_desc);
-        WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &render_pass_desc);
-        ImGui_ImplWGPU_RenderDrawData(draw_data, pass);
-        wgpuRenderPassEncoderEnd(pass);
-
-        WGPUCommandBufferDescriptor command_buffer_desc = {};
-        WGPUCommandBuffer command_buffer = wgpuCommandEncoderFinish(encoder, &command_buffer_desc);
-        if ((config->Flags & ImGuiAppFrameFlags_NoPresent) == 0)
-            wgpuQueueSubmit(bd->Queue, 1, &command_buffer);
-
-        wgpuTextureViewRelease(texture_view);
-        wgpuRenderPassEncoderRelease(pass);
-        wgpuCommandEncoderRelease(encoder);
-        wgpuCommandBufferRelease(command_buffer);
-    }
 }
 
-static bool ImGuiApp_ImplSDL2WGPU_Init(const ImGuiApp_ImplSDL2WGPU_InitInfo* init_info)
+void ImGuiApp_ImplSDL2WGPU_Shutdown()
 {
-    if (ImGuiX::GetCurrentContext() == nullptr)
-        ImGuiX::CreateContext();
+    ImGuiApp_ImplSDL2WGPU_Data* bd = ImGuiApp_ImplSDL2WGPU_GetBackendData();
+    IM_ASSERT(bd != nullptr && "No platform backend to shutdown, or already shutdown?");
+    if (bd == nullptr)
+        return;
 
-    IM_ASSERT(IsInitInfoValid(init_info) && "ImGuiApp_ImplSDL2WGPU_Init: invalid init_info.");
-    if (!IsInitInfoValid(init_info))
-        return false;
+    if (bd->RendererBackendInitialized)
+        ImGui_ImplWGPU_Shutdown();
+    if (bd->PlatformBackendInitialized)
+        ImGui_ImplSDL2_Shutdown();
 
-    ImGuiX::Shutdown();
+    if (bd->Surface != nullptr)
+    {
+        wgpuSurfaceUnconfigure(bd->Surface);
+        wgpuSurfaceRelease(bd->Surface);
+    }
+    if (bd->Queue != nullptr)
+        wgpuQueueRelease(bd->Queue);
+    if (bd->Device != nullptr)
+        wgpuDeviceRelease(bd->Device);
+    if (bd->Instance != nullptr)
+        wgpuInstanceRelease(bd->Instance);
+
+    GBackend = nullptr;
+    IM_DELETE(bd);
+}
+
+void ImGuiApp_ImplSDL2WGPU_NewFrame()
+{
+    ImGuiApp_ImplSDL2WGPU_Data* bd = ImGuiApp_ImplSDL2WGPU_GetBackendData();
+    IM_ASSERT(bd != nullptr && "Backend not initialized! Did you call ImGuiApp_ImplSDL2WGPU_Init()?");
+    if (bd == nullptr)
+        return;
+
+    int width = 1;
+    int height = 1;
+    ReadCanvasSize(bd, &width, &height);
+    ResizeSurface(bd, width, height);
+
+    ImGui_ImplWGPU_NewFrame();
+    ImGui_ImplSDL2_NewFrame();
+}
+
+// Submits and presents in one hook (no PresentFrame; legacy single-hook contract).
+void ImGuiApp_ImplSDL2WGPU_RenderDrawData(ImDrawData* draw_data, const ImGuiAppFrameConfig* config)
+{
+    ImGuiApp_ImplSDL2WGPU_Data* bd = ImGuiApp_ImplSDL2WGPU_GetBackendData();
+    IM_ASSERT(bd != nullptr && "Backend not initialized! Did you call ImGuiApp_ImplSDL2WGPU_Init()?");
+    if (bd == nullptr || draw_data == nullptr || config == nullptr || bd->Surface == nullptr)
+        return;
+
+    int width = 1;
+    int height = 1;
+    ReadCanvasSize(bd, &width, &height);
+    ResizeSurface(bd, width, height);
+
+    WGPUSurfaceTexture surface_texture = {};
+    wgpuSurfaceGetCurrentTexture(bd->Surface, &surface_texture);
+    if (ImGui_ImplWGPU_IsSurfaceStatusError(surface_texture.status))
+    {
+        std::fprintf(stderr, "WebGPU unrecoverable surface status: %#.8x\n", surface_texture.status);
+        if (surface_texture.texture != nullptr)
+            wgpuTextureRelease(surface_texture.texture);
+        return;
+    }
+    if (ImGui_ImplWGPU_IsSurfaceStatusSubOptimal(surface_texture.status))
+    {
+        if (surface_texture.texture != nullptr)
+            wgpuTextureRelease(surface_texture.texture);
+        ResizeSurface(bd, width, height);
+        return;
+    }
+
+    WGPUTextureViewDescriptor view_desc = {};
+    view_desc.format = bd->SurfaceConfiguration.format;
+    view_desc.dimension = WGPUTextureViewDimension_2D;
+    view_desc.mipLevelCount = WGPU_MIP_LEVEL_COUNT_UNDEFINED;
+    view_desc.arrayLayerCount = WGPU_ARRAY_LAYER_COUNT_UNDEFINED;
+    view_desc.aspect = WGPUTextureAspect_All;
+    WGPUTextureView texture_view = wgpuTextureCreateView(surface_texture.texture, &view_desc);
+    if (texture_view == nullptr)
+        return;
+
+    WGPURenderPassColorAttachment color_attachment = {};
+    color_attachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+    color_attachment.loadOp = (config->Flags & ImGuiAppFrameFlags_NoClear) ? WGPULoadOp_Load : WGPULoadOp_Clear;
+    color_attachment.storeOp = WGPUStoreOp_Store;
+    color_attachment.clearValue = { config->ClearColor.x * config->ClearColor.w, config->ClearColor.y * config->ClearColor.w, config->ClearColor.z * config->ClearColor.w, config->ClearColor.w };
+    color_attachment.view = texture_view;
+
+    WGPURenderPassDescriptor render_pass_desc = {};
+    render_pass_desc.colorAttachmentCount = 1;
+    render_pass_desc.colorAttachments = &color_attachment;
+    render_pass_desc.depthStencilAttachment = nullptr;
+
+    WGPUCommandEncoderDescriptor encoder_desc = {};
+    WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(bd->Device, &encoder_desc);
+    WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &render_pass_desc);
+    ImGui_ImplWGPU_RenderDrawData(draw_data, pass);
+    wgpuRenderPassEncoderEnd(pass);
+
+    WGPUCommandBufferDescriptor command_buffer_desc = {};
+    WGPUCommandBuffer command_buffer = wgpuCommandEncoderFinish(encoder, &command_buffer_desc);
+    if ((config->Flags & ImGuiAppFrameFlags_NoPresent) == 0)
+        wgpuQueueSubmit(bd->Queue, 1, &command_buffer);
+
+    wgpuTextureViewRelease(texture_view);
+    wgpuRenderPassEncoderRelease(pass);
+    wgpuCommandEncoderRelease(encoder);
+    wgpuCommandBufferRelease(command_buffer);
+}
+
+bool ImGuiApp_ImplSDL2WGPU_Init(const ImGuiApp_ImplSDL2WGPU_InitInfo* init_info)
+{
     IM_ASSERT(GBackend == nullptr && "Already initialized a platform backend!");
+    IM_ASSERT(IsInitInfoValid(init_info) && "ImGuiApp_ImplSDL2WGPU_Init: invalid init_info.");
+    if (GBackend != nullptr || !IsInitInfoValid(init_info))
+        return false;
 
     GBackend = IM_NEW(ImGuiApp_ImplSDL2WGPU_Data)();
     GBackend->Window = (SDL_Window*)init_info->Window;
@@ -373,13 +366,13 @@ static bool ImGuiApp_ImplSDL2WGPU_Init(const ImGuiApp_ImplSDL2WGPU_InitInfo* ini
 
     if (!InitWGPU(GBackend))
     {
-        ShutdownBackend(GBackend);
+        ImGuiApp_ImplSDL2WGPU_Shutdown();
         return false;
     }
 
     if (!ImGui_ImplSDL2_InitForOther(GBackend->Window))
     {
-        ShutdownBackend(GBackend);
+        ImGuiApp_ImplSDL2WGPU_Shutdown();
         return false;
     }
     GBackend->PlatformBackendInitialized = true;
@@ -391,24 +384,10 @@ static bool ImGuiApp_ImplSDL2WGPU_Init(const ImGuiApp_ImplSDL2WGPU_InitInfo* ini
     wgpu_init_info.DepthStencilFormat = WGPUTextureFormat_Undefined;
     if (!ImGui_ImplWGPU_Init(&wgpu_init_info))
     {
-        ShutdownBackend(GBackend);
+        ImGuiApp_ImplSDL2WGPU_Shutdown();
         return false;
     }
     GBackend->RendererBackendInitialized = true;
-
-    ImGuiXInitInfo imguix_init_info;
-    imguix_init_info.Backend.Name = "imguiapp_impl_sdl2_wgpu";
-    imguix_init_info.Backend.UserData = GBackend;
-    imguix_init_info.Backend.Shutdown = ShutdownBackend;
-    imguix_init_info.Backend.NewFrame = NewFrame;
-    imguix_init_info.Backend.RenderDrawData = RenderDrawData;
-
-    if (!ImGuiX::Initialize(&imguix_init_info))
-    {
-        ShutdownBackend(GBackend);
-        return false;
-    }
-
     return true;
 }
 
@@ -430,14 +409,18 @@ bool ImGuiApp_ImplSDL2WGPU_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
 
     config.ConfigFlags = ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
 
-    ImGuiX::CreateContext();
+    if (ImGui::GetCurrentContext() == nullptr)
+    {
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        state->OwnsImGuiContext = true;
+    }
 
     ImGuiApp_ImplSDL2WGPU_InitInfo init_info;
     init_info.Window         = state->Window;
     init_info.CanvasSelector = "#canvas";
     if (!ImGuiApp_ImplSDL2WGPU_Init(&init_info))
     {
-        ImGuiX::DestroyContext();
         SDL_DestroyWindow(state->Window);
         state->Window = nullptr;
         SDL_Quit();
@@ -453,9 +436,18 @@ bool ImGuiApp_ImplSDL2WGPU_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
 
 void ImGuiApp_ImplSDL2WGPU_ShutdownPlatform(ImGuiApp* app)
 {
+    // Graphics first (wrapped imgui backends + WGPU objects need the window alive), then the host.
+    if (ImGuiApp_ImplSDL2WGPU_GetBackendData() != nullptr)
+        ImGuiApp_ImplSDL2WGPU_Shutdown();
+
     ImGuiAppPlatformData* state = app->PlatformData;
     if (state == nullptr)
         return;
+    if (state->OwnsImGuiContext)
+    {
+        ImGui::DestroyContext();
+        state->OwnsImGuiContext = false;
+    }
     if (state->Window != nullptr)
     {
         SDL_DestroyWindow(state->Window);
@@ -472,6 +464,12 @@ static const ImGuiAppPlatformBackend GPlatformBackend =
     ImGuiApp_ImplSDL2WGPU_InitPlatform,
     ImGuiApp_ImplSDL2WGPU_ShutdownPlatform,
     ImGuiApp_ImplSDL2_RunLoop,
+    nullptr, // CaptureFrame
+    "imguiapp_impl_sdl2_wgpu",
+    ImGuiApp_ImplSDL2WGPU_Shutdown,
+    ImGuiApp_ImplSDL2WGPU_NewFrame,
+    ImGuiApp_ImplSDL2WGPU_RenderDrawData,
+    nullptr, // PresentFrame: RenderDrawData presents (legacy single-hook)
 };
 
 const ImGuiAppPlatformBackend* ImGuiApp_GetPlatformBackend() { return &GPlatformBackend; }

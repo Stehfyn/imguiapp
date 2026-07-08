@@ -32,7 +32,6 @@
 #endif
 #include <chrono>
 #include "imgui_internal.h"
-#include "imguix.h"
 
 #include <ctime>
 #include <cstdio>
@@ -182,14 +181,6 @@ bool ImGuiApp::OnInitializePlatform(ImGuiAppConfig& config)
 
 void ImGuiApp::OnShutdownPlatform()
 {
-    // ImGuiX shutdown must precede backend teardown: the registered backend Shutdown hook
-    // still needs platform/renderer resources alive.
-    if (ImGuiX::GetCurrentContext() != nullptr)
-    {
-        ImGuiX::Shutdown();
-        ImGuiX::DestroyContext();
-    }
-
     ImGuiApp_GetPlatformBackend()->ShutdownPlatform(this);
     PlatformData = nullptr;
 }
@@ -423,7 +414,8 @@ void ImGuiApp::OnDrawFrame()
     FrameID.Tsc = AppClockTsc();
     FrameID.TimeSec = AppClockNowSec() - epoch;
 
-    ImGuiX::BeginFrame();
+    ImGuiApp_GetPlatformBackend()->NewFrame();
+    ImGui::NewFrame();
     DrawFrame(this);
 }
 
@@ -431,7 +423,8 @@ void ImGuiApp::OnRenderFrame()
 {
     ImGuiAppFrameConfig frame_config;
     frame_config.ClearColor = ClearColor;
-    ImGuiX::EndFrame(&frame_config);
+    ImGui::Render();
+    ImGuiApp_GetPlatformBackend()->RenderDrawData(ImGui::GetDrawData(), &frame_config);
 }
 
 void ImGuiApp::OnEncodeFrame()
@@ -444,9 +437,12 @@ void ImGuiApp::OnEncodeFrame()
 
 void ImGuiApp::OnPresentFrame()
 {
+    const ImGuiAppPlatformBackend* backend = ImGuiApp_GetPlatformBackend();
+    if (backend->PresentFrame == nullptr)   // legacy single-hook: RenderDrawData presented
+        return;
     ImGuiAppFrameConfig frame_config;
     frame_config.ClearColor = ClearColor;
-    ImGuiX::PresentFrame(&frame_config);
+    backend->PresentFrame(&frame_config);
 }
 
 void ImGuiApp::OnExecuteCommand(ImGuiAppCommand cmd)

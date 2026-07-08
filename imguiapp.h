@@ -640,6 +640,14 @@ struct ImGuiAppPlatformBackend
     // phase (after render, before present). Encode-every-frame contract: steady state may return frame N-1's
     // pixels (FrameID stamped at copy time), drain the tail by re-calling, never block, never repeat a FrameIndex.
     bool (*CaptureFrame)(ImGuiApp* app, ImGuiAppAVFrame* out_frame);
+    // Frame lifecycle: the backend's exposed ImGuiApp_ImplXXX_* functions (imgui impl pattern),
+    // driven by the app's frame phases (OnDrawFrame/OnRenderFrame/OnPresentFrame). PresentFrame
+    // optional (null = RenderDrawData presents, legacy single-hook).
+    const char* Name;
+    void (*Shutdown)();
+    void (*NewFrame)();
+    void (*RenderDrawData)(ImDrawData* draw_data, const ImGuiAppFrameConfig* config);
+    void (*PresentFrame)(const ImGuiAppFrameConfig* config);
 };
 
 IMGUI_API const ImGuiAppPlatformBackend* ImGuiApp_GetPlatformBackend();

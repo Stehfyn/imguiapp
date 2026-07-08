@@ -16,7 +16,7 @@ codegen corpus byte-identical, style ratchet monotonically down.
 | §3 Formatting (F1-F28) | 10 | 8 | 3 (+6 gate-covered) | bare `default:` 50:1 (S9) |
 | §4 Architecture (A1-A32) | 7 | 7 | 7 (+2 n/a) | no `IMGUI_DISABLE` wrap anywhere |
 | §5 API grammar (G1-G24) | 4 | 5 | 2 | silent overpop in all four `PopApp*`; no V twins |
-| §6 Backends (B1-B18) | seam ✓ | B5/B7/B15 | B1/B2/B16/B17 | anatomy/CHANGELOG/guards/prefix wave |
+| §6 Backends (B1-B18) | seam ✓ | B5/B15 | B1/B2/B16/B17 | anatomy/CHANGELOG/guards/prefix wave |
 | §7 Idioms (I1-I41) | 8 | 5 | 3 | dialect breach (43 `auto`, 33 capturing lambdas) |
 | §8 Demo (D1-D9) | 3 | 2 | 3 slips | sample controls not in user register |
 
@@ -83,8 +83,7 @@ backend-internal functions (22 static + ~23 in anon namespaces — canon never u
 `GBackend` identifier unprefixed; AV vtable callbacks contracted (`ImGuiAppLibav_*` vs
 `ImGuiApp_ImplLibav_*`); `std::max` ×8 + `<algorithm>` in SDL backends (Δ2 doesn't license
 backends); `IMGUIX_API`/`IMGUI_API` export split unstated (B4); B15 viewport hooks unbannered,
-named bare `Hook_*`; no `GetBackendData` accessor in the SDL hosts (B7); NewFrame callbacks carry
-no "Did you call Init?" assert (B8, defensible under Δ4 — state it); UTF-8 BOMs on 6 headers.
+named bare `Hook_*`; UTF-8 BOMs on 6 headers.
 
 ### S8. Recoverable-error machinery — G4/G19 (HIGH)
 **Silent overpop**: all four `PopApp*` `if (empty) return;` — no assert, no WAL record
@@ -221,14 +220,18 @@ keeps imgui's meaning of `g`.
 ### Δ4 — Host backends compose upstream imgui backends behind the ImGuiX seam (adapts B6/B9-B14)
 
 `imguiapp_impl_{win32,sdl2}_{opengl3,vulkan,wgpu}` do not re-implement the imgui backend
-contract; they wrap the real `imgui_impl_*` backends and register lifecycle callbacks on the
-`ImGuiXBackend` vtable. Consequences, ratified:
+contract; they wrap the real `imgui_impl_*` backends behind an exposed `ImGuiApp_ImplXXX_*`
+lifecycle (`_Init(const InitInfo*)`/`_Shutdown`/`_NewFrame`/`_RenderDrawData`/`_PresentFrame`,
+imgui impl pattern; InitInfo public in the header). The lifecycle rides the
+`ImGuiApp_GetPlatformBackend()` vtable, driven by the app core's frame phases; the ImGuiX seam
+optionally binds the same vtable via `ImGuiX::Initialize()`. Neither imguiapp core nor backend
+TUs include imguix.h; the platform host owns the ImGui context it creates (none existed) and
+destroys it in ShutdownPlatform. Consequences, ratified:
 
 - `io.BackendPlatformUserData`/`BackendRendererUserData` belong to the wrapped upstream backends;
-  the host's `ImGuiApp_ImplXXX_Data` is `IM_NEW`-allocated, handed to the seam as
-  `Backend.UserData`, and reached by context-free viewport hooks through a
-  `ImGuiApp_ImplXXX_GetBackendData()` accessor over a single instance pointer (the seam supports
-  one backend per process; init asserts "Already initialized").
+  the host's `ImGuiApp_ImplXXX_Data` is `IM_NEW`-allocated and reached (by the lifecycle and by
+  context-free viewport hooks alike) through a `ImGuiApp_ImplXXX_GetBackendData()` accessor over
+  a single instance pointer (one backend per process; init asserts "Already initialized").
 - io wiring, render-state backup/restore, texture lifecycle, and shaders (B9-B14) are audited at
   the wrapped backend, not the wrapper.
 
