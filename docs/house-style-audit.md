@@ -70,7 +70,7 @@ stated scope is a violation, not consistency. (Origin: Tier 1 of the initial aud
 
 ### Δ1 — Virtual interfaces in the app object model (departs A19/P1)
 
-The composition model (`ImGuiAppInterface`, `ImGuiAppLayerBase`, `ImGuiAppItemBase`,
+The composition model (`ImGuiAppInterface`, `ImGuiAppLayerBase`, `ImGuiAppNodeBase`,
 and the template adapters over them) uses virtual dispatch.
 Polymorphic ownership of user-defined layers/windows/controls is the framework's mechanism; a
 function-pointer vtable would re-implement C++ virtuals by hand for no user benefit.

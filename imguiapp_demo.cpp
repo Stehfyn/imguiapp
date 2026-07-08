@@ -3192,7 +3192,7 @@ IMGUI_API ImGuiAppGraph* AppLayerDemoGraph(ImGuiApp* host)
     if (host == nullptr)
         return nullptr;
     // Instance data is keyed by data type id in app->Data regardless of which window hosts
-    // the control (GraphDocControl is Composer-window-hosted, never in host->Controls).
+    // the control (GraphDocControl is Composer-window-hosted, never in host->Children).
     ImGuiAppGraphDocData* doc = (ImGuiAppGraphDocData*)host->Data.GetVoidPtr(ImGuiAppType<ImGuiAppGraphDocData>::ID);
     if (doc == nullptr)
         return nullptr;

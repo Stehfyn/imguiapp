@@ -616,7 +616,7 @@ ImGuiAppPacer::ImGuiAppPacer()
 // toggles mid-frame. File-local render-loop detail, not a polymorphic hook -- items expose StyleMods/ColorMods as data.
 namespace
 {
-ImGuiAppStyleScope PushItemStyle(const ImGuiAppItemBase* item)
+ImGuiAppStyleScope PushItemStyle(const ImGuiAppNodeBase* item)
 {
     ImGuiAppStyleScope s;
     s.Vars   = ImGui::PushAppStyleMods(item->StyleMods.Data, item->StyleMods.Size);
@@ -745,7 +745,7 @@ void ImGuiAppDisplayLayer::OnDraw(const ImGuiApp* app) const
         PopItemStyle(sidebar_scope);
 
         // Controls render their own windows; submit them outside the sidebar's Begin/End.
-        for (ImGuiAppControlBase* control : sidebar->Controls)
+        for (ImGuiAppControlBase* control : sidebar->Children)
         {
             const ImGuiAppStyleScope control_scope = PushItemStyle(control);
             control->OnDraw(app);
@@ -787,7 +787,7 @@ void ImGuiAppDisplayLayer::OnDraw(const ImGuiApp* app) const
 
             // Hosted controls render INSIDE the host window (child regions, not their own Begin/End).
             // Style mods bracket OnDraw only: they style the control's region but not its popups.
-            for (ImGuiAppControlBase* control : window->Controls)
+            for (ImGuiAppControlBase* control : window->Children)
             {
                 const ImGuiAppStyleScope control_scope = PushItemStyle(control);
                 control->OnDraw(app);
@@ -953,7 +953,7 @@ void PopAppSidebar(ImGuiApp* app)
     ImGuiAppSidebarBase* sidebar = app->Sidebars.back();
     app->Sidebars.pop_back();
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "pop sidebar '%s'", sidebar->Label);
-    ShutdownAppControls(app, sidebar->Controls);
+    ShutdownAppControls(app, sidebar->Children);
     sidebar->OnShutdown(app);
     IM_DELETE(sidebar);
 }
@@ -972,7 +972,7 @@ void PopAppWindow(ImGuiApp* app)
     ImGuiAppWindowBase* window = app->Windows.back();
     app->Windows.pop_back();
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "pop window '%s'", window->Label);
-    ShutdownAppControls(app, window->Controls);
+    ShutdownAppControls(app, window->Children);
     window->OnShutdown(app);
     IM_DELETE(window);
 }

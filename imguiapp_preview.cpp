@@ -1069,7 +1069,7 @@ void AppPvPushControl(ImGuiAppPreview* s, const ImGuiAppNode* n, ImGuiAppWindowB
     control->Hosted = (host != nullptr);
     ImStrncpy(control->Label, n->Draft.Name, IM_ARRAYSIZE(control->Label));
 
-    if (host != nullptr) host->Controls.push_back(control);
+    if (host != nullptr) host->Children.push_back(control);
     else                 app->Controls.push_back(control);
     control->OnInitialize(app);
 

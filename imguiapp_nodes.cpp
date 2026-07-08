@@ -8109,7 +8109,7 @@ static void AppLiveFieldsTable(const char* str_id, const ImGuiAppControlBase* ct
 #endif // IMGUIX_DISABLE_TOOLS
 // Resolve a live mirror node back to the runtime object it reflects (the inverse of BuildAppLiveGraph's
 // keying: windows by label hash, sidebars by label hash + 1, controls by PersistData id).
-static ImGuiAppItemBase* AppGraphFindLiveItem(ImGuiApp* app, const ImGuiAppNode* n)
+static ImGuiAppNodeBase* AppGraphFindLiveItem(ImGuiApp* app, const ImGuiAppNode* n)
 {
     if (app == nullptr || n == nullptr || !n->IsLive)
         return nullptr;
@@ -8268,7 +8268,7 @@ void EditAppNodeInspectorEx(ImGuiAppGraph* g, int node_id, ImGuiApp* live_app)
         // Live style: values are the mirror's echo, but the Active flags write THROUGH to the running item --
         // flip a checkbox, watch the app restyle, no regeneration. Falls back to the plain echo when the host
         // didn't pass its mirrored app (or the item vanished between frames).
-        ImGuiAppItemBase* item = AppGraphFindLiveItem(live_app, n);
+        ImGuiAppNodeBase* item = AppGraphFindLiveItem(live_app, n);
 
         // Live data: the RUNNING control's reflected members with their current values,
         // re-read every frame (this is the running binary's memory, not a draft).
@@ -12316,7 +12316,7 @@ static void AppEmitSchemaFieldDeps(const ImGuiAppLiveFieldDesc* fields, int coun
 // data edges GetDependencyIDs produced). Returns false when the runtime object is gone.
 static bool AppEmitLiveControlCode(const ImGuiAppGraph* g, ImGuiApp* live_app, const ImGuiAppNode* n, ImGuiTextBuffer* out, ImGuiStorage* emitted)
 {
-    ImGuiAppItemBase* item = AppGraphFindLiveItem(live_app, n);
+    ImGuiAppNodeBase* item = AppGraphFindLiveItem(live_app, n);
     if (item == nullptr)
     {
         out->appendf("// live control '%s': runtime object unavailable\n\n", n->Draft.Name);
@@ -12610,14 +12610,14 @@ void GenerateAppGraphCodeEx(const ImGuiAppGraph* g, ImGuiTextBuffer* out, ImVect
         {
             char pbase[IM_LABEL_SIZE]; AppNodeBaseName(pn, pbase, IM_ARRAYSIZE(pbase));
             out->appendf("  ImGui::PushSidebarControl<%s>(app, sb_%s); // hosted by %s\n", base, pbase, pn->Draft.Name);
-            char expr[IM_LABEL_SIZE + 32]; ImFormatString(expr, IM_ARRAYSIZE(expr), "sb_%s->Controls.back()", pbase);
+            char expr[IM_LABEL_SIZE + 32]; ImFormatString(expr, IM_ARRAYSIZE(expr), "sb_%s->Children.back()", pbase);
             AppEmitStyleModLines(n, expr, "  ", out);
         }
         else if (pn && pn->Kind == ImGuiAppNodeKind_Window)
         {
             char pbase[IM_LABEL_SIZE]; AppNodeBaseName(pn, pbase, IM_ARRAYSIZE(pbase));
             out->appendf("  ImGui::PushWindowControl<%s>(app, win_%s); // hosted by %s\n", base, pbase, pn->Draft.Name);
-            char expr[IM_LABEL_SIZE + 32]; ImFormatString(expr, IM_ARRAYSIZE(expr), "win_%s->Controls.back()", pbase);
+            char expr[IM_LABEL_SIZE + 32]; ImFormatString(expr, IM_ARRAYSIZE(expr), "win_%s->Children.back()", pbase);
             AppEmitStyleModLines(n, expr, "  ", out);
         }
         else
@@ -14903,7 +14903,7 @@ struct ImGuiAppLiveWant
     ImVec2                  InitialSize;
     ImGuiDir                DockDir;   // Sidebar only
     float                   DockSize;  // Sidebar only
-    const ImGuiAppItemBase* Item;      // live object (windows/sidebars/controls; null for layers) -- read within
+    const ImGuiAppNodeBase* Item;      // live object (windows/sidebars/controls; null for layers) -- read within
                                       // BuildAppLiveGraph only, to mirror StyleMods (kept OFF this struct: a nested
                                       // ImVector member inside ImVector<ImGuiAppLiveWant> would break ImVector's memcpy grow)
 };
@@ -14978,7 +14978,7 @@ void BuildAppLiveGraph(const ImGuiApp* app, ImGuiAppGraph* g)
             ImFormatString(w.Name, IM_ARRAYSIZE(w.Name), "%s", AppLayerNodeName(lt));
         want.push_back(w);
     }
-    // Windows / Sidebars: keyed by their unique Label. Each hosts its own controls (window->Controls), mirrored
+    // Windows / Sidebars: keyed by their unique Label. Each hosts its own controls (window->Children), mirrored
     // right after the host so a live containment edge (control -> host) can be built below.
     for (int i = 0; i < app->Windows.Size; i++)
     {
@@ -14992,8 +14992,8 @@ void BuildAppLiveGraph(const ImGuiApp* app, ImGuiAppGraph* g)
         w.Item = win;
         ImStrncpy(w.Name, lbl[0] ? lbl : "Window", IM_ARRAYSIZE(w.Name));
         want.push_back(w);
-        for (int c = 0; c < win->Controls.Size; c++)
-            PushControlWant(win->Controls.Data[c], key);
+        for (int c = 0; c < win->Children.Size; c++)
+            PushControlWant(win->Children.Data[c], key);
     }
     for (int i = 0; i < app->Sidebars.Size; i++)
     {
@@ -15007,8 +15007,8 @@ void BuildAppLiveGraph(const ImGuiApp* app, ImGuiAppGraph* g)
         w.Item = sb;
         ImStrncpy(w.Name, lbl[0] ? lbl : "Sidebar", IM_ARRAYSIZE(w.Name));
         want.push_back(w);
-        for (int c = 0; c < sb->Controls.Size; c++)
-            PushControlWant(sb->Controls.Data[c], key);
+        for (int c = 0; c < sb->Children.Size; c++)
+            PushControlWant(sb->Children.Data[c], key);
     }
     // App-level controls: keyed by runtime PersistData id; carry their dependency ids for edge discovery.
     for (int c = 0; c < app->Controls.Size; c++)

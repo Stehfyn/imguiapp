@@ -799,7 +799,7 @@ struct ImGuiAppLayerBase : ImGuiAppInterface
     virtual void OnDraw(const ImGuiApp*) const    = 0;
 };
 
-struct ImGuiAppItemBase : ImGuiAppInterface
+struct ImGuiAppNodeBase : ImGuiAppInterface
 {
     char Label[IM_LABEL_SIZE]; // type name by default; deduplicated with "##N" on real collisions
 
@@ -816,13 +816,13 @@ struct ImGuiAppItemBase : ImGuiAppInterface
     virtual void OnDraw(const ImGuiApp*) const                         = 0;
 };
 
-struct ImGuiAppWindowBase : ImGuiAppItemBase
+struct ImGuiAppWindowBase : ImGuiAppNodeBase
 {
     bool                           Open     = true;
     ImGuiWindow*                   Window   = nullptr;
     ImGuiViewport*                 Viewport = nullptr;
     ImGuiWindowFlags               Flags    = ImGuiWindowFlags_None;
-    ImVector<ImGuiAppControlBase*> Controls;
+    ImVector<ImGuiAppControlBase*> Children;
 
     // Optional first-use placement (applied with ImGuiCond_FirstUseEver, so saved .ini wins).
     bool   HasInitialPlacement = false;
@@ -840,7 +840,7 @@ struct ImGuiAppSidebarBase : ImGuiAppWindowBase
 // re-exposed on the type-erased base, so tools inspect a control without knowing its concrete
 // template pack. Hooks default inert (imguiapp.cpp); ImGuiAppControlMirrorAdapter<> overrides each
 // from its pack. (ImGuiAppLiveFieldDesc lives in imguiapp_reflect.h, included at the top.)
-struct ImGuiAppControlBase : ImGuiAppItemBase
+struct ImGuiAppControlBase : ImGuiAppNodeBase
 {
     // Data identity
     virtual ImGuiID GetDataID() const;                                                  // instance-qualified storage key of PersistData
@@ -1335,13 +1335,13 @@ namespace ImGui
     }
 
     // Host a control inside a window: instance data registers in app->Data as usual, but the control joins
-    // window->Controls and renders between the host window's Begin/End (no Begin of its own).
+    // window->Children and renders between the host window's Begin/End (no Begin of its own).
     template <typename T>
     IMGUI_API inline void PushWindowControl(ImGuiApp* app, ImGuiAppWindowBase* window, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count)
     {
         IM_ASSERT(app);
         IM_ASSERT(window);
-        AppControlPush(app, &window->Controls, AppControlCreate<T>(app, instance, binds, binds_count, "window", window->Label));
+        AppControlPush(app, &window->Children, AppControlCreate<T>(app, instance, binds, binds_count, "window", window->Label));
     }
 
     template <typename T>
@@ -1349,7 +1349,7 @@ namespace ImGui
     {
         IM_ASSERT(app);
         IM_ASSERT(sidebar);
-        AppControlPush(app, &sidebar->Controls, AppControlCreate<T>(app, instance, binds, binds_count, "sidebar", sidebar->Label));
+        AppControlPush(app, &sidebar->Children, AppControlCreate<T>(app, instance, binds, binds_count, "sidebar", sidebar->Label));
     }
 
     // Visit every pushed control in update order: app-level, then sidebar-hosted, then window-hosted.
@@ -1361,11 +1361,11 @@ namespace ImGui
         for (int i = 0; i < app->Controls.Size; i++)
             visitor(app->Controls.Data[i], (ImGuiAppWindowBase*)nullptr);
         for (int s = 0; s < app->Sidebars.Size; s++)
-            for (int i = 0; i < app->Sidebars.Data[s]->Controls.Size; i++)
-                visitor(app->Sidebars.Data[s]->Controls.Data[i], (ImGuiAppWindowBase*)app->Sidebars.Data[s]);
+            for (int i = 0; i < app->Sidebars.Data[s]->Children.Size; i++)
+                visitor(app->Sidebars.Data[s]->Children.Data[i], (ImGuiAppWindowBase*)app->Sidebars.Data[s]);
         for (int w = 0; w < app->Windows.Size; w++)
-            for (int i = 0; i < app->Windows.Data[w]->Controls.Size; i++)
-                visitor(app->Windows.Data[w]->Controls.Data[i], app->Windows.Data[w]);
+            for (int i = 0; i < app->Windows.Data[w]->Children.Size; i++)
+                visitor(app->Windows.Data[w]->Children.Data[i], app->Windows.Data[w]);
     }
 
     template <typename Visitor>
@@ -1375,11 +1375,11 @@ namespace ImGui
         for (int i = 0; i < app->Controls.Size; i++)
             visitor((const ImGuiAppControlBase*)app->Controls.Data[i], (const ImGuiAppWindowBase*)nullptr);
         for (int s = 0; s < app->Sidebars.Size; s++)
-            for (int i = 0; i < app->Sidebars.Data[s]->Controls.Size; i++)
-                visitor((const ImGuiAppControlBase*)app->Sidebars.Data[s]->Controls.Data[i], (const ImGuiAppWindowBase*)app->Sidebars.Data[s]);
+            for (int i = 0; i < app->Sidebars.Data[s]->Children.Size; i++)
+                visitor((const ImGuiAppControlBase*)app->Sidebars.Data[s]->Children.Data[i], (const ImGuiAppWindowBase*)app->Sidebars.Data[s]);
         for (int w = 0; w < app->Windows.Size; w++)
-            for (int i = 0; i < app->Windows.Data[w]->Controls.Size; i++)
-                visitor((const ImGuiAppControlBase*)app->Windows.Data[w]->Controls.Data[i], (const ImGuiAppWindowBase*)app->Windows.Data[w]);
+            for (int i = 0; i < app->Windows.Data[w]->Children.Size; i++)
+                visitor((const ImGuiAppControlBase*)app->Windows.Data[w]->Children.Data[i], (const ImGuiAppWindowBase*)app->Windows.Data[w]);
     }
 } // namespace ImGui
 
