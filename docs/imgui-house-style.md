@@ -81,7 +81,7 @@ The mission statement (`imgui.cpp:112-129`, verbatim bullets):
   5. **Linkage**: `IMGUI_API` with the definition in a core `.cpp`, or `static inline`/template (or macro wrapper, Maths) in the header.
   Canon's own deviations are quarantined, not license: `ImFormatStringToTempBuffer[V]` reads `GImGui->TempBuffer` (a convenience wart — do not replicate); the "High-level text functions" sub-block is banner-marked `DO NOT USE!!!`; `ImFontAtlas*`/`ImFontCalc*` free functions share the bare prefix but live OUTSIDE Generic helpers and touch the context — font-system internals, not tier members. Anything failing the test is either `ImGui::` API or a plain-PascalCase file-local static (N12).
   **imguiapp third tier**: `ImApp<Family><Op>` passes the same five points one level up — placement in the applayer helper regions (`imguiapp.h` Helpers, `imguiapp_reflect.h` constexpr type-identity layer, the animation section for `ImAppEase`); "framework state" additionally means `ImGuiApp*` and the `ImGui::App*` API; the imgui `Im*` tier below is a legal dependency. Members: `ImAppHashType` (Hash), `ImAppRising/ImAppFalling/ImAppChanged` (state-delta), `ImAppRandom/ImAppRandomFloat/ImAppRandomInt` (RNG), `ImAppEase` (maths), `ImAppFormatLabel/ImAppNulTerminate/ImAppTypeDisplayName/ImAppDataReflectable` (type identity). Sole sanctioned exception: `ImAppAssertFail`, the IM_ASSERT sink — forensics infrastructure whose job is reaching the WAL/ring dump (context-free `ImGui::App*` calls only).
-- **N12.** File-local static helpers: PascalCase; take the `Im` prefix ONLY when they pass N11's points 2-4 verbatim — i.e. promotable to Generic helpers unchanged (`static const char* ImAtoi`). A static that touches the context, the style/ID stacks, or any framework state stays plain PascalCase (render-loop bookkeeping is not tier material). Template helpers take `T` suffix (`DataTypeClampT`); getter tables use underscore sub-namespacing (`Items_ArrayGetter`).
+- **N12.** File-local static FUNCTIONS: PascalCase; take the `Im` prefix ONLY when they pass N11's points 2-4 verbatim — i.e. promotable to Generic helpers unchanged (`static const char* ImAtoi`). A static function that touches the context, the style/ID stacks, or any framework state stays plain PascalCase (render-loop bookkeeping is not tier material). Template helpers take `T` suffix (`DataTypeClampT`); getter tables use underscore sub-namespacing (`Items_ArrayGetter`). This license is functions-only — TU-local TYPES always keep full tier prefixes (A23).
 
 ### 2.5 Variables
 
@@ -193,8 +193,55 @@ Machine-enforced baseline (`.editorconfig`): 4-space indent, no tabs, final newl
 ### 4.8 Struct design
 
 - **A19.** Plain structs, all-public PascalCase members, no getters/setters for data, no virtuals. Small value types get `constexpr` inline ctors (`ImVec2`, `imgui.h:303`); large config structs declare ctor in header, define in .cpp; POD-ish structs zero themselves: `memset((void*)this, 0, sizeof(*this));` with the `(void*)` cast to silence `-Wclass-memaccess` (`imgui.cpp:1663`).
+
 - **A20.** Trivial one-liner methods inline in the struct with `{ ... }` inner-spaced; real logic declared `IMGUI_API`, defined in .cpp.
 - **A21.** Storage shrinking via bitfields (`unsigned int Field : 1`) and narrow index typedefs (N2).
+
+### 4.9 Placement — where every symbol is declared and defined
+
+- **A22.** The placement matrix. Every symbol kind has exactly ONE declaration home and ONE definition home; anything unlisted resolves via A23's closing rule. imguiapp analog follows "→" per row (Δ7: every imguiapp definition site is the matching `[SECTION]` region of the unity `imguiapp.cpp`).
+
+| Kind | Declared | Defined |
+|---|---|---|
+| Public API functions (`ImGui::`, N9) | `imgui.h` end-user API `[SECTION]` → `imguiapp.h` | TU owning the subsystem: widgets → `imgui_widgets.cpp`; tables/columns → `imgui_tables.cpp`; drawlist/fonts → `imgui_draw.cpp`; demo showcase → `imgui_demo.cpp`; context/windows/nav/dock/settings/viewports/inputs/everything else → `imgui.cpp` → `imguiapp.cpp` region |
+| Internal API functions (`ImGui::`) | `imgui_internal.h` internal-API `[SECTION]` → `imguiapp_internal.h` | same subsystem ownership map → `imguiapp.cpp` region |
+| Foundation helper functions (bare `Im*`, N11) | `imgui_internal.h` `[SECTION] Generic helpers` under `// Helpers: <Family>`; one-liners/templates `static inline` in place → `ImApp*`: public-surface in `imguiapp.h` Helpers, type-identity in `imguiapp_reflect.h`, internal-only in `imguiapp_internal.h` | out-of-line in the TU owning the family's consumers: `ImHashData`/`ImQsort`/`ImFileOpen`/`ImTriangleContainsPoint`/`ImAlphaBlendColors` → `imgui.cpp`; `ImBezierCubicCalc` → `imgui_draw.cpp` → `imguiapp.cpp` |
+| Public-currency `Im*` value types (appear in public signatures/members: `ImVec2/ImVec4`, `ImVector<>`, `ImColor`, `ImDrawList`, `ImFont`) | `imgui.h` (`ImVector`, `imgui.h:2301`) | trivial methods inline (A20); real logic in the owning TU (drawlist/fonts → `imgui_draw.cpp`) |
+| Internal `Im*` helper types (`ImRect`, `ImPool<>`, `ImSpan<>`, `ImBitArray`, `ImChunkStream<>`) | `imgui_internal.h` under `// Helper: <Type>` → `ImAppTween/Timer/Spring/Pulse` in `imguiapp_internal.h` animation section | inline; heavy methods in the owning TU |
+| Public context-layer types (`ImGuiIO`, `ImGuiStyle`, callback-data structs) | `imgui.h` structs `[SECTION]` → `ImGuiApp`, `ImGuiAppRecorder` in `imguiapp.h` | ctors + logic `imgui.cpp` → `imguiapp.cpp` |
+| Internal context-layer types (`ImGuiContext`, `ImGuiWindow`, `ImGuiTable`) | `imgui_internal.h` → `ImGuiAppGraph`, `ImGuiAppEditorState` in `imguiapp_internal.h` | logic in the owning TU |
+| Enums/flags (N4-N8) | the same header as their consumer type/API, directly beside it | n/a |
+| Scalar + index typedefs (N2) | `ImS8..ImU64` → `imgui.h` basic types; domain index typedefs → `imgui_internal.h` beside their domain | n/a |
+| Function-pointer typedefs (N3) | beside their first consumer, same header | n/a |
+| Config/overridable macros (`IM_ASSERT`, `IM_VEC2_CLASS_EXTRA`) | override point `imconfig.h`, default in `imgui.h` → `imappconfig.h` / `imguiapp.h` | n/a |
+| Value macros (`IM_COL32`, `IM_ALLOC/IM_NEW`, `IM_ARRAYSIZE`, `IM_FMTARGS`) | `imgui.h` | n/a |
+| Internal macros (`IM_PI`, `IM_NEWLINE`, `IM_MSVC_RUNTIME_CHECKS_OFF`) | `imgui_internal.h` `[SECTION] Macros` → `imguiapp_internal.h` `[SECTION] Macros` | n/a |
+| Process globals (`GIm*`, N13) | `extern IMGUI_API` in `imgui_internal.h` (`GImGui`, `:232`) → banned in imguiapp (Δ3; Δ6 singleton accessors instead) | `imgui.cpp` context section (`:1494`) |
+| Backend symbols (§6) | public lifecycle API in `backends/imgui_impl_<sdk>.h` ONLY; Data struct + everything else TU-local in the `.cpp` → `backends/imguiapp_impl_*` | `imgui_impl_<sdk>.cpp` |
+| Vendored code | `imstb_*.h` → `imguiapp_reflect.h` port; body exempt from all rules | n/a |
+
+- **A23.** TU-local symbols — the rules for INSIDE every implementation file (`imgui.cpp`, `imgui_widgets.cpp`, `imgui_draw.cpp`, `imgui_tables.cpp`, `imgui_demo.cpp`, `backends/*.cpp`):
+  - Never declared in any header; static forward decls live in the TU's `[SECTION] Forward Declarations` (A17).
+  - **Types are ALWAYS tier-prefixed, even TU-local**: `ImGuiResizeGripDef`/`ImGuiDockRequest` (`imgui.cpp:7198/17816`), `ImGuiPlotArrayGetterData`/`ImGuiTabBarSection` (`imgui_widgets.cpp:9026/9744`). Only FUNCTIONS may drop the prefix when file-local (N12). → applayer TU-local types: `ImGuiApp*` when context/render-coupled, `ImApp*` only if N11-promotable.
+  - Static data tables: `G`-prefixed PascalCase const arrays, locked by `IM_STATIC_ASSERT` beside them (A18 — present in all four core TUs).
+  - `imgui_demo.cpp` is a deliberate REGISTER EXCEPTION: includes `imgui.h` + libc only — never `imgui_internal.h`, never the `Im*` math wrappers ("imgui_demo.cpp does _not_ use them to keep the code easy to copy", `imgui_internal.h:494`); demo-local symbols read as user code: `ShowExampleApp*` statics, `Example*` structs, plain `HelpMarker`. The Im grammar is suspended there and ONLY there. → imguiapp demo region keeps applayer grammar for framework chrome; sample controls showcase the user register.
+  - Closing rule for anything unlisted: (1) visibility decides the header — end user → public header; framework/tools → internal header; one TU → that TU only, never a header. (2) The definition lives in the TU that owns the declaring subsystem — never a third place. (3) Growing the file set itself requires a spec amendment (N20 names the closed set).
+
+
+### 4.10 Ordering — cardinal anchors, ordinal sequences, directions
+
+- **A24.** Cardinal order, `imgui_internal.h`: Header mess -> Forward declarations -> Context pointer -> STB includes -> Macros -> Generic helpers -> ImDrawList/Style/Data-types/Widgets support -> per-subsystem support sections (Popup -> Inputs -> Clipper -> Navigation -> Typing-select -> Columns -> Box-select -> Multi-select -> Docking -> Viewport -> ...) -> the `namespace ImGui` internal-API declarations toward the tail (`imgui_internal.h:10-31` index; internal API from `:3529`). Complements A7 (imgui.h section order); A1 fixes every file's absolute top/bottom anchors (banner first; pragma pops + echoed `#endif` last). imguiapp analog: `imguiapp_internal.h` keeps its index in the same shape; deprecation scaffolding tail-anchors when it lands (audit S5).
+- **A25.** Cardinal order, implementation files: `imgui.cpp` opens with the DOCUMENTATION block (MISSION STATEMENT -> CONTROLS GUIDE -> PROGRAMMER GUIDE -> API BREAKING CHANGES -> FAQ) BEFORE any code; code runs INCLUDES -> FORWARD DECLARATIONS -> CONTEXT AND MEMORY ALLOCATORS -> USER FACING STRUCTURES -> MISC HELPERS/UTILITIES (five blocks in Generic-helpers family order) -> subsystem sections (`imgui.cpp:63-94` index). Satellite TUs open includes/pragmas -> `[SECTION] Forward Declarations` -> subsystem sections. imguiapp analog: `imguiapp.cpp` top index + Δ7 per-region indexes, same shape.
+- **A26.** Ordinal rule — definitions follow declarations: a TU's `[SECTION]` sequence mirrors the order of the API groups it implements in its header. `imgui_widgets.cpp` sections track imgui.h's `// Widgets:` group order verbatim (Text -> Main -> Combo -> Drag -> Slider -> Input -> Color -> Tree -> Selectable -> ListBox -> Plot -> Menu -> Tab; `imgui_widgets.cpp:8-31` vs `imgui.h:623-802`); support sections insert directly before their first consumer (Data Type helpers before Drag; Typing/Box/Multi-select support beside their widgets). WITHIN a section, definitions follow the header's declaration order. Audit mechanically: map header declaration ranks onto definition positions — the rank sequence must be monotonic ASCENDING modulo the stated insertions (the check that caught imguiapp's S1 drift).
+- **A27.** Ordinal rule — additions: a new declaration joins its functional group, never the file tail. Pair members sit adjacent (`End` beside `Begin`, the `V` twin beside its variadic, the `Ex` engine beside its public wrapper, `Pop` beside `Push`; `imgui.h:436-440`, `:626-627`); new members append at their group's END; new groups slot into the audience order of A7/A24. The ONLY sanctioned tail-append is the guarded Obsolete section (A14). Definitions then land per A26 in the owning TU.
+- **A28.** Sequence directions — every ordered list carries an explicit sort key AND direction; the normative set:
+  - Chronological lists run DESCENDING (newest first): `API BREAKING CHANGES` (A15), backend `// CHANGELOG`s (B2), `OBSOLETED` entries (A14, "newest first"), CHANGELOG.txt releases (C3).
+  - Enum values run ASCENDING: index enums count 0..`_COUNT`; flag enums allocate bits low-to-high (`1 << 0` upward, N7); `_BEGIN`/`_END` ranges are half-open with `_BEGIN < _END` (N6).
+  - Forward declarations: ASCENDING case-sensitive alphabetical WITHIN each layer group (`imgui.h:176-190`: ImDraw* -> ImFont* -> ImTexture*); deprecated entries sink to the group tail regardless of alphabet (`ImColor` last, tagged `*OBSOLETE*`, `imgui.h:191`).
+  - Includes: fixed dependency order, most fundamental first — config -> `imgui.h` -> `imgui_internal.h` -> libc -> SDK/extras (A9).
+  - Version gates compare `IMGUI_VERSION_NUM` ASCENDING (A13); warning-pragma blocks list compilers MSVC -> clang -> gcc (A3); monitor lists put the primary FIRST (B10).
+  - A sequence with no stated direction is a spec bug, not an author's choice: state the key + direction when introducing any new ordered list. imguiapp analog: identical directions; the S5 breaking-log adopts reverse-chronological on landing.
+
 
 ---
 

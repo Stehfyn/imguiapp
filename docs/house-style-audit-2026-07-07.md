@@ -252,7 +252,28 @@ near a known doc-tracked debt, drop the tag at the site; (3) add F20 tag-census 
    only if promotable to the section verbatim. `ImApp*` asserted as the tier one level up
    (full member list in N11; `ImAppAssertFail` = sole sanctioned exception, IM_ASSERT sink).
    Enforcement: `ImAppItemStyle` (file-local pop-count struct riding context-touching
-   `PushItemStyle`/`PopItemStyle`) renamed `ItemStyleScope` per sharpened N12, 9 sites, one TU.
+   `PushItemStyle`/`PopItemStyle`) renamed — first to `ItemStyleScope`, then corrected to
+   `ImGuiAppItemStyleScope` once canon showed TU-local TYPES always keep tier prefixes
+   (`ImGuiResizeGripDef`/`ImGuiDockRequest`/`ImGuiPlotArrayGetterData`); the N12 plain-name
+   license is functions-only. 9 sites, one TU.
+6. **A22/A23 placement matrix added** (2026-07-08): "where is each symbol kind declared and
+   defined" was previously scattered/implicit. New §4.9: a full declaration/definition matrix
+   (public/internal API fns, foundation helpers, value vs context types, enums, typedefs, macro
+   tiers, globals, backends, vendored) with per-subsystem definition ownership across ALL
+   implementation files (imgui.cpp / widgets / draw / tables / demo / backends), TU-local rules
+   (types always prefixed; G-tables + static-assert locks; demo = sanctioned user-register
+   exception, imgui.h + libc only), and a three-step closing rule so unlisted kinds resolve
+   unilaterally. imguiapp analog inline per row (Δ7 unity-file regions).
+7. **A24-A28 ordering rules added** (2026-07-08, §4.10): cardinal section order for
+   `imgui_internal.h` (A24) and the implementation files incl. imgui.cpp's DOCUMENTATION-first
+   block (A25); the ordinal definitions-follow-declarations law with the mechanical
+   rank-monotonicity audit (A26 — the check behind S1); where additions join (A27: functional
+   group + pair-member adjacency, tail-append reserved for the Obsolete section); and explicit
+   DIRECTIONS for every ordered sequence (A28: chronological lists descending/newest-first,
+   enum values + flag bits ascending, forward decls alphabetical-ascending within layer group
+   with deprecated entries sinking to the tail, includes dependency-first, primary-first monitor
+   lists; unstated direction = spec bug). Closes the ordering gaps found by interrogating the
+   spec per the updated house-style-survey skill.
 
 ## Sequencing (each wave gated: imguix-tests + imguix-core-tests + imguix-headless-verify green, codegen corpus byte-identical, style ratchet re-pinned monotonically down)
 

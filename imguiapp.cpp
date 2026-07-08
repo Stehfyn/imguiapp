@@ -682,21 +682,21 @@ ImGuiAppPacer::ImGuiAppPacer()
 // toggles mid-frame. File-local render-loop detail, not a polymorphic hook -- items expose StyleMods/ColorMods as data.
 namespace
 {
-    struct ItemStyleScope
+    struct ImGuiAppItemStyleScope
     {
         int Vars   = 0;
         int Colors = 0;
     };
 
-    ItemStyleScope PushItemStyle(const ImGuiAppItemBase* item)
+    ImGuiAppItemStyleScope PushItemStyle(const ImGuiAppItemBase* item)
     {
-        ItemStyleScope s;
+        ImGuiAppItemStyleScope s;
         s.Vars   = ImGui::PushAppStyleMods(item->StyleMods.Data, item->StyleMods.Size);
         s.Colors = ImGui::PushAppColorMods(item->ColorMods.Data, item->ColorMods.Size);
         return s;
     }
 
-    void PopItemStyle(ItemStyleScope s)
+    void PopItemStyle(ImGuiAppItemStyleScope s)
     {
         if (s.Colors > 0)
           ImGui::PopStyleColor(s.Colors);
@@ -786,7 +786,7 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
 {
     for (auto& sidebar : app->Sidebars)
     {
-      const ItemStyleScope sidebar_scope = PushItemStyle(sidebar);
+      const ImGuiAppItemStyleScope sidebar_scope = PushItemStyle(sidebar);
 
       if (sidebar->Window && (sidebar->Flags & ImGuiWindowFlags_AlwaysAutoResize))
       {
@@ -819,7 +819,7 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
       // Controls render their own windows; submit them outside the sidebar's Begin/End.
       for (auto& control : sidebar->Controls)
       {
-        const ItemStyleScope control_scope = PushItemStyle(control);
+        const ImGuiAppItemStyleScope control_scope = PushItemStyle(control);
         control->OnRender(app);
         PopItemStyle(control_scope);
       }
@@ -832,7 +832,7 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
       if (!window->Open)
         continue;
 
-      const ItemStyleScope window_scope = PushItemStyle(window);
+      const ImGuiAppItemStyleScope window_scope = PushItemStyle(window);
 
       // Never fight a dock binding: SetNextWindowPos undocks a docked window by design
       // (BeginDocked's PosUndock), so placement only applies to windows with no dock home
@@ -861,7 +861,7 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
         // Style mods bracket OnRender only: they style the control's region but not its popups.
         for (auto& control : window->Controls)
         {
-          const ItemStyleScope control_scope = PushItemStyle(control);
+          const ImGuiAppItemStyleScope control_scope = PushItemStyle(control);
           control->OnRender(app);
           PopItemStyle(control_scope);
         }
@@ -873,7 +873,7 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
 
     for (auto& control : app->Controls)
     {
-      const ItemStyleScope control_scope = PushItemStyle(control);
+      const ImGuiAppItemStyleScope control_scope = PushItemStyle(control);
       control->OnRender(app);
       PopItemStyle(control_scope);
     }
