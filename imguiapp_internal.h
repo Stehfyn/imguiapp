@@ -67,76 +67,76 @@ struct ImGuiAppPreviewDll;      // DLL preview session (imguiapp_preview_dll.h)
 struct ImGuiTestEngine;         // imgui_test_engine (test-harness impl only)
 
 // AV meta stream + recorder + run artifacts
-struct ImGuiAppMetaRecorder;    // meta-only run recorder (no video)
 struct ImGuiAppAVStreamStats;   // integrity ladder recomputed from a meta stream
-struct ImGuiAppRunMeta;         // per-run header decoded from the stream
-struct ImGuiAppRunTick;         // one tick's landing (offset + payload)
+struct ImGuiAppMetaRecorder;    // meta-only run recorder (no video)
 struct ImGuiAppRunCommand;      // one dispatched command at a tick
 struct ImGuiAppRunIndex;        // tick-keyed index over a reconstructed stream
+struct ImGuiAppRunMeta;         // per-run header decoded from the stream
 struct ImGuiAppRunState;        // reconstructed values at a scrubbed tick
+struct ImGuiAppRunTick;         // one tick's landing (offset + payload)
 struct ImGuiAppRunTransport;    // App-time transport view (LiveRing vs FileRun)
 
 // Graph model + editor
+struct ImGuiAppCommandDesc;     // authored command on a node
+struct ImGuiAppDragStick;       // drag-gesture state
+struct ImGuiAppEditorUndo;      // one undo entry
+struct ImGuiAppEventDesc;       // authored event (edge + action)
+struct ImGuiAppFieldBinding;    // field-to-producer wiring
 struct ImGuiAppFieldDesc;       // one field of a design-phase node draft
+struct ImGuiAppGraphViewState;  // transient per-frame editor view state
+struct ImGuiAppGroupFrame;      // group frame around nodes
+struct ImGuiAppKeyBinding;      // key-to-command binding
+struct ImGuiAppNode;            // one node in the graph
 struct ImGuiAppNodeDraft;       // node whose backing C++ type does not exist yet
 struct ImGuiAppNodeLink;        // one edge in the typed graph
 struct ImGuiAppNodePort;        // one pin on a node
-struct ImGuiAppCommandDesc;     // authored command on a node
 struct ImGuiAppOpOperand;       // one operand of an op-fold expression
-struct ImGuiAppEventDesc;       // authored event (edge + action)
-struct ImGuiAppNode;            // one node in the graph
-struct ImGuiAppFieldBinding;    // field-to-producer wiring
-struct ImGuiAppKeyBinding;      // key-to-command binding
-struct ImGuiAppScopeCamera;     // per-scope camera
-struct ImGuiAppScopePlacement;  // per-scope node placement
-struct ImGuiAppScopeOrder;      // sequence order within a scope
-struct ImGuiAppTrunkSeg;        // one segment of a wire trunk
-struct ImGuiAppTrunkRoute;      // routed wire trunk
-struct ImGuiAppDragStick;       // drag-gesture state
-struct ImGuiAppGroupFrame;      // group frame around nodes
-struct ImGuiAppGraphViewState;  // transient per-frame editor view state
 struct ImGuiAppPrefab;          // reusable node cluster
-struct ImGuiAppEditorUndo;      // one undo entry
+struct ImGuiAppScopeCamera;     // per-scope camera
+struct ImGuiAppScopeOrder;      // sequence order within a scope
+struct ImGuiAppScopePlacement;  // per-scope node placement
+struct ImGuiAppTrunkRoute;      // routed wire trunk
+struct ImGuiAppTrunkSeg;        // one segment of a wire trunk
 
 struct ImGuiAppEditorState;     // per-graph editor session state
 struct ImGuiAppGraph;           // the authored document graph
 
 // Embeddable Composer control
+struct ImGuiAppComposerControl;
 struct ImGuiAppComposerControlData;
 struct ImGuiAppComposerControlTempData;
-struct ImGuiAppComposerControl;
 
 // Animation builtins
-struct ImAppTweenData;   struct ImAppTweenTempData;   struct ImAppTween;
-struct ImAppTimerData;   struct ImAppTimerTempData;   struct ImAppTimer;
-struct ImAppSpringData;  struct ImAppSpringTempData;  struct ImAppSpring;
-struct ImAppPulseData;   struct ImAppPulseTempData;   struct ImAppPulse;
+struct ImAppPulse;   struct ImAppPulseData;   struct ImAppPulseTempData;
+struct ImAppSpring;  struct ImAppSpringData;  struct ImAppSpringTempData;
+struct ImAppTimer;   struct ImAppTimerData;   struct ImAppTimerTempData;
+struct ImAppTween;   struct ImAppTweenData;   struct ImAppTweenTempData;
 
 // Headless test harness
 struct ImGuiAppTestHarnessConfig;
 
 // Canvas UI [TOOLS]
-struct ImGuiCanvasStyle;        // canvas visual style
 struct ImGuiCanvasIO;           // per-frame canvas input
 struct ImGuiCanvasNodeRec;      // submitted node record
 struct ImGuiCanvasPinRec;       // submitted pin record
-struct ImGuiCanvasWireRec;      // per-frame wire submission
 struct ImGuiCanvasState;        // canvas engine state (opaque to callers)
+struct ImGuiCanvasStyle;        // canvas visual style
+struct ImGuiCanvasWireRec;      // per-frame wire submission
 
 struct ImGuiAppGraphHostCmd;   // fwd (declared with the palette API below)
 struct ImGuiAppGraphIssue;     // fwd (declared with the validation API below)
 
 // Enumerations / Flags (full lists at their [SECTION]s)
 typedef int ImGuiAppAVMetaRecordType;  // -> enum ImGuiAppAVMetaRecordType_  // meta-stream record type
-typedef int ImGuiAppTransportSource;   // -> enum ImGuiAppTransportSource_   // LiveRing vs FileRun
-typedef int ImGuiAppFieldType;         // -> enum ImGuiAppFieldType_         // draft field scalar type
-typedef int ImGuiAppNodeKind;          // -> enum ImGuiAppNodeKind_          // node discriminator
-typedef int ImGuiAppLayerType;         // -> enum ImGuiAppLayerType_         // layer discriminator
-typedef int ImGuiAppPortKind;          // -> enum ImGuiAppPortKind_          // port discriminator
 typedef int ImGuiAppEdgeKind;          // -> enum ImGuiAppEdgeKind_          // edge discriminator
-typedef int ImGuiAppEventEdge;         // -> enum ImGuiAppEventEdge_         // event trigger edge
 typedef int ImGuiAppEventAction;       // -> enum ImGuiAppEventAction_       // event action
+typedef int ImGuiAppEventEdge;         // -> enum ImGuiAppEventEdge_         // event trigger edge
+typedef int ImGuiAppFieldType;         // -> enum ImGuiAppFieldType_         // draft field scalar type
 typedef int ImGuiAppHoverSource;
+typedef int ImGuiAppLayerType;         // -> enum ImGuiAppLayerType_         // layer discriminator
+typedef int ImGuiAppNodeKind;          // -> enum ImGuiAppNodeKind_          // node discriminator
+typedef int ImGuiAppPortKind;          // -> enum ImGuiAppPortKind_          // port discriminator
+typedef int ImGuiAppTransportSource;   // -> enum ImGuiAppTransportSource_   // LiveRing vs FileRun
 
 //-----------------------------------------------------------------------------
 // [SECTION] AV meta stream + recorder + run artifacts (was imguiapp_av.h)

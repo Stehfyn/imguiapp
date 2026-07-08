@@ -45,21 +45,21 @@ Index of this file:
 // Forward declarations: ImGuiApp layer
 struct ImGuiApp;
 struct ImGuiAppBase;
-struct ImGuiAppPlatformData;        // Opaque; defined privately by the linked platform backend TU (impl pattern)
-struct ImGuiAppLayerBase;
-struct ImGuiAppLayer;
-struct ImGuiAppTaskLayer;
 struct ImGuiAppCommandLayer;
+struct ImGuiAppLayer;
+struct ImGuiAppLayerBase;
+struct ImGuiAppPlatformData;        // Opaque; defined privately by the linked platform backend TU (impl pattern)
+struct ImGuiAppTaskLayer;
 
 // Forward declarations: ImGuiAppControl layer
-struct ImGuiAppControlMirrorBase;
-struct ImGuiAppControlBase;
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
-struct ImGuiAppInterfaceAdapterBase;
+struct ImGuiAppControl;
+struct ImGuiAppControlBase;
+struct ImGuiAppControlMirrorBase;
 template <typename Base, typename PersistDataT, typename TempDataT, typename... DataDependencies>
 struct ImGuiAppInterfaceAdapter;
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
-struct ImGuiAppControl;
+struct ImGuiAppInterfaceAdapterBase;
 
 // Forward declarations: ImGuiAppDisplay layer
 struct ImGuiAppWindowBase;
@@ -68,28 +68,28 @@ struct ImGuiAppWindowBase;
 struct ImGuiAppSidebarBase;
 
 // Forward declarations: state history + input log (time travel / record-replay)
-struct ImGuiAppStateHistory;
 struct ImGuiAppInputLog;
+struct ImGuiAppStateHistory;
 
 // Configuration + basic structs (defined in [SECTION] Configuration structs / Helpers below).
-struct ImGuiAppConfig;
-struct ImGuiAppWAL;
-struct ImGuiAppThreadFuncs;
-struct ImGuiAppStyleModDesc;
 struct ImGuiAppColorModDesc;
+struct ImGuiAppConfig;
 struct ImGuiAppDataBinding;
+struct ImGuiAppStyleModDesc;
+struct ImGuiAppThreadFuncs;
+struct ImGuiAppWAL;
 
 // Enumerations (bodies in [SECTION] Flags & Enumerations below).
 enum ImGuiAppCommand : int;            // -> enum ImGuiAppCommand         // dispatched app command
 
 // Flags (full enum lists in [SECTION] Flags & Enumerations below).
+typedef int ImGuiAppAVTimingMode;      // -> enum ImGuiAppAVTimingMode_
 typedef int ImGuiAppFrameFlags;        // -> enum ImGuiAppFrameFlags_
-typedef int ImGuiAppStyle;             // -> enum ImGuiAppStyle_
 typedef int ImGuiAppHeadlessMode;      // -> enum ImGuiAppHeadlessMode_
 typedef int ImGuiAppPacerMode;         // -> enum ImGuiAppPacerMode_
-typedef int ImGuiAppWALLevel;          // -> enum ImGuiAppWALLevel_
-typedef int ImGuiAppAVTimingMode;      // -> enum ImGuiAppAVTimingMode_
 typedef int ImGuiAppRecordQueuePolicy; // -> enum ImGuiAppRecordQueuePolicy_
+typedef int ImGuiAppStyle;             // -> enum ImGuiAppStyle_
+typedef int ImGuiAppWALLevel;          // -> enum ImGuiAppWALLevel_
 
 //-----------------------------------------------------------------------------
 // [SECTION] Dear ImGui end-user API functions

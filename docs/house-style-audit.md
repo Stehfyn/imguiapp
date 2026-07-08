@@ -14,7 +14,7 @@ codegen corpus byte-identical, style ratchet monotonically down.
 |---|---|---|---|---|
 | §2 Naming (N1-N24) | 7 | 10 | 7 | k-tier (243 uses); `ImGuiCanvas*` squat |
 | §3 Formatting (F1-F28) | 10 | 8 | 3 (+6 gate-covered) | bare `default:` 50:1 (S9) |
-| §4 Architecture (A1-A32) | 7 | 7 | 7 (+2 n/a) | no `IMGUI_DISABLE` wrap anywhere |
+| §4 Architecture (A1-A32) | 8 | 6 | 7 (+2 n/a) | no `IMGUI_DISABLE` wrap in the core TUs (backends done) |
 | §5 API grammar (G1-G24) | 4 | 5 | 2 | silent overpop in all four `PopApp*`; no V twins |
 | §6 Backends (B1-B18) | hosts ✓ | B5 | — | — |
 | §7 Idioms (I1-I41) | 8 | 5 | 3 | dialect breach (43 `auto`, 33 capturing lambdas) |
@@ -49,11 +49,6 @@ Bundled: `ImAppTween/Timer/Spring/Pulse` `*Data`/`*TempData` snake_case members
 (`internal.h:1057-1131`) — same reflection/codegen blast radius, decide together. Also update
 N1/A22's description of the animation four if their tier claim changes (they are `ImGuiAppControl<>`
 subclasses, not standalone value types).
-
-### R4. Forward-decl ordering direction — A28 (MED)
-Both headers order fwd decls semantically (`ImGuiAppLayerBase` before `ImGuiAppLayer`,
-`imguiapp.h:46-51`; `internal.h:80-99`) vs A28's alphabetical-within-group. **Conform or ratify
-a stated dependency-order delta** — an ordered list with unstated direction is a spec bug by A28.
 
 ### R7. Δ6 ratification — singleton accessors vs ad-hoc statics (carried)
 Accessor pattern (`AppAssert()`/`AppPacer()`/`AppTypeSchemas()`) is the framework idiom; ratify it.
@@ -138,7 +133,7 @@ target N23 form, ID-key blocks get rationale comments.
 
 ## Sequencing (each wave gated)
 
-1. **Wave R — decisions**: R1-R4, R7. Everything below assumes the outcomes.
+1. **Wave R — decisions**: R1-R3, R7. Everything below assumes the outcomes.
 2. **Wave L — lint first**: S6 tag census + N22/N23 greps into `tests/style`, so no fixed class
    regresses again.
 3. **Wave M — sed batch**: M13, M15, M18, M21, M22, M26, M34, M36, M37, M39, M44, F26 explicit-type
