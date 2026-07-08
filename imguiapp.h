@@ -1068,7 +1068,10 @@ struct ImGuiAppInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistData
 
     virtual void OnInitialize(ImGuiApp*, PersistDataT*, const DataDependencies*...) const override {}
     template <size_t... Is>
-    inline void _OnInitializeExpand(ImGuiApp* app, ImAppIndexSeq<Is...>) const { OnInitialize(app, &_InstanceData->PersistData, (DataDependencies*)_Dependencies[Is]...); }
+    inline void _OnInitializeExpand(ImGuiApp* app, ImAppIndexSeq<Is...>) const
+    {
+        OnInitialize(app, &_InstanceData->PersistData, (DataDependencies*)_Dependencies[Is]...);
+    }
     virtual void OnInitialize(ImGuiApp* app) const override final
     {
         IM_ASSERT(_InstanceData != nullptr);
@@ -1077,7 +1080,10 @@ struct ImGuiAppInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistData
 
     virtual void OnShutdown(ImGuiApp*, PersistDataT*, const DataDependencies*...) const override {}
     template <size_t... Is>
-    inline void _OnShutdownExpand(ImGuiApp* app, ImAppIndexSeq<Is...>) const { OnShutdown(app, &_InstanceData->PersistData, (DataDependencies*)_Dependencies[Is]...); }
+    inline void _OnShutdownExpand(ImGuiApp* app, ImAppIndexSeq<Is...>) const
+    {
+        OnShutdown(app, &_InstanceData->PersistData, (DataDependencies*)_Dependencies[Is]...);
+    }
     virtual void OnShutdown(ImGuiApp* app) const override final
     {
         _OnShutdownExpand(app, _DepSeq());
@@ -1085,7 +1091,10 @@ struct ImGuiAppInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistData
 
     virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*, const PersistDataT*, const TempDataT*, const DataDependencies*...) const override {}
     template <size_t... Is>
-    inline void _OnGetCommandExpand(const ImGuiApp* app, ImGuiAppCommand* cmd, ImAppIndexSeq<Is...>) const { OnGetCommand(app, cmd, &_InstanceData->PersistData, &_InstanceData->TempData, (DataDependencies*)_Dependencies[Is]...); }
+    inline void _OnGetCommandExpand(const ImGuiApp* app, ImGuiAppCommand* cmd, ImAppIndexSeq<Is...>) const
+    {
+        OnGetCommand(app, cmd, &_InstanceData->PersistData, &_InstanceData->TempData, (DataDependencies*)_Dependencies[Is]...);
+    }
     virtual void OnGetCommand(const ImGuiApp* app, ImGuiAppCommand* cmd) const override final
     {
         _OnGetCommandExpand(app, cmd, _DepSeq());
@@ -1093,7 +1102,10 @@ struct ImGuiAppInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistData
 
     virtual void OnUpdate(float, PersistDataT*, const TempDataT*, const TempDataT*, const DataDependencies*...) const override {}
     template <size_t... Is>
-    inline void _OnUpdateExpand(float dt, ImAppIndexSeq<Is...>) const { OnUpdate(dt, &_InstanceData->PersistData, &_InstanceData->TempData, &_InstanceData->LastTempData, (DataDependencies*)_Dependencies[Is]...); }
+    inline void _OnUpdateExpand(float dt, ImAppIndexSeq<Is...>) const
+    {
+        OnUpdate(dt, &_InstanceData->PersistData, &_InstanceData->TempData, &_InstanceData->LastTempData, (DataDependencies*)_Dependencies[Is]...);
+    }
     virtual void OnUpdate(const ImGuiApp* app, float dt) const override final
     {
         IM_UNUSED(app);
@@ -1103,7 +1115,10 @@ struct ImGuiAppInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistData
 
     virtual void OnRender(const PersistDataT*, TempDataT*, const DataDependencies*...) const override {}
     template <size_t... Is>
-    inline void _OnRenderExpand(ImAppIndexSeq<Is...>) const { OnRender(&_InstanceData->PersistData, &_InstanceData->TempData, (DataDependencies*)_Dependencies[Is]...); }
+    inline void _OnRenderExpand(ImAppIndexSeq<Is...>) const
+    {
+        OnRender(&_InstanceData->PersistData, &_InstanceData->TempData, (DataDependencies*)_Dependencies[Is]...);
+    }
     virtual void OnRender(const ImGuiApp* app) const override final
     {
         IM_UNUSED(app);
