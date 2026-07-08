@@ -2276,6 +2276,9 @@ IMGUI_API ::ImGuiAppGraph* AppLayerDemoGraph(ImGuiApp* host);
 // at font-init; null leaves the inspector on the UI font. (Was in imguiapp.h; tool-coupled.)
 IMGUI_API void             SetAppCodeFont(ImGuiAppGraph* g, ImFont* font);
 
+// Media Foundation MFStartup/COM process refcount slot (used by imguiapp_impl_mediafoundation).
+IMGUI_API int&             AppMediaFoundationStartupRefs();
+
 // Composer introspection accessors (relocated from imguiapp.h; tool-coupled, "exposed for tests").
 // App-time transport (F29): number of state snapshots the running composer has recorded of its
 // snapshottable controls (0 = none). Drives the toolbar scrubber; exposed for the headless scrub test.

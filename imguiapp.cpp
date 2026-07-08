@@ -73,20 +73,77 @@
 //-----------------------------------------------------------------------------
 // See imguix_imconfig.h for IM_ASSERT routing.
 
-// Assert-time forensics state, read from the assert handler (ImAppAssertFail) -- a context-free callback
-// with no `this`, so this must be reachable as a process-wide slot. Function-local static: constructed on
-// first use, no TU-scope global, no static-init-order hazard for the recorder vector.
+// Assert-time forensics state, read from the assert handler (ImAppAssertFail) -- a context-free
+// callback with no `this`, so it lives on the process-state root below.
 struct ImGuiAppAssertState
 {
     ImGuiAppWAL*                WAL = nullptr;         // sink for the assert line; null = stderr only
     ImVector<ImGuiAppRecorder*> RingRecorders;        // armed flight-recorder rings to dump on assert (F15)
 };
 
-static ImGuiAppAssertState& AppAssert()
+// Per-viewport present deadlines (secondary platform windows; main viewport never skips).
+struct ImGuiAppViewportPace
 {
-    static ImGuiAppAssertState state;
-    return state;
+    ImGuiID ViewportId;
+    double  NextDeadline;
+    ImU64   LastSeenFrame; // FrameID.FrameIndex; feeds lazy pruning of vanished viewports
+};
+
+// Pacer bookkeeping the ImGuiAppPacer struct doesn't carry. Single slot: one paced app
+// per process; the deadline chain re-anchors when a different app starts pacing.
+struct ImGuiAppPacerState
+{
+    const ImGuiApp* App          = nullptr;
+    double          NextDeadline = -1.0; // on the monotonic app clock; < 0 = chain not started
+    double          LastEnter    = -1.0; // previous AppPacerWait entry (feeds LastFrameMs)
+#ifdef _WIN32
+    // High-res waitable timer + MMCSS "Games" registration for the paced thread: the timer
+    // decides WHEN the thread is ready, MMCSS makes the scheduler run it promptly under
+    // contention. Both best-effort; *Failed latches a one-time failure so we stop retrying.
+    HANDLE          Timer        = nullptr; // null = uncreated
+    bool            TimerFailed  = false;
+    HANDLE          Mmcss        = nullptr; // null = unregistered
+    bool            MmcssFailed  = false;
+#endif
+    ImVector<ImGuiAppViewportPace> ViewportPace; // secondary-window present deadlines
+};
+
+// Hz cache entry for the monitor hosting a viewport (stale after a display-mode change until restart).
+struct ImGuiAppCachedHz
+{
+    void* Handle;
+    float Hz;
+};
+
+// THE process-wide state root (the applayer's GImGui analog): every formerly ad-hoc mutable
+// static lives here as a member. Anchored by one constant-initialized pointer + lazy IM_NEW,
+// so cross-TU static initializers (control ctors registering type schemas) stay ordered-safe.
+struct ImGuiAppProcessState
+{
+    ImGuiAppAssertState                 Assert;
+    ImGuiAppPacerState                  Pacer;
+    ImVector<const ImGuiAppTypeSchema*> TypeSchemas;
+    const ImGuiAppThreadFuncs*          ThreadFuncs         = nullptr; // null = resolve the default at use
+    double                              RunEpoch            = 0.0;     // 0 = unset (first stamped frame sets it)
+    ImU64                               QpcHz               = 0;       // 0 = unset (win32 QPC frequency)
+    ImVector<ImGuiAppCachedHz>          MonitorHz;                     // per-monitor refresh cache
+    bool                                AssertSymReady      = false;   // win32 sym handler initialized
+    int                                 MediaFoundationRefs = 0;       // MFStartup/COM process refcount (mf backend)
+    ImGuiApp*                           DemoHost            = nullptr; // ShowAppDemo's current host
+    ImGuiApp*                           DemoFallbackApp     = nullptr; // demo-owned app for host-less callers
+    ImGuiApp*                           DemoComposed        = nullptr; // the one composed app per process
+};
+
+static ImGuiAppProcessState* GImGuiAppState = nullptr; // constant-initialized: safe before main
+
+static ImGuiAppProcessState& AppState()
+{
+    if (GImGuiAppState == nullptr)
+        GImGuiAppState = IM_NEW(ImGuiAppProcessState)();
+    return *GImGuiAppState;
 }
+
+static ImGuiAppAssertState& AppAssert() { return AppState().Assert; }
 
 IMGUI_API int ImAppStackTrace(char* out, int out_size, int skip_frames)
 {
@@ -95,7 +152,7 @@ IMGUI_API int ImAppStackTrace(char* out, int out_size, int skip_frames)
     out[0] = 0;
 #ifdef _WIN32
     HANDLE proc = GetCurrentProcess();
-    static bool sym_ready = false;
+    bool& sym_ready = AppState().AssertSymReady;
     if (!sym_ready)
     {
         SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
@@ -221,41 +278,9 @@ int ImGuiApp::Run(int argc, char** argv)
 #endif
 #endif
 
-// Per-viewport present deadlines (secondary platform windows; main viewport never skips).
-struct ImGuiAppViewportPace
-{
-    ImGuiID ViewportId;
-    double  NextDeadline;
-    ImU64   LastSeenFrame; // FrameID.FrameIndex; feeds lazy pruning of vanished viewports
-};
-
-// Pacer bookkeeping the ImGuiAppPacer struct doesn't carry. Single slot: one paced app
-// per process; the deadline chain re-anchors when a different app starts pacing.
-struct ImGuiAppPacerState
-{
-    const ImGuiApp* App          = nullptr;
-    double          NextDeadline = -1.0; // on the monotonic app clock; < 0 = chain not started
-    double          LastEnter    = -1.0; // previous AppPacerWait entry (feeds LastFrameMs)
-#ifdef _WIN32
-    // High-res waitable timer + MMCSS "Games" registration for the paced thread: the timer
-    // decides WHEN the thread is ready, MMCSS makes the scheduler run it promptly under
-    // contention. Both best-effort; *Failed latches a one-time failure so we stop retrying.
-    HANDLE          Timer        = nullptr; // null = uncreated
-    bool            TimerFailed  = false;
-    HANDLE          Mmcss        = nullptr; // null = unregistered
-    bool            MmcssFailed  = false;
-#endif
-    ImVector<ImGuiAppViewportPace> ViewportPace; // secondary-window present deadlines
-};
-
-// Process-wide pacer state (one paced app per process). Function-local static: constructed
-// on first use, no TU-scope global -- and never aggregate-reset, so the timer/MMCSS handles
-// survive a paced app's Shutdown (only the deadline-chain fields clear; see Shutdown).
-static ImGuiAppPacerState& AppPacer()
-{
-    static ImGuiAppPacerState state;
-    return state;
-}
+// Process-wide pacer state (one paced app per process); never aggregate-reset, so the timer/MMCSS
+// handles survive a paced app's Shutdown (only the deadline-chain fields clear; see Shutdown).
+static ImGuiAppPacerState& AppPacer() { return AppState().Pacer; }
 
 static void AppPacerShutdownTimer()
 {
@@ -293,12 +318,7 @@ static float AppPacerPrimaryRefreshHz()
 static float AppPacerViewportRefreshHz(const ImGuiViewport* viewport)
 {
 #ifdef _WIN32
-    struct ImGuiAppCachedHz
-    {
-        void* Handle;
-        float Hz;
-    };
-    static ImVector<ImGuiAppCachedHz> s_monitor_hz;
+    ImVector<ImGuiAppCachedHz>& monitor_hz = AppState().MonitorHz;
 
     const ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
     const short monitor_idx = ((const ImGuiViewportP*)viewport)->PlatformMonitor;   // internal field; public ImGuiViewport has no monitor index
@@ -308,9 +328,9 @@ static float AppPacerViewportRefreshHz(const ImGuiViewport* viewport)
     if (hmon == nullptr)
         return AppPacerPrimaryRefreshHz();
 
-    for (int i = 0; i < s_monitor_hz.Size; i++)
-        if (s_monitor_hz.Data[i].Handle == hmon)
-            return s_monitor_hz.Data[i].Hz;
+    for (int i = 0; i < monitor_hz.Size; i++)
+        if (monitor_hz.Data[i].Handle == hmon)
+            return monitor_hz.Data[i].Hz;
 
     float hz = 60.0f;
     MONITORINFOEXA mi;
@@ -326,7 +346,7 @@ static float AppPacerViewportRefreshHz(const ImGuiViewport* viewport)
     ImGuiAppCachedHz cached;
     cached.Handle = hmon;
     cached.Hz = hz;
-    s_monitor_hz.push_back(cached);
+    monitor_hz.push_back(cached);
     return hz;
 #else
     IM_UNUSED(viewport);
@@ -382,12 +402,16 @@ void ImGuiApp::Shutdown()
 static double AppClockNowSec()
 {
 #ifdef _WIN32
-    static LARGE_INTEGER s_freq = {};
-    if (s_freq.QuadPart == 0)
-        ::QueryPerformanceFrequency(&s_freq);
+    ImU64& freq = AppState().QpcHz;
+    if (freq == 0)
+    {
+        LARGE_INTEGER f;
+        ::QueryPerformanceFrequency(&f);
+        freq = (ImU64)f.QuadPart;
+    }
     LARGE_INTEGER now;
     ::QueryPerformanceCounter(&now);
-    return (double)now.QuadPart / (double)s_freq.QuadPart;
+    return (double)now.QuadPart / (double)freq;
 #else
     timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -409,7 +433,9 @@ static ImU64 AppClockTsc()
 // first call (i.e. the first stamped frame), via C++11 thread-safe local-static init.
 static double AppRunEpoch()
 {
-    static double epoch = AppClockNowSec();
+    double& epoch = AppState().RunEpoch;
+    if (epoch == 0.0)
+        epoch = AppClockNowSec();
     return epoch;
 }
 
@@ -488,13 +514,9 @@ void ImGuiApp::DrawFrame(ImGuiApp* app)
 //-----------------------------------------------------------------------------
 // Manifest grammar + registration surface: see imguiapp.h.
 
-// Function-local static: registration can run from static initializers and from control
-// construction across TUs, so the registry must not itself race static-init order.
-static ImVector<const ImGuiAppTypeSchema*>* AppTypeSchemas()
-{
-    static ImVector<const ImGuiAppTypeSchema*> schemas;
-    return &schemas;
-}
+// Registration can run from static initializers across TUs; AppState's lazy pointer anchor keeps
+// the registry safe from static-init order.
+static ImVector<const ImGuiAppTypeSchema*>* AppTypeSchemas() { return &AppState().TypeSchemas; }
 
 void ImGui::AppRegisterTypeSchema(const ImGuiAppTypeSchema* schema)
 {
@@ -1801,6 +1823,13 @@ IMGUI_API void AppWALWrite(ImGuiAppWAL* wal, ImGuiAppWALLevel level, const char*
     va_start(args, fmt);
     AppWALWriteV(wal, level, fmt, args);
     va_end(args);
+}
+
+// Media Foundation backend's MFStartup/COM process refcount (lives on the state root so the
+// backend TU carries no mutable static of its own).
+IMGUI_API int& AppMediaFoundationStartupRefs()
+{
+    return AppState().MediaFoundationRefs;
 }
 
 IMGUI_API void SetAppAssertWAL(ImGuiAppWAL* wal)
@@ -6548,7 +6577,7 @@ struct ComposerWindow : ImGuiAppWindow<ComposerWindow>
 // TempData; OnUpdate writes them back.
 // Demo host slot (Δ6 accessor idiom): set by ShowAppDemo each call; lets host-less demo
 // controls (DemoMenu) reach host-scoped introspection accessors.
-static ImGuiApp*& AppDemoHost() { static ImGuiApp* host = nullptr; return host; }
+static ImGuiApp*& AppDemoHost() { return AppState().DemoHost; }
 
 struct ImGuiAppDemoMenuData
 {
@@ -6739,24 +6768,22 @@ IMGUI_API void ShowAppDemo(bool* p_open, ImGuiApp* host)
 {
     // A caller without an ImGuiApp (plain imgui contexts: samples, tests) gets a demo-owned
     // fallback, which is then the process's one app; the demo drives its frame below.
-    static ImGuiApp s_fallback_app;
-    static bool s_fallback_ready = false;
     ImGuiApp* app = host;
     if (app == nullptr)
     {
-        if (!s_fallback_ready)
+        if (AppState().DemoFallbackApp == nullptr)
         {
-            InitializeApp(&s_fallback_app);
-            s_fallback_ready = true;
+            AppState().DemoFallbackApp = IM_NEW(ImGuiApp)();
+            InitializeApp(AppState().DemoFallbackApp);
         }
-        app = &s_fallback_app;
+        app = AppState().DemoFallbackApp;
     }
 
     // Chrome composition, once. Examples are pushed/popped AFTER the chrome, so they are always
     // the tail of their vectors and the toggle rebuild below can pop them back off.
     AppDemoHost() = app;
 
-    static ImGuiApp* s_composed = nullptr;
+    ImGuiApp*& s_composed = AppState().DemoComposed;
     IM_ASSERT((s_composed == nullptr || s_composed == app) && "One composed application per process.");
     if (s_composed != app)
     {
@@ -6862,14 +6889,15 @@ IMGUI_API void ShowAppDemo(bool* p_open, ImGuiApp* host)
     }
 
     // Hosted mode ends here -- the host runs its own frame. Fallback mode: the demo owns it.
-    if (app == &s_fallback_app)
+    if (app == AppState().DemoFallbackApp)
     {
         UpdateApp(app);
         RenderApp(app);
         if (app->ShutdownPending)
         {
             ShutdownApp(app);
-            s_fallback_ready = false;
+            IM_DELETE(AppState().DemoFallbackApp);
+            AppState().DemoFallbackApp = nullptr;
             s_composed = nullptr;
         }
     }
@@ -24985,17 +25013,24 @@ static const ImGuiAppThreadFuncs GAppThreadFuncsDefault =
     AppMutexCreateDefault, AppMutexDestroyDefault, AppMutexLockDefault, AppMutexUnlockDefault,
     AppCondCreateDefault, AppCondDestroyDefault, AppCondWaitDefault, AppCondSignalDefault, AppCondBroadcastDefault,
 };
-static const ImGuiAppThreadFuncs* GAppThreadFuncs = &GAppThreadFuncsDefault;
-#else
-static const ImGuiAppThreadFuncs* GAppThreadFuncs = nullptr;
 #endif // #ifndef IMGUIAPP_DISABLE_DEFAULT_THREAD_FUNCS
+
+// Reads the process-state slot; null resolves to the std::thread default table (unless stripped).
+static const ImGuiAppThreadFuncs* AppThreadFuncs()
+{
+#ifndef IMGUIAPP_DISABLE_DEFAULT_THREAD_FUNCS
+    return AppState().ThreadFuncs != nullptr ? AppState().ThreadFuncs : &GAppThreadFuncsDefault;
+#else
+    return AppState().ThreadFuncs;
+#endif
+}
 
 IMGUI_API void ImGui::SetAppThreadFuncs(const ImGuiAppThreadFuncs* funcs)
 {
 #ifndef IMGUIAPP_DISABLE_DEFAULT_THREAD_FUNCS
-    GAppThreadFuncs = funcs != nullptr ? funcs : &GAppThreadFuncsDefault;
+    AppState().ThreadFuncs = funcs;
 #else
-    GAppThreadFuncs = funcs;
+    AppState().ThreadFuncs = funcs;
 #endif
 }
 
@@ -25011,7 +25046,7 @@ struct ImGuiAppRecorderThread
 static void AvEncoderThread(void* arg)
 {
     ImGuiAppRecorder* rec = (ImGuiAppRecorder*)arg;
-    const ImGuiAppThreadFuncs* tf = GAppThreadFuncs;
+    const ImGuiAppThreadFuncs* tf = AppThreadFuncs();
     for (;;)
     {
         ImGuiAppAVJob* job = nullptr;
@@ -25043,7 +25078,7 @@ static void AvEncoderThread(void* arg)
 // Push with the configured full-queue policy. Returns false when the frame was dropped.
 static bool AvQueuePush(ImGuiAppRecorder* rec, ImGuiAppAVJob* job)
 {
-    const ImGuiAppThreadFuncs* tf = GAppThreadFuncs;
+    const ImGuiAppThreadFuncs* tf = AppThreadFuncs();
     tf->MutexLockFn(rec->Thread->Mutex);
     if (rec->QueuePolicy == ImGuiAppRecordQueuePolicy_Block)
     {
@@ -25781,12 +25816,12 @@ IMGUI_API ImGuiAppRecorder* AppRecordBegin(ImGuiApp* app, ImGuiAppAVEncoder* enc
     rec->EncoderOpen = true;
 
     rec->Active = true;
-    IM_ASSERT(GAppThreadFuncs != nullptr && "No thread backend: call ImGui::SetAppThreadFuncs() (IMGUIAPP_DISABLE_DEFAULT_THREAD_FUNCS is set).");
+    IM_ASSERT(AppThreadFuncs() != nullptr && "No thread backend: call ImGui::SetAppThreadFuncs() (IMGUIAPP_DISABLE_DEFAULT_THREAD_FUNCS is set).");
     rec->Thread = IM_NEW(ImGuiAppRecorderThread)();
-    rec->Thread->Mutex  = GAppThreadFuncs->MutexCreateFn();
-    rec->Thread->CvPush = GAppThreadFuncs->CondCreateFn();
-    rec->Thread->CvPop  = GAppThreadFuncs->CondCreateFn();
-    rec->Thread->Worker = GAppThreadFuncs->ThreadCreateFn(AvEncoderThread, rec);
+    rec->Thread->Mutex  = AppThreadFuncs()->MutexCreateFn();
+    rec->Thread->CvPush = AppThreadFuncs()->CondCreateFn();
+    rec->Thread->CvPop  = AppThreadFuncs()->CondCreateFn();
+    rec->Thread->Worker = AppThreadFuncs()->ThreadCreateFn(AvEncoderThread, rec);
     if (app->Recorder == nullptr)
         app->Recorder = rec;   // OnEncodeFrame pumps it; explicit AppRecordPump remains valid
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "av: recording '%s' via %s (%s)", rec->OutputPath, encoder->Name,
@@ -25811,11 +25846,11 @@ IMGUI_API void AppRecordSetQueuePolicy(ImGuiAppRecorder* rec, ImGuiAppRecordQueu
         return;
     if (rec->Thread != nullptr)
     {
-        GAppThreadFuncs->MutexLockFn(rec->Thread->Mutex);
+        AppThreadFuncs()->MutexLockFn(rec->Thread->Mutex);
         rec->QueuePolicy = policy;
         rec->QueueDepth = depth;
-        GAppThreadFuncs->CondBroadcastFn(rec->Thread->CvPush);
-        GAppThreadFuncs->MutexUnlockFn(rec->Thread->Mutex);
+        AppThreadFuncs()->CondBroadcastFn(rec->Thread->CvPush);
+        AppThreadFuncs()->MutexUnlockFn(rec->Thread->Mutex);
         return;
     }
     rec->QueuePolicy = policy;   // no encoder thread yet (ring mode / before begin): plain writes
@@ -25840,7 +25875,7 @@ IMGUI_API void AppRecordEnd(ImGuiAppRecorder* rec)
     {
         if (rec->Thread != nullptr)
         {
-            const ImGuiAppThreadFuncs* tf = GAppThreadFuncs;
+            const ImGuiAppThreadFuncs* tf = AppThreadFuncs();
             tf->MutexLockFn(rec->Thread->Mutex);
             rec->ThreadStop = true;
             tf->CondBroadcastFn(rec->Thread->CvPop);

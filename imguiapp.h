@@ -684,6 +684,12 @@ struct ImGuiAppInterface
 };
 
 
+// Minimal compile-time index sequence (keeps <tuple>/<utility> out of the public header): the
+// adapter expands its opaque dependency slots and its type pack in lockstep with it.
+template <size_t... Is>           struct ImAppIndexSeq {};
+template <size_t N, size_t... Is> struct ImAppMakeIndexSeq : ImAppMakeIndexSeq<N - 1, N - 1, Is...> {};
+template <size_t... Is>           struct ImAppMakeIndexSeq<0, Is...> { using Type = ImAppIndexSeq<Is...>; };
+
 // State-delta event helpers over (this frame, last frame): rising = started, falling = ended, changed = either.
 inline static bool ImAppRising(bool now, bool last) { return now && !last; }
 inline static bool ImAppFalling(bool now, bool last) { return !now && last; }
@@ -976,12 +982,6 @@ struct ImGuiApp : ImGuiAppBase
     virtual bool OnInitializePlatform(ImGuiAppConfig& config);
     virtual void OnShutdownPlatform();
 };
-
-// Minimal compile-time index sequence (keeps <tuple>/<utility> out of the public header): the
-// adapter expands its opaque dependency slots and its type pack in lockstep with it.
-template <size_t... Is>           struct ImAppIndexSeq {};
-template <size_t N, size_t... Is> struct ImAppMakeIndexSeq : ImAppMakeIndexSeq<N - 1, N - 1, Is...> {};
-template <size_t... Is>           struct ImAppMakeIndexSeq<0, Is...> { using Type = ImAppIndexSeq<Is...>; };
 
 template <typename Base, typename PersistDataT, typename TempDataT, typename... DataDependencies>
 struct ImGuiAppInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistDataT, TempDataT, DataDependencies...>

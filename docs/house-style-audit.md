@@ -1,7 +1,7 @@
 # House-Style Audit — imguiapp vs imgui-house-style.md (outstanding items)
 
 **Spec**: [imgui-house-style.md](imgui-house-style.md) (181 rules: N1-N24, F1-F28, A1-A32, G1-G24,
-B1-B18, I1-I41, D1-D9, C1-C3) + the Δ registry at the bottom of this doc (Δ6 pending — R7).
+B1-B18, I1-I41, D1-D9, C1-C3) + the Δ registry at the bottom of this doc.
 **Corpus**: `imguiapp.h`, `imguiapp_internal.h`, `imguiapp.cpp`, `imappconfig.h`, `backends/*`
 (`imguiapp_reflect.h` body exempt). All counts grep-measured; method: parallel evidence-cited
 audits per dimension. This doc tracks OPEN items only — anything absent is conformant or resolved.
@@ -12,13 +12,13 @@ codegen corpus byte-identical, style ratchet monotonically down.
 
 | Dimension | Conform | Partial | Violation | Top open item |
 |---|---|---|---|---|
-| §2 Naming (N1-N24) | 7 | 10 | 7 | `ImGuiCanvas*` squat (R2) |
-| §3 Formatting (F1-F28) | 10 | 8 | 3 (+6 gate-covered) | 6 semantic bare `default:` (S9 residue) |
+| §2 Naming (N1-N24) | 7 | 10 | 7 | R1 dialect renames pending (Δ8 decision) |
+| §3 Formatting (F1-F28) | 10 | 8 | 3 (+6 gate-covered) | — (gates green) |
 | §4 Architecture (A1-A32) | 8 | 6 | 7 (+2 n/a) | deprecation/breaking-change machinery absent (S5) |
-| §5 API grammar (G1-G24) | 4 | 5 | 2 | silent overpop in all four `PopApp*` (S8) |
+| §5 API grammar (G1-G24) | 4 | 5 | 2 | Canvas conditional-End contract nuances |
 | §6 Backends (B1-B18) | hosts ✓ | B5 | — | — |
 | §7 Idioms (I1-I41) | 8 | 5 | 3 | dialect breach (43 `auto`, 33 capturing lambdas) |
-| §8 Demo (D1-D9) | 3 | 2 | 3 slips | sample controls not in user register |
+| §8 Demo (D1-D9) | 3 | 2 | 3 slips | — (showcase re-registered as public-API user code) |
 
 ---
 
@@ -33,29 +33,6 @@ structural in the editor UI — **decide Δ8 (license capturing lambdas as scope
 tool/editor regions, core stays clean) or schedule the rewrite** (`struct Func` + explicit types,
 ~90 sites). (Range-for `auto&` → explicit element types: done.)
 
-### R2. `ImGuiCanvas*` tier squat — N1 (HIGH)
-6 structs + 4 enums (`imguiapp_internal.h:119-124`, `:1786-1898`, `:2170-2172`; `ImGuiCanvasState`
-178 uses) claim upstream imgui's `ImGui*` tier — collision surface with future imgui symbols.
-**Ratify Δ9 or rename `ImGuiAppCanvas*`** (AST rename, one TU + headers). Same decision batch:
-`ImStackTrace` → `ImAppStackTrace` (`internal.h:1171`, bare-Im foundation-tier squat, fails N11
-points 1-2; recommend rename, NOT ratification).
-
-### R3. Sample-control register + member casing — D3/D8 + M20 (MED)
-RandomTime/Breathing (the user-register showcase) use `ImStrncpy`/`ImFormatString`/`ImHashData` +
-`std::string_view` + snake_case members + `kDemo*` palette (`imguiapp.cpp:3505-3740`). Either
-re-register as user code (public API only, PascalCase members) or amend A23's demo arrow.
-Bundled: `ImAppTween/Timer/Spring/Pulse` `*Data`/`*TempData` snake_case members
-(`internal.h:1057-1131`) — same reflection/codegen blast radius, decide together. Also update
-N1/A22's description of the animation four if their tier claim changes (they are `ImGuiAppControl<>`
-subclasses, not standalone value types).
-
-### R7. Δ6 ratification — singleton accessors vs ad-hoc statics (carried)
-Accessor pattern (`AppAssert()`/`AppPacer()`/`AppTypeSchemas()`) is the framework idiom; ratify it.
-Open regardless: 9 ad-hoc mutable statics (`imguiapp.cpp:63,:74,:116,:240,:285,:369,:396,:473`;
-`mediafoundation.cpp:30`) + file-scope mutable `GAppThreadFuncs` (`:24794`) — each moves into its
-owning singleton or gets a process-wide justification comment. Two use `s_` Hungarian
-(`s_monitor_hz`, `s_freq`) — a third register; eliminate in the same pass.
-
 ---
 
 ## Systemic items
@@ -66,23 +43,6 @@ is encoded ad hoc (`IMGUIAPP_PREVIEW_ABI 20260706u`, `internal.h:56-58`). Stand 
 Obsolete section, breaking-changes block seeded with the known preview-ABI break, staged lifecycle
 on the next rename, version-stamp grammar (M38).
 
-### S6. Work-marker system — F20 (absent)
-Zero FIXME/TODO/HACK/XXX corpus-wide; deferred work lives only in docs. Adopt `FIXME-<AREA>`
-(`FIXME-CANVAS/-GRAPH/-CODEGEN/-AV/-PREVIEW/-OPT`), drop tags when touching doc-tracked debt, add
-the tag-census check to `tests/style` (fail TODO/HACK/XXX outside string literals).
-
-### S8. Recoverable-error machinery — G4/G19 (HIGH)
-**Silent overpop**: all four `PopApp*` `if (empty) return;` — no assert, no WAL record
-(`imguiapp.cpp:988-1031`) — the exact "100%-silent recovery" canon refuses; G4's named overpop
-assert missing. 0 `IM_ASSERT_USER_ERROR`; ~14/152 asserts messaged (trailing-comment anti-pattern
-instances fixed). Route Pop/registration misuse through `IM_ASSERT_USER_ERROR` + WAL; sweep
-user-reachable asserts into sentence-with-hint form.
-
-### S9. Micro-lexicon residue — F25 (LOW; remainder of the fixed wave)
-6 bare `default:` with load-bearing bodies remain (each needs a per-site named-case merge or a
-fall-out-of-switch restructure; the mergeable/no-op 9 are fixed). House index name decided: `i`
-(the imguiapp majority form; canon's `n` not adopted — 398:1 corpus vote).
-
 ---
 
 ## Mechanical fixes (M-table)
@@ -90,15 +50,13 @@ fall-out-of-switch restructure; the mergeable/no-op 9 are fixed). House index na
 | # | Rule | Finding | Fix |
 |---|---|---|---|
 | M29 | I20 | ListClipper ×1; 0 `IM_MSVC_RUNTIME_CHECKS_*` | low priority; after profiling |
-| M41 | A26 | `ShowAppGraphEditor` defined in Scope-interior section not editor-render; 6 residual rank descents | move with the Phase C section restructure |
-| M43b | I33 | `clicked` ×30 (+ `changed` locals) vs canon `pressed`/`value_changed` (`backup_` family done) | AST-scoped local rename (plain sed corrupts comments) |
+| M41b | A26 | 6 residual rank descents (region-scoped def order vs header decl order) | with the Phase C section restructure |
 
 ## Sequencing (each wave gated)
 
-1. **Wave R — decisions**: R1-R3, R7. Everything below assumes the outcomes.
-2. **Wave L — lint**: S6 tag census + N22/N23 greps into `tests/style`, so no fixed class regresses.
-3. **Wave F — functional adds**: S8 (USER_ERROR + overpop + WAL), S5, S6 adoption, M43b, and
-   M41/M29 with the Phase C restructure / profiling pass.
+1. **Wave R — decisions**: R1 (Δ8 capturing-lambda license or rewrite).
+2. **Wave F — remainder**: S5 deprecation machinery; M41b/M29 with the Phase C restructure /
+   profiling pass.
 
 ---
 
@@ -124,10 +82,12 @@ code MUST NOT introduce virtuals (imgui rule stands everywhere else).
 imgui's "no STL, ever" is held for engine, editor, canvas, and model code (ImVector/ImStr*/Im*
 throughout — audit confirms 0 raw allocation, 0 std::min/max). Three bounded layers are licensed:
 
-- **Template composition front** (`imguiapp.h` bottom sections): `<tuple>`/`<type_traits>` power
-  the typed dependency injection (`PushAppControl<T>`, `std::apply` fan-out). The C-callable
-  type-erased seam beneath it (`AppRegisterLayer/Window/Sidebar`, `AppControlRegisterStorage` +
-  `AppControlPush`) is the binding surface; the template front is C++ convenience only.
+- **Template composition front** (`imguiapp.h` bottom sections): `<type_traits>` powers the
+  typed dependency injection (`PushAppControl<T>`); the fan-out runs over an opaque `void*`
+  slot array + a local index sequence (no `<tuple>`/`std::apply`, no STL members). The
+  C-callable type-erased seam beneath it (`AppRegisterLayer/Window/Sidebar`,
+  `AppControlRegisterStorage` + `AppControlPush`) is the binding surface; the template front
+  is C++ convenience only.
 - **Reflection layer** (`imguiapp_reflect.h` port + the field-render templates in
   `imguiapp_internal.h`): `<format>/<string_view>/<type_traits>` — constexpr metaprogramming is
   the point of the layer.

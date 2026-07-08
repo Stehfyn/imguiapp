@@ -29,12 +29,6 @@
 // refcount, NOT per-encoder state (folding it into ImGuiApp_ImplMediaFoundation_Data would give each
 // instance its own counter and unbalance the pairing). Function-local static keeps the
 // single process-wide slot off file scope.
-static int& ImGuiApp_ImplMediaFoundation_StartupRefs()
-{
-    static int refs = 0;
-    return refs;
-}
-
 struct ImGuiApp_ImplMediaFoundation_Data
 {
     char                 OutputPath[512];
@@ -160,7 +154,7 @@ static bool ImGuiApp_ImplMediaFoundation_Open(ImGuiAppAVEncoder* self, const ImG
             return false;
         }
         bd->MfStarted = true;
-        ImGuiApp_ImplMediaFoundation_StartupRefs()++;
+        ImGui::AppMediaFoundationStartupRefs()++;
     }
 
     snprintf(bd->OutputPath, sizeof(bd->OutputPath), "%s", config->OutputPath);
@@ -306,8 +300,8 @@ static void ImGuiApp_ImplMediaFoundation_Destroy(ImGuiAppAVEncoder* self)
     ImGuiApp_ImplMediaFoundation_Data* bd = (ImGuiApp_ImplMediaFoundation_Data*)self->UserData;
     if (bd != nullptr && bd->MfStarted)
     {
-        ImGuiApp_ImplMediaFoundation_StartupRefs()--;
-        if (ImGuiApp_ImplMediaFoundation_StartupRefs() == 0)
+        ImGui::AppMediaFoundationStartupRefs()--;
+        if (ImGui::AppMediaFoundationStartupRefs() == 0)
             MFShutdown();
         if (bd->CoInited)
             ::CoUninitialize();
