@@ -23,7 +23,7 @@ still names the idea). Design docs cite these; this file is the union.
 - [The Inspector window](https://docs.unity3d.com/Manual/UsingTheInspector.html) / [Manage the Inspector window](https://docs.unity3d.com/Manual/InspectorOptions.html) — component panels, ⋮ menus, locked/focused inspectors.
 - [Use components](https://docs.unity3d.com/Manual/UsingComponents.html) — the component as the editing unit: header, enable checkbox, context commands. → section grammar, desc Active checkbox idiom.
 - [Preferences (Colors ▸ Playmode tint)](https://docs.unity3d.com/Manual/Preferences.html) — ambient mode signaling. → run-state tint.
-- [Script lifecycle flowchart](https://docs.unity3d.com/Manual/execution-order.html) — the north-star Lifecycle view's model (see up-next.md).
+- [Script lifecycle flowchart](https://docs.unity3d.com/Manual/execution-order.html) — the north-star Lifecycle view's model (see archive/up-next.md).
 - [Shader Graph Blackboard](https://docs.unity3d.com/Packages/com.unity.shadergraph@12.0/manual/Blackboard.html) — Save Asset primary action, right-aligned panel toggles.
 
 ## Blender
@@ -46,7 +46,7 @@ still names the idea). Design docs cite these; this file is the union.
 
 ## Design docs using these
 
-- [composer-ui-design.md](composer-ui-design.md) — gen 1: lateral ties, viewport chrome.
-- [composer-workbench-design.md](composer-workbench-design.md) — gen 2: workbench hardening/expansion.
-- [metrics-debugger-coherence-design.md](metrics-debugger-coherence-design.md) — status/health coherence.
-- [node-editor-upgrade-design.md](node-editor-upgrade-design.md) — canvas/editor upgrade.
+- [composer-ui-design](designs.md#composer-ui-design) — gen 1: lateral ties, viewport chrome.
+- [composer-workbench-design](designs.md#composer-workbench-design) — gen 2: workbench hardening/expansion.
+- [metrics-debugger-coherence-design](designs.md#metrics-debugger-coherence-design) — status/health coherence.
+- [node-editor-upgrade-design](designs.md#node-editor-upgrade-design) — canvas/editor upgrade.

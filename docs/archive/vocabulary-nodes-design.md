@@ -7,9 +7,9 @@ semantics so the downstream code lands with no open questions. It is a decision 
 below is binding on F54-F57.
 
 Companion documents: [big-idea.md](big-idea.md) (the four-phase pipeline the codegen compiles against),
-[phase-coherence.md](phase-coherence.md) (the temp^last one-frame skew the animation builtins obey),
+[bug-classes.md](bug-classes.md) (the temp^last one-frame skew the animation builtins obey),
 [scope-interior-design.md](scope-interior-design.md) (scope domains + altitude; the Layout layer gets its
-first interior here), [up-next.md](up-next.md) (module-interop layer model).
+first interior here), [archive/up-next.md](archive/up-next.md) (module-interop layer model).
 
 Each new kind states **four rows**: palette legality (which scope offers it), scope domain (where it
 updates / what `AppScopeParentOf` returns), validation, and codegen shape. Constraints honored throughout:
@@ -196,7 +196,7 @@ input) keeps them headless-deterministic — no injected input, per the headless
 
 All four update in Task and are pure-published: OnUpdate is the sole writer, the DataOut is set before any
 consumer reads it because Task runs consumers in dependency order (`big-idea.md`; the type-keyed DAG). None
-sizes or styles UI from measured geometry, so none can trip the stale-frame class (`phase-coherence.md §1`).
+sizes or styles UI from measured geometry, so none can trip the stale-frame class (`bug-classes.md §1`).
 
 The **temp^last** edge idiom (`big-idea.md`; `imguiapp_demo.cpp:167`) appears in two places:
 
@@ -349,7 +349,7 @@ save/load/undo) cover them by extension, not by parallel rails.
   cross-frame value, no phase to violate.
 - **Animation builtins** update in Task (OnUpdate, sole mutator), publish DataOut before consumers read it
   (dependency order), and never read measured UI geometry — clean of all three species
-  (`phase-coherence.md §1-1c`). Determinism rests on state living in PersistData (§2.4).
+  (`bug-classes.md §1-1c`). Determinism rests on state living in PersistData (§2.4).
 - **Layout** codegen runs in `OnLayout()` before any window Begins (`:5361`), so no window reads a
   half-built dock tree; DockBuilder is imgui's own once-guarded build. The canvas region-reference chip is
   draw-list-only, rebuilt each frame from the model (rule-E pattern), reading no previous-frame pixels.

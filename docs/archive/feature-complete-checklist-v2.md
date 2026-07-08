@@ -1,7 +1,7 @@
 # Feature Checklist (v2 — post-100)
 
 Forward work, detailed to the file / struct / function / test level. The completed F01–F78.5 series is in
-[archive/feature-complete-checklist.md](archive/feature-complete-checklist.md) (closure:
+[feature-complete-checklist.md](feature-complete-checklist.md) (closure:
 [feature-audit-2026-07-05.md](feature-audit-2026-07-05.md)). Design-first for high-blast-radius phases
 (matching how F53/F61/F66/F76 gated code on a doc). "Green" = imguix-tests + imguix-core-tests +
 imguix-headless-verify (`cmake --build build/vs2026 --config Release --target imguix-tests imguix-core-tests

@@ -8,8 +8,8 @@ Primary source: Robert Nystrom, *Game Programming Patterns*, "Command" (Design P
 first pattern). Read verbatim; quotes below are cited to that chapter. Companion docs:
 [composer-ui-design.md](composer-ui-design.md) (§T2 status-bar keymap, §"four roads"),
 [metrics-debugger-coherence-design.md](metrics-debugger-coherence-design.md) (surface hidden
-diagnostics), [phase-coherence.md](phase-coherence.md) (derive once, in phase),
-[feature-complete-checklist.md](feature-complete-checklist.md) (F01 harness, F58 precedent).
+diagnostics), [bug-classes.md](bug-classes.md) (derive once, in phase),
+[archive/feature-complete-checklist.md](archive/feature-complete-checklist.md) (F01 harness, F58 precedent).
 
 ## 1. The problem — input welded to verb
 
@@ -174,7 +174,7 @@ retired `cmdId` is dropped on load (graceful, like dangling selection ids are cl
 
 **F01 harness extension — the F58 precedent.** New persisted model state joins the field-by-field
 compare, which catches a record that *load* drops even when the serializer omits it (byte-stability
-alone cannot see that; `feature-complete-checklist.md:12-18` — "authored order once F58 exists"
+alone cannot see that; `archive/feature-complete-checklist.md:12-18` — "authored order once F58 exists"
 extends the same harness). Add to `AppGraphModelEqual`
 (`tests/imguiapp_nodes_tests.cpp:140-229`, after the `Bindings`/`ScopePlacements` blocks `:213-226`):
 
@@ -233,7 +233,7 @@ re-expresses this through the resolver:
 - **Host collision:** a user chord equal to a host chord is flagged by the shared conflict scan;
   precedence is deterministic (editor first).
 - **Phase coherence:** the effective table is derived once per override change, before dispatch — no
-  measured geometry, no camera input; nothing here mixes phases (`phase-coherence.md`).
+  measured geometry, no camera input; nothing here mixes phases (`bug-classes.md`).
 
 ## 9. Rejected alternatives
 

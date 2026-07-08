@@ -1,9 +1,9 @@
 # Roadmap (v2 — post-100)
 
 Lean forward map. The original feature series (F01–F78.5) reached 100% on 2026-07-05 — it and its audit
-live in [archive/](archive/) ([checklist](archive/feature-complete-checklist.md),
-[roadmap](archive/feature-complete-roadmap.md), [up-next](archive/up-next.md),
-[audit v1](archive/feature-audit-2026-07-04.md)); the closure is
+live in this folder ([checklist](feature-complete-checklist.md),
+[roadmap](feature-complete-roadmap.md), [up-next](up-next.md),
+[audit v1](feature-audit-2026-07-04.md)); the closure is
 [feature-audit-2026-07-05.md](feature-audit-2026-07-05.md).
 
 ## Where we are
@@ -17,7 +17,7 @@ lib) — including hand-written control method bodies.
 ## Post-100 arc (A → E, in order)
 
 Each phase gates the next. Per-phase detail (files, structs, functions, decisions, acceptance) +
-design-first docs live in [feature-complete-checklist.md](feature-complete-checklist.md) (v2).
+design-first docs live in [feature-complete-checklist-v2.md](feature-complete-checklist-v2.md).
 
 - **Done:** DLL preview renders live in-panel (closes the F78/F78.5 "see it live" residual).
 - **A — lean & mean split.** `imguiapp_internal.h` for tool interfaces + one `IMGUIX_DISABLE_TOOLS` switch

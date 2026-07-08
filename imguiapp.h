@@ -29,13 +29,9 @@ Index of this file:
 #define IMGUI_APPLAYER_VERSION "0.4.1"
 #define IMGUI_APPLAYER_VERSION_NUM 401
 
-#include <mutex> // std::call_once + ImGuiAppRecorder encoder-thread mutex
-#include <tuple>
-#include <type_traits>
-#include <string_view>
-#include <thread>             // ImGuiAppRecorder encoder thread
-#include <condition_variable> // ImGuiAppRecorder bounded-queue signalling
-#include <cstring>            // memset (ImGuiAppRecorder ctor)
+// Template composition front only (docs/style-deltas.md Δ2); the C seam is AppRegister*/AppControl*.
+#include <tuple>       // std::tuple, std::apply (typed dependency fan-out)
+#include <type_traits> // std::is_trivially_copyable_v (control storage contract)
 
 
 #ifdef _MSC_VER
@@ -55,11 +51,12 @@ struct ImGuiAppTaskLayer;
 struct ImGuiAppCommandLayer;
 
 // Forward declarations: ImGuiAppControl layer
+struct ImGuiAppControlMirrorBase;
 struct ImGuiAppControlBase;
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
 struct ImGuiAppInterfaceAdapterBase;
 template <typename Base, typename PersistDataT, typename TempDataT, typename... DataDependencies>
-struct ImGuiInterfaceAdapter;
+struct ImGuiAppInterfaceAdapter;
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
 struct ImGuiAppControl;
 
@@ -76,6 +73,7 @@ struct ImGuiAppInputLog;
 // Configuration + basic structs (defined in [SECTION] Configuration structs / Helpers below).
 struct ImGuiAppConfig;
 struct ImGuiAppWAL;
+struct ImGuiAppThreadFuncs;
 struct ImGuiAppStyleModDesc;
 struct ImGuiAppColorModDesc;
 struct ImGuiAppDataBinding;
@@ -221,6 +219,10 @@ namespace ImGui
     // WAL sink for IM_ASSERT failures routed to ImAppAssertFail.
     IMGUI_API void        SetAppAssertWAL(ImGuiAppWAL* wal);
 
+    // Thread backend (like SetAllocatorFunctions). Null = restore the std::thread default;
+    // asserts if IMGUIAPP_DISABLE_DEFAULT_THREAD_FUNCS stripped it. Set before recording starts.
+    IMGUI_API void        SetAppThreadFuncs(const ImGuiAppThreadFuncs* funcs);
+
     // Authored style/color overrides
     // Push every Active (in-range) entry; returns the number pushed -- pop with PopStyleVar/PopStyleColor(count).
     IMGUI_API int         PushAppStyleMods(const ImGuiAppStyleModDesc* mods, int count);
@@ -314,10 +316,10 @@ enum ImGuiAppRecordQueuePolicy_
 //-----------------------------------------------------------------------------
 // Public so clients can drive recording: supply an encoder provider, tune the encode/ring config,
 // inspect/extend the recorder. Encoder IMPLEMENTATIONS live in backends/imguiapp_impl_*.h. The rest of
-// the AV seam (decoder, meta-stream verify, AppRecord* API) is in imguiapp_internal.h. See docs/av-design.md.
+// the AV seam (decoder, meta-stream verify, AppRecord* API) is in imguiapp_internal.h. See docs/designs.md (av-design).
 
 // Frame identity: one id per frame, taken at the top of OnDrawFrame. The correlation key across video
-// frames, sidecar records, WAL lines, and test logs (docs/av-design.md). Defined HERE (not imguiapp.h)
+// frames, sidecar records, WAL lines, and test logs (docs/designs.md (av-design)). Defined HERE (not imguiapp.h)
 // so this header is self-contained -- ImGuiAppAVFrame holds one by value.
 struct ImGuiAppFrameID
 {
@@ -325,7 +327,7 @@ struct ImGuiAppFrameID
     ImU64  Tsc;        // __rdtsc / platform equivalent at frame begin
     double TimeSec;    // QPC seconds since run start
 
-    ImGuiAppFrameID() { memset(this, 0, sizeof(*this)); }
+    ImGuiAppFrameID() { memset((void*)this, 0, sizeof(*this)); }
 };
 
 // One captured frame. Produced by the platform backend's CaptureFrame; consumed by an
@@ -340,7 +342,7 @@ struct ImGuiAppAVFrame
     const void*     UserData; // optional per-frame blob (meta stream record, never visible pixels)
     int             UserDataSize;
 
-    ImGuiAppAVFrame() { memset(this, 0, sizeof(*this)); }
+    ImGuiAppAVFrame() { memset((void*)this, 0, sizeof(*this)); }
 };
 
 struct ImGuiAppAVEncodeConfig
@@ -386,7 +388,7 @@ struct ImGuiAppAVEncoder
     void        (*Destroy)(ImGuiAppAVEncoder* self);
     void*       UserData; // provider state
 
-    ImGuiAppAVEncoder() { memset(this, 0, sizeof(*this)); }
+    ImGuiAppAVEncoder() { memset((void*)this, 0, sizeof(*this)); }
 };
 
 // Reconstructed meta-stream header (magic "IMAVMETA", version, fps, start TSC + QPC Hz).
@@ -446,6 +448,25 @@ struct ImGuiAppAVRingEntry
     }
 };
 
+// Thread backend used by the recorder's encoder thread. Default = std::thread (imguiapp.cpp);
+// override via SetAppThreadFuncs() BEFORE recording starts. All hooks required.
+struct ImGuiAppThreadFuncs
+{
+    void* (*ThreadCreate)(void (*fn)(void*), void* arg); // start a thread running fn(arg); returns handle
+    void  (*ThreadJoin)(void* thread);                   // join + destroy the handle
+    void* (*MutexCreate)();
+    void  (*MutexDestroy)(void* mutex);
+    void  (*MutexLock)(void* mutex);
+    void  (*MutexUnlock)(void* mutex);
+    void* (*CondCreate)();
+    void  (*CondDestroy)(void* cond);
+    void  (*CondWait)(void* cond, void* mutex);          // atomically unlock, wait, relock
+    void  (*CondSignal)(void* cond);
+    void  (*CondBroadcast)(void* cond);
+};
+
+struct ImGuiAppRecorderThread; // Opaque encoder-thread state (handles from ImGuiAppThreadFuncs), defined in imguiapp.cpp
+
 // Glue between the app, the platform backend's CaptureFrame, and one encoder. WriteFrame runs on a
 // single encoder thread behind a bounded queue. Held by ImGuiApp::Recorder; methods defined in imguiapp.cpp.
 struct ImGuiAppRecorder
@@ -496,12 +517,9 @@ struct ImGuiAppRecorder
     ImVector<char> EmbedStream;         // framed chunk stamped into the strip
     bool           EmbedTooShortWarned; // frame shorter than EmbedRows: WAL once
 
-    // Encoder thread + bounded queue (normal mode only)
-    std::thread               Thread;
-    std::mutex                Mutex;
-    std::condition_variable   CvPush;
-    std::condition_variable   CvPop;
-    ImVector<ImGuiAppAVJob*>  Queue; // FIFO; front = index 0
+    // Encoder thread + bounded queue (normal mode only). Thread opaque (docs/style-deltas.md Δ2); null in ring mode.
+    ImGuiAppRecorderThread*   Thread;
+    ImVector<ImGuiAppAVJob*>  Queue; // FIFO; front = index 0; guarded by Thread->Mutex while recording
     int                       QueueDepth;
     ImGuiAppRecordQueuePolicy QueuePolicy;
     bool                      ThreadStop;
@@ -528,6 +546,7 @@ struct ImGuiAppRecorder
         AcceptedFrames   = 0;
         LastEmittedIndex = 0;
         NoSizeWarned     = false;
+        Thread           = nullptr;
         memset(&MetaHeader, 0, sizeof(MetaHeader));
         MetaPendingCursor   = 0;
         PendingBlobSet      = false;
@@ -577,33 +596,19 @@ struct ImGuiAppPlatform
 
 struct ImGuiAppConfig
 {
-    ImGuiAppPlatform     Platform;
-    ImGuiConfigFlags     ConfigFlags;
-    ImGuiAppStyle        Style;
-    ImVec4               ClearColor;
-    float                FontScale;
-    float                DpiScale;
-    ImGuiAppHeadlessMode Headless;
-    bool                 PersistSettings;
-    const char*          WindowTitle;
-    int                  WindowWidth;
-    int                  WindowHeight;
+    ImGuiAppPlatform     Platform;        // = { NULL, NULL }
+    ImGuiConfigFlags     ConfigFlags;     // = 0
+    ImGuiAppStyle        Style;           // = ImGuiAppStyle_Dark
+    ImVec4               ClearColor;      // = (0, 0, 0, 1)
+    float                FontScale;       // = 1.0f
+    float                DpiScale;        // = 1.0f
+    ImGuiAppHeadlessMode Headless;        // = ImGuiAppHeadlessMode_None
+    bool                 PersistSettings; // = true
+    const char*          WindowTitle;     // = NULL
+    int                  WindowWidth;     // = 0
+    int                  WindowHeight;    // = 0
 
-    ImGuiAppConfig()
-    {
-        Platform.Name               = nullptr;
-        Platform.NativeWindowHandle = nullptr;
-        ConfigFlags                 = 0;
-        Style                       = ImGuiAppStyle_Dark;
-        ClearColor                  = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);
-        FontScale                   = 1.0f;
-        DpiScale                    = 1.0f;
-        Headless                    = ImGuiAppHeadlessMode_None;
-        PersistSettings             = true;
-        WindowTitle                 = nullptr;
-        WindowWidth                 = 0;
-        WindowHeight                = 0;
-    }
+    IMGUI_API ImGuiAppConfig();
 };
 
 // Advisory frame pacer. Backend run loops call AppPacerWait once per iteration, before OnDrawFrame;
@@ -611,22 +616,14 @@ struct ImGuiAppConfig
 // (imapp_av.h ImGuiAppAVTimingMode) -- honest-realtime video takes PTS from FrameID.TimeSec.
 struct ImGuiAppPacer
 {
-    ImGuiAppPacerMode Mode;
-    float             TargetHz;     // <= 0 with Mode_Target = pace to primary monitor refresh
-    float             SleepSlackMs; // spin the last N ms (OS sleep granularity guard)
-    double            LastFrameMs;
-    double            LastWaitMs;
-    ImU64             MissedDeadlines; // frames that arrived after their deadline
+    ImGuiAppPacerMode Mode;            // = ImGuiAppPacerMode_Off
+    float             TargetHz;        // = 0.0f  // <= 0 with Mode_Target = pace to primary monitor refresh
+    float             SleepSlackMs;    // = 2.0f  // spin the last N ms (OS sleep granularity guard)
+    double            LastFrameMs;     // = 0.0
+    double            LastWaitMs;      // = 0.0
+    ImU64             MissedDeadlines; // = 0     // frames that arrived after their deadline
 
-    ImGuiAppPacer()
-    {
-        Mode            = ImGuiAppPacerMode_Off;
-        TargetHz        = 0.0f;
-        SleepSlackMs    = 2.0f;
-        LastFrameMs     = 0.0;
-        LastWaitMs      = 0.0;
-        MissedDeadlines = 0;
-    }
+    IMGUI_API ImGuiAppPacer();
 };
 
 // Write-ahead logger. Each record is appended and flushed BEFORE the operation it names executes, so after
@@ -639,7 +636,7 @@ struct ImGuiAppWAL
     const ImGuiAppFrameID* FrameID; // optional (point at ImGuiApp::FrameID): prefixes records "[tick:N tsc:T]"
     char                   Path[256];
 
-    ImGuiAppWAL() { memset(this, 0, sizeof(*this)); }
+    ImGuiAppWAL() { memset((void*)this, 0, sizeof(*this)); }
 };
 
 // Platform backend interface. The core app layer depends only on this vtable. Exactly one backend
@@ -670,9 +667,14 @@ IMGUI_API const ImGuiAppPlatformBackend* ImGuiApp_GetPlatformBackend();
 // ImGuiAppStatic<> / ImGuiAppType<> / ImAppNulTerminate / ImAppFormatLabel / ImAppTypeDisplayName, and
 // the AppReflectFields walk) lives in imguiapp_reflect.h, included at the top of this file.
 
+// Polymorphic root of the app object model: the common base the app owns layers/items/adapters by, so
+// they delete virtually through a base pointer. Carries NO data -- identity (Label) lives on the
+// concrete branches (ImGuiAppLayerBase / ImGuiAppItemBase) that use it, NOT here, so a secondary
+// interface mixed into a branch (e.g. ImGuiAppControlMirrorBase into ImGuiAppControlBase) adds no
+// duplicate Label. Virtual dispatch is ratified for this hierarchy ONLY (docs/style-deltas.md Δ1);
+// everything outside the app object model keeps imgui's no-virtuals rule.
 struct ImGuiAppInterface
 {
-    char Label[IM_LABEL_SIZE] = {};
     ImGuiAppInterface()          = default;
     virtual ~ImGuiAppInterface() = default;
 };
@@ -744,26 +746,21 @@ IMGUI_API ImGuiID ImAppHashType(ImGuiID type_id, ImGuiID instance);
 
 struct ImGuiAppLayerBase : ImGuiAppInterface
 {
+    char Label[IM_LABEL_SIZE]; // type name by default; the app can override
+
     virtual void OnAttach(ImGuiApp*) const        = 0;
     virtual void OnDetach(ImGuiApp*) const        = 0;
     virtual void OnUpdate(ImGuiApp*, float) const = 0;
     virtual void OnRender(const ImGuiApp*) const  = 0;
 };
 
-// Number of style/color stack entries OnStylePush pushed, handed back to the paired
-// OnStylePop so the pops balance exactly. Call-stack scratch, NOT item state: an item is
-// authored data; the push balance belongs to the one submission in flight, so passing it
-// through the caller keeps OnStylePush/Pop honestly const and re-entrancy-safe (toggling
-// Active mid-frame cannot stomp a shared count).
-struct ImGuiAppStyleScope
-{
-    int StyleCount = 0;
-    int ColorCount = 0;
-};
-
 struct ImGuiAppItemBase : ImGuiAppInterface
 {
-    // Authored style/color overrides applied around the item's submission.
+    char Label[IM_LABEL_SIZE]; // type name by default; deduplicated with "##N" on real collisions
+
+    // Authored style/color overrides. The render loop brackets each item's submission with them via
+    // ImGui::PushAppStyleMods/PushAppColorMods + the matching Pop (imgui idiom: explicit push/pop around
+    // submission). Plain data, not a virtual hook -- this IS the per-item style customization point.
     ImVector<ImGuiAppStyleModDesc> StyleMods;
     ImVector<ImGuiAppColorModDesc> ColorMods;
 
@@ -772,8 +769,6 @@ struct ImGuiAppItemBase : ImGuiAppInterface
     virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*) const = 0;
     virtual void OnUpdate(const ImGuiApp* app, float dt) const         = 0;
     virtual void OnRender(const ImGuiApp*) const                       = 0;
-    virtual ImGuiAppStyleScope OnStylePush(const ImGuiApp*) const;
-    virtual void               OnStylePop(const ImGuiApp*, ImGuiAppStyleScope) const;
 };
 
 struct ImGuiAppWindowBase : ImGuiAppItemBase
@@ -799,83 +794,35 @@ struct ImGuiAppSidebarBase : ImGuiAppWindowBase
 // NOTE: ImGuiAppLiveFieldKind / ImGuiAppLiveFieldDesc (the reflected-member manifest referenced by the
 // virtuals below) live in imguiapp_reflect.h, included at the top of this file.
 
-struct ImGuiAppControlBase : ImGuiAppItemBase
+// Live-mirror reflection surface: compile-time-erased data identity re-exposed on the type-erased
+// ImGuiAppControlBase*, so tools (Composer, state inspector) inspect a control without knowing its
+// concrete (PersistDataT, TempDataT, DataDependencies...) pack. A pure interface in the house style
+// (derives ImGuiAppInterface, like ImGuiAppItemBase / ImGuiAppInterfaceAdapterBase); carries no Label
+// of its own. Every hook defaults inert (0 / "" / false / no-op) so a control with nothing reflectable
+// needs no boilerplate; ImGuiAppControl<> overrides each from its pack. Default bodies in imguiapp.cpp.
+struct ImGuiAppControlMirrorBase : ImGuiAppInterface
 {
-    // Re-expose the compile-time-erased data identity for live mirrors. Defaults inert; ImGuiAppControl<>
-    // overrides from its pack.
-    virtual ImGuiID GetControlDataID() const { return 0; }
-    virtual int     GetControlDependencyIDs(ImGuiID* out, int cap) const
-    {
-        IM_UNUSED(out);
-        IM_UNUSED(cap);
-        return 0;
-    }
-    virtual void GetControlDataTypeName(char* out, int out_size) const
-    {
-        if (out && out_size > 0)
-            out[0] = 0;
-    }
-    virtual void GetControlTempDataTypeName(char* out, int out_size) const
-    {
-        if (out && out_size > 0)
-            out[0] = 0;
-    }
-    // Reflected members of PersistDataT (temp_data false) or TempDataT (true). out null = count only.
-    virtual int GetControlFields(ImGuiAppLiveFieldDesc* out, int cap, bool temp_data) const
-    {
-        IM_UNUSED(out);
-        IM_UNUSED(cap);
-        IM_UNUSED(temp_data);
-        return 0;
-    }
-    // Live instance memory of the RUNNING control (read-only by contract). False before initialization.
-    virtual bool GetControlLiveData(const void** out_persist, const void** out_temp) const
-    {
-        IM_UNUSED(out_persist);
-        IM_UNUSED(out_temp);
-        return false;
-    }
-    // False = outside the reflectable contract (not trivially copyable): opaque, exactly like snapshots.
-    virtual bool IsControlDataReflectable(bool temp_data) const
-    {
-        IM_UNUSED(temp_data);
-        return false;
-    }
-    // Rebind the cached dependency pointers from their resolved keys. AppRebuildUpdateOrder calls
-    // this after any push/pop, so a re-pushed producer's fresh instance data is picked up (and a
-    // popped producer with live consumers asserts instead of dangling).
-    virtual void RefreshControlDependencyData(const ImGuiApp* app) { IM_UNUSED(app); }
-    // Declared dependency TYPE ids (the compile-time pack, before resolution): what CAN be wired.
-    // GetControlDependencyIDs returns where each slot is wired NOW (resolved storage keys).
-    virtual int GetControlDependencyTypeIDs(ImGuiID* out, int cap) const
-    {
-        IM_UNUSED(out);
-        IM_UNUSED(cap);
-        return 0;
-    }
-    // Per-slot Optional flags, same slot order as the id queries (mirror draws soft wires dimmed).
-    virtual int GetControlDependencyOptional(bool* out, int cap) const
-    {
-        IM_UNUSED(out);
-        IM_UNUSED(cap);
-        return 0;
-    }
-    // Re-route one declared dependency at runtime (Composer edge rewiring, no pop/re-push): the
-    // slot whose type matches bind->TypeID re-resolves to that producer instance and the app's
-    // update order rebuilds. False when TypeID is not in this control's pack.
-    virtual bool SetControlDependencyBinding(ImGuiApp* app, const ImGuiAppDataBinding* bind)
-    {
-        IM_UNUSED(app);
-        IM_UNUSED(bind);
-        return false;
-    }
+    virtual ImGuiID GetControlDataID() const;                                                     // instance-qualified storage key of PersistData
+    virtual int     GetControlDependencyIDs(ImGuiID* out, int cap) const;                          // RESOLVED producer keys -- where each slot is wired NOW (out null = count)
+    virtual int     GetControlDependencyTypeIDs(ImGuiID* out, int cap) const;                      // DECLARED dependency type ids -- the compile-time pack, what CAN be wired
+    virtual int     GetControlDependencyOptional(bool* out, int cap) const;                        // per-slot Optional flags, same order as the id queries
+    virtual void    GetControlDataTypeName(char* out, int out_size) const;                         // PersistData type name
+    virtual void    GetControlTempDataTypeName(char* out, int out_size) const;                     // TempData type name
+    virtual int     GetControlFields(ImGuiAppLiveFieldDesc* out, int cap, bool temp_data) const;   // reflected members of Persist (false) / Temp (true); out null = count
+    virtual bool    IsControlDataReflectable(bool temp_data) const;                                // false = not trivially copyable: opaque, exactly like snapshots
+    virtual bool    GetControlLiveData(const void** out_persist, const void** out_temp) const;     // live instance memory of the RUNNING control (read-only); false before init
+    virtual void    RefreshControlDependencyData(const ImGuiApp* app);                             // rebind cached dependency pointers from resolved keys (AppRebuildUpdateOrder, after any push/pop)
+    virtual bool    SetControlDependencyBinding(ImGuiApp* app, const ImGuiAppDataBinding* bind);   // re-route one declared dependency at runtime (Composer rewiring); false = TypeID not in pack
 };
 
-// NOTE: the reflectability contracts + type-schema registry + the reflection field-walk
-// (ImGuiAppDataReflectable, ImGuiAppTypeSchema + ImGuiAppRegister/FindTypeSchema, ImGuiAppFieldsVisible)
-// live in imguiapp_reflect.h, included at the top. The type-name helpers + reflection walk that consume
-// them (ImAppFormatLabel, ImAppTypeDisplayName, AppReflectFields, AppEnsureTypeRegistered) live in imguiapp_reflect.h; defined
-// near the top of this file, right after that include.
+// A control = an authorable item (ImGuiAppItemBase) + the live-mirror surface (ImGuiAppControlMirrorBase).
+struct ImGuiAppControlBase : ImGuiAppItemBase, ImGuiAppControlMirrorBase
+{
+};
+
+// The reflectability contracts, type-schema registry, and reflection field-walk these adapters drive
+// (ImAppDataReflectable, ImGuiAppTypeSchema, AppReflectFields, AppEnsureTypeRegistered, ImAppFormatLabel, ...)
+// all live in imguiapp_reflect.h, included at the top of this file.
 
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
 struct ImGuiAppInterfaceAdapterBase : ImGuiAppInterface
@@ -1006,7 +953,9 @@ struct ImGuiApp : ImGuiAppBase
     ImGuiAppPacer                  Pacer;    // advisory; consulted by the backend run loop via AppPacerWait
     bool                           Initialized;
 
-    ImGuiApp() : CompositionRevision(0), UpdateOrderRevision(-1), PlatformData(nullptr), WAL(nullptr), Recorder(nullptr), Initialized(false) {}
+    // Platform is a bare POD (no ctor); the owner zeroes it so a not-yet-Initialize()'d app is still
+    // safe to render -- StatusLayer reads Platform.Name and only null-guards it, so garbage would crash.
+    ImGuiApp() : CompositionRevision(0), UpdateOrderRevision(-1), PlatformData(nullptr), WAL(nullptr), Recorder(nullptr), Initialized(false) { Platform.Name = nullptr; Platform.NativeWindowHandle = nullptr; }
     virtual ~ImGuiApp();
     int          Run(int argc, char** argv);
     bool         Initialize(const ImGuiAppConfig* config);
@@ -1029,7 +978,7 @@ struct ImGuiApp : ImGuiAppBase
 };
 
 template <typename Base, typename PersistDataT, typename TempDataT, typename... DataDependencies>
-struct ImGuiInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistDataT, TempDataT, DataDependencies...>
+struct ImGuiAppInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistDataT, TempDataT, DataDependencies...>
 {
     // Created, registered in ImGuiApp::Data, and bound here by PushAppControl<>() before OnInitialize.
     struct InstanceData
@@ -1142,10 +1091,10 @@ struct ImGuiInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistDataT, 
 };
 
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
-struct ImGuiAppControl : ImGuiInterfaceAdapter<ImGuiAppControlBase, PersistDataT, TempDataT, DataDependencies...>
+struct ImGuiAppControl : ImGuiAppInterfaceAdapter<ImGuiAppControlBase, PersistDataT, TempDataT, DataDependencies...>
 {
     using ControlDataType         = PersistDataT;
-    using ControlInstanceDataType = ImGuiInterfaceAdapter<ImGuiAppControlBase, PersistDataT, TempDataT, DataDependencies...>::InstanceData;
+    using ControlInstanceDataType = ImGuiAppInterfaceAdapter<ImGuiAppControlBase, PersistDataT, TempDataT, DataDependencies...>::InstanceData;
 
     // Constructing any control materializes its data types' manifests (and everything they
     // reach) into the runtime schema registry.

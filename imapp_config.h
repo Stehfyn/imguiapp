@@ -6,3 +6,7 @@
 // compile out, leaving the runtime (model, codegen, recorder, decoder, interpreter core, anim, AV).
 // CMake option IMGUIX_ENABLE_TOOLS=OFF defines it build-wide.
 // #define IMGUIX_DISABLE_TOOLS
+
+// Defined -> strip the std::thread default thread backend (<thread>/<mutex> leave the build);
+// the app must call ImGui::SetAppThreadFuncs() before any recording starts.
+// #define IMGUIAPP_DISABLE_DEFAULT_THREAD_FUNCS

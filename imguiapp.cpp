@@ -1,5 +1,5 @@
 // ImGuiAppLayer core: frame pipeline, typed app composition (layers / windows / sidebars / controls),
-// state discipline (docs/phase-coherence.md).
+// state discipline (docs/bug-classes.md).
 //
 // Index of this file (search for "[SECTION]"):
 // [SECTION] Assert forensics (symbolized backtrace + WAL sink)
@@ -15,8 +15,11 @@
 #include "imguiapp.h"
 #include "imguiapp_internal.h"   // core model/codegen (nodes.h) + interpreter (preview.h) + tool-UI decls
 #include "IconsFontAwesome6.h"   // ICON_FA_* glyph macros used by core node/layer icon helpers
-#include <thread>
+#ifndef IMGUIAPP_DISABLE_DEFAULT_THREAD_FUNCS
+#include <thread>                // default ImGuiAppThreadFuncs impl
+#include <mutex>
 #include <condition_variable>
+#endif
 #include <chrono>
 #include "imgui_internal.h"
 #include "imguix.h"
@@ -690,25 +693,77 @@ int ImGui::PushAppColorMods(const ImGuiAppColorModDesc* mods, int count)
     return pushed;
 }
 
-ImGuiAppStyleScope ImGuiAppItemBase::OnStylePush(const ImGuiApp* app) const
+// Defaults for the public config/pacer structs (declared bare in the header, imgui-style; the default
+// value is documented in the // = value column next to each member).
+ImGuiAppConfig::ImGuiAppConfig()
 {
-    IM_UNUSED(app);
-
-    ImGuiAppStyleScope scope;
-    scope.StyleCount = ImGui::PushAppStyleMods(StyleMods.Data, StyleMods.Size);
-    scope.ColorCount = ImGui::PushAppColorMods(ColorMods.Data, ColorMods.Size);
-    return scope;
+    Platform.Name               = nullptr;
+    Platform.NativeWindowHandle = nullptr;
+    ConfigFlags                 = 0;
+    Style                       = ImGuiAppStyle_Dark;
+    ClearColor                  = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);
+    FontScale                   = 1.0f;
+    DpiScale                    = 1.0f;
+    Headless                    = ImGuiAppHeadlessMode_None;
+    PersistSettings             = true;
+    WindowTitle                 = nullptr;
+    WindowWidth                 = 0;
+    WindowHeight                = 0;
 }
 
-void ImGuiAppItemBase::OnStylePop(const ImGuiApp* app, ImGuiAppStyleScope scope) const
+ImGuiAppPacer::ImGuiAppPacer()
 {
-    IM_UNUSED(app);
-
-    if (scope.StyleCount > 0)
-      ImGui::PopStyleVar(scope.StyleCount);
-    if (scope.ColorCount > 0)
-      ImGui::PopStyleColor(scope.ColorCount);
+    Mode            = ImGuiAppPacerMode_Off;
+    TargetHz        = 0.0f;
+    SleepSlackMs    = 2.0f;
+    LastFrameMs     = 0.0;
+    LastWaitMs      = 0.0;
+    MissedDeadlines = 0;
 }
+
+// Bracket an item's submission with its authored style/color overrides. The render loop pushes before an
+// item renders and pops after; the returned counts pop exactly what was pushed so the stacks stay
+// balanced even if an entry's Active toggles mid-frame. File-local: this is a render-loop detail, not a
+// polymorphic hook -- the item exposes StyleMods/ColorMods as plain data (imgui idiom).
+namespace
+{
+    struct ImAppItemStyle
+    {
+        int Vars   = 0;
+        int Colors = 0;
+    };
+
+    ImAppItemStyle PushItemStyle(const ImGuiAppItemBase* item)
+    {
+        ImAppItemStyle s;
+        s.Vars   = ImGui::PushAppStyleMods(item->StyleMods.Data, item->StyleMods.Size);
+        s.Colors = ImGui::PushAppColorMods(item->ColorMods.Data, item->ColorMods.Size);
+        return s;
+    }
+
+    void PopItemStyle(ImAppItemStyle s)
+    {
+        if (s.Colors > 0)
+          ImGui::PopStyleColor(s.Colors);
+        if (s.Vars > 0)
+          ImGui::PopStyleVar(s.Vars);
+    }
+}
+
+// ImGuiAppControlMirrorBase: inert defaults for the live-mirror data-identity surface. ImGuiAppControl<>
+// overrides every one of these from its (PersistDataT, TempDataT, DataDependencies...) pack; a plain
+// ImGuiAppControlBase (or a control with nothing reflectable) keeps them.
+ImGuiID ImGuiAppControlMirrorBase::GetControlDataID() const { return 0; }
+int     ImGuiAppControlMirrorBase::GetControlDependencyIDs(ImGuiID* out, int cap) const { IM_UNUSED(out); IM_UNUSED(cap); return 0; }
+int     ImGuiAppControlMirrorBase::GetControlDependencyTypeIDs(ImGuiID* out, int cap) const { IM_UNUSED(out); IM_UNUSED(cap); return 0; }
+int     ImGuiAppControlMirrorBase::GetControlDependencyOptional(bool* out, int cap) const { IM_UNUSED(out); IM_UNUSED(cap); return 0; }
+void    ImGuiAppControlMirrorBase::GetControlDataTypeName(char* out, int out_size) const { if (out && out_size > 0) out[0] = 0; }
+void    ImGuiAppControlMirrorBase::GetControlTempDataTypeName(char* out, int out_size) const { if (out && out_size > 0) out[0] = 0; }
+int     ImGuiAppControlMirrorBase::GetControlFields(ImGuiAppLiveFieldDesc* out, int cap, bool temp_data) const { IM_UNUSED(out); IM_UNUSED(cap); IM_UNUSED(temp_data); return 0; }
+bool    ImGuiAppControlMirrorBase::IsControlDataReflectable(bool temp_data) const { IM_UNUSED(temp_data); return false; }
+bool    ImGuiAppControlMirrorBase::GetControlLiveData(const void** out_persist, const void** out_temp) const { IM_UNUSED(out_persist); IM_UNUSED(out_temp); return false; }
+void    ImGuiAppControlMirrorBase::RefreshControlDependencyData(const ImGuiApp* app) { IM_UNUSED(app); }
+bool    ImGuiAppControlMirrorBase::SetControlDependencyBinding(ImGuiApp* app, const ImGuiAppDataBinding* bind) { IM_UNUSED(app); IM_UNUSED(bind); return false; }
 
 //-----------------------------------------------------------------------------
 // [SECTION] Display layer (windows, sidebars, hosted controls, .ini handler)
@@ -776,7 +831,7 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
 {
     for (auto& sidebar : app->Sidebars)
     {
-      const ImGuiAppStyleScope sidebar_scope = sidebar->OnStylePush(app);
+      const ImAppItemStyle sidebar_scope = PushItemStyle(sidebar);
 
       if (sidebar->Window && (sidebar->Flags & ImGuiWindowFlags_AlwaysAutoResize))
       {
@@ -804,14 +859,14 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
       }
       ImGui::End();
 
-      sidebar->OnStylePop(app, sidebar_scope);
+      PopItemStyle(sidebar_scope);
 
       // Controls render their own windows; submit them outside the sidebar's Begin/End.
       for (auto& control : sidebar->Controls)
       {
-        const ImGuiAppStyleScope control_scope = control->OnStylePush(app);
+        const ImAppItemStyle control_scope = PushItemStyle(control);
         control->OnRender(app);
-        control->OnStylePop(app, control_scope);
+        PopItemStyle(control_scope);
       }
     }
 
@@ -822,7 +877,7 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
       if (!window->Open)
         continue;
 
-      const ImGuiAppStyleScope window_scope = window->OnStylePush(app);
+      const ImAppItemStyle window_scope = PushItemStyle(window);
 
       // Never fight a dock binding: SetNextWindowPos undocks a docked window by design
       // (BeginDocked's PosUndock), so placement only applies to windows with no dock home
@@ -851,21 +906,21 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
         // Style mods bracket OnRender only: they style the control's region but not its popups.
         for (auto& control : window->Controls)
         {
-          const ImGuiAppStyleScope control_scope = control->OnStylePush(app);
+          const ImAppItemStyle control_scope = PushItemStyle(control);
           control->OnRender(app);
-          control->OnStylePop(app, control_scope);
+          PopItemStyle(control_scope);
         }
       }
       ImGui::End();
 
-      window->OnStylePop(app, window_scope);
+      PopItemStyle(window_scope);
     }
 
     for (auto& control : app->Controls)
     {
-      const ImGuiAppStyleScope control_scope = control->OnStylePush(app);
+      const ImAppItemStyle control_scope = PushItemStyle(control);
       control->OnRender(app);
-      control->OnStylePop(app, control_scope);
+      PopItemStyle(control_scope);
     }
 }
 
@@ -1770,8 +1825,8 @@ namespace ImGui
 //======================== canvas engine (folded from imguiapp_canvas.cpp) ========================
 // ImGuiAppLayer canvas engine. Invariant: node geometry is STORED in model units; the camera is
 // applied exactly once, at draw/hit-test time, always with THIS frame's values; sizes are measured
-// the same frame and same zoom they rendered with. docs/canvas-engine-design.md,
-// docs/phase-coherence.md.
+// the same frame and same zoom they rendered with. docs/designs.md (canvas-engine-design),
+// docs/bug-classes.md.
 //
 // Index of this file (search for "[SECTION]"):
 // [SECTION] State
@@ -2510,7 +2565,7 @@ namespace ImGui
     c->CanvasSize = GetWindowSize();
     c->DrawList = GetWindowDrawList();
     // Captured once per frame: every camera conversion this frame uses the same scale, even if
-    // the window changed monitors this frame (docs/phase-coherence.md).
+    // the window changed monitors this frame (docs/bug-classes.md).
     c->FontRatio = GetStyle().FontSizeBase > 0.0f ? GetFontSize() / GetStyle().FontSizeBase : 1.0f;
     c->Splitter.Split(c->DrawList, 3);   // 0 = grid + wires, 1 = node plates, 2 = node content
     c->Splitter.SetCurrentChannel(c->DrawList, 0);
@@ -2688,7 +2743,7 @@ namespace ImGui
     c->CurNodePins.resize(0);
 
     // Content renders under the zoomed font + zoom-scaled layout metrics; the engine owns the
-    // scaling, hosts submit plain widgets (docs/phase-coherence.md rule 1).
+    // scaling, hosts submit plain widgets (docs/bug-classes.md rule 1).
     c->Splitter.SetCurrentChannel(c->DrawList, 2);
     // Host style metrics and font already carry the DPI/user font scale, so they take the LOGICAL
     // zoom only; canvas-style model metrics take the full scale (Zoom * FontRatio).
@@ -2753,7 +2808,7 @@ namespace ImGui
     // px/scale round-trip re-measures a hair differently per wheel tick. The stored model size
     // moves only when the measurement exceeds the noise bound -- every consumer (layout, group
     // frames, wire routing) reads a zoom-idempotent size, and genuine content growth still
-    // propagates in one frame (docs/phase-coherence.md section 1b).
+    // propagates in one frame (docs/bug-classes.md section 1b).
     const float kNoiseM = 2.0f;
     if (n->Size.x <= 0.0f || n->Size.y <= 0.0f
         || ImFabs(fresh.x - n->Size.x) > kNoiseM || ImFabs(fresh.y - n->Size.y) > kNoiseM)
@@ -4134,7 +4189,7 @@ namespace
     tr->RunDir[0] = 0;
   }
 
-  // F70 preview-session record (docs/previewer-design.md section 10). The record path drives the
+  // F70 preview-session record (docs/designs.md (previewer-design) section 10). The record path drives the
   // preview app under the frame dt and exports an F61 run container via the meta-only writer
   // (imguiapp_av.h AppMetaRecord*) -- the SAME Identity/Frame/IoFrame/InputFrame/StateSnapshot/Digest
   // records the video recorder embeds, minus the pixel pipeline. Session state rides the editor object;
@@ -6777,7 +6832,7 @@ namespace ImGui
 
 
 //==================== DLL preview backend (folded from imguiapp_preview_dll.cpp) ====================
-// DLL preview backend implementation (F78; docs/dll-preview-design.md). Copy-marshalling: the preview DLL
+// DLL preview backend implementation (F78; docs/designs.md (dll-preview-design)). Copy-marshalling: the preview DLL
 // owns its entire runtime; the host only compiles/loads it and moves bytes across the C-ABI (see the emitted
 // surface in GenerateAppPreviewModuleCode). No shared context/allocator/pointer -> link-agnostic.
 //
@@ -6914,8 +6969,15 @@ namespace ImGui
     fwrite(module.c_str(), 1, (size_t)module.size(), f);
     fclose(f);
 
-    // Enter the toolset env, then a self-contained /LD compile. /MD keeps a normal dynamic CRT; the module
-    // has its OWN imgui context, so nothing crosses the boundary except copied bytes.
+    // Enter the toolset env, then a self-contained /LD compile. The module has its OWN imgui context, so
+    // nothing crosses the boundary except copied bytes -- but it links the same imguix/imgui_te libs, so its
+    // dynamic CRT MUST match the host build's (a Debug /MDd host links Debug libs; a /MD module then fails
+    // with RuntimeLibrary / _ITERATOR_DEBUG_LEVEL / __imp__*_dbg mismatches). Select the CRT from _DEBUG.
+#ifdef _DEBUG
+    const char* preview_crt = "/MDd /Od";
+#else
+    const char* preview_crt = "/MD /O2";
+#endif
     FILE* b = fopen(bat_path, "wb");
     if (b == nullptr)
     {
@@ -6924,8 +6986,8 @@ namespace ImGui
     }
     fprintf(b, "@echo off\r\n");
     fprintf(b, "call \"%s\" >nul\r\n", vcvars);
-    fprintf(b, "cl /nologo /LD /std:c++20 /O2 /MD /EHsc %s \"%s\" /Fe:\"%s\" /link /OPT:REF %s > \"%s\" 2>&1\r\n",
-            IMGUIX_PREVIEW_CL_ARGS, cpp_path, dll_path, IMGUIX_PREVIEW_LIBS, log_path);
+    fprintf(b, "cl /nologo /LD /std:c++20 %s /EHsc %s \"%s\" /Fe:\"%s\" /link /OPT:REF %s > \"%s\" 2>&1\r\n",
+            preview_crt, IMGUIX_PREVIEW_CL_ARGS, cpp_path, dll_path, IMGUIX_PREVIEW_LIBS, log_path);
     fclose(b);
 
     // The batch redirects cl's output to the log itself, so system() just runs it (absolute paths inside).
@@ -11285,7 +11347,7 @@ namespace ImGui
 
   // This frame's layer-column geometry, published by AppDrawLayerGroupBox for consumers in the
   // same pass (trunk routing): the LAYER NODE rects ARE the obstacle set -- one producer per
-  // value, never re-derived (docs/phase-coherence.md rule 3). Screen space, this frame's camera.
+  // value, never re-derived (docs/bug-classes.md rule 3). Screen space, this frame's camera.
 #endif // IMGUIX_DISABLE_TOOLS
   struct AppLayerColumnGeom
   {
@@ -11399,7 +11461,7 @@ namespace ImGui
 
     const float em = ImGui::GetFontSize();   // already zoom-scaled: this draws under the canvas content font
     // Published bounds (BoxMin/Max, SilRight) get chrome from unzoomed metrics x zoom; the pushed
-    // font rounds + clamps per zoom and must not size bounds (docs/phase-coherence.md rule 1).
+    // font rounds + clamps per zoom and must not size bounds (docs/bug-classes.md rule 1).
     const float em_b = em_base * ImGui::CanvasGetZoom(cv);
     const float pad = em_b * 0.75f;
     const float rail_w = em_b * 2.0f;    // left gutter housing the numbered execution-order rail
@@ -11570,7 +11632,7 @@ namespace ImGui
         const ImVec2 pos(kAppGraphX0, y);
         AppGraphConstrainLayerColumn(g, show_live, n->Id, &pos);
         // Same pre-submission pass as the constrain: members must submit at THIS frame's row
-        // origin, not trail it by a frame (docs/phase-coherence.md rule 1).
+        // origin, not trail it by a frame (docs/bug-classes.md rule 1).
         AppGraphSeatWindowSection(g, show_live);
 
         const ImVec2 accepted_pos = n->GridPos;
@@ -12814,7 +12876,7 @@ namespace ImGui
     const float kIndentX = 48.0f;
     const ImVec2 sz = AppLayoutPureSize(g, n);   // pure model size: tidy is zoom-idempotent
     // Altitude split: a scoped tidy arranges THIS interior (placement records); only the root
-    // tidy owns GridPos (one producer per altitude, scope-interior-design.md par.7).
+    // tidy owns GridPos (one producer per altitude, designs.md (scope-interior-design) par.7).
     const ImVec2 pos(x0 + (float)ImMin(depth, kAppLayoutMaxDepth - 1) * kIndentX, *y);
     if (AppScopeCurrent(g) >= 0)
       AppNodeScopePosStore(g, id, pos);
@@ -12833,7 +12895,7 @@ namespace ImGui
       AppLayoutStack(g, kids.Data[k], depth + 1, x0, y, max_r);
   }
 
-  // Tidy sizes are PURE MODEL functions (docs/phase-coherence.md: the camera is never an input
+  // Tidy sizes are PURE MODEL functions (docs/bug-classes.md: the camera is never an input
   // to a model-derived value): measured sizes vary with zoom because font metrics are not linear
   // in size, so a layout derived from them cannot be idempotent across zooms. Estimated from the
   // node's CONTENT instead -- identical model, identical layout, at any zoom, any time. Estimates
@@ -13313,13 +13375,13 @@ namespace ImGui
   //-----------------------------------------------------------------------------
   // [SECTION] Scope interior (walls, boundary portals, density altitude, scope-local placement)
   //
-  // What nodes look like below the composition root (docs/scope-interior-design.md). Inside a
+  // What nodes look like below the composition root (docs/designs.md (scope-interior-design)). Inside a
   // window/sidebar scope: the owner's card silhouette becomes the room (walls with title bar +
   // config readout), data edges crossing the boundary dock on the wall as portal chips, member
   // cards carry full authoring detail while everywhere else they fold to identity cards, and each
   // interior owns its own node arrangement (ScopePlacements; the root layout stays in GridPos).
   //
-  // Geometry phase audit (docs/phase-coherence.md checklist, classified up front):
+  // Geometry phase audit (docs/bug-classes.md checklist, classified up front):
   //   * walls           -- bounds from engine positions / this scope's model placements with THIS
   //                        frame's camera; drawn pre-submission on the background list, same path
   //                        as group frames. Published to ImGuiAppEditorState::ScopeWallRect in
@@ -13577,7 +13639,7 @@ namespace ImGui
   // transform discipline). Publishes ScopeWallRect + ScopeStripRow (model units) for the
   // post-CanvasEnd strip/portal passes. em_base/fh_base are the zoom-free font metrics captured
   // before CanvasBegin. An empty scope publishes nothing (the empty CTA owns that state).
-  // Bounds grow instantly and shrink only past a deadband (docs/phase-coherence.md 1b -- the
+  // Bounds grow instantly and shrink only past a deadband (docs/bug-classes.md 1b -- the
   // fixed point: the rect is stable while every edge is within the deadband of its target).
 #ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
   static void AppDrawScopeWalls(ImGuiAppGraph* g, ImGuiCanvasState* cv, bool show_live, float em_base, float fh_base)
@@ -14753,7 +14815,7 @@ namespace ImGui
       g->_LayerBoxMax = ImGui::CanvasFromScreen(cv, col_geom.BoxMax);
     }
 
-    // Scope walls (docs/scope-interior-design.md rule A): drilled into a window/sidebar, the
+    // Scope walls (docs/designs.md (scope-interior-design) rule A): drilled into a window/sidebar, the
     // owner's silhouette becomes the room. Background channel like the pipeline box; publishes
     // the wall/bracket rects (model units) that the post-CanvasEnd brackets/rail/portal passes
     // consume this same frame. Self-gates (clears ScopeWallValid at root / non-wall scopes).
@@ -14834,7 +14896,7 @@ namespace ImGui
 
           // Click (no drag) folds/unfolds; drag moves the group. A section-seated owner's
           // position is owned by the window-section packer (one producer per value,
-          // docs/phase-coherence.md rule 3): expanded, the drag moves only the cluster;
+          // docs/bug-classes.md rule 3): expanded, the drag moves only the cluster;
           // collapsed, the drag is inert.
           const bool owner_seated = at_root
               && (owner->Kind == ImGuiAppNodeKind_Window || owner->Kind == ImGuiAppNodeKind_Sidebar)
@@ -14871,7 +14933,7 @@ namespace ImGui
             // (_GroupFramesPrev) because THIS frame's group frames are still mid-publication at this point
             // in the pass -- the phase break that let a group clip past a neighbour it should slide against.
             // Deferred, the clamp reads this frame's complete _GroupFrames + layer box; the group + its
-            // nodes move on the next frame (deliberate T+1, model units, docs/phase-coherence.md rule 4).
+            // nodes move on the next frame (deliberate T+1, model units, docs/bug-classes.md rule 4).
             g->_GroupDragPending = owner_id;
           }
           if (ImGui::IsItemDeactivated() && !g->_GroupDragMoved)
@@ -15391,7 +15453,7 @@ namespace ImGui
         ImGui::CanvasEndPin(cv);
       }
 
-      // Detail altitude (docs/scope-interior-design.md rule D): the full authoring body renders
+      // Detail altitude (docs/designs.md (scope-interior-design) rule D): the full authoring body renders
       // only in the node's scope-parent's scope; everywhere else the card folds to identity
       // (title, pins, summary line). Deps pins stay at both altitudes -- wires must land.
       const bool detail = AppScopeDetailAltitude(g, n);
@@ -15728,7 +15790,7 @@ namespace ImGui
     AppGraphEditorState(g)->EditorRectMin = editor_min;    // F38: publish the canvas rect for gesture detection + tests
     AppGraphEditorState(g)->EditorRectMax = editor_min + editor_size;
 
-    // Deferred group-drag application (docs/phase-coherence.md: mutate the model in the update pass, never
+    // Deferred group-drag application (docs/bug-classes.md: mutate the model in the update pass, never
     // mid-render). A group drag detected during the canvas pass recorded its owner in _GroupDragPending;
     // the slide-to-contact clamp + the member position writes run HERE, where THIS frame's group frames
     // (_GroupFrames) and layer box (_LayerBox) are fully published.
@@ -15982,7 +16044,7 @@ namespace ImGui
           if (AppNodeModelSize(g, n->Id, &m))
             w = ImMax(w, m.x - pad2);
         }
-        if (w > AppLayerUniformW(g) + 2.0f)   // deadband: docs/phase-coherence.md 1b
+        if (w > AppLayerUniformW(g) + 2.0f)   // deadband: docs/bug-classes.md 1b
           g->_LayerUniformW = w;
       }
       AppGraphConstrainLayerColumn(g, show_live, moved_layer_id, moved_layer_id != 0 ? &moved_layer_pos : nullptr);
@@ -23433,7 +23495,7 @@ void ImAppPulse::OnUpdate(float dt, ImAppPulseData* data, const ImAppPulseTempDa
 }
 
 //################### interpreter core + preview surface (folded from imguiapp_preview.cpp) ###################
-// Previewer interpreter core (F67). Freezes to docs/previewer-design.md (F66). The interpreter is a
+// Previewer interpreter core (F67). Freezes to docs/designs.md (previewer-design) (F66). The interpreter is a
 // SECOND backend beside codegen: it builds a real ImGuiApp from the authored graph and evaluates the same
 // model every frame, emitting nothing. It reuses shipped rails -- RegisterAppStorage, the Task/Command/
 // Window passes, the temp^last skew, ImGuiAppStateHistory -- so "what the preview does" equals "what the
@@ -24171,7 +24233,7 @@ struct ImGuiAppPreviewControl : ImGuiAppControlBase
 
     // F56 STUB: animation-builtin dt update (Tween/Timer/Spring/Pulse) would run its closed-form rule over
     // this control's Persist accumulator HERE, before events, when Inst->IsBuiltin names an animator. See
-    // vocabulary-nodes-design.md 2.1. Left unimplemented: the builtins do not exist in this base (F56).
+    // designs.md (vocabulary-nodes-design) 2.1. Left unimplemented: the builtins do not exist in this base (F56).
     IM_UNUSED(Inst->IsBuiltin);
 
     // 2. Events, in authored order (design 4.2).
@@ -24220,7 +24282,7 @@ struct ImGuiAppPreviewControl : ImGuiAppControlBase
       }
     }
 
-    // The temp^last swap: last_temp <- temp (mirror of ImGuiInterfaceAdapter::OnUpdate). Next frame's edge
+    // The temp^last swap: last_temp <- temp (mirror of ImGuiAppInterfaceAdapter::OnUpdate). Next frame's edge
     // test compares the next recorded input against this frame's.
     if (Inst->TempBytes > 0) memcpy(last_temp, temp, Inst->TempBytes);
   }
@@ -24758,7 +24820,7 @@ namespace ImGui
 
 //################### recorder + encoder + decoder/playback (folded from imguiapp_av.cpp) ###################
 // ImGuiAppAV seam implementation: recorder, encoder thread, meta stream writer/parsers,
-// flight-recorder ring (imguiapp_av.h, docs/av-design.md).
+// flight-recorder ring (imguiapp_av.h, docs/designs.md (av-design)).
 //
 // Index of this file (search for "[SECTION]"):
 // [SECTION] Clocks + meta stream primitives
@@ -24862,20 +24924,73 @@ IMGUI_API void ImGui::AppAVDestroyEncoder(ImGuiAppAVEncoder* encoder)
 // [SECTION] Encoder thread + queue
 //-----------------------------------------------------------------------------
 
-static void AvEncoderThread(ImGuiAppRecorder* rec)
+// Default ImGuiAppThreadFuncs: std::thread behind void* handles (docs/style-deltas.md Δ2).
+#ifndef IMGUIAPP_DISABLE_DEFAULT_THREAD_FUNCS
+static void* AppThreadCreateDefault(void (*fn)(void*), void* arg) { return IM_NEW(std::thread)(fn, arg); }
+static void  AppThreadJoinDefault(void* t)                        { std::thread* th = (std::thread*)t; if (th->joinable()) th->join(); IM_DELETE(th); }
+static void* AppMutexCreateDefault()                              { return IM_NEW(std::mutex)(); }
+static void  AppMutexDestroyDefault(void* m)                      { IM_DELETE((std::mutex*)m); }
+static void  AppMutexLockDefault(void* m)                         { ((std::mutex*)m)->lock(); }
+static void  AppMutexUnlockDefault(void* m)                       { ((std::mutex*)m)->unlock(); }
+static void* AppCondCreateDefault()                               { return IM_NEW(std::condition_variable)(); }
+static void  AppCondDestroyDefault(void* cv)                      { IM_DELETE((std::condition_variable*)cv); }
+static void  AppCondWaitDefault(void* cv, void* m)
 {
+  std::unique_lock<std::mutex> lock(*(std::mutex*)m, std::adopt_lock);
+  ((std::condition_variable*)cv)->wait(lock);
+  lock.release();   // caller keeps the re-acquired mutex
+}
+static void  AppCondSignalDefault(void* cv)                       { ((std::condition_variable*)cv)->notify_one(); }
+static void  AppCondBroadcastDefault(void* cv)                    { ((std::condition_variable*)cv)->notify_all(); }
+
+static const ImGuiAppThreadFuncs GAppThreadFuncsDefault =
+{
+  AppThreadCreateDefault, AppThreadJoinDefault,
+  AppMutexCreateDefault, AppMutexDestroyDefault, AppMutexLockDefault, AppMutexUnlockDefault,
+  AppCondCreateDefault, AppCondDestroyDefault, AppCondWaitDefault, AppCondSignalDefault, AppCondBroadcastDefault,
+};
+static const ImGuiAppThreadFuncs* GAppThreadFuncs = &GAppThreadFuncsDefault;
+#else
+static const ImGuiAppThreadFuncs* GAppThreadFuncs = nullptr;
+#endif
+
+IMGUI_API void ImGui::SetAppThreadFuncs(const ImGuiAppThreadFuncs* funcs)
+{
+#ifndef IMGUIAPP_DISABLE_DEFAULT_THREAD_FUNCS
+  GAppThreadFuncs = funcs != nullptr ? funcs : &GAppThreadFuncsDefault;
+#else
+  GAppThreadFuncs = funcs;
+#endif
+}
+
+// Opaque body of ImGuiAppRecorder::Thread: handles from the active ImGuiAppThreadFuncs.
+struct ImGuiAppRecorderThread
+{
+  void* Worker;
+  void* Mutex;   // guards rec->Queue / QueueDepth / QueuePolicy / ThreadStop
+  void* CvPush;  // signalled when the queue has room
+  void* CvPop;   // signalled when the queue has work
+};
+
+static void AvEncoderThread(void* arg)
+{
+  ImGuiAppRecorder* rec = (ImGuiAppRecorder*)arg;
+  const ImGuiAppThreadFuncs* tf = GAppThreadFuncs;
   for (;;)
   {
     ImGuiAppAVJob* job = nullptr;
+    tf->MutexLock(rec->Thread->Mutex);
+    while (rec->Queue.Size == 0 && !rec->ThreadStop)
+      tf->CondWait(rec->Thread->CvPop, rec->Thread->Mutex);
+    if (rec->Queue.Size == 0 && rec->ThreadStop)
     {
-      std::unique_lock<std::mutex> lock(rec->Mutex);
-      rec->CvPop.wait(lock, [rec] { return rec->Queue.Size > 0 || rec->ThreadStop; });
-      if (rec->Queue.Size == 0 && rec->ThreadStop)
-        return;
-      job = rec->Queue.Data[0];
-      rec->Queue.erase(rec->Queue.begin());
-      rec->CvPush.notify_one();
+      tf->MutexUnlock(rec->Thread->Mutex);
+      return;
     }
+    job = rec->Queue.Data[0];
+    rec->Queue.erase(rec->Queue.begin());
+    tf->CondSignal(rec->Thread->CvPush);
+    tf->MutexUnlock(rec->Thread->Mutex);
 
     ImGuiAppAVFrame frame;
     frame.Width = job->Width;
@@ -24892,12 +25007,15 @@ static void AvEncoderThread(ImGuiAppRecorder* rec)
 // Push with the configured full-queue policy. Returns false when the frame was dropped.
 static bool AvQueuePush(ImGuiAppRecorder* rec, ImGuiAppAVJob* job)
 {
-  std::unique_lock<std::mutex> lock(rec->Mutex);
+  const ImGuiAppThreadFuncs* tf = GAppThreadFuncs;
+  tf->MutexLock(rec->Thread->Mutex);
   if (rec->QueuePolicy == ImGuiAppRecordQueuePolicy_Block)
   {
-    rec->CvPush.wait(lock, [rec] { return rec->Queue.Size < rec->QueueDepth || rec->ThreadStop; });
+    while (rec->Queue.Size >= rec->QueueDepth && !rec->ThreadStop)
+      tf->CondWait(rec->Thread->CvPush, rec->Thread->Mutex);
     if (rec->ThreadStop)
     {
+      tf->MutexUnlock(rec->Thread->Mutex);
       IM_DELETE(job);
       return false;
     }
@@ -24905,11 +25023,13 @@ static bool AvQueuePush(ImGuiAppRecorder* rec, ImGuiAppAVJob* job)
   else if (rec->Queue.Size >= rec->QueueDepth)
   {
     rec->DroppedFrames++;
+    tf->MutexUnlock(rec->Thread->Mutex);
     IM_DELETE(job);
     return false;
   }
   rec->Queue.push_back(job);
-  rec->CvPop.notify_one();
+  tf->CondSignal(rec->Thread->CvPop);
+  tf->MutexUnlock(rec->Thread->Mutex);
   return true;
 }
 
@@ -25189,7 +25309,7 @@ static void AvBuildDigestRecord(ImVector<char>* out, ImU64 stream_bytes, ImU32 d
 // [SECTION] Embedded metadata (pixel strip)
 //-----------------------------------------------------------------------------
 
-// Strip format is the frozen contract in imguiapp_av.h / docs/av-design.md: bottom
+// Strip format is the frozen contract in imguiapp_av.h / docs/designs.md (av-design): bottom
 // EmbedRows rows, 4x4 luma blocks (black 16 / white 235), block (bx, by) with by = 0
 // the TOPMOST reserved row group, bit index = by * blocks_per_row + bx, MSB-first per
 // stream byte. Per frame: u32 'IMIL' | u32 chunk_size | chunk (the stream's next bytes,
@@ -25647,7 +25767,12 @@ IMGUI_API ImGuiAppRecorder* AppRecordBegin(ImGuiApp* app, ImGuiAppAVEncoder* enc
   rec->EncoderOpen = true;
 
   rec->Active = true;
-  rec->Thread = std::thread(AvEncoderThread, rec);
+  IM_ASSERT(GAppThreadFuncs != nullptr && "No thread backend: call ImGui::SetAppThreadFuncs() (IMGUIAPP_DISABLE_DEFAULT_THREAD_FUNCS is set).");
+  rec->Thread = IM_NEW(ImGuiAppRecorderThread)();
+  rec->Thread->Mutex  = GAppThreadFuncs->MutexCreate();
+  rec->Thread->CvPush = GAppThreadFuncs->CondCreate();
+  rec->Thread->CvPop  = GAppThreadFuncs->CondCreate();
+  rec->Thread->Worker = GAppThreadFuncs->ThreadCreate(AvEncoderThread, rec);
   if (app->Recorder == nullptr)
     app->Recorder = rec;   // OnEncodeFrame pumps it; explicit AppRecordPump remains valid
   AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "av: recording '%s' via %s (%s)", rec->OutputPath, encoder->Name,
@@ -25670,10 +25795,17 @@ IMGUI_API void AppRecordSetQueuePolicy(ImGuiAppRecorder* rec, ImGuiAppRecordQueu
   IM_ASSERT(rec != nullptr && depth > 0);
   if (rec == nullptr || depth <= 0)
     return;
-  std::lock_guard<std::mutex> lock(rec->Mutex);
-  rec->QueuePolicy = policy;
+  if (rec->Thread != nullptr)
+  {
+    GAppThreadFuncs->MutexLock(rec->Thread->Mutex);
+    rec->QueuePolicy = policy;
+    rec->QueueDepth = depth;
+    GAppThreadFuncs->CondBroadcast(rec->Thread->CvPush);
+    GAppThreadFuncs->MutexUnlock(rec->Thread->Mutex);
+    return;
+  }
+  rec->QueuePolicy = policy;   // no encoder thread yet (ring mode / before begin): plain writes
   rec->QueueDepth = depth;
-  rec->CvPush.notify_all();
 }
 
 IMGUI_API void AppRecordSetFrameData(ImGuiAppRecorder* rec, const void* data, int size)
@@ -25827,14 +25959,21 @@ IMGUI_API void AppRecordEnd(ImGuiAppRecorder* rec)
 
   if (!rec->IsRing)
   {
+    if (rec->Thread != nullptr)
     {
-      std::lock_guard<std::mutex> lock(rec->Mutex);
+      const ImGuiAppThreadFuncs* tf = GAppThreadFuncs;
+      tf->MutexLock(rec->Thread->Mutex);
       rec->ThreadStop = true;
-      rec->CvPop.notify_all();
-      rec->CvPush.notify_all();
+      tf->CondBroadcast(rec->Thread->CvPop);
+      tf->CondBroadcast(rec->Thread->CvPush);
+      tf->MutexUnlock(rec->Thread->Mutex);
+      tf->ThreadJoin(rec->Thread->Worker);
+      tf->CondDestroy(rec->Thread->CvPop);
+      tf->CondDestroy(rec->Thread->CvPush);
+      tf->MutexDestroy(rec->Thread->Mutex);
+      IM_DELETE(rec->Thread);
+      rec->Thread = nullptr;
     }
-    if (rec->Thread.joinable())
-      rec->Thread.join();
     if (rec->EncoderOpen)
     {
       rec->Encoder->Close(rec->Encoder);
@@ -26956,7 +27095,7 @@ namespace ImGui
 #include <algorithm>
 // ImGuiAppTestHarness (imguiapp_testharness.h): Test Engine + headless rendering +
 // frame encoding + WAL, one entry point, one frame id across every artifact
-// (docs/av-design.md). The only applayer TU that links the imgui test engine.
+// (docs/designs.md (av-design)). The only applayer TU that links the imgui test engine.
 
 #ifdef IMGUIX_HAS_LIBAV
 #endif
@@ -26989,7 +27128,7 @@ namespace
   bool HarnessMkdirRecursive(const char* path)
   {
     char buf[512];
-    snprintf(buf, sizeof(buf), "%s", path);
+    ImFormatString(buf, IM_ARRAYSIZE(buf), "%s", path);
     for (char* c = buf + 1; *c; c++)
     {
       if (*c != '/' && *c != '\\')
@@ -27013,11 +27152,11 @@ namespace
     {
       for (int i = 0; ; i++)
       {
-        snprintf(path, sizeof(path), "%s/%06d.qoi", video_path, i);
+        ImFormatString(path, IM_ARRAYSIZE(path), "%s/%06d.qoi", video_path, i);
         if (remove(path) != 0)
           break;
       }
-      snprintf(path, sizeof(path), "%s/index.tsv", video_path);
+      ImFormatString(path, IM_ARRAYSIZE(path), "%s/index.tsv", video_path);
       remove(path);
 #ifdef _WIN32
       _rmdir(video_path);
@@ -27224,7 +27363,8 @@ IMGUI_API int ImGui::AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessC
   if (ft_ms.Size > 0)
   {
     ImVector<double> sorted = ft_ms;
-    std::sort(sorted.begin(), sorted.end());
+    ImQsort(sorted.Data, (size_t)sorted.Size, sizeof(double),
+            [](const void* a, const void* b) { const double da = *(const double*)a, db = *(const double*)b; return (da < db) ? -1 : (da > db) ? 1 : 0; });
     const double p50 = sorted[(int)(0.50 * (sorted.Size - 1))];
     const double p95 = sorted[(int)(0.95 * (sorted.Size - 1))];
     const double p99 = sorted[(int)(0.99 * (sorted.Size - 1))];

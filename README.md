@@ -47,5 +47,8 @@ order. Because every concept is a graph object, the bundled **Composer** edits t
 algebra and generates the C++ back out.
 
 - **[docs/big-idea.md](docs/big-idea.md)** — the concepts and why they're orthogonal.
-- **[docs/up-next.md](docs/up-next.md)** — living priorities; rewritten constantly.
+- **[docs/bug-classes.md](docs/bug-classes.md)** — the recurring bug classes: rules of thumb and smells.
+- **[docs/imgui-house-style.md](docs/imgui-house-style.md)** — the Dear ImGui house-style spec this code is held to.
+- **[docs/designs.md](docs/designs.md)** — all per-subsystem design docs, collated.
+- **[docs/](docs/)** — dated audits, sweeps, and superseded originals live in [docs/archive/](docs/archive/).
 - `imguiapp_demo.cpp` — full demo, including the dogfooded Composer (Tools → Composer).

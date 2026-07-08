@@ -239,7 +239,7 @@ the contract-7 machinery (restore-and-replay proven exact,
 4. **Inspect.** The reconstruction app's registered storage now holds the app AT tick N. The inspector
    renders each instance's `Persist` and `Temp` through the reflection field-widgets (ImStructTable /
    the reflection walk `imguiapp_reflect.h`, the same table the live mirror uses,
-   `feature-complete-checklist.md:563`). Persist/LastTemp is the `[0, TempOffset)` prefix; Temp is the
+   `archive/feature-complete-checklist.md:563`). Persist/LastTemp is the `[0, TempOffset)` prefix; Temp is the
    `[TempOffset, TempOffset+TempSize)` input range (`imguiapp.h:842-844`).
 5. **Command log for N.** The WAL slice `Ticks[N].WalFirst..+WalCount` — the `[tick:N]` lines,
    `"execute command %d"` among them — is that tick's dispatch list, shown verbatim.

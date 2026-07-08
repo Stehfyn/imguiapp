@@ -23,7 +23,7 @@ Companion documents (binding cross-references, cited by name below):
 [vocabulary-nodes-design.md](vocabulary-nodes-design.md) (F53 — the interpreter's vocabulary *is*
 F53's semantics: op-fold expressions, animation builtins' Task-phase dt update, layout nodes),
 [big-idea.md](big-idea.md) (the four-phase pipeline the interpreter executes),
-[phase-coherence.md](phase-coherence.md) (the temp^last skew every animator and brush obeys),
+[bug-classes.md](bug-classes.md) (the temp^last skew every animator and brush obeys),
 [metrics-debugger-coherence-design.md](metrics-debugger-coherence-design.md) (the selection channel
 and StatusPill grammar the preview reuses), [playback-debugger-design.md](playback-debugger-design.md)
 (F61 — the shared F29 transport and run container F70 closes against).
@@ -71,7 +71,7 @@ apply verbatim), the value stores (§6), the per-instance store manifests (§6.1
 state, the dispatched-command log (§4.3), and the last interpreter signature (§7). It is **not**
 serialized and **not** part of any snapshot — exactly `ComposerTransport`'s status
 (`playback-debugger-design.md §4`). The graph document is never mutated by running it (render purity,
-contract; `phase-coherence.md §1c`).
+contract; `bug-classes.md §1c`).
 
 **The interpreter's app is a real `ImGuiApp`.** Rather than reimplement the pipeline, the interpreter
 *builds* a live `ImGuiApp`: it pushes the framework core layers (`PushAppLayer<ImGuiAppTaskLayer>` …,
@@ -86,7 +86,7 @@ already targets an `ImGuiApp`; the interpreter *is* one.
 ## 3. The interpreter control (one class, dynamic fields)
 
 A design-drafted control's C++ type does not exist, so the interpreter cannot instantiate a
-`ImGuiInterfaceAdapter<…>` (`imguiapp.h:920`). Instead **one** compiled `ImGuiAppPreviewControl :
+`ImGuiAppInterfaceAdapter<…>` (`imguiapp.h:920`). Instead **one** compiled `ImGuiAppPreviewControl :
 ImGuiAppControlBase` stands in for every interpreted control; its "type" is data, carried per instance:
 
 - Its `PersistData`/`TempData`/`LastTempData` are **flat byte buffers** sized and laid out from the
@@ -317,7 +317,7 @@ Selection is **one id, two surfaces**, extending the metrics-debugger selection 
 - **Composer → preview.** When a Control node is the primary selection (`*selected_node_id`,
   `imguiapp_nodes.h:741-745`) or hovered, its instance's widget group **haloes** in the preview: the
   panel measures its group rect during the Window pass and an overlay draws the outline. This is a
-  coherent T-1 publish/consume pair (`ScopeWallRect` pattern, `imguiapp_nodes.h:622`; `phase-coherence.md`
+  coherent T-1 publish/consume pair (`ScopeWallRect` pattern, `imguiapp_nodes.h:622`; `bug-classes.md`
   rule 1) — measured last frame, drawn this frame, never mixing a fresh transform with a stale rect.
 - **Preview → composer.** When the user hovers/clicks a widget in the preview, the owning instance's
   node id is published into the editor's hover **brushing bus** (`HoverNode`/`HoverPrevNode`, render
@@ -365,11 +365,11 @@ and the animation builtins) appears exactly once; F67 implements straight from t
 ## 10. Phase-coherence, determinism, and the F69/F70 close
 
 - **Render purity.** The interpreter mutates Persist only in Task; Render writes only Temp (input) and
-  draws — no model mutation mid-publication (`phase-coherence.md §1c`). The graph document is never
+  draws — no model mutation mid-publication (`bug-classes.md §1c`). The graph document is never
   written by running it.
 - **No measured-geometry feedback.** The only render-phase measurement is the selection-halo group rect
   and the layout dock tree, both consumed as coherent T-1 pairs or built once by DockBuilder
-  (`phase-coherence.md §1,§1b`, vocabulary §5) — no measure→apply loop, no settle.
+  (`bug-classes.md §1,§1b`, vocabulary §5) — no measure→apply loop, no settle.
 - **Contract parity (F69).** Because the interpreter *is* an `ImGuiApp` with real registered storage,
   the shipped contract suite runs against it unchanged: UCR order (topo `AppRebuildUpdateOrder`),
   edge-once (§4.2 temp^last), same-frame latch (Task-before-Command, §4.3), dedup dispatch

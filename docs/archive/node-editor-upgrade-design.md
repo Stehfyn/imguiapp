@@ -250,7 +250,7 @@ refactored into `AppEmitControl(draft, depNames, depCount, out)`; the legacy ent
    control struct. Its `DataDependencies` = the *distinct* producer PersistData types of its incoming data
    edges, ordered by topo index (deterministic); each becomes an extra `ImGuiAppControl<...>` template arg
    and a `const <Dep>Data*` param appended to `OnInitialize/OnUpdate/OnRender` in that order (matching
-   `ImGuiInterfaceAdapterBase`, h:297-302). Each `ImGuiAppFieldBinding` on that edge emits one `OnUpdate`
+   `ImGuiAppInterfaceAdapterBase`, h:297-302). Each `ImGuiAppFieldBinding` on that edge emits one `OnUpdate`
    line `data-><DstField> = <depParam>-><SrcField>;` (only when the two fields' `ImGuiAppFieldType` match;
    mismatches dropped).
 4. Emit one bring-up function: **Layers** first (`PushAppLayer<TypeName>`), then **Windows/Sidebars** with

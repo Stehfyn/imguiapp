@@ -7,8 +7,8 @@ document are the editor's own (`kAppHue*` through `AppThemeAccent`, `imguiapp_no
 
 Companion documents: [composer-ui-design.md](composer-ui-design.md) (visual grammar v1, altitude
 law), [composer-workbench-design.md](composer-workbench-design.md) (grammar v2, overlay altitude
-table), [phase-coherence.md](phase-coherence.md) (every geometry rule below complies; §7),
-[up-next.md](up-next.md) (the Lifecycle north star this design advances).
+table), [bug-classes.md](bug-classes.md) (every geometry rule below complies; §7),
+[archive/up-next.md](archive/up-next.md) (the Lifecycle north star this design advances).
 
 ## 1. Diagnosis — the drilled view before rules A–E (all resolved)
 
@@ -171,7 +171,7 @@ connectors, section packing, phase bands: unchanged.
   persistence, and the outliner, or need special-casing in all four. Chips are draw-list
   presentation of existing `Links` rows.
 - **Fixed lane layout in-scope** (members force-packed along the rail). Free placement + rail
-  preserves spatial memory and keeps the scope-local tidy verb (up-next.md) as the on-demand
+  preserves spatial memory and keeps the scope-local tidy verb (archive/up-next.md) as the on-demand
   arranger. The rail suggests order; it does not own positions. (Window-section semantics stay
   root-only.)
 - **Config editing in the wall title bar.** The inspector owns editing; a second editor surface

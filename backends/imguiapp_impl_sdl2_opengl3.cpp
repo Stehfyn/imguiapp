@@ -28,9 +28,12 @@ namespace
         SDL_GLContext GLContext;
         bool          PlatformBackendInitialized;
         bool          RendererBackendInitialized;
+
+        ImGuiApp_ImplSDL2OpenGL3_Data() { memset((void*)this, 0, sizeof(*this)); }
     };
 
-    ImGuiApp_ImplSDL2OpenGL3_Data GBackend;
+    // IM_NEW'd at Init, freed by ShutdownBackend (docs/style-deltas.md Δ4).
+    ImGuiApp_ImplSDL2OpenGL3_Data* GBackend = nullptr;
 
     bool IsInitInfoValid(const ImGuiApp_ImplSDL2OpenGL3_InitInfo* init_info)
     {
@@ -51,7 +54,9 @@ namespace
         if (bd->PlatformBackendInitialized)
             ImGui_ImplSDL2_Shutdown();
 
-        *bd = ImGuiApp_ImplSDL2OpenGL3_Data();
+        if (GBackend == bd)
+            GBackend = nullptr;
+        IM_DELETE(bd);
     }
 
     void NewFrame(void* user_data)
@@ -106,27 +111,30 @@ static bool ImGuiApp_ImplSDL2OpenGL3_Init(const ImGuiApp_ImplSDL2OpenGL3_InitInf
         return false;
 
     ImGuiX::Shutdown();
+    IM_ASSERT(GBackend == nullptr && "Already initialized a platform backend!");
 
-    GBackend.Window = (SDL_Window*)init_info->Window;
-    GBackend.GLContext = (SDL_GLContext)init_info->GLContext;
+    GBackend = IM_NEW(ImGuiApp_ImplSDL2OpenGL3_Data)();
+    GBackend->Window = (SDL_Window*)init_info->Window;
+    GBackend->GLContext = (SDL_GLContext)init_info->GLContext;
 
-    if (!ImGui_ImplSDL2_InitForOpenGL(GBackend.Window, GBackend.GLContext))
+    if (!ImGui_ImplSDL2_InitForOpenGL(GBackend->Window, GBackend->GLContext))
     {
-        GBackend = ImGuiApp_ImplSDL2OpenGL3_Data();
+        IM_DELETE(GBackend);
+        GBackend = nullptr;
         return false;
     }
-    GBackend.PlatformBackendInitialized = true;
+    GBackend->PlatformBackendInitialized = true;
 
     if (!ImGui_ImplOpenGL3_Init(init_info->GlslVersion))
     {
-        ShutdownBackend(&GBackend);
+        ShutdownBackend(GBackend);
         return false;
     }
-    GBackend.RendererBackendInitialized = true;
+    GBackend->RendererBackendInitialized = true;
 
     ImGuiXInitInfo imguix_init_info;
     imguix_init_info.Backend.Name = "imguiapp_impl_sdl2_opengl3";
-    imguix_init_info.Backend.UserData = &GBackend;
+    imguix_init_info.Backend.UserData = GBackend;
     imguix_init_info.Backend.Shutdown = ShutdownBackend;
     imguix_init_info.Backend.NewFrame = NewFrame;
     imguix_init_info.Backend.RenderDrawData = RenderDrawData;
@@ -134,7 +142,7 @@ static bool ImGuiApp_ImplSDL2OpenGL3_Init(const ImGuiApp_ImplSDL2OpenGL3_InitInf
 
     if (!ImGuiX::Initialize(&imguix_init_info))
     {
-        ShutdownBackend(&GBackend);
+        ShutdownBackend(GBackend);
         return false;
     }
 

@@ -141,7 +141,7 @@ typedef int ImGuiAppHoverSource;
 //-----------------------------------------------------------------------------
 // [SECTION] AV meta stream + recorder + run artifacts (was imguiapp_av.h)
 //-----------------------------------------------------------------------------
-// Frame encode-to-video + run artifacts for ImGuiApp (docs/av-design.md). SEAM only: encoder
+// Frame encode-to-video + run artifacts for ImGuiApp (docs/designs.md (av-design)). SEAM only: encoder
 // implementations live in backends/imguiapp_impl_*.h, wired by the app like imgui_impl_* backends; this
 // header never references a provider. The recording BEHAVIOR types (ImGuiAppAVFrame, ImGuiAppAVEncodeConfig,
 // ImGuiAppAVEncoder, ImGuiAppAVMetaHeader, ImGuiAppAVTimingMode, ImGuiAppRecordQueuePolicy,
@@ -229,7 +229,7 @@ struct ImGuiAppAVStreamStats
 //-----------------------------------------------------------------------------
 // One walk of the reconstructed meta buffer (structurally the traversal AppAVMetaVerify
 // performs) records each record's tick and payload offset instead of only counting them.
-// The result is the playback debugger's index (docs/playback-debugger-design.md section 3):
+// The result is the playback debugger's index (docs/designs.md (playback-debugger-design) section 3):
 // no new byte format, same records, a richer landing. All offsets index the buffer the
 // index owns; the shipped single-record readers (AppAVMetaRead*) consume from there.
 
@@ -293,7 +293,7 @@ struct ImGuiAppRunIndex
 //-----------------------------------------------------------------------------
 // [SECTION] State-at-tick (F64): restore nearest snapshot + replay inputs to tick N
 //-----------------------------------------------------------------------------
-// docs/playback-debugger-design.md section 5. Reconstructs the app's VALUES at a scrubbed tick
+// docs/designs.md (playback-debugger-design) section 5. Reconstructs the app's VALUES at a scrubbed tick
 // by the contract-7 machinery: restore the nearest StateSnapshot <= N, then AppInputReplay the
 // reconstructed input log's frames (S,N] into a reconstruction app. Reconstruction is legal only
 // when the recon app's composition + schema equal the take's Identity; on mismatch it is refused,
@@ -322,7 +322,7 @@ struct ImGuiAppRunState
 // [SECTION] Transport source (F63): the App-time transport's two frame sources
 //-----------------------------------------------------------------------------
 // The F29 transport (a live state ring) gains a SOURCE switch behind the design's
-// Count()/Show(int) view (docs/playback-debugger-design.md section 4). LiveRing restores
+// Count()/Show(int) view (docs/designs.md (playback-debugger-design) section 4). LiveRing restores
 // snapshotted bytes into the running app; FileRun decodes the recorded frame image at a
 // tick and blits its pixels -- no app is driven.
 enum ImGuiAppTransportSource_
@@ -676,7 +676,7 @@ struct ImGuiAppDragStick
 
 // One group frame as PUBLISHED by the frames pass, in model units -- the single producer of
 // group geometry. Consumers (drag clamping) read last frame's publication: a coherent T-1 pair
-// (docs/phase-coherence.md rule 1). Transient, not serialized.
+// (docs/bug-classes.md rule 1). Transient, not serialized.
 struct ImGuiAppGroupFrame
 {
   int    OwnerId = 0;
@@ -1247,7 +1247,7 @@ namespace ImGui
 
 
   // Run artifacts (F62): file loader + tick index + state-at-tick
-  // F62 loader/index. Build the tick index (docs/playback-debugger-design.md section 3)
+  // F62 loader/index. Build the tick index (docs/designs.md (playback-debugger-design) section 3)
   // from a reconstructed meta buffer -- ONE linear walk reusing the same TLV traversal
   // AppAVMetaVerify performs, landing each record's tick + payload offset. The path->buffer
   // step is the per-backend extractor (ImGuiApp_Impl{Libav,Qoi}_ExtractEmbeddedMeta), same
@@ -1258,7 +1258,7 @@ namespace ImGui
   IMGUI_API int                    AppRunTickCount(const ImGuiAppRunIndex* run);          // == Ticks.Size; 0 on null
   IMGUI_API const ImGuiAppRunTick* AppRunTickAt(const ImGuiAppRunIndex* run, int i);      // null when out of range
 
-  // F64 state-at-tick (docs/playback-debugger-design.md section 5). Restore the nearest snapshot
+  // F64 state-at-tick (docs/designs.md (playback-debugger-design) section 5). Restore the nearest snapshot
   // <= tick_index into recon_app, then AppInputReplay the reconstructed input log forward to
   // tick_index -- the contract-7 restore-and-replay. recon_app's storage holds the app AT that tick
   // on success (its Persist/Temp are the inspector's values). Returns false (out->Reconstructed
@@ -1274,7 +1274,7 @@ namespace ImGui
 
 
   // Transport source (F63)
-  // F63 FILE-mode transport view over a run index (docs/playback-debugger-design.md section 4).
+  // F63 FILE-mode transport view over a run index (docs/designs.md (playback-debugger-design) section 4).
   // Count == AppRunTickCount(view->Run). Show(view, i) lands on tick index i: it sets
   // ShownTick = Ticks[i].Tick and decodes Ticks[i].FrameImage into view->Pixels via view->Decode.
   // Returns false only on an invalid index or a hard decode failure; a tick with no frame image
@@ -1327,7 +1327,7 @@ namespace ImGui
   //---------------------------------------------------------------------------
   // Meta-only run recorder (F70): a preview session records without video
   //---------------------------------------------------------------------------
-  // The previewer (docs/previewer-design.md section 10) closes author -> play -> record ->
+  // The previewer (docs/designs.md (previewer-design) section 10) closes author -> play -> record ->
   // debug with zero compiles: a preview session drives its own ImGuiApp under a fixed dt and
   // exports an F61 run container. The bytes are exactly what the video recorder embeds -- the
   // IMAVMETA header + Identity/Frame/IoFrame/InputHdr/InputFrame/StateSnapshot/Digest records
@@ -1851,7 +1851,7 @@ namespace ImGui
 
 
   // Headless test harness
-  // Runs queued tests to completion and returns a ctest-ready exit code (see docs/av-design.md).
+  // Runs queued tests to completion and returns a ctest-ready exit code (see docs/designs.md (av-design)).
   IMGUI_API int AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessConfig* config);
 } // namespace ImGui
 

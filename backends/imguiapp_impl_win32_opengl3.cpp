@@ -45,10 +45,17 @@ namespace
         ImU64          CaptureLastReturned; // highest FrameID.FrameIndex handed out; a repeat call with no new frame returns false
         ImVector<char> CaptureRead;         // glReadPixels scratch, GL's bottom-up row order
         ImVector<char> CaptureRgba;         // top-down RGBA handed to callers; valid until the next capture
+
+        // Platform window/loop state sidecar, owned by app->PlatformData (freed in ShutdownPlatform).
+        ImGuiAppPlatformState* State;
+
+        ImGuiApp_ImplWin32OpenGL3_Data() { memset((void*)this, 0, sizeof(*this)); }
     };
 
-    ImGuiApp_ImplWin32OpenGL3_Data GBackend;
-    static ImGuiAppPlatformState* GState = nullptr;
+    // IM_NEW'd at Init, freed by ShutdownBackend; viewport hooks reach it via the accessor (docs/style-deltas.md Δ4).
+    ImGuiApp_ImplWin32OpenGL3_Data* GBackend = nullptr;
+
+    ImGuiApp_ImplWin32OpenGL3_Data* ImGuiApp_ImplWin32OpenGL3_GetBackendData() { return GBackend; }
 
     bool IsInitInfoValid(const ImGuiApp_ImplWin32OpenGL3_InitInfo* init_info)
     {
@@ -90,13 +97,14 @@ namespace
 
     static void Hook_Renderer_CreateWindow(ImGuiViewport* viewport)
     {
-        IM_ASSERT(GState != nullptr);
+        ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData();
+        IM_ASSERT(bd != nullptr && bd->State != nullptr);
         IM_ASSERT(viewport->RendererUserData == nullptr);
-        if (GState == nullptr)
+        if (bd == nullptr || bd->State == nullptr)
             return;
 
         ImGuiAppPlatformState::WGLWindowData* data = IM_NEW(ImGuiAppPlatformState::WGLWindowData)();
-        if (!CreateDeviceWGL((HWND)viewport->PlatformHandle, data, &GState->MainGLRC))
+        if (!CreateDeviceWGL((HWND)viewport->PlatformHandle, data, &bd->State->MainGLRC))
         {
             IM_DELETE(data);
             return;
@@ -116,31 +124,34 @@ namespace
     }
 
     // Per-viewport pacing wrappers: installed into platform_io, so they run as context-free
-    // callbacks and reach backend state through the GBackend singleton. See the pacing fields
-    // on ImGuiApp_ImplWin32OpenGL3_Data.
+    // callbacks and reach backend state through the GetBackendData accessor. See the pacing
+    // fields on ImGuiApp_ImplWin32OpenGL3_Data.
     static void Hook_Platform_RenderWindow(ImGuiViewport* viewport, void*)
     {
-        if (GState == nullptr)
+        ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData();
+        if (bd == nullptr || bd->State == nullptr)
             return;
-        const bool present = ImGui::AppPacerViewportShouldPresent(GBackend.App, viewport);
-        GBackend.VpSkip.SetBool(viewport->ID, !present);
+        const bool present = ImGui::AppPacerViewportShouldPresent(bd->App, viewport);
+        bd->VpSkip.SetBool(viewport->ID, !present);
         if (!present)
             return;
         if (ImGuiAppPlatformState::WGLWindowData* data = (ImGuiAppPlatformState::WGLWindowData*)viewport->RendererUserData)
-            wglMakeCurrent(data->hDC, GState->MainGLRC);
+            wglMakeCurrent(data->hDC, bd->State->MainGLRC);
     }
 
     static void Pace_Renderer_RenderWindow(ImGuiViewport* viewport, void* render_arg)
     {
-        if (GBackend.VpSkip.GetBool(viewport->ID))
+        ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData();
+        if (bd == nullptr || bd->VpSkip.GetBool(viewport->ID))
             return;
-        if (GBackend.UnderlyingRendererRenderWindow != nullptr)
-            GBackend.UnderlyingRendererRenderWindow(viewport, render_arg);
+        if (bd->UnderlyingRendererRenderWindow != nullptr)
+            bd->UnderlyingRendererRenderWindow(viewport, render_arg);
     }
 
     static void Hook_Renderer_SwapBuffers(ImGuiViewport* viewport, void*)
     {
-        if (GBackend.VpSkip.GetBool(viewport->ID))
+        ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData();
+        if (bd == nullptr || bd->VpSkip.GetBool(viewport->ID))
             return;
         if (ImGuiAppPlatformState::WGLWindowData* data = (ImGuiAppPlatformState::WGLWindowData*)viewport->RendererUserData)
             ::SwapBuffers(data->hDC);
@@ -176,7 +187,9 @@ namespace
         if (bd->PlatformBackendInitialized)
             ImGui_ImplWin32_Shutdown();
 
-        *bd = ImGuiApp_ImplWin32OpenGL3_Data();
+        if (GBackend == bd)
+            GBackend = nullptr;
+        IM_DELETE(bd);
     }
 
     void NewFrame(void* user_data)
@@ -234,8 +247,8 @@ namespace
     // GL_BACK still holds it); a repeat call with no new frame rendered returns false.
     bool CaptureFrame(ImGuiApp* app, ImGuiAppAVFrame* out_frame)
     {
-        ImGuiApp_ImplWin32OpenGL3_Data* bd = &GBackend;
-        if (out_frame == nullptr || bd->MainDC == nullptr || bd->MainGLRC == nullptr)
+        ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData();
+        if (bd == nullptr || out_frame == nullptr || bd->MainDC == nullptr || bd->MainGLRC == nullptr)
             return false;
         if (app != nullptr && app->FrameID.FrameIndex <= bd->CaptureLastReturned)
             return false;   // drain/gap call: this frame was already handed out
@@ -284,28 +297,31 @@ static bool ImGuiApp_ImplWin32OpenGL3_Init(const ImGuiApp_ImplWin32OpenGL3_InitI
         return false;
 
     ImGuiX::Shutdown();
+    IM_ASSERT(GBackend == nullptr && "Already initialized a platform backend!");
 
-    GBackend.Hwnd = init_info->Hwnd;
-    GBackend.MainDC = init_info->MainDC;
-    GBackend.MainGLRC = init_info->MainGLRC;
+    GBackend = IM_NEW(ImGuiApp_ImplWin32OpenGL3_Data)();
+    GBackend->Hwnd = init_info->Hwnd;
+    GBackend->MainDC = init_info->MainDC;
+    GBackend->MainGLRC = init_info->MainGLRC;
 
     if (!ImGui_ImplWin32_InitForOpenGL(init_info->Hwnd))
     {
-        GBackend = ImGuiApp_ImplWin32OpenGL3_Data();
+        IM_DELETE(GBackend);
+        GBackend = nullptr;
         return false;
     }
-    GBackend.PlatformBackendInitialized = true;
+    GBackend->PlatformBackendInitialized = true;
 
     if (!ImGui_ImplOpenGL3_Init(init_info->GlslVersion))
     {
-        ShutdownBackend(&GBackend);
+        ShutdownBackend(GBackend);
         return false;
     }
-    GBackend.RendererBackendInitialized = true;
+    GBackend->RendererBackendInitialized = true;
 
     ImGuiXInitInfo imguix_init_info;
     imguix_init_info.Backend.Name = "imguiapp_impl_win32_opengl3";
-    imguix_init_info.Backend.UserData = &GBackend;
+    imguix_init_info.Backend.UserData = GBackend;
     imguix_init_info.Backend.Shutdown = ShutdownBackend;
     imguix_init_info.Backend.NewFrame = NewFrame;
     imguix_init_info.Backend.RenderDrawData = RenderDrawData;
@@ -313,7 +329,7 @@ static bool ImGuiApp_ImplWin32OpenGL3_Init(const ImGuiApp_ImplWin32OpenGL3_InitI
 
     if (!ImGuiX::Initialize(&imguix_init_info))
     {
-        ShutdownBackend(&GBackend);
+        ShutdownBackend(GBackend);
         return false;
     }
 
@@ -331,8 +347,6 @@ bool ImGuiApp_ImplWin32OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& confi
     ImGuiAppPlatformState* state = IM_NEW(ImGuiAppPlatformState)();
     app->PlatformData = state;
 
-    GState = state;
-
     ImGui_ImplWin32_EnableDpiAwareness();
     const float main_scale    = ImGui_ImplWin32_GetDpiScaleForMonitor(::MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY));
     const int   window_width  = (int)(config.WindowWidth  * main_scale);
@@ -345,16 +359,12 @@ bool ImGuiApp_ImplWin32OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& confi
     ::RegisterClassExA(&state->WindowClass);
     state->Hwnd = ::CreateWindowA(state->WindowClass.lpszClassName, config.WindowTitle, WS_OVERLAPPEDWINDOW, 100, 100, window_width, window_height, nullptr, nullptr, state->WindowClass.hInstance, nullptr);
     if (state->Hwnd == nullptr)
-    {
-        GState = nullptr;
         return false;
-    }
 
     if (!CreateDeviceWGL(state->Hwnd, &state->MainWindow, &state->MainGLRC))
     {
         ::DestroyWindow(state->Hwnd);
         state->Hwnd = nullptr;
-        GState = nullptr;
         return false;
     }
     wglMakeCurrent(state->MainWindow.hDC, state->MainGLRC);
@@ -372,9 +382,9 @@ bool ImGuiApp_ImplWin32OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& confi
     if (!ImGuiApp_ImplWin32OpenGL3_Init(&init_info))
     {
         ImGuiX::DestroyContext();
-        GState = nullptr;
         return false;
     }
+    GBackend->State = state;   // viewport hooks reach the window/GL state through the backend data
 
     ImGui::GetIO().ConfigFlags |= config.ConfigFlags;
 
@@ -392,8 +402,8 @@ bool ImGuiApp_ImplWin32OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& confi
 
         // Wrap the upstream GL renderer's per-viewport draw (registered by
         // ImGui_ImplOpenGL3_Init above) so a pacing-skipped viewport draws nothing.
-        GBackend.App = app;
-        GBackend.UnderlyingRendererRenderWindow = platform_io.Renderer_RenderWindow;
+        GBackend->App = app;
+        GBackend->UnderlyingRendererRenderWindow = platform_io.Renderer_RenderWindow;
         platform_io.Renderer_RenderWindow = Pace_Renderer_RenderWindow;
     }
 
@@ -427,11 +437,14 @@ void ImGuiApp_ImplWin32OpenGL3_ShutdownPlatform(ImGuiApp* app)
         ::UnregisterClassA(state->WindowClass.lpszClassName, state->WindowClass.hInstance);
         state->WindowClass = {};
     }
-    if (GState == state)
-        GState = nullptr;
-    GBackend.App = nullptr;
-    GBackend.UnderlyingRendererRenderWindow = nullptr;
-    GBackend.VpSkip.Clear();
+    if (ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData())
+    {
+        if (bd->State == state)
+            bd->State = nullptr;
+        bd->App = nullptr;
+        bd->UnderlyingRendererRenderWindow = nullptr;
+        bd->VpSkip.Clear();
+    }
 
     IM_DELETE(state);
     app->PlatformData = nullptr;

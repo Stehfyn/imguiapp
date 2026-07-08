@@ -5,7 +5,7 @@ Decision (2026-07-02): hand-roll the node canvas inside ImGuiAppLayer. Rationale
 1. **Phase coherence by construction.** imnodes stores node origins in screen-flavored "grid"
    pixels and measures into pixel rects, forcing our model↔pixel seam (zoom emulation, the model
    cache, per-frame style scaling, decoration transforms). Every bug in the 2026-07 series
-   (docs/phase-coherence.md) was seam friction. A canvas whose CORE is model-space — one transform,
+   (docs/bug-classes.md) was seam friction. A canvas whose CORE is model-space — one transform,
    applied at draw, measurements returned in model units — cannot express those bugs.
 2. **Zoom native**, not emulated through a style/font/position trampoline.
 3. **No untouchable upstream in the hot path** (the no-upstream-edits rule stays; this moves the
@@ -64,7 +64,7 @@ menu-pending, wheel = zoom, Ctrl+click = toggle-select). Drag deltas divide by Z
 ### 2.4 Measurement feedback loops
 Node size = measured content each frame (imgui group rect / Zoom captured with the SAME Zoom used to
 place it — exact by construction). Uniform-width constraints (layer column) stay host-side with
-their deadband (§1b of phase-coherence.md); the engine gives them exact model measurements so the
+their deadband (§1b of bug-classes.md); the engine gives them exact model measurements so the
 loop noise shrinks to glyph rounding only.
 
 ### 2.5 Files + naming

@@ -39,9 +39,12 @@ namespace
         int                      SurfaceHeight;
         bool                     PlatformBackendInitialized;
         bool                     RendererBackendInitialized;
+
+        ImGuiApp_ImplSDL2WGPU_Data() { memset((void*)this, 0, sizeof(*this)); }
     };
 
-    ImGuiApp_ImplSDL2WGPU_Data GBackend;
+    // IM_NEW'd at Init, freed by ShutdownBackend (docs/style-deltas.md Δ4).
+    ImGuiApp_ImplSDL2WGPU_Data* GBackend = nullptr;
 
     bool IsInitInfoValid(const ImGuiApp_ImplSDL2WGPU_InitInfo* init_info)
     {
@@ -256,7 +259,9 @@ namespace
         if (bd->Instance != nullptr)
             wgpuInstanceRelease(bd->Instance);
 
-        *bd = ImGuiApp_ImplSDL2WGPU_Data();
+        if (GBackend == bd)
+            GBackend = nullptr;
+        IM_DELETE(bd);
     }
 
     void NewFrame(void* user_data)
@@ -354,45 +359,47 @@ static bool ImGuiApp_ImplSDL2WGPU_Init(const ImGuiApp_ImplSDL2WGPU_InitInfo* ini
         return false;
 
     ImGuiX::Shutdown();
+    IM_ASSERT(GBackend == nullptr && "Already initialized a platform backend!");
 
-    GBackend.Window = (SDL_Window*)init_info->Window;
-    GBackend.CanvasSelector = init_info->CanvasSelector != nullptr ? init_info->CanvasSelector : "#canvas";
+    GBackend = IM_NEW(ImGuiApp_ImplSDL2WGPU_Data)();
+    GBackend->Window = (SDL_Window*)init_info->Window;
+    GBackend->CanvasSelector = init_info->CanvasSelector != nullptr ? init_info->CanvasSelector : "#canvas";
 
-    if (!InitWGPU(&GBackend))
+    if (!InitWGPU(GBackend))
     {
-        ShutdownBackend(&GBackend);
+        ShutdownBackend(GBackend);
         return false;
     }
 
-    if (!ImGui_ImplSDL2_InitForOther(GBackend.Window))
+    if (!ImGui_ImplSDL2_InitForOther(GBackend->Window))
     {
-        ShutdownBackend(&GBackend);
+        ShutdownBackend(GBackend);
         return false;
     }
-    GBackend.PlatformBackendInitialized = true;
+    GBackend->PlatformBackendInitialized = true;
 
     ImGui_ImplWGPU_InitInfo wgpu_init_info;
-    wgpu_init_info.Device = GBackend.Device;
+    wgpu_init_info.Device = GBackend->Device;
     wgpu_init_info.NumFramesInFlight = 3;
-    wgpu_init_info.RenderTargetFormat = GBackend.SurfaceConfiguration.format;
+    wgpu_init_info.RenderTargetFormat = GBackend->SurfaceConfiguration.format;
     wgpu_init_info.DepthStencilFormat = WGPUTextureFormat_Undefined;
     if (!ImGui_ImplWGPU_Init(&wgpu_init_info))
     {
-        ShutdownBackend(&GBackend);
+        ShutdownBackend(GBackend);
         return false;
     }
-    GBackend.RendererBackendInitialized = true;
+    GBackend->RendererBackendInitialized = true;
 
     ImGuiXInitInfo imguix_init_info;
     imguix_init_info.Backend.Name = "imguiapp_impl_sdl2_wgpu";
-    imguix_init_info.Backend.UserData = &GBackend;
+    imguix_init_info.Backend.UserData = GBackend;
     imguix_init_info.Backend.Shutdown = ShutdownBackend;
     imguix_init_info.Backend.NewFrame = NewFrame;
     imguix_init_info.Backend.RenderDrawData = RenderDrawData;
 
     if (!ImGuiX::Initialize(&imguix_init_info))
     {
-        ShutdownBackend(&GBackend);
+        ShutdownBackend(GBackend);
         return false;
     }
 

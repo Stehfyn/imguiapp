@@ -3,8 +3,8 @@
 Successor to [feature-audit-2026-07-04.md](feature-audit-2026-07-04.md) (v1: 23 agents, 470 claims).
 v1 established the code-verified baseline and ranked the remaining gaps per area. v2 confirms those gaps
 are now closed by the explicit feature series
-[archive/feature-complete-checklist.md](archive/feature-complete-checklist.md) (F01–F78.5, archived at 100%;
-the live [feature-complete-checklist.md](feature-complete-checklist.md) is now the v2 post-100 tracker), each item shipped with at least
+[feature-complete-checklist.md](feature-complete-checklist.md) (F01–F78.5, archived at 100%;
+[feature-complete-checklist-v2.md](feature-complete-checklist-v2.md) is the v2 post-100 tracker), each item shipped with at least
 one test on `imguix-tests` / `imguix-core-tests` / `imguix-headless-verify`, or parked by intent with a
 doc note. The checklist's per-item DONE notes are the authoritative per-feature evidence (function names +
 test names + suite counts); this doc is the roll-up + the closure verdict.
