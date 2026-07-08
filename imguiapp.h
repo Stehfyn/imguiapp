@@ -70,6 +70,7 @@ Index of this file:
 struct ImGuiApp;
 struct ImGuiAppBase;
 struct ImGuiAppCommandLayer;
+struct ImGuiAppDisplayNodeBase;
 struct ImGuiAppLayer;
 struct ImGuiAppLayerBase;
 struct ImGuiAppNodeBase;
@@ -181,8 +182,8 @@ namespace ImGui
     // (host_kind/host_label = owning window/sidebar, or null), labels the control, registers its instance
     // storage. The typed template caller then wires _InstanceID/_InstanceData and ResolveDependencies.
     IMGUI_API void        AppControlRegisterStorage(ImGuiApp* app, ImGuiAppControlBase* control, const char* name, ImGuiID data_type_id, ImGuiID instance, void* instance_data, bool snapshottable, int inst_size, int temp_offset, int temp_size, void (*destroy)(void*), const char* host_kind, const char* host_label);
-    // Type-erased tail: append the wired node to its owning list and initialize it.
-    IMGUI_API void        AppControlPush(ImGuiApp* app, ImVector<ImGuiAppNodeBase*>* list, ImGuiAppNodeBase* node);
+    // Type-erased tail: append the wired node to its owning list, initialize and attach it.
+    IMGUI_API void        AppControlPush(ImGuiApp* app, ImVector<ImGuiAppDisplayNodeBase*>* list, ImGuiAppDisplayNodeBase* node);
     IMGUI_API void        UnregisterAppStorage(ImGuiApp* app, ImGuiID id);                                                                            // destroys + removes one entry
     IMGUI_API void        ClearAppStorage(ImGuiApp* app);
 
@@ -790,16 +791,6 @@ IMGUI_API ImGuiID ImAppHashType(ImGuiID type_id, ImGuiID instance);
 // [SECTION] App object model (layers, items, controls, ImGuiApp, adapter/control templates)
 //-----------------------------------------------------------------------------
 
-struct ImGuiAppLayerBase : ImGuiAppInterface
-{
-    char Label[IM_LABEL_SIZE]; // type name by default; the app can override
-
-    virtual void OnAttach(ImGuiApp*) const        = 0;
-    virtual void OnDetach(ImGuiApp*) const        = 0;
-    virtual void OnUpdate(ImGuiApp*, float) const = 0;
-    virtual void OnDraw(const ImGuiApp*) const    = 0;
-};
-
 // A node: an authorable item in the composition tree + the live-mirror surface -- compile-time-erased
 // data identity re-exposed on the type-erased base, so tools inspect any node without knowing its
 // concrete template pack. Mirror hooks default inert (imguiapp.cpp); ImGuiAppControlMirrorAdapter<>
@@ -808,17 +799,17 @@ struct ImGuiAppNodeBase : ImGuiAppInterface
 {
     char Label[IM_LABEL_SIZE]; // type name by default; deduplicated with "##N" on real collisions
 
-    // Authored style/color overrides. The render loop brackets each item's submission with them via
-    // ImGui::PushAppStyleMods/PushAppColorMods + the matching Pop (imgui idiom: explicit push/pop around
-    // submission). Plain data, not a virtual hook -- this IS the per-item style customization point.
-    ImVector<ImGuiAppStyleModDesc> StyleMods;
-    ImVector<ImGuiAppColorModDesc> ColorMods;
-
+    // Lifetime bracket: once per node object (push creates -> OnInitialize; pop destroys -> OnShutdown).
     virtual void OnInitialize(ImGuiApp*) const                         = 0;
     virtual void OnShutdown(ImGuiApp*) const                           = 0;
     virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*) const = 0;
-    virtual void OnUpdate(const ImGuiApp* app, float dt) const         = 0;
+    virtual void OnUpdate(ImGuiApp* app, float dt) const               = 0;
     virtual void OnDraw(const ImGuiApp*) const                         = 0;
+
+    // Membership bracket, distinct from the lifetime pair: push fires OnInitialize -> OnAttach, pop
+    // fires OnDetach -> OnShutdown, and recomposition may detach/re-attach a node without destroying it.
+    virtual void OnAttach(ImGuiApp*) const                             { }
+    virtual void OnDetach(ImGuiApp*) const                             { }
 
     // Data identity
     virtual ImGuiID GetDataID() const;                                                  // instance-qualified storage key of PersistData
@@ -838,13 +829,29 @@ struct ImGuiAppNodeBase : ImGuiAppInterface
     virtual bool    SetDependencyBinding(ImGuiApp* app, const ImGuiAppDataBinding* bind); // re-route one declared dependency at runtime (Composer rewiring); false = TypeID not in pack
 };
 
-struct ImGuiAppWindowBase : ImGuiAppNodeBase
+// Type marker: a layer node -- a domain in the stack (Task/Command/Status/Layout/Display or custom);
+// N3 moves each domain's hosted node list onto its layer.
+struct ImGuiAppLayerBase : ImGuiAppNodeBase
 {
-    bool                           Open     = true;
-    ImGuiWindow*                   Window   = nullptr;
-    ImGuiViewport*                 Viewport = nullptr;
-    ImGuiWindowFlags               Flags    = ImGuiWindowFlags_None;
-    ImVector<ImGuiAppNodeBase*>    Children;
+};
+
+// A display node: submits ImGui widgets during the draw phase. The display layer brackets each
+// node's submission with the authored style/color overrides below via ImGui::PushAppStyleMods/
+// PushAppColorMods + the matching Pop (imgui idiom: explicit push/pop around submission). Plain
+// data, not a virtual hook -- this IS the per-item style customization point.
+struct ImGuiAppDisplayNodeBase : ImGuiAppNodeBase
+{
+    ImVector<ImGuiAppStyleModDesc> StyleMods;
+    ImVector<ImGuiAppColorModDesc> ColorMods;
+};
+
+struct ImGuiAppWindowBase : ImGuiAppDisplayNodeBase
+{
+    bool                                Open     = true;
+    ImGuiWindow*                        Window   = nullptr;
+    ImGuiViewport*                      Viewport = nullptr;
+    ImGuiWindowFlags                    Flags    = ImGuiWindowFlags_None;
+    ImVector<ImGuiAppDisplayNodeBase*>  Children;
 
     // Optional first-use placement (applied with ImGuiCond_FirstUseEver, so saved .ini wins).
     bool   HasInitialPlacement = false;
@@ -859,8 +866,9 @@ struct ImGuiAppSidebarBase : ImGuiAppWindowBase
 };
 
 // Type marker: a data-carrying node (Persist/Temp/dependency pack behind the ImGuiAppNodeBase
-// mirror surface). Kept while hosted/free lists and the adapter Base parameter stay control-typed (N1).
-struct ImGuiAppControlBase : ImGuiAppNodeBase
+// mirror surface). Display-based while every control renders in a display slot; N4/N5 split the
+// pure-compute kind out to the Task layer.
+struct ImGuiAppControlBase : ImGuiAppDisplayNodeBase
 {
 };
 
@@ -884,10 +892,11 @@ struct ImGuiAppInterfaceAdapterBase : ImGuiAppInterface
 
 struct ImGuiAppLayer : ImGuiAppLayerBase
 {
-    virtual void OnAttach(ImGuiApp*)        const override { }
-    virtual void OnDetach(ImGuiApp*)        const override { }
-    virtual void OnUpdate(ImGuiApp*, float) const override { }
-    virtual void OnDraw(const ImGuiApp*)    const override { }
+    virtual void OnInitialize(ImGuiApp*)                         const override { }
+    virtual void OnShutdown(ImGuiApp*)                           const override { }
+    virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*) const override { }
+    virtual void OnUpdate(ImGuiApp*, float)                      const override { }
+    virtual void OnDraw(const ImGuiApp*)                         const override { }
 };
 
 struct ImGuiAppTaskLayer : ImGuiAppLayer
@@ -930,10 +939,18 @@ struct ImGuiAppDisplayLayer : ImGuiAppLayer
     virtual void OnDraw(const ImGuiApp*)    const override final;
 };
 
-struct ImGuiAppBase : ImGuiAppInterface
+// Root node: driven by the frame phases (OnDrawFrame/OnRenderFrame/OnPresentFrame), not the node
+// hooks; inert here so the app participates in the one tree (D2).
+struct ImGuiAppBase : ImGuiAppNodeBase
 {
     virtual void OnExecuteCommand(ImGuiAppCommand cmd) = 0;
     bool         ShutdownPending                       = false;
+
+    virtual void OnInitialize(ImGuiApp*)                         const override { }
+    virtual void OnShutdown(ImGuiApp*)                           const override { }
+    virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*) const override { }
+    virtual void OnUpdate(ImGuiApp*, float)                      const override { }
+    virtual void OnDraw(const ImGuiApp*)                         const override { }
 };
 
 struct ImGuiAppStorageEntry
@@ -984,25 +1001,25 @@ struct ImGuiAppInputLog
 struct ImGuiApp : ImGuiAppBase
 {
     // State: composition (push order), platform/presentation, services (null = inactive)
-    ImGuiStorage                   Data;                          // id-keyed instance storage (controls' Persist/Temp blocks)
-    ImVector<ImGuiAppStorageEntry> StorageEntries;
-    ImVector<ImGuiAppLayerBase*>   Layers;
-    ImVector<ImGuiAppWindowBase*>  Windows;
-    ImVector<ImGuiAppSidebarBase*> Sidebars;
-    ImVector<ImGuiAppNodeBase*>    Controls;
-    ImVector<ImGuiAppNodeBase*>    UpdateOrder;                   // dependency-sorted OnUpdate iteration (AppRebuildUpdateOrder)
-    int                            CompositionRevision = 0;       // bumped by every storage register/unregister (pop+repush of the same type still advances it)
-    int                            UpdateOrderRevision = -1;      // revision UpdateOrder + the cached dependency bindings were built at
-    const char*                    PlatformName        = nullptr; // app label for diagnostics (StatusLayer null-guards it); from config
-    void*                          PlatformWindowHandle = nullptr; // main window handle (set by the host's InitPlatform; read by the sibling platform host's run loop)
-    ImVec4                         ClearColor;
-    void*                          PlatformData        = nullptr; // platform host window/loop state (io userdata-slot analog; owned by the backend's InitPlatform/ShutdownPlatform)
-    void*                          BackendData         = nullptr; // host backend data (io.BackendXxxUserData analog; owned by ImGuiApp_ImplXXX_Init/Shutdown)
-    ImGuiAppWAL*                   WAL                 = nullptr; // optional write-ahead logger (caller-owned); null = silent
-    ImGuiAppRecorder*              Recorder            = nullptr; // active recording (AppRecordBegin registers, AppRecordEnd clears); null = none
-    ImGuiAppFrameID                FrameID;                       // stamped at the top of OnDrawFrame; correlation key for WAL/video/sidecar
-    ImGuiAppPacer                  Pacer;                         // advisory; consulted by the backend run loop via AppPacerWait
-    bool                           Initialized         = false;
+    ImGuiStorage                       Data;                          // id-keyed instance storage (controls' Persist/Temp blocks)
+    ImVector<ImGuiAppStorageEntry>     StorageEntries;
+    ImVector<ImGuiAppLayerBase*>       Layers;
+    ImVector<ImGuiAppWindowBase*>      Windows;
+    ImVector<ImGuiAppSidebarBase*>     Sidebars;
+    ImVector<ImGuiAppDisplayNodeBase*> Controls;
+    ImVector<ImGuiAppNodeBase*>        UpdateOrder;                   // dependency-sorted OnUpdate iteration (AppRebuildUpdateOrder)
+    int                                CompositionRevision = 0;       // bumped by every storage register/unregister (pop+repush of the same type still advances it)
+    int                                UpdateOrderRevision = -1;      // revision UpdateOrder + the cached dependency bindings were built at
+    const char*                        PlatformName        = nullptr; // app label for diagnostics (StatusLayer null-guards it); from config
+    void*                              PlatformWindowHandle = nullptr; // main window handle (set by the host's InitPlatform; read by the sibling platform host's run loop)
+    ImVec4                             ClearColor;
+    void*                              PlatformData        = nullptr; // platform host window/loop state (io userdata-slot analog; owned by the backend's InitPlatform/ShutdownPlatform)
+    void*                              BackendData         = nullptr; // host backend data (io.BackendXxxUserData analog; owned by ImGuiApp_ImplXXX_Init/Shutdown)
+    ImGuiAppWAL*                       WAL                 = nullptr; // optional write-ahead logger (caller-owned); null = silent
+    ImGuiAppRecorder*                  Recorder            = nullptr; // active recording (AppRecordBegin registers, AppRecordEnd clears); null = none
+    ImGuiAppFrameID                    FrameID;                       // stamped at the top of OnDrawFrame; correlation key for WAL/video/sidecar
+    ImGuiAppPacer                      Pacer;                         // advisory; consulted by the backend run loop via AppPacerWait
+    bool                               Initialized         = false;
 
     // Lifecycle. One frame = the four phases in order: draw (frame id, NewFrame, app layers/widgets),
     // render (draw data -> GPU, platform windows), encode (recorder pump reads the frame just
@@ -1111,7 +1128,7 @@ struct ImGuiAppInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistData
     //
     //
     virtual void OnUpdate(float, PersistDataT*, const TempDataT*, const TempDataT*, const DataDependencies*...) const override {}
-    virtual void OnUpdate(const ImGuiApp* app, float dt) const override final { IM_UNUSED(app); ApplyUpdate(dt, DepSeq()); _InstanceData->LastTempData = _InstanceData->TempData; }
+    virtual void OnUpdate(ImGuiApp* app, float dt) const override final { IM_UNUSED(app); ApplyUpdate(dt, DepSeq()); _InstanceData->LastTempData = _InstanceData->TempData; }
 
     //
     //
@@ -1244,7 +1261,7 @@ struct ImGuiAppWindow : ImGuiAppWindowBase
     virtual void OnInitialize(ImGuiApp*)                         const override { };
     virtual void OnShutdown(ImGuiApp*)                           const override { };
     virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*) const override { };
-    virtual void OnUpdate(const ImGuiApp* app, float dt)         const override { };
+    virtual void OnUpdate(ImGuiApp* app, float dt)               const override { };
     virtual void OnDraw(const ImGuiApp*)                         const override { };
 };
 
@@ -1254,7 +1271,7 @@ struct ImGuiAppSidebar : ImGuiAppSidebarBase
     virtual void OnInitialize(ImGuiApp*)                         const override { };
     virtual void OnShutdown(ImGuiApp*)                           const override { };
     virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*) const override { };
-    virtual void OnUpdate(const ImGuiApp* app, float dt)         const override { };
+    virtual void OnUpdate(ImGuiApp* app, float dt)               const override { };
     virtual void OnDraw(const ImGuiApp*)                         const override { };
 };
 

@@ -25,6 +25,13 @@ kinds — so the mirror becomes an isomorphism instead of a translation.
 - **D5 — OnDraw leaves the shared base.** Each layer defines its nodes' phase contract; only
   display-node bases declare OnDraw. Kills the inert-OnDraw default permanently
   (imguiapp.cpp:802-807 called OnDraw on free compute controls that never draw).
+- **D7 — lifetime and membership are distinct brackets.** OnInitialize/OnShutdown fire once per
+  node object; OnAttach/OnDetach (inert defaults on the base) fire on entering/leaving the live
+  tree. Push = OnInitialize -> OnAttach; pop = OnDetach -> OnShutdown. Recomposition may
+  detach/re-attach without destroying.
+- **D8 — StyleMods/ColorMods are display-only.** They live on `ImGuiAppDisplayNodeBase`
+  (windows, sidebars, hosted/free controls), not the shared node base: style brackets widget
+  submission, and non-display nodes never submit.
 - **D6 — push grammar per layer.** `PushAppWindow` / `PushAppSidebar` stay (display).
   `PushWindowControl` / `PushSidebarControl` become the child-window push. Free `PushAppControl`
   dies. `PushAppTask` is born. Model enum appends `ImGuiAppNodeKind_Task` (append-only,
@@ -42,11 +49,16 @@ kinds — so the mirror becomes an isomorphism instead of a translation.
   `Children`, `app->Controls`, and `UpdateOrder` element type generalized to
   `ImGuiAppNodeBase*`. `ForEachAppControl` → `ForEachAppNode`, `ShutdownAppControls` →
   `ShutdownAppNodes`; no adapter change was needed (Base parameter unchanged).
+- **N2** — Layer is a node; display base split out. `ImGuiAppLayerBase` is a marker over
+  `ImGuiAppNodeBase`; concrete layers keep OnAttach/OnDetach as membership hooks (D7) and inherit
+  inert lifetime hooks from `ImGuiAppLayer`. `ImGuiAppBase` derives the node base (root node,
+  hooks inert; frame phases drive it). `ImGuiAppDisplayNodeBase` carries StyleMods/ColorMods (D8);
+  WindowBase/ControlBase derive it; display lists (`Children`, `app->Controls`) are display-typed,
+  `UpdateOrder` stays node-typed. The shared OnUpdate hook takes a mutable app (layers rebuild
+  order/dispatch through it; the control adapter ignores it). All push/pop paths fire the D7
+  double bracket. IMGUIAPP_PREVIEW_ABI bumped.
 
 ## Phases (each lands green: build + 7 ctest suites incl. style/section/indent ratchets)
-- **N2 — Layer is a node.** `ImGuiAppLayerBase` folds onto `ImGuiAppNodeBase`; reconcile
-  OnAttach/OnDetach vs OnInitialize/OnShutdown (one lifecycle pair survives). App becomes the
-  root node owning the layer list as Children (ordered walk preserved).
 - **N3 — collections migrate into their layers.** `app->Windows/Sidebars/Controls` flat vectors
   move into the Display layer node; cross-cutting services (storage registry, dependency-sorted
   update order, WAL, composition ID, state history, mirror walk) iterate the tree. The global

@@ -616,7 +616,7 @@ ImGuiAppPacer::ImGuiAppPacer()
 // toggles mid-frame. File-local render-loop detail, not a polymorphic hook -- items expose StyleMods/ColorMods as data.
 namespace
 {
-ImGuiAppStyleScope PushItemStyle(const ImGuiAppNodeBase* item)
+ImGuiAppStyleScope PushItemStyle(const ImGuiAppDisplayNodeBase* item)
 {
     ImGuiAppStyleScope s;
     s.Vars   = ImGui::PushAppStyleMods(item->StyleMods.Data, item->StyleMods.Size);
@@ -745,7 +745,7 @@ void ImGuiAppDisplayLayer::OnDraw(const ImGuiApp* app) const
         PopItemStyle(sidebar_scope);
 
         // Controls render their own windows; submit them outside the sidebar's Begin/End.
-        for (ImGuiAppNodeBase* control : sidebar->Children)
+        for (ImGuiAppDisplayNodeBase* control : sidebar->Children)
         {
             const ImGuiAppStyleScope control_scope = PushItemStyle(control);
             control->OnDraw(app);
@@ -787,7 +787,7 @@ void ImGuiAppDisplayLayer::OnDraw(const ImGuiApp* app) const
 
             // Hosted controls render INSIDE the host window (child regions, not their own Begin/End).
             // Style mods bracket OnDraw only: they style the control's region but not its popups.
-            for (ImGuiAppNodeBase* control : window->Children)
+            for (ImGuiAppDisplayNodeBase* control : window->Children)
             {
                 const ImGuiAppStyleScope control_scope = PushItemStyle(control);
                 control->OnDraw(app);
@@ -799,7 +799,7 @@ void ImGuiAppDisplayLayer::OnDraw(const ImGuiApp* app) const
         PopItemStyle(window_scope);
     }
 
-    for (ImGuiAppNodeBase* control : app->Controls)
+    for (ImGuiAppDisplayNodeBase* control : app->Controls)
     {
         const ImGuiAppStyleScope control_scope = PushItemStyle(control);
         control->OnDraw(app);
@@ -937,6 +937,7 @@ void PopAppLayer(ImGuiApp* app)
     app->Layers.pop_back();
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "pop layer %s", layer->Label);
     layer->OnDetach(app);
+    layer->OnShutdown(app);
     IM_DELETE(layer);
 }
 
@@ -954,6 +955,7 @@ void PopAppSidebar(ImGuiApp* app)
     app->Sidebars.pop_back();
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "pop sidebar '%s'", sidebar->Label);
     ShutdownAppNodes(app, sidebar->Children);
+    sidebar->OnDetach(app);
     sidebar->OnShutdown(app);
     IM_DELETE(sidebar);
 }
@@ -973,6 +975,7 @@ void PopAppWindow(ImGuiApp* app)
     app->Windows.pop_back();
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "pop window '%s'", window->Label);
     ShutdownAppNodes(app, window->Children);
+    window->OnDetach(app);
     window->OnShutdown(app);
     IM_DELETE(window);
 }
@@ -996,6 +999,7 @@ void PopAppControl(ImGuiApp* app)
         control->GetDataTypeName(dt, IM_ARRAYSIZE(dt));
         AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "pop control <%s>", dt);
     }
+    control->OnDetach(app);
     control->OnShutdown(app);
     const ImGuiID data_id = control->GetDataID();   // read before delete; pop frees what push registered
     IM_DELETE(control);
@@ -1089,10 +1093,11 @@ IMGUI_API void AppControlRegisterStorage(ImGuiApp* app, ImGuiAppControlBase* con
     RegisterAppControlStorage(app, id, instance_data, snapshottable, inst_size, temp_offset, temp_size, destroy);
 }
 
-IMGUI_API void AppControlPush(ImGuiApp* app, ImVector<ImGuiAppNodeBase*>* list, ImGuiAppNodeBase* node)
+IMGUI_API void AppControlPush(ImGuiApp* app, ImVector<ImGuiAppDisplayNodeBase*>* list, ImGuiAppDisplayNodeBase* node)
 {
     list->push_back(node);
     node->OnInitialize(app);
+    node->OnAttach(app);
 }
 
 IMGUI_API void UnregisterAppStorage(ImGuiApp* app, ImGuiID id)
@@ -1160,6 +1165,7 @@ IMGUI_API void AppRegisterLayer(ImGuiApp* app, ImGuiAppLayerBase* layer, const c
     app->Layers.push_back(layer);
     if (layer->Label[0] == 0) // default Label to the type name
         ImStrncpy(layer->Label, name, IM_ARRAYSIZE(layer->Label));
+    layer->OnInitialize(app);
     layer->OnAttach(app);
 }
 
@@ -1171,6 +1177,7 @@ IMGUI_API void AppRegisterWindow(ImGuiApp* app, ImGuiAppWindowBase* window, cons
     AppDeduplicateItemLabel(window->Label, IM_ARRAYSIZE(window->Label), &app->Windows, &app->Sidebars);
     app->Windows.push_back(window);
     window->OnInitialize(app);
+    window->OnAttach(app);
 }
 
 IMGUI_API void AppRegisterSidebar(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, const char* name, ImGuiViewport* vp, ImGuiDir dir, float size, ImGuiWindowFlags flags)
@@ -1185,6 +1192,7 @@ IMGUI_API void AppRegisterSidebar(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, c
     sidebar->Flags    = flags;
     app->Sidebars.push_back(sidebar);
     sidebar->OnInitialize(app);
+    sidebar->OnAttach(app);
 }
 
 IMGUI_API const ImVector<ImGuiAppNodeBase*>* AppRebuildUpdateOrder(ImGuiApp* app)
@@ -1251,7 +1259,7 @@ IMGUI_API const ImVector<ImGuiAppNodeBase*>* AppRebuildUpdateOrder(ImGuiApp* app
 }
 
 // Composition push/pop helpers (declarations in imguiapp.h; the Push* templates there call these).
-void ShutdownAppNodes(ImGuiApp* app, ImVector<ImGuiAppNodeBase*>& nodes)
+void ShutdownAppNodes(ImGuiApp* app, ImVector<ImGuiAppDisplayNodeBase*>& nodes)
 {
     IM_ASSERT(app != nullptr && "NULL ImGuiApp!");
 

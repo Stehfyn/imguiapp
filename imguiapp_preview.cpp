@@ -735,7 +735,7 @@ struct ImGuiAppPreviewControl : ImGuiAppControlBase
 
     virtual void OnShutdown(ImGuiApp* app) const override final { IM_UNUSED(app); }
 
-    virtual void OnUpdate(const ImGuiApp* app, float dt) const override final
+    virtual void OnUpdate(ImGuiApp* app, float dt) const override final
     {
         IM_UNUSED(dt);
         char* buffer = (char*)app->Data.GetVoidPtr(Inst->DataTypeId);

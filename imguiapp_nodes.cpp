@@ -8109,7 +8109,7 @@ static void AppLiveFieldsTable(const char* str_id, const ImGuiAppNodeBase* ctrl,
 #endif // IMGUIX_DISABLE_TOOLS
 // Resolve a live mirror node back to the runtime object it reflects (the inverse of BuildAppLiveGraph's
 // keying: windows by label hash, sidebars by label hash + 1, controls by PersistData id).
-static ImGuiAppNodeBase* AppGraphFindLiveItem(ImGuiApp* app, const ImGuiAppNode* n)
+static ImGuiAppDisplayNodeBase* AppGraphFindLiveItem(ImGuiApp* app, const ImGuiAppNode* n)
 {
     if (app == nullptr || n == nullptr || !n->IsLive)
         return nullptr;
@@ -8127,11 +8127,11 @@ static ImGuiAppNodeBase* AppGraphFindLiveItem(ImGuiApp* app, const ImGuiAppNode*
     }
     else if (n->Kind == ImGuiAppNodeKind_Control)
     {
-        ImGuiAppNodeBase* found = nullptr;
+        ImGuiAppDisplayNodeBase* found = nullptr;
         ForEachAppNode(app, [&](ImGuiAppNodeBase* ctrl, ImGuiAppWindowBase*)
                                  {
         if (found == nullptr && ctrl->GetDataID() == n->LiveKey)
-          found = ctrl;
+          found = (ImGuiAppDisplayNodeBase*)ctrl;   // every walked node is display-hosted until N4
       });
         return found;
     }
@@ -8268,7 +8268,7 @@ void EditAppNodeInspectorEx(ImGuiAppGraph* g, int node_id, ImGuiApp* live_app)
         // Live style: values are the mirror's echo, but the Active flags write THROUGH to the running item --
         // flip a checkbox, watch the app restyle, no regeneration. Falls back to the plain echo when the host
         // didn't pass its mirrored app (or the item vanished between frames).
-        ImGuiAppNodeBase* item = AppGraphFindLiveItem(live_app, n);
+        ImGuiAppDisplayNodeBase* item = AppGraphFindLiveItem(live_app, n);
 
         // Live data: the RUNNING control's reflected members with their current values,
         // re-read every frame (this is the running binary's memory, not a draft).
@@ -12316,7 +12316,7 @@ static void AppEmitSchemaFieldDeps(const ImGuiAppLiveFieldDesc* fields, int coun
 // data edges GetDependencyIDs produced). Returns false when the runtime object is gone.
 static bool AppEmitLiveControlCode(const ImGuiAppGraph* g, ImGuiApp* live_app, const ImGuiAppNode* n, ImGuiTextBuffer* out, ImGuiStorage* emitted)
 {
-    ImGuiAppNodeBase* item = AppGraphFindLiveItem(live_app, n);
+    ImGuiAppDisplayNodeBase* item = AppGraphFindLiveItem(live_app, n);
     if (item == nullptr)
     {
         out->appendf("// live control '%s': runtime object unavailable\n\n", n->Draft.Name);
@@ -14903,7 +14903,7 @@ struct ImGuiAppLiveWant
     ImVec2                  InitialSize;
     ImGuiDir                DockDir;   // Sidebar only
     float                   DockSize;  // Sidebar only
-    const ImGuiAppNodeBase* Item;      // live object (windows/sidebars/controls; null for layers) -- read within
+    const ImGuiAppDisplayNodeBase* Item; // live object (windows/sidebars/controls; null for layers) -- read within
                                       // BuildAppLiveGraph only, to mirror StyleMods (kept OFF this struct: a nested
                                       // ImVector member inside ImVector<ImGuiAppLiveWant> would break ImVector's memcpy grow)
 };
@@ -14925,7 +14925,7 @@ void BuildAppLiveGraph(const ImGuiApp* app, ImGuiAppGraph* g)
     // Snapshot one control (app-level or hosted). Keyed by its runtime PersistData id (app->Data is keyed by
     // type id, so the id is unique per app -> no collision between app-level and hosted controls). parent_key is
     // the host window/sidebar Key for a hosted control, 0 for an app-level control.
-    auto PushControlWant = [&](const ImGuiAppNodeBase* ctrl, ImGuiID parent_key)
+    auto PushControlWant = [&](const ImGuiAppDisplayNodeBase* ctrl, ImGuiID parent_key)
     {
         if (ctrl == nullptr)
             return;
