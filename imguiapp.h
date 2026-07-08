@@ -69,6 +69,8 @@ struct ImGuiAppTaskLayer;
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
 struct ImGuiAppControl;
 struct ImGuiAppControlBase;
+template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
+struct ImGuiAppControlMirrorAdapter;
 struct ImGuiAppControlMirrorBase;
 template <typename Base, typename PersistDataT, typename TempDataT, typename... DataDependencies>
 struct ImGuiAppInterfaceAdapter;
@@ -1069,22 +1071,12 @@ struct ImGuiAppInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistData
     template <size_t... Is> inline void ApplyRender(ImAppIndexSeq<Is...>) const                                                { OnRender(&_InstanceData->PersistData, &_InstanceData->TempData, GetData<DataDependencies>(Is)...); }
 };
 
+// Live-mirror implementation over the adapter's pack: the ImGuiAppControlMirrorBase hooks,
+// compile-time erased from PersistDataT/TempDataT/DataDependencies. Machinery only -- user code
+// subclasses ImGuiAppControl<> below and never sees this layer.
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
-struct ImGuiAppControl : ImGuiAppInterfaceAdapter<ImGuiAppControlBase, PersistDataT, TempDataT, DataDependencies...>
+struct ImGuiAppControlMirrorAdapter : ImGuiAppInterfaceAdapter<ImGuiAppControlBase, PersistDataT, TempDataT, DataDependencies...>
 {
-    using ControlDataType         = PersistDataT;
-    using ControlInstanceDataType = ImGuiAppInterfaceAdapter<ImGuiAppControlBase, PersistDataT, TempDataT, DataDependencies...>::InstanceData;
-
-    // Constructing any control materializes its data types' manifests (and everything they
-    // reach) into the runtime schema registry.
-    ImGuiAppControl()
-    {
-#ifdef IMGUIAPP_HAS_REFLECT
-        ImGui::AppEnsureTypeRegistered<PersistDataT>();
-        ImGui::AppEnsureTypeRegistered<TempDataT>();
-#endif
-    }
-
     // Instance-qualified storage keys -- the same keys app->Data uses. Dependency ids are the
     // RESOLVED producer keys (push-time routing), so mirrors draw the actual wiring.
     virtual ImGuiID GetControlDataID() const override final { return ImAppHashType(ImGuiAppType<PersistDataT>::ID, this->_InstanceID); }
@@ -1177,6 +1169,15 @@ struct ImGuiAppControl : ImGuiAppInterfaceAdapter<ImGuiAppControlBase, PersistDa
             *out_temp = &this->_InstanceData->TempData;
         return true;
     }
+};
+
+template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
+struct ImGuiAppControl : ImGuiAppControlMirrorAdapter<PersistDataT, TempDataT, DataDependencies...>
+{
+    using ControlDataType         = PersistDataT;
+    using ControlInstanceDataType = ImGuiAppInterfaceAdapter<ImGuiAppControlBase, PersistDataT, TempDataT, DataDependencies...>::InstanceData;
+
+    ImGuiAppControl() { ImGui::AppEnsureTypeRegistered<PersistDataT>(); ImGui::AppEnsureTypeRegistered<TempDataT>(); } // materialize both data manifests into the schema registry
 };
 
 template <typename T>
