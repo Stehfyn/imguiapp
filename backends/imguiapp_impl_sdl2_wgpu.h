@@ -18,12 +18,13 @@ struct ImGuiApp_ImplSDL2WGPU_InitInfo
     const char* CanvasSelector; // nullptr = "#canvas"
 };
 
-// Frame lifecycle (imgui impl pattern); registered on the seam via ImGuiAppPlatformBackend.
+// Frame lifecycle (imgui impl pattern, app-threaded); registered on the seam via ImGuiAppPlatformBackend.
+// Backend data lives in app->BackendData (io.BackendXxxUserData analog; both io slots belong to the wrapped imgui backends).
 // No PresentFrame: RenderDrawData submits/presents (legacy single-hook).
-IMGUI_API bool ImGuiApp_ImplSDL2WGPU_Init(const ImGuiApp_ImplSDL2WGPU_InitInfo* init_info);
-IMGUI_API void ImGuiApp_ImplSDL2WGPU_Shutdown();
-IMGUI_API void ImGuiApp_ImplSDL2WGPU_NewFrame();
-IMGUI_API void ImGuiApp_ImplSDL2WGPU_RenderDrawData(ImDrawData* draw_data, const ImGuiAppFrameConfig* config);
+IMGUI_API bool ImGuiApp_ImplSDL2WGPU_Init(ImGuiApp* app, const ImGuiApp_ImplSDL2WGPU_InitInfo* init_info);
+IMGUI_API void ImGuiApp_ImplSDL2WGPU_Shutdown(ImGuiApp* app);
+IMGUI_API void ImGuiApp_ImplSDL2WGPU_NewFrame(ImGuiApp* app);
+IMGUI_API void ImGuiApp_ImplSDL2WGPU_RenderDrawData(ImGuiApp* app, ImDrawData* draw_data, const ImGuiAppFrameConfig* config);
 
 IMGUI_API bool ImGuiApp_ImplSDL2WGPU_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config);
 IMGUI_API void ImGuiApp_ImplSDL2WGPU_ShutdownPlatform(ImGuiApp* app);

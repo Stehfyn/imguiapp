@@ -19,12 +19,13 @@ struct ImGuiApp_ImplSDL2OpenGL3_InitInfo
     const char* GlslVersion; // nullptr = imgui_impl_opengl3 default
 };
 
-// Frame lifecycle (imgui impl pattern); registered on the seam via ImGuiAppPlatformBackend.
-IMGUI_API bool ImGuiApp_ImplSDL2OpenGL3_Init(const ImGuiApp_ImplSDL2OpenGL3_InitInfo* init_info);
-IMGUI_API void ImGuiApp_ImplSDL2OpenGL3_Shutdown();
-IMGUI_API void ImGuiApp_ImplSDL2OpenGL3_NewFrame();
-IMGUI_API void ImGuiApp_ImplSDL2OpenGL3_RenderDrawData(ImDrawData* draw_data, const ImGuiAppFrameConfig* config);
-IMGUI_API void ImGuiApp_ImplSDL2OpenGL3_PresentFrame(const ImGuiAppFrameConfig* config);
+// Frame lifecycle (imgui impl pattern, app-threaded); registered on the seam via ImGuiAppPlatformBackend.
+// Backend data lives in app->BackendData (io.BackendXxxUserData analog; both io slots belong to the wrapped imgui backends).
+IMGUI_API bool ImGuiApp_ImplSDL2OpenGL3_Init(ImGuiApp* app, const ImGuiApp_ImplSDL2OpenGL3_InitInfo* init_info);
+IMGUI_API void ImGuiApp_ImplSDL2OpenGL3_Shutdown(ImGuiApp* app);
+IMGUI_API void ImGuiApp_ImplSDL2OpenGL3_NewFrame(ImGuiApp* app);
+IMGUI_API void ImGuiApp_ImplSDL2OpenGL3_RenderDrawData(ImGuiApp* app, ImDrawData* draw_data, const ImGuiAppFrameConfig* config);
+IMGUI_API void ImGuiApp_ImplSDL2OpenGL3_PresentFrame(ImGuiApp* app, const ImGuiAppFrameConfig* config);
 
 IMGUI_API bool ImGuiApp_ImplSDL2OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config);
 IMGUI_API void ImGuiApp_ImplSDL2OpenGL3_ShutdownPlatform(ImGuiApp* app);

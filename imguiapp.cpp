@@ -390,7 +390,7 @@ void ImGuiApp::OnDrawFrame()
     FrameID.Tsc = AppClockTsc();
     FrameID.TimeSec = AppClockNowSec() - epoch;
 
-    ImGuiAppGetPlatformBackend()->NewFrameFn();
+    ImGuiAppGetPlatformBackend()->NewFrameFn(this);
     ImGui::NewFrame();
     ImGui::DrawAppFrame(this);
 }
@@ -400,7 +400,7 @@ void ImGuiApp::OnRenderFrame()
     ImGuiAppFrameConfig frame_config;
     frame_config.ClearColor = ClearColor;
     ImGui::Render();
-    ImGuiAppGetPlatformBackend()->RenderDrawDataFn(ImGui::GetDrawData(), &frame_config);
+    ImGuiAppGetPlatformBackend()->RenderDrawDataFn(this, ImGui::GetDrawData(), &frame_config);
 }
 
 void ImGuiApp::OnEncodeFrame()
@@ -418,7 +418,7 @@ void ImGuiApp::OnPresentFrame()
         return;
     ImGuiAppFrameConfig frame_config;
     frame_config.ClearColor = ClearColor;
-    backend->PresentFrameFn(&frame_config);
+    backend->PresentFrameFn(this, &frame_config);
 }
 
 void ImGuiApp::OnExecuteCommand(ImGuiAppCommand cmd)

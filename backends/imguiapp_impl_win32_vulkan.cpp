@@ -9,6 +9,7 @@
 //  [X] Headless: Offscreen render target behind a hidden input window (ImGuiAppHeadlessMode_Offscreen).
 
 // CHANGELOG
+//  2026-07-08: Threaded ImGuiApp* through the frame lifecycle; backend data moved to app->BackendData, file-scope backend global removed; viewport hooks recover the app via the main viewport's GWLP_USERDATA.
 //  2026-07-08: Exposed ImGuiApp_ImplWin32Vulkan_* frame lifecycle (imgui impl pattern); host owns the ImGui context it creates; backend-internal symbols prefixed; IMGUI_DISABLE guards added.
 
 #include "imguiapp_impl_win32_vulkan.h"
@@ -106,10 +107,22 @@ struct ImGuiApp_ImplWin32Vulkan_Data
     ImVector<char>  CaptureRgba;            // RGBA8 conversion buffer handed to CaptureFrame callers
 };
 
-// IM_NEW'd at Init (value-init: MainWindow keeps upstream ctor defaults), freed by Shutdown (one backend per process).
-static ImGuiApp_ImplWin32Vulkan_Data* GImGuiAppBackend = nullptr;
+// Backend data stored in app->BackendData (the io userdata slots belong to the wrapped imgui backends).
+// IM_NEW'd at Init (value-init: MainWindow keeps upstream ctor defaults), freed by Shutdown.
+static ImGuiApp_ImplWin32Vulkan_Data* ImGuiApp_ImplWin32Vulkan_GetBackendData(ImGuiApp* app)
+{
+    return app != nullptr ? (ImGuiApp_ImplWin32Vulkan_Data*)app->BackendData : nullptr;
+}
 
-static ImGuiApp_ImplWin32Vulkan_Data* ImGuiApp_ImplWin32Vulkan_GetBackendData() { return GImGuiAppBackend; }
+// Context-free viewport hooks recover the app through the main viewport's window user data
+// (set at the end of InitPlatform; the same slot the shared WndProc reads for WM_TIMER repaints).
+static ImGuiApp* ImGuiApp_ImplWin32Vulkan_GetApp()
+{
+    ImGuiViewport* main_viewport = ImGui::GetMainViewport();
+    if (main_viewport == nullptr || main_viewport->PlatformHandle == nullptr)
+        return nullptr;
+    return (ImGuiApp*)::GetWindowLongPtr((HWND)main_viewport->PlatformHandle, GWLP_USERDATA);
+}
 
 static void ImGuiApp_ImplWin32Vulkan_CheckVkResult(VkResult err)
 {
@@ -1012,9 +1025,9 @@ static int ImGuiApp_ImplWin32Vulkan_CreateVkSurfaceForViewport(ImGuiViewport* vi
 }
 
 
-void ImGuiApp_ImplWin32Vulkan_Shutdown()
+void ImGuiApp_ImplWin32Vulkan_Shutdown(ImGuiApp* app)
 {
-    ImGuiApp_ImplWin32Vulkan_Data* bd = ImGuiApp_ImplWin32Vulkan_GetBackendData();
+    ImGuiApp_ImplWin32Vulkan_Data* bd = ImGuiApp_ImplWin32Vulkan_GetBackendData(app);
     IM_ASSERT(bd != nullptr && "No platform backend to shutdown, or already shutdown?");
     if (bd == nullptr)
         return;
@@ -1032,13 +1045,13 @@ void ImGuiApp_ImplWin32Vulkan_Shutdown()
     ImGuiApp_ImplWin32Vulkan_CleanupVulkanWindow(bd, &bd->MainWindow);
     ImGuiApp_ImplWin32Vulkan_CleanupVulkan(bd);
 
-    GImGuiAppBackend = nullptr;
+    app->BackendData = nullptr;
     IM_DELETE(bd);
 }
 
-void ImGuiApp_ImplWin32Vulkan_NewFrame()
+void ImGuiApp_ImplWin32Vulkan_NewFrame(ImGuiApp* app)
 {
-    ImGuiApp_ImplWin32Vulkan_Data* bd = ImGuiApp_ImplWin32Vulkan_GetBackendData();
+    ImGuiApp_ImplWin32Vulkan_Data* bd = ImGuiApp_ImplWin32Vulkan_GetBackendData(app);
     IM_ASSERT(bd != nullptr && "Backend not initialized! Did you call ImGuiApp_ImplWin32Vulkan_Init()?");
     if (bd == nullptr)
         return;
@@ -1048,9 +1061,9 @@ void ImGuiApp_ImplWin32Vulkan_NewFrame()
     ImGui_ImplWin32_NewFrame();
 }
 
-void ImGuiApp_ImplWin32Vulkan_RenderDrawData(ImDrawData* draw_data, const ImGuiAppFrameConfig* config)
+void ImGuiApp_ImplWin32Vulkan_RenderDrawData(ImGuiApp* app, ImDrawData* draw_data, const ImGuiAppFrameConfig* config)
 {
-    ImGuiApp_ImplWin32Vulkan_Data* bd = ImGuiApp_ImplWin32Vulkan_GetBackendData();
+    ImGuiApp_ImplWin32Vulkan_Data* bd = ImGuiApp_ImplWin32Vulkan_GetBackendData(app);
     IM_ASSERT(bd != nullptr && "Backend not initialized! Did you call ImGuiApp_ImplWin32Vulkan_Init()?");
     if (bd == nullptr || draw_data == nullptr || config == nullptr)
         return;
@@ -1086,9 +1099,9 @@ void ImGuiApp_ImplWin32Vulkan_RenderDrawData(ImDrawData* draw_data, const ImGuiA
 
 // Present phase: the encode phase runs between RenderDrawData and this, reading
 // back the frame just rendered before it goes on screen.
-void ImGuiApp_ImplWin32Vulkan_PresentFrame(const ImGuiAppFrameConfig* config)
+void ImGuiApp_ImplWin32Vulkan_PresentFrame(ImGuiApp* app, const ImGuiAppFrameConfig* config)
 {
-    ImGuiApp_ImplWin32Vulkan_Data* bd = ImGuiApp_ImplWin32Vulkan_GetBackendData();
+    ImGuiApp_ImplWin32Vulkan_Data* bd = ImGuiApp_ImplWin32Vulkan_GetBackendData(app);
     if (bd == nullptr || config == nullptr)
         return;
     if (bd->LastFrameRendered && (config->Flags & ImGuiAppFrameFlags_NoPresent) == 0)
@@ -1108,7 +1121,7 @@ void ImGuiApp_ImplWin32Vulkan_PresentFrame(const ImGuiAppFrameConfig* config)
 // skip decision is cached in VpSkip and consumed by SwapBuffers.
 static void ImGuiApp_ImplWin32Vulkan_Viewport_RenderWindow(ImGuiViewport* viewport, void* render_arg)
 {
-    ImGuiApp_ImplWin32Vulkan_Data* bd = ImGuiApp_ImplWin32Vulkan_GetBackendData();
+    ImGuiApp_ImplWin32Vulkan_Data* bd = ImGuiApp_ImplWin32Vulkan_GetBackendData(ImGuiApp_ImplWin32Vulkan_GetApp());
     if (bd == nullptr)
         return;
     const bool present = ImGui::AppPacerViewportShouldPresent(bd->App, viewport);
@@ -1119,30 +1132,32 @@ static void ImGuiApp_ImplWin32Vulkan_Viewport_RenderWindow(ImGuiViewport* viewpo
 
 static void ImGuiApp_ImplWin32Vulkan_Viewport_SwapBuffers(ImGuiViewport* viewport, void* render_arg)
 {
-    ImGuiApp_ImplWin32Vulkan_Data* bd = ImGuiApp_ImplWin32Vulkan_GetBackendData();
+    ImGuiApp_ImplWin32Vulkan_Data* bd = ImGuiApp_ImplWin32Vulkan_GetBackendData(ImGuiApp_ImplWin32Vulkan_GetApp());
     if (bd == nullptr || bd->VpSkip.GetBool(viewport->ID))
         return;
     if (bd->UnderlyingViewportSwapBuffers != nullptr)
         bd->UnderlyingViewportSwapBuffers(viewport, render_arg);
 }
 
-bool ImGuiApp_ImplWin32Vulkan_Init(const ImGuiApp_ImplWin32Vulkan_InitInfo* init_info)
+bool ImGuiApp_ImplWin32Vulkan_Init(ImGuiApp* app, const ImGuiApp_ImplWin32Vulkan_InitInfo* init_info)
 {
-    IM_ASSERT(GImGuiAppBackend == nullptr && "Already initialized a platform backend!");
+    IM_ASSERT(app != nullptr && app->BackendData == nullptr && "Already initialized a platform backend!");
     IM_ASSERT(ImGuiApp_ImplWin32Vulkan_IsInitInfoValid(init_info) && "ImGuiApp_ImplWin32Vulkan_Init: invalid init_info.");
-    if (GImGuiAppBackend != nullptr || !ImGuiApp_ImplWin32Vulkan_IsInitInfoValid(init_info))
+    if (app == nullptr || app->BackendData != nullptr || !ImGuiApp_ImplWin32Vulkan_IsInitInfoValid(init_info))
         return false;
 
-    GImGuiAppBackend = IM_NEW(ImGuiApp_ImplWin32Vulkan_Data)();
-    GImGuiAppBackend->Hwnd = (HWND)init_info->Hwnd;
-    GImGuiAppBackend->MinImageCount = init_info->MinImageCount >= 3 ? init_info->MinImageCount : 3;
+    ImGuiApp_ImplWin32Vulkan_Data* bd = IM_NEW(ImGuiApp_ImplWin32Vulkan_Data)();
+    app->BackendData = bd;
+    bd->App = app;
+    bd->Hwnd = (HWND)init_info->Hwnd;
+    bd->MinImageCount = init_info->MinImageCount >= 3 ? init_info->MinImageCount : 3;
 
     ImVector<const char*> extensions;
     extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
     extensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
-    if (!ImGuiApp_ImplWin32Vulkan_SetupVulkan(GImGuiAppBackend, extensions, init_info->EnableValidation))
+    if (!ImGuiApp_ImplWin32Vulkan_SetupVulkan(bd, extensions, init_info->EnableValidation))
     {
-        ImGuiApp_ImplWin32Vulkan_Shutdown();
+        ImGuiApp_ImplWin32Vulkan_Shutdown(app);
         return false;
     }
 
@@ -1157,19 +1172,19 @@ bool ImGuiApp_ImplWin32Vulkan_Init(const ImGuiApp_ImplWin32Vulkan_InitInfo* init
     }
     else
     {
-        ImGuiApp_ImplWin32Vulkan_GetClientSize(GImGuiAppBackend->Hwnd, &width, &height);
+        ImGuiApp_ImplWin32Vulkan_GetClientSize(bd->Hwnd, &width, &height);
     }
     if (width <= 0 || height <= 0)
     {
-        ImGuiApp_ImplWin32Vulkan_Shutdown();
+        ImGuiApp_ImplWin32Vulkan_Shutdown(app);
         return false;
     }
 
     if (offscreen)
     {
-        if (!ImGuiApp_ImplWin32Vulkan_CreateOffscreenTarget(GImGuiAppBackend, width, height))
+        if (!ImGuiApp_ImplWin32Vulkan_CreateOffscreenTarget(bd, width, height))
         {
-            ImGuiApp_ImplWin32Vulkan_Shutdown();
+            ImGuiApp_ImplWin32Vulkan_Shutdown(app);
             return false;
         }
     }
@@ -1178,49 +1193,49 @@ bool ImGuiApp_ImplWin32Vulkan_Init(const ImGuiApp_ImplWin32Vulkan_InitInfo* init
         VkSurfaceKHR surface = VK_NULL_HANDLE;
         VkWin32SurfaceCreateInfoKHR surface_info = {};
         surface_info.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-        surface_info.hwnd = GImGuiAppBackend->Hwnd;
+        surface_info.hwnd = bd->Hwnd;
         surface_info.hinstance = ::GetModuleHandle(nullptr);
-        VkResult err = vkCreateWin32SurfaceKHR(GImGuiAppBackend->Instance, &surface_info, GImGuiAppBackend->Allocator, &surface);
+        VkResult err = vkCreateWin32SurfaceKHR(bd->Instance, &surface_info, bd->Allocator, &surface);
         ImGuiApp_ImplWin32Vulkan_CheckVkResult(err);
-        if (surface == VK_NULL_HANDLE || !ImGuiApp_ImplWin32Vulkan_SetupVulkanWindow(GImGuiAppBackend, &GImGuiAppBackend->MainWindow, surface, width, height))
+        if (surface == VK_NULL_HANDLE || !ImGuiApp_ImplWin32Vulkan_SetupVulkanWindow(bd, &bd->MainWindow, surface, width, height))
         {
             if (surface != VK_NULL_HANDLE)
-                vkDestroySurfaceKHR(GImGuiAppBackend->Instance, surface, GImGuiAppBackend->Allocator);
-            ImGuiApp_ImplWin32Vulkan_Shutdown();
+                vkDestroySurfaceKHR(bd->Instance, surface, bd->Allocator);
+            ImGuiApp_ImplWin32Vulkan_Shutdown(app);
             return false;
         }
     }
 
-    if (!ImGui_ImplWin32_Init(GImGuiAppBackend->Hwnd))
+    if (!ImGui_ImplWin32_Init(bd->Hwnd))
     {
-        ImGuiApp_ImplWin32Vulkan_Shutdown();
+        ImGuiApp_ImplWin32Vulkan_Shutdown(app);
         return false;
     }
-    GImGuiAppBackend->PlatformBackendInitialized = true;
+    bd->PlatformBackendInitialized = true;
     ImGui::GetPlatformIO().Platform_CreateVkSurface = ImGuiApp_ImplWin32Vulkan_CreateVkSurfaceForViewport;
 
     ImGui_ImplVulkan_InitInfo vulkan_init_info = {};
-    vulkan_init_info.Instance = GImGuiAppBackend->Instance;
-    vulkan_init_info.PhysicalDevice = GImGuiAppBackend->PhysicalDevice;
-    vulkan_init_info.Device = GImGuiAppBackend->Device;
-    vulkan_init_info.QueueFamily = GImGuiAppBackend->QueueFamily;
-    vulkan_init_info.Queue = GImGuiAppBackend->Queue;
-    vulkan_init_info.PipelineCache = GImGuiAppBackend->PipelineCache;
-    vulkan_init_info.DescriptorPool = GImGuiAppBackend->DescriptorPool;
-    vulkan_init_info.MinImageCount = offscreen ? 2 : GImGuiAppBackend->MinImageCount;
-    vulkan_init_info.ImageCount = offscreen ? 2 : GImGuiAppBackend->MainWindow.ImageCount;
-    vulkan_init_info.Allocator = GImGuiAppBackend->Allocator;
-    vulkan_init_info.PipelineInfoMain.RenderPass = offscreen ? GImGuiAppBackend->OffscreenRenderPass : GImGuiAppBackend->MainWindow.RenderPass;
+    vulkan_init_info.Instance = bd->Instance;
+    vulkan_init_info.PhysicalDevice = bd->PhysicalDevice;
+    vulkan_init_info.Device = bd->Device;
+    vulkan_init_info.QueueFamily = bd->QueueFamily;
+    vulkan_init_info.Queue = bd->Queue;
+    vulkan_init_info.PipelineCache = bd->PipelineCache;
+    vulkan_init_info.DescriptorPool = bd->DescriptorPool;
+    vulkan_init_info.MinImageCount = offscreen ? 2 : bd->MinImageCount;
+    vulkan_init_info.ImageCount = offscreen ? 2 : bd->MainWindow.ImageCount;
+    vulkan_init_info.Allocator = bd->Allocator;
+    vulkan_init_info.PipelineInfoMain.RenderPass = offscreen ? bd->OffscreenRenderPass : bd->MainWindow.RenderPass;
     vulkan_init_info.PipelineInfoMain.Subpass = 0;
     vulkan_init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
     vulkan_init_info.CheckVkResultFn = ImGuiApp_ImplWin32Vulkan_CheckVkResult;
 
     if (!ImGui_ImplVulkan_Init(&vulkan_init_info))
     {
-        ImGuiApp_ImplWin32Vulkan_Shutdown();
+        ImGuiApp_ImplWin32Vulkan_Shutdown(app);
         return false;
     }
-    GImGuiAppBackend->RendererBackendInitialized = true;
+    bd->RendererBackendInitialized = true;
 
     // Per-viewport pacing: wrap the upstream vulkan viewport hooks. A skipped viewport
     // skips BOTH RenderWindow (acquire + submit) and SwapBuffers (present) -- the same
@@ -1229,9 +1244,9 @@ bool ImGuiApp_ImplWin32Vulkan_Init(const ImGuiApp_ImplWin32Vulkan_InitInfo* init
     // would not be safe; the pair is decided once in the RenderWindow wrapper.
     {
         ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
-        GImGuiAppBackend->UnderlyingViewportRenderWindow = platform_io.Renderer_RenderWindow;
-        GImGuiAppBackend->UnderlyingViewportSwapBuffers  = platform_io.Renderer_SwapBuffers;
-        if (GImGuiAppBackend->UnderlyingViewportRenderWindow != nullptr && GImGuiAppBackend->UnderlyingViewportSwapBuffers != nullptr)
+        bd->UnderlyingViewportRenderWindow = platform_io.Renderer_RenderWindow;
+        bd->UnderlyingViewportSwapBuffers  = platform_io.Renderer_SwapBuffers;
+        if (bd->UnderlyingViewportRenderWindow != nullptr && bd->UnderlyingViewportSwapBuffers != nullptr)
         {
             platform_io.Renderer_RenderWindow = ImGuiApp_ImplWin32Vulkan_Viewport_RenderWindow;
             platform_io.Renderer_SwapBuffers  = ImGuiApp_ImplWin32Vulkan_Viewport_SwapBuffers;
@@ -1293,9 +1308,8 @@ bool ImGuiApp_ImplWin32Vulkan_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config
     init_info.Headless         = config.Headless;
     init_info.OffscreenWidth   = window_width;
     init_info.OffscreenHeight  = window_height;
-    if (!ImGuiApp_ImplWin32Vulkan_Init(&init_info))
+    if (!ImGuiApp_ImplWin32Vulkan_Init(app, &init_info))
         return false;
-    GImGuiAppBackend->App = app;
 
     ImGui::GetIO().ConfigFlags |= config.ConfigFlags;
 
@@ -1308,8 +1322,8 @@ bool ImGuiApp_ImplWin32Vulkan_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config
 void ImGuiApp_ImplWin32Vulkan_ShutdownPlatform(ImGuiApp* app)
 {
     // Graphics first (wrapped imgui backends + vulkan objects need the window alive), then the host.
-    if (ImGuiApp_ImplWin32Vulkan_GetBackendData() != nullptr)
-        ImGuiApp_ImplWin32Vulkan_Shutdown();
+    if (ImGuiApp_ImplWin32Vulkan_GetBackendData(app) != nullptr)
+        ImGuiApp_ImplWin32Vulkan_Shutdown(app);
 
     ImGuiAppPlatformData* state = app->PlatformData;
     if (state == nullptr)
@@ -1475,8 +1489,7 @@ static bool ImGuiApp_ImplWin32Vulkan_CaptureSyncNow(ImGuiApp_ImplWin32Vulkan_Dat
 // - Never returns the same FrameIndex twice (CaptureLastReturned gate).
 bool ImGuiApp_ImplWin32Vulkan_CaptureFrame(ImGuiApp* app, ImGuiAppAVFrame* out_frame)
 {
-    IM_UNUSED(app);
-    ImGuiApp_ImplWin32Vulkan_Data* bd = ImGuiApp_ImplWin32Vulkan_GetBackendData();
+    ImGuiApp_ImplWin32Vulkan_Data* bd = ImGuiApp_ImplWin32Vulkan_GetBackendData(app);
     if (bd == nullptr)
         return false;
     if (out_frame == nullptr || !bd->VulkanInitialized || !bd->CaptureSupported)
@@ -1533,7 +1546,7 @@ bool ImGuiApp_ImplWin32Vulkan_CaptureFrame(ImGuiApp* app, ImGuiAppAVFrame* out_f
     return false;
 }
 
-static const ImGuiAppPlatformBackend GPlatformBackend =
+static const ImGuiAppPlatformBackend ImGuiApp_ImplWin32Vulkan_PlatformBackend =
 {
     ImGuiApp_ImplWin32Vulkan_InitPlatform,
     ImGuiApp_ImplWin32Vulkan_ShutdownPlatform,
@@ -1546,7 +1559,7 @@ static const ImGuiAppPlatformBackend GPlatformBackend =
     ImGuiApp_ImplWin32Vulkan_PresentFrame,
 };
 
-const ImGuiAppPlatformBackend* ImGuiAppGetPlatformBackend() { return &GPlatformBackend; }
+const ImGuiAppPlatformBackend* ImGuiAppGetPlatformBackend() { return &ImGuiApp_ImplWin32Vulkan_PlatformBackend; }
 
 
 

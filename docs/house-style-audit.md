@@ -30,8 +30,9 @@ Three host-layer patterns diverge from backend canon with no Δ covering them:
   `static const ImGuiAppPlatformBackend GPlatformBackend` at file scope; accessors return the raw
   global with no context guard. Canon stores backend data in the io userdata slots and derives it
   from the context (B6/B7; pattern retired upstream 2021-06-29, `imgui_impl_dx11.cpp:105-108`) --
-  but both io slots are taken by the wrapped imgui backends, and hosts are one-per-process by
-  design. Also breaches B17 static naming (`GImGuiAppBackend` vs full `ImGuiApp_ImplXXX_` prefix;
+  both io slots are taken by the wrapped imgui backends, but the `ImGuiApp*` itself can hold the
+  data (`app->PlatformData` precedent); the global only buys the app-free frame-hook signatures.
+  Also breaches B17 static naming (`GImGuiAppBackend` vs full `ImGuiApp_ImplXXX_` prefix;
   the `G` grammar belongs to core's `GImGui`, not backends).
 - **One-host-per-link seam**: each host TU defines its own `struct ImGuiAppPlatformData` and
   `ImGuiAppGetPlatformBackend()` ("exactly one links per build"). Upstream backends all coexist in
@@ -161,7 +162,10 @@ obligation, not the option.
 - Δ6 (proposed): Meyers-singleton accessors for process-wide services (`AppAssert()`,
   `AppPacer()`, `AppTypeSchemas()`); ad-hoc mutable function-local statics remain violations.
 - Δ9 (proposed): Canon stores backend data in the io userdata slots and derives it from the
-  context (B6/B7; pattern retired upstream 2021-06-29, `imgui_impl_dx11.cpp:105-108`) -- but both
-  io slots are taken by the wrapped imgui backends, and hosts are one-per-process by design. Also
-  breaches B17 static naming (`GImGuiAppBackend` vs full `ImGuiApp_ImplXXX_` prefix; the `G`
-  grammar belongs to core's `GImGui`, not backends).
+  context (B6/B7; pattern retired upstream 2021-06-29, `imgui_impl_dx11.cpp:105-108`). Both io
+  slots are taken by the wrapped imgui backends, but the `ImGuiApp*` itself can hold the host
+  backend data (`app->PlatformData` already carries the window/loop sidecar) -- the file-scope
+  global only buys the app-free frame-hook signatures (Shutdown/NewFrame/RenderDrawData mirror the
+  imgui impl pattern and take no app). Ratify the global + those signatures, or thread the app
+  through the seam hooks and conform. Also breaches B17 static naming (`GImGuiAppBackend` vs full
+  `ImGuiApp_ImplXXX_` prefix; the `G` grammar belongs to core's `GImGui`, not backends).

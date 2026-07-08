@@ -10,6 +10,7 @@
 //  [ ] Headless modes (use win32-vulkan).
 
 // CHANGELOG
+//  2026-07-08: Threaded ImGuiApp* through the frame lifecycle; backend data moved to app->BackendData, file-scope backend global removed; viewport hooks recover the app via the main viewport's GWLP_USERDATA.
 //  2026-07-08: Exposed ImGuiApp_ImplWin32OpenGL3_* frame lifecycle (imgui impl pattern); host owns the ImGui context it creates; backend-internal symbols prefixed; IMGUI_DISABLE guards added.
 
 #include "imguiapp_impl_win32_opengl3.h"
@@ -70,10 +71,21 @@ struct ImGuiApp_ImplWin32OpenGL3_Data
     ImGuiApp_ImplWin32OpenGL3_Data() { memset((void*)this, 0, sizeof(*this)); }
 };
 
-// IM_NEW'd at Init, freed by Shutdown; viewport hooks reach it via the accessor (one backend per process).
-static ImGuiApp_ImplWin32OpenGL3_Data* GImGuiAppBackend = nullptr;
+// Backend data stored in app->BackendData (the io userdata slots belong to the wrapped imgui backends).
+static ImGuiApp_ImplWin32OpenGL3_Data* ImGuiApp_ImplWin32OpenGL3_GetBackendData(ImGuiApp* app)
+{
+    return app != nullptr ? (ImGuiApp_ImplWin32OpenGL3_Data*)app->BackendData : nullptr;
+}
 
-static ImGuiApp_ImplWin32OpenGL3_Data* ImGuiApp_ImplWin32OpenGL3_GetBackendData() { return GImGuiAppBackend; }
+// Context-free viewport hooks recover the app through the main viewport's window user data
+// (set at the end of InitPlatform; the same slot the shared WndProc reads for WM_TIMER repaints).
+static ImGuiApp* ImGuiApp_ImplWin32OpenGL3_GetApp()
+{
+    ImGuiViewport* main_viewport = ImGui::GetMainViewport();
+    if (main_viewport == nullptr || main_viewport->PlatformHandle == nullptr)
+        return nullptr;
+    return (ImGuiApp*)::GetWindowLongPtr((HWND)main_viewport->PlatformHandle, GWLP_USERDATA);
+}
 
 static bool ImGuiApp_ImplWin32OpenGL3_IsInitInfoValid(const ImGuiApp_ImplWin32OpenGL3_InitInfo* init_info)
 {
@@ -121,7 +133,7 @@ static void ImGuiApp_ImplWin32OpenGL3_CleanupDeviceWGL(HWND hWnd, ImGuiAppPlatfo
 
 static void ImGuiApp_ImplWin32OpenGL3_Renderer_CreateWindow(ImGuiViewport* viewport)
 {
-    ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData();
+    ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData(ImGuiApp_ImplWin32OpenGL3_GetApp());
     IM_ASSERT(bd != nullptr && bd->State != nullptr);
     IM_ASSERT(viewport->RendererUserData == nullptr);
     if (bd == nullptr || bd->State == nullptr)
@@ -152,7 +164,7 @@ static void ImGuiApp_ImplWin32OpenGL3_Renderer_DestroyWindow(ImGuiViewport* view
 // fields on ImGuiApp_ImplWin32OpenGL3_Data.
 static void ImGuiApp_ImplWin32OpenGL3_Platform_RenderWindow(ImGuiViewport* viewport, void*)
 {
-    ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData();
+    ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData(ImGuiApp_ImplWin32OpenGL3_GetApp());
     if (bd == nullptr || bd->State == nullptr)
         return;
     const bool present = ImGui::AppPacerViewportShouldPresent(bd->App, viewport);
@@ -165,7 +177,7 @@ static void ImGuiApp_ImplWin32OpenGL3_Platform_RenderWindow(ImGuiViewport* viewp
 
 static void ImGuiApp_ImplWin32OpenGL3_Renderer_RenderWindow(ImGuiViewport* viewport, void* render_arg)
 {
-    ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData();
+    ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData(ImGuiApp_ImplWin32OpenGL3_GetApp());
     if (bd == nullptr || bd->VpSkip.GetBool(viewport->ID))
         return;
     if (bd->UnderlyingRendererRenderWindow != nullptr)
@@ -174,7 +186,7 @@ static void ImGuiApp_ImplWin32OpenGL3_Renderer_RenderWindow(ImGuiViewport* viewp
 
 static void ImGuiApp_ImplWin32OpenGL3_Renderer_SwapBuffers(ImGuiViewport* viewport, void*)
 {
-    ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData();
+    ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData(ImGuiApp_ImplWin32OpenGL3_GetApp());
     if (bd == nullptr || bd->VpSkip.GetBool(viewport->ID))
         return;
     if (ImGuiAppPlatformData::WGLWindowData* data = (ImGuiAppPlatformData::WGLWindowData*)viewport->RendererUserData)
@@ -205,7 +217,7 @@ static void ImGuiApp_ImplWin32OpenGL3_GetClientSize(void* hwnd, int* width, int*
 // GL_BACK still holds it); a repeat call with no new frame rendered returns false.
 static bool ImGuiApp_ImplWin32OpenGL3_CaptureFrame(ImGuiApp* app, ImGuiAppAVFrame* out_frame)
 {
-    ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData();
+    ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData(app);
     if (bd == nullptr || out_frame == nullptr || bd->MainDC == nullptr || bd->MainGLRC == nullptr)
         return false;
     if (app != nullptr && app->FrameID.FrameIndex <= bd->CaptureLastReturned)
@@ -244,37 +256,39 @@ static bool ImGuiApp_ImplWin32OpenGL3_CaptureFrame(ImGuiApp* app, ImGuiAppAVFram
     return true;
 }
 
-bool ImGuiApp_ImplWin32OpenGL3_Init(const ImGuiApp_ImplWin32OpenGL3_InitInfo* init_info)
+bool ImGuiApp_ImplWin32OpenGL3_Init(ImGuiApp* app, const ImGuiApp_ImplWin32OpenGL3_InitInfo* init_info)
 {
-    IM_ASSERT(GImGuiAppBackend == nullptr && "Already initialized a platform backend!");
+    IM_ASSERT(app != nullptr && app->BackendData == nullptr && "Already initialized a platform backend!");
     IM_ASSERT(ImGuiApp_ImplWin32OpenGL3_IsInitInfoValid(init_info) && "ImGuiApp_ImplWin32OpenGL3_Init: invalid init_info.");
-    if (GImGuiAppBackend != nullptr || !ImGuiApp_ImplWin32OpenGL3_IsInitInfoValid(init_info))
+    if (app == nullptr || app->BackendData != nullptr || !ImGuiApp_ImplWin32OpenGL3_IsInitInfoValid(init_info))
         return false;
 
-    GImGuiAppBackend = IM_NEW(ImGuiApp_ImplWin32OpenGL3_Data)();
-    GImGuiAppBackend->Hwnd = init_info->Hwnd;
-    GImGuiAppBackend->MainDC = init_info->MainDC;
-    GImGuiAppBackend->MainGLRC = init_info->MainGLRC;
+    ImGuiApp_ImplWin32OpenGL3_Data* bd = IM_NEW(ImGuiApp_ImplWin32OpenGL3_Data)();
+    app->BackendData = bd;
+    bd->App = app;
+    bd->Hwnd = init_info->Hwnd;
+    bd->MainDC = init_info->MainDC;
+    bd->MainGLRC = init_info->MainGLRC;
 
     if (!ImGui_ImplWin32_InitForOpenGL(init_info->Hwnd))
     {
-        ImGuiApp_ImplWin32OpenGL3_Shutdown();
+        ImGuiApp_ImplWin32OpenGL3_Shutdown(app);
         return false;
     }
-    GImGuiAppBackend->PlatformBackendInitialized = true;
+    bd->PlatformBackendInitialized = true;
 
     if (!ImGui_ImplOpenGL3_Init(init_info->GlslVersion))
     {
-        ImGuiApp_ImplWin32OpenGL3_Shutdown();
+        ImGuiApp_ImplWin32OpenGL3_Shutdown(app);
         return false;
     }
-    GImGuiAppBackend->RendererBackendInitialized = true;
+    bd->RendererBackendInitialized = true;
     return true;
 }
 
-void ImGuiApp_ImplWin32OpenGL3_Shutdown()
+void ImGuiApp_ImplWin32OpenGL3_Shutdown(ImGuiApp* app)
 {
-    ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData();
+    ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData(app);
     IM_ASSERT(bd != nullptr && "No platform backend to shutdown, or already shutdown?");
     if (bd == nullptr)
         return;
@@ -284,22 +298,22 @@ void ImGuiApp_ImplWin32OpenGL3_Shutdown()
     if (bd->PlatformBackendInitialized)
         ImGui_ImplWin32_Shutdown();
 
-    GImGuiAppBackend = nullptr;
+    app->BackendData = nullptr;
     IM_DELETE(bd);
 }
 
-void ImGuiApp_ImplWin32OpenGL3_NewFrame()
+void ImGuiApp_ImplWin32OpenGL3_NewFrame(ImGuiApp* app)
 {
-    ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData();
+    ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData(app);
     IM_ASSERT(bd != nullptr && "Backend not initialized! Did you call ImGuiApp_ImplWin32OpenGL3_Init()?");
     IM_UNUSED(bd);
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplWin32_NewFrame();
 }
 
-void ImGuiApp_ImplWin32OpenGL3_RenderDrawData(ImDrawData* draw_data, const ImGuiAppFrameConfig* config)
+void ImGuiApp_ImplWin32OpenGL3_RenderDrawData(ImGuiApp* app, ImDrawData* draw_data, const ImGuiAppFrameConfig* config)
 {
-    ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData();
+    ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData(app);
     IM_ASSERT(bd != nullptr && "Backend not initialized! Did you call ImGuiApp_ImplWin32OpenGL3_Init()?");
     if (bd == nullptr)
         return;
@@ -330,9 +344,9 @@ void ImGuiApp_ImplWin32OpenGL3_RenderDrawData(ImDrawData* draw_data, const ImGui
 
 // Present phase: the encode phase runs between RenderDrawData and this, reading
 // back the frame just rendered before it goes on screen.
-void ImGuiApp_ImplWin32OpenGL3_PresentFrame(const ImGuiAppFrameConfig* config)
+void ImGuiApp_ImplWin32OpenGL3_PresentFrame(ImGuiApp* app, const ImGuiAppFrameConfig* config)
 {
-    ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData();
+    ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData(app);
     if (bd == nullptr || config == nullptr)
         return;
     if ((config->Flags & ImGuiAppFrameFlags_NoPresent) == 0)
@@ -387,9 +401,10 @@ bool ImGuiApp_ImplWin32OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& confi
     init_info.MainDC      = state->MainWindow.hDC;
     init_info.MainGLRC    = state->MainGLRC;
     init_info.GlslVersion = nullptr;
-    if (!ImGuiApp_ImplWin32OpenGL3_Init(&init_info))
+    if (!ImGuiApp_ImplWin32OpenGL3_Init(app, &init_info))
         return false;
-    GImGuiAppBackend->State = state;   // viewport hooks reach the window/GL state through the backend data
+    ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData(app);
+    bd->State = state;   // viewport hooks reach the window/GL state through the backend data
 
     ImGui::GetIO().ConfigFlags |= config.ConfigFlags;
 
@@ -407,8 +422,7 @@ bool ImGuiApp_ImplWin32OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& confi
 
         // Wrap the upstream GL renderer's per-viewport draw (registered by
         // ImGui_ImplOpenGL3_Init above) so a pacing-skipped viewport draws nothing.
-        GImGuiAppBackend->App = app;
-        GImGuiAppBackend->UnderlyingRendererRenderWindow = platform_io.Renderer_RenderWindow;
+        bd->UnderlyingRendererRenderWindow = platform_io.Renderer_RenderWindow;
         platform_io.Renderer_RenderWindow = ImGuiApp_ImplWin32OpenGL3_Renderer_RenderWindow;
     }
 
@@ -421,8 +435,8 @@ bool ImGuiApp_ImplWin32OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& confi
 void ImGuiApp_ImplWin32OpenGL3_ShutdownPlatform(ImGuiApp* app)
 {
     // Graphics first (wrapped imgui backends need the window/GL context alive), then the host.
-    if (ImGuiApp_ImplWin32OpenGL3_GetBackendData() != nullptr)
-        ImGuiApp_ImplWin32OpenGL3_Shutdown();
+    if (ImGuiApp_ImplWin32OpenGL3_GetBackendData(app) != nullptr)
+        ImGuiApp_ImplWin32OpenGL3_Shutdown(app);
 
     ImGuiAppPlatformData* state = app->PlatformData;
     if (state == nullptr)
@@ -455,7 +469,7 @@ void ImGuiApp_ImplWin32OpenGL3_ShutdownPlatform(ImGuiApp* app)
     app->PlatformData = nullptr;
 }
 
-static const ImGuiAppPlatformBackend GPlatformBackend =
+static const ImGuiAppPlatformBackend ImGuiApp_ImplWin32OpenGL3_PlatformBackend =
 {
     ImGuiApp_ImplWin32OpenGL3_InitPlatform,
     ImGuiApp_ImplWin32OpenGL3_ShutdownPlatform,
@@ -468,6 +482,6 @@ static const ImGuiAppPlatformBackend GPlatformBackend =
     ImGuiApp_ImplWin32OpenGL3_PresentFrame,
 };
 
-const ImGuiAppPlatformBackend* ImGuiAppGetPlatformBackend() { return &GPlatformBackend; }
+const ImGuiAppPlatformBackend* ImGuiAppGetPlatformBackend() { return &ImGuiApp_ImplWin32OpenGL3_PlatformBackend; }
 
 #endif // #ifndef IMGUI_DISABLE

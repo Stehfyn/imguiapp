@@ -8,6 +8,7 @@
 //  [ ] AV: CaptureFrame readback (recording unavailable on this host; use win32-vulkan).
 
 // CHANGELOG
+//  2026-07-08: Threaded ImGuiApp* through the frame lifecycle; backend data moved to app->BackendData, file-scope backend global removed.
 //  2026-07-08: Exposed ImGuiApp_ImplSDL2WGPU_* frame lifecycle (imgui impl pattern); host owns the ImGui context it creates; backend-internal symbols prefixed; IMGUI_DISABLE guards added.
 
 #include "imguiapp_impl_sdl2_wgpu.h"
@@ -54,10 +55,11 @@ struct ImGuiApp_ImplSDL2WGPU_Data
     ImGuiApp_ImplSDL2WGPU_Data() { memset((void*)this, 0, sizeof(*this)); }
 };
 
-// IM_NEW'd at Init, freed by Shutdown; reached through the accessor (one backend per process).
-static ImGuiApp_ImplSDL2WGPU_Data* GImGuiAppBackend = nullptr;
-
-static ImGuiApp_ImplSDL2WGPU_Data* ImGuiApp_ImplSDL2WGPU_GetBackendData() { return GImGuiAppBackend; }
+// Backend data stored in app->BackendData (the io userdata slots belong to the wrapped imgui backends).
+static ImGuiApp_ImplSDL2WGPU_Data* ImGuiApp_ImplSDL2WGPU_GetBackendData(ImGuiApp* app)
+{
+    return app != nullptr ? (ImGuiApp_ImplSDL2WGPU_Data*)app->BackendData : nullptr;
+}
 
 static bool ImGuiApp_ImplSDL2WGPU_IsInitInfoValid(const ImGuiApp_ImplSDL2WGPU_InitInfo* init_info)
 {
@@ -249,9 +251,9 @@ static bool ImGuiApp_ImplSDL2WGPU_InitWGPU(ImGuiApp_ImplSDL2WGPU_Data* bd)
 }
 
 
-void ImGuiApp_ImplSDL2WGPU_Shutdown()
+void ImGuiApp_ImplSDL2WGPU_Shutdown(ImGuiApp* app)
 {
-    ImGuiApp_ImplSDL2WGPU_Data* bd = ImGuiApp_ImplSDL2WGPU_GetBackendData();
+    ImGuiApp_ImplSDL2WGPU_Data* bd = ImGuiApp_ImplSDL2WGPU_GetBackendData(app);
     IM_ASSERT(bd != nullptr && "No platform backend to shutdown, or already shutdown?");
     if (bd == nullptr)
         return;
@@ -273,13 +275,13 @@ void ImGuiApp_ImplSDL2WGPU_Shutdown()
     if (bd->Instance != nullptr)
         wgpuInstanceRelease(bd->Instance);
 
-    GImGuiAppBackend = nullptr;
+    app->BackendData = nullptr;
     IM_DELETE(bd);
 }
 
-void ImGuiApp_ImplSDL2WGPU_NewFrame()
+void ImGuiApp_ImplSDL2WGPU_NewFrame(ImGuiApp* app)
 {
-    ImGuiApp_ImplSDL2WGPU_Data* bd = ImGuiApp_ImplSDL2WGPU_GetBackendData();
+    ImGuiApp_ImplSDL2WGPU_Data* bd = ImGuiApp_ImplSDL2WGPU_GetBackendData(app);
     IM_ASSERT(bd != nullptr && "Backend not initialized! Did you call ImGuiApp_ImplSDL2WGPU_Init()?");
     if (bd == nullptr)
         return;
@@ -294,9 +296,9 @@ void ImGuiApp_ImplSDL2WGPU_NewFrame()
 }
 
 // Submits and presents in one hook (no PresentFrame; legacy single-hook contract).
-void ImGuiApp_ImplSDL2WGPU_RenderDrawData(ImDrawData* draw_data, const ImGuiAppFrameConfig* config)
+void ImGuiApp_ImplSDL2WGPU_RenderDrawData(ImGuiApp* app, ImDrawData* draw_data, const ImGuiAppFrameConfig* config)
 {
-    ImGuiApp_ImplSDL2WGPU_Data* bd = ImGuiApp_ImplSDL2WGPU_GetBackendData();
+    ImGuiApp_ImplSDL2WGPU_Data* bd = ImGuiApp_ImplSDL2WGPU_GetBackendData(app);
     IM_ASSERT(bd != nullptr && "Backend not initialized! Did you call ImGuiApp_ImplSDL2WGPU_Init()?");
     if (bd == nullptr || draw_data == nullptr || config == nullptr || bd->Surface == nullptr)
         return;
@@ -362,41 +364,42 @@ void ImGuiApp_ImplSDL2WGPU_RenderDrawData(ImDrawData* draw_data, const ImGuiAppF
     wgpuCommandBufferRelease(command_buffer);
 }
 
-bool ImGuiApp_ImplSDL2WGPU_Init(const ImGuiApp_ImplSDL2WGPU_InitInfo* init_info)
+bool ImGuiApp_ImplSDL2WGPU_Init(ImGuiApp* app, const ImGuiApp_ImplSDL2WGPU_InitInfo* init_info)
 {
-    IM_ASSERT(GImGuiAppBackend == nullptr && "Already initialized a platform backend!");
+    IM_ASSERT(app != nullptr && app->BackendData == nullptr && "Already initialized a platform backend!");
     IM_ASSERT(ImGuiApp_ImplSDL2WGPU_IsInitInfoValid(init_info) && "ImGuiApp_ImplSDL2WGPU_Init: invalid init_info.");
-    if (GImGuiAppBackend != nullptr || !ImGuiApp_ImplSDL2WGPU_IsInitInfoValid(init_info))
+    if (app == nullptr || app->BackendData != nullptr || !ImGuiApp_ImplSDL2WGPU_IsInitInfoValid(init_info))
         return false;
 
-    GImGuiAppBackend = IM_NEW(ImGuiApp_ImplSDL2WGPU_Data)();
-    GImGuiAppBackend->Window = (SDL_Window*)init_info->Window;
-    GImGuiAppBackend->CanvasSelector = init_info->CanvasSelector != nullptr ? init_info->CanvasSelector : "#canvas";
+    ImGuiApp_ImplSDL2WGPU_Data* bd = IM_NEW(ImGuiApp_ImplSDL2WGPU_Data)();
+    app->BackendData = bd;
+    bd->Window = (SDL_Window*)init_info->Window;
+    bd->CanvasSelector = init_info->CanvasSelector != nullptr ? init_info->CanvasSelector : "#canvas";
 
-    if (!ImGuiApp_ImplSDL2WGPU_InitWGPU(GImGuiAppBackend))
+    if (!ImGuiApp_ImplSDL2WGPU_InitWGPU(bd))
     {
-        ImGuiApp_ImplSDL2WGPU_Shutdown();
+        ImGuiApp_ImplSDL2WGPU_Shutdown(app);
         return false;
     }
 
-    if (!ImGui_ImplSDL2_InitForOther(GImGuiAppBackend->Window))
+    if (!ImGui_ImplSDL2_InitForOther(bd->Window))
     {
-        ImGuiApp_ImplSDL2WGPU_Shutdown();
+        ImGuiApp_ImplSDL2WGPU_Shutdown(app);
         return false;
     }
-    GImGuiAppBackend->PlatformBackendInitialized = true;
+    bd->PlatformBackendInitialized = true;
 
     ImGui_ImplWGPU_InitInfo wgpu_init_info;
-    wgpu_init_info.Device = GImGuiAppBackend->Device;
+    wgpu_init_info.Device = bd->Device;
     wgpu_init_info.NumFramesInFlight = 3;
-    wgpu_init_info.RenderTargetFormat = GImGuiAppBackend->SurfaceConfiguration.format;
+    wgpu_init_info.RenderTargetFormat = bd->SurfaceConfiguration.format;
     wgpu_init_info.DepthStencilFormat = WGPUTextureFormat_Undefined;
     if (!ImGui_ImplWGPU_Init(&wgpu_init_info))
     {
-        ImGuiApp_ImplSDL2WGPU_Shutdown();
+        ImGuiApp_ImplSDL2WGPU_Shutdown(app);
         return false;
     }
-    GImGuiAppBackend->RendererBackendInitialized = true;
+    bd->RendererBackendInitialized = true;
     return true;
 }
 
@@ -428,7 +431,7 @@ bool ImGuiApp_ImplSDL2WGPU_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
     ImGuiApp_ImplSDL2WGPU_InitInfo init_info;
     init_info.Window         = state->Window;
     init_info.CanvasSelector = "#canvas";
-    if (!ImGuiApp_ImplSDL2WGPU_Init(&init_info))
+    if (!ImGuiApp_ImplSDL2WGPU_Init(app, &init_info))
     {
         SDL_DestroyWindow(state->Window);
         state->Window = nullptr;
@@ -446,8 +449,8 @@ bool ImGuiApp_ImplSDL2WGPU_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
 void ImGuiApp_ImplSDL2WGPU_ShutdownPlatform(ImGuiApp* app)
 {
     // Graphics first (wrapped imgui backends + WGPU objects need the window alive), then the host.
-    if (ImGuiApp_ImplSDL2WGPU_GetBackendData() != nullptr)
-        ImGuiApp_ImplSDL2WGPU_Shutdown();
+    if (ImGuiApp_ImplSDL2WGPU_GetBackendData(app) != nullptr)
+        ImGuiApp_ImplSDL2WGPU_Shutdown(app);
 
     ImGuiAppPlatformData* state = app->PlatformData;
     if (state == nullptr)
@@ -468,7 +471,7 @@ void ImGuiApp_ImplSDL2WGPU_ShutdownPlatform(ImGuiApp* app)
     app->PlatformData = nullptr;
 }
 
-static const ImGuiAppPlatformBackend GPlatformBackend =
+static const ImGuiAppPlatformBackend ImGuiApp_ImplSDL2WGPU_PlatformBackend =
 {
     ImGuiApp_ImplSDL2WGPU_InitPlatform,
     ImGuiApp_ImplSDL2WGPU_ShutdownPlatform,
@@ -481,7 +484,7 @@ static const ImGuiAppPlatformBackend GPlatformBackend =
     nullptr, // PresentFrame: RenderDrawData presents (legacy single-hook)
 };
 
-const ImGuiAppPlatformBackend* ImGuiAppGetPlatformBackend() { return &GPlatformBackend; }
+const ImGuiAppPlatformBackend* ImGuiAppGetPlatformBackend() { return &ImGuiApp_ImplSDL2WGPU_PlatformBackend; }
 
 
 #endif // #ifndef IMGUI_DISABLE

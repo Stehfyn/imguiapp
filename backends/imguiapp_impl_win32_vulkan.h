@@ -23,12 +23,13 @@ struct ImGuiApp_ImplWin32Vulkan_InitInfo
     int                  OffscreenHeight;
 };
 
-// Frame lifecycle (imgui impl pattern); registered on the seam via ImGuiAppPlatformBackend.
-IMGUI_API bool ImGuiApp_ImplWin32Vulkan_Init(const ImGuiApp_ImplWin32Vulkan_InitInfo* init_info);
-IMGUI_API void ImGuiApp_ImplWin32Vulkan_Shutdown();
-IMGUI_API void ImGuiApp_ImplWin32Vulkan_NewFrame();
-IMGUI_API void ImGuiApp_ImplWin32Vulkan_RenderDrawData(ImDrawData* draw_data, const ImGuiAppFrameConfig* config);
-IMGUI_API void ImGuiApp_ImplWin32Vulkan_PresentFrame(const ImGuiAppFrameConfig* config);
+// Frame lifecycle (imgui impl pattern, app-threaded); registered on the seam via ImGuiAppPlatformBackend.
+// Backend data lives in app->BackendData (io.BackendXxxUserData analog; both io slots belong to the wrapped imgui backends).
+IMGUI_API bool ImGuiApp_ImplWin32Vulkan_Init(ImGuiApp* app, const ImGuiApp_ImplWin32Vulkan_InitInfo* init_info);
+IMGUI_API void ImGuiApp_ImplWin32Vulkan_Shutdown(ImGuiApp* app);
+IMGUI_API void ImGuiApp_ImplWin32Vulkan_NewFrame(ImGuiApp* app);
+IMGUI_API void ImGuiApp_ImplWin32Vulkan_RenderDrawData(ImGuiApp* app, ImDrawData* draw_data, const ImGuiAppFrameConfig* config);
+IMGUI_API void ImGuiApp_ImplWin32Vulkan_PresentFrame(ImGuiApp* app, const ImGuiAppFrameConfig* config);
 
 IMGUI_API bool ImGuiApp_ImplWin32Vulkan_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config);
 IMGUI_API void ImGuiApp_ImplWin32Vulkan_ShutdownPlatform(ImGuiApp* app);

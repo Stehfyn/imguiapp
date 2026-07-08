@@ -138,7 +138,7 @@ typedef int ImGuiAppTransportSource;   // -> enum ImGuiAppTransportSource_   // 
 #define IMGUIAPP_CONTROL_BODY_MAX 2048   // ImGuiAppNodeDraft per-method custom C++ body cap (fixed buffer -> draft stays memcpy-safe)
 
 #ifndef IMGUIAPP_PREVIEW_ABI
-#define IMGUIAPP_PREVIEW_ABI 20260706u   // host<->DLL preview ABI tag (F78); bump on any layout/vtable/signature change. Since 0.4.1 (July 2026, 401)
+#define IMGUIAPP_PREVIEW_ABI 20260708u   // host<->DLL preview ABI tag (F78); bump on any layout/vtable/signature change. Since 0.4.1 (July 2026, 401)
 #endif
 
 // Private command range: dispatch ids above the public ImGuiAppCommand_COUNT.

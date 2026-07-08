@@ -689,10 +689,10 @@ struct ImGuiAppPlatformBackend
     // driven by the app's frame phases (OnDrawFrame/OnRenderFrame/OnPresentFrame). PresentFrame
     // optional (null = RenderDrawData presents, legacy single-hook).
     const char* Name;
-    void (*ShutdownFn)();
-    void (*NewFrameFn)();
-    void (*RenderDrawDataFn)(ImDrawData* draw_data, const ImGuiAppFrameConfig* config);
-    void (*PresentFrameFn)(const ImGuiAppFrameConfig* config);
+    void (*ShutdownFn)(ImGuiApp* app);
+    void (*NewFrameFn)(ImGuiApp* app);
+    void (*RenderDrawDataFn)(ImGuiApp* app, ImDrawData* draw_data, const ImGuiAppFrameConfig* config);
+    void (*PresentFrameFn)(ImGuiApp* app, const ImGuiAppFrameConfig* config);
 };
 
 IMGUI_API const ImGuiAppPlatformBackend* ImGuiAppGetPlatformBackend();
@@ -977,6 +977,7 @@ struct ImGuiApp : ImGuiAppBase
     ImGuiAppPlatform               Platform            = {};      // zeroed so a not-yet-Initialize()'d app is safe to render (StatusLayer null-guards Platform.Name)
     ImVec4                         ClearColor;
     ImGuiAppPlatformData*          PlatformData        = nullptr; // opaque platform host state (allocated/freed by the backend's Init/ShutdownPlatform)
+    void*                          BackendData         = nullptr; // host backend data (io.BackendXxxUserData analog; owned by ImGuiApp_ImplXXX_Init/Shutdown)
     ImGuiAppWAL*                   WAL                 = nullptr; // optional write-ahead logger (caller-owned); null = silent
     ImGuiAppRecorder*              Recorder            = nullptr; // active recording (AppRecordBegin registers, AppRecordEnd clears); null = none
     ImGuiAppFrameID                FrameID;                       // stamped at the top of OnDrawFrame; correlation key for WAL/video/sidecar
