@@ -72,6 +72,7 @@ struct ImGuiAppBase;
 struct ImGuiAppCommandLayer;
 struct ImGuiAppLayer;
 struct ImGuiAppLayerBase;
+struct ImGuiAppNodeBase;
 struct ImGuiAppTaskLayer;
 
 // Forward declarations: ImGuiAppControl layer
@@ -180,13 +181,13 @@ namespace ImGui
     // (host_kind/host_label = owning window/sidebar, or null), labels the control, registers its instance
     // storage. The typed template caller then wires _InstanceID/_InstanceData and ResolveDependencies.
     IMGUI_API void        AppControlRegisterStorage(ImGuiApp* app, ImGuiAppControlBase* control, const char* name, ImGuiID data_type_id, ImGuiID instance, void* instance_data, bool snapshottable, int inst_size, int temp_offset, int temp_size, void (*destroy)(void*), const char* host_kind, const char* host_label);
-    // Type-erased tail: append the wired control to its owning list and initialize it.
-    IMGUI_API void        AppControlPush(ImGuiApp* app, ImVector<ImGuiAppControlBase*>* list, ImGuiAppControlBase* control);
+    // Type-erased tail: append the wired node to its owning list and initialize it.
+    IMGUI_API void        AppControlPush(ImGuiApp* app, ImVector<ImGuiAppNodeBase*>* list, ImGuiAppNodeBase* node);
     IMGUI_API void        UnregisterAppStorage(ImGuiApp* app, ImGuiID id);                                                                            // destroys + removes one entry
     IMGUI_API void        ClearAppStorage(ImGuiApp* app);
 
     // Internal helper for the inline Push templates below (defined in imguiapp.cpp; must stay here because
-    // those public templates call it). ShutdownAppControls -- cpp-only -- lives in imguiapp_internal.h.
+    // those public templates call it). ShutdownAppNodes -- cpp-only -- lives in imguiapp_internal.h.
     IMGUI_API void        AppDeduplicateItemLabel(char* label, int label_size, const ImVector<ImGuiAppWindowBase*>* windows, const ImVector<ImGuiAppSidebarBase*>* sidebars);
     // Dependency-slot key resolution for the adapter template below (order: explicit binding ->
     // the control's own instance id -> the type singleton). Defined in imguiapp.cpp.
@@ -265,9 +266,9 @@ namespace ImGui
     IMGUI_API int         PushAppColorMods(const ImGuiAppColorModDesc* mods, int count);
 
     template <typename Visitor>
-    IMGUI_API inline void ForEachAppControl(ImGuiApp* app, Visitor visitor);
+    IMGUI_API inline void ForEachAppNode(ImGuiApp* app, Visitor visitor);
     template <typename Visitor>
-    IMGUI_API inline void ForEachAppControl(const ImGuiApp* app, Visitor visitor);
+    IMGUI_API inline void ForEachAppNode(const ImGuiApp* app, Visitor visitor);
 
     // Demo
     // host: the PROCESS's real app, offered as the "Host app" live-mirror perspective
@@ -799,6 +800,10 @@ struct ImGuiAppLayerBase : ImGuiAppInterface
     virtual void OnDraw(const ImGuiApp*) const    = 0;
 };
 
+// A node: an authorable item in the composition tree + the live-mirror surface -- compile-time-erased
+// data identity re-exposed on the type-erased base, so tools inspect any node without knowing its
+// concrete template pack. Mirror hooks default inert (imguiapp.cpp); ImGuiAppControlMirrorAdapter<>
+// overrides each from its pack. (ImGuiAppLiveFieldDesc lives in imguiapp_reflect.h, included at the top.)
 struct ImGuiAppNodeBase : ImGuiAppInterface
 {
     char Label[IM_LABEL_SIZE]; // type name by default; deduplicated with "##N" on real collisions
@@ -814,6 +819,23 @@ struct ImGuiAppNodeBase : ImGuiAppInterface
     virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*) const = 0;
     virtual void OnUpdate(const ImGuiApp* app, float dt) const         = 0;
     virtual void OnDraw(const ImGuiApp*) const                         = 0;
+
+    // Data identity
+    virtual ImGuiID GetDataID() const;                                                  // instance-qualified storage key of PersistData
+    virtual void    GetDataTypeName(char* out, int out_size) const;                     // PersistData type name
+    virtual void    GetTempDataTypeName(char* out, int out_size) const;                 // TempData type name
+
+    // Reflection + live memory
+    virtual int     GetFields(ImGuiAppLiveFieldDesc* out, int cap, bool temp_data) const; // reflected members of Persist (false) / Temp (true); out null = count
+    virtual bool    IsDataReflectable(bool temp_data) const;                            // false = not trivially copyable: opaque, exactly like snapshots
+    virtual bool    GetLiveData(const void** out_persist, const void** out_temp) const; // live instance memory of the RUNNING node (read-only); false before init
+
+    // Dependency wiring
+    virtual int     GetDependencyIDs(ImGuiID* out, int cap) const;                      // RESOLVED producer keys -- where each slot is wired NOW (out null = count)
+    virtual int     GetDependencyTypeIDs(ImGuiID* out, int cap) const;                  // DECLARED dependency type ids -- the compile-time pack, what CAN be wired
+    virtual int     GetDependencyOptional(bool* out, int cap) const;                    // per-slot Optional flags, same order as the id queries
+    virtual void    RefreshDependencyData(const ImGuiApp* app);                         // rebind cached dependency pointers from resolved keys (AppRebuildUpdateOrder, after any push/pop)
+    virtual bool    SetDependencyBinding(ImGuiApp* app, const ImGuiAppDataBinding* bind); // re-route one declared dependency at runtime (Composer rewiring); false = TypeID not in pack
 };
 
 struct ImGuiAppWindowBase : ImGuiAppNodeBase
@@ -822,7 +844,7 @@ struct ImGuiAppWindowBase : ImGuiAppNodeBase
     ImGuiWindow*                   Window   = nullptr;
     ImGuiViewport*                 Viewport = nullptr;
     ImGuiWindowFlags               Flags    = ImGuiWindowFlags_None;
-    ImVector<ImGuiAppControlBase*> Children;
+    ImVector<ImGuiAppNodeBase*>    Children;
 
     // Optional first-use placement (applied with ImGuiCond_FirstUseEver, so saved .ini wins).
     bool   HasInitialPlacement = false;
@@ -836,28 +858,10 @@ struct ImGuiAppSidebarBase : ImGuiAppWindowBase
     float    Size    = 0.0f;
 };
 
-// A control: an authorable item + the live-mirror surface -- compile-time-erased data identity
-// re-exposed on the type-erased base, so tools inspect a control without knowing its concrete
-// template pack. Hooks default inert (imguiapp.cpp); ImGuiAppControlMirrorAdapter<> overrides each
-// from its pack. (ImGuiAppLiveFieldDesc lives in imguiapp_reflect.h, included at the top.)
+// Type marker: a data-carrying node (Persist/Temp/dependency pack behind the ImGuiAppNodeBase
+// mirror surface). Kept while hosted/free lists and the adapter Base parameter stay control-typed (N1).
 struct ImGuiAppControlBase : ImGuiAppNodeBase
 {
-    // Data identity
-    virtual ImGuiID GetDataID() const;                                                  // instance-qualified storage key of PersistData
-    virtual void    GetDataTypeName(char* out, int out_size) const;                     // PersistData type name
-    virtual void    GetTempDataTypeName(char* out, int out_size) const;                 // TempData type name
-
-    // Reflection + live memory
-    virtual int     GetFields(ImGuiAppLiveFieldDesc* out, int cap, bool temp_data) const; // reflected members of Persist (false) / Temp (true); out null = count
-    virtual bool    IsDataReflectable(bool temp_data) const;                            // false = not trivially copyable: opaque, exactly like snapshots
-    virtual bool    GetLiveData(const void** out_persist, const void** out_temp) const; // live instance memory of the RUNNING control (read-only); false before init
-
-    // Dependency wiring
-    virtual int     GetDependencyIDs(ImGuiID* out, int cap) const;                      // RESOLVED producer keys -- where each slot is wired NOW (out null = count)
-    virtual int     GetDependencyTypeIDs(ImGuiID* out, int cap) const;                  // DECLARED dependency type ids -- the compile-time pack, what CAN be wired
-    virtual int     GetDependencyOptional(bool* out, int cap) const;                    // per-slot Optional flags, same order as the id queries
-    virtual void    RefreshDependencyData(const ImGuiApp* app);                         // rebind cached dependency pointers from resolved keys (AppRebuildUpdateOrder, after any push/pop)
-    virtual bool    SetDependencyBinding(ImGuiApp* app, const ImGuiAppDataBinding* bind); // re-route one declared dependency at runtime (Composer rewiring); false = TypeID not in pack
 };
 
 // The reflectability contracts, type-schema registry, and reflection field-walk these adapters drive
@@ -985,8 +989,8 @@ struct ImGuiApp : ImGuiAppBase
     ImVector<ImGuiAppLayerBase*>   Layers;
     ImVector<ImGuiAppWindowBase*>  Windows;
     ImVector<ImGuiAppSidebarBase*> Sidebars;
-    ImVector<ImGuiAppControlBase*> Controls;
-    ImVector<ImGuiAppControlBase*> UpdateOrder;                   // dependency-sorted OnUpdate iteration (AppRebuildUpdateOrder)
+    ImVector<ImGuiAppNodeBase*>    Controls;
+    ImVector<ImGuiAppNodeBase*>    UpdateOrder;                   // dependency-sorted OnUpdate iteration (AppRebuildUpdateOrder)
     int                            CompositionRevision = 0;       // bumped by every storage register/unregister (pop+repush of the same type still advances it)
     int                            UpdateOrderRevision = -1;      // revision UpdateOrder + the cached dependency bindings were built at
     const char*                    PlatformName        = nullptr; // app label for diagnostics (StatusLayer null-guards it); from config
@@ -1355,7 +1359,7 @@ namespace ImGui
     // Visit every pushed control in update order: app-level, then sidebar-hosted, then window-hosted.
     // visitor(control, host) with host == nullptr for app-level. The single shared enumeration of "all controls".
     template <typename Visitor>
-    IMGUI_API inline void ForEachAppControl(ImGuiApp* app, Visitor visitor)
+    IMGUI_API inline void ForEachAppNode(ImGuiApp* app, Visitor visitor)
     {
         IM_ASSERT(app);
         for (int i = 0; i < app->Controls.Size; i++)
@@ -1369,17 +1373,17 @@ namespace ImGui
     }
 
     template <typename Visitor>
-    IMGUI_API inline void ForEachAppControl(const ImGuiApp* app, Visitor visitor)
+    IMGUI_API inline void ForEachAppNode(const ImGuiApp* app, Visitor visitor)
     {
         IM_ASSERT(app);
         for (int i = 0; i < app->Controls.Size; i++)
-            visitor((const ImGuiAppControlBase*)app->Controls.Data[i], (const ImGuiAppWindowBase*)nullptr);
+            visitor((const ImGuiAppNodeBase*)app->Controls.Data[i], (const ImGuiAppWindowBase*)nullptr);
         for (int s = 0; s < app->Sidebars.Size; s++)
             for (int i = 0; i < app->Sidebars.Data[s]->Children.Size; i++)
-                visitor((const ImGuiAppControlBase*)app->Sidebars.Data[s]->Children.Data[i], (const ImGuiAppWindowBase*)app->Sidebars.Data[s]);
+                visitor((const ImGuiAppNodeBase*)app->Sidebars.Data[s]->Children.Data[i], (const ImGuiAppWindowBase*)app->Sidebars.Data[s]);
         for (int w = 0; w < app->Windows.Size; w++)
             for (int i = 0; i < app->Windows.Data[w]->Children.Size; i++)
-                visitor((const ImGuiAppControlBase*)app->Windows.Data[w]->Children.Data[i], (const ImGuiAppWindowBase*)app->Windows.Data[w]);
+                visitor((const ImGuiAppNodeBase*)app->Windows.Data[w]->Children.Data[i], (const ImGuiAppWindowBase*)app->Windows.Data[w]);
     }
 } // namespace ImGui
 

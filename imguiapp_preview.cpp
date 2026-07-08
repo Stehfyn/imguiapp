@@ -1175,7 +1175,7 @@ ImGuiAppPreview* AppPreviewCreate(const ImGuiAppGraph* graph, char* err, int err
 
     // Producers before consumers, or refuse (design 4.1 uses AppRebuildUpdateOrder's topo; this base's
     // equivalent is AppGraphTopoOrder). The interpreter pushes controls in this order, so the shipped
-    // push-order-is-update-order enumeration (ForEachAppControl) runs the DAG correctly.
+    // push-order-is-update-order enumeration (ForEachAppNode) runs the DAG correctly.
     ImVector<int> order;
     char toperr[160];
     if (!AppGraphTopoOrder(graph, &order, toperr, IM_ARRAYSIZE(toperr)))

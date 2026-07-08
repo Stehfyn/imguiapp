@@ -37,14 +37,13 @@ kinds — so the mirror becomes an isomorphism instead of a translation.
   expectations moved together.
 - **N0b** — `ImGuiAppItemBase` → `ImGuiAppNodeBase`; `ImGuiAppWindowBase::Controls` →
   `Children` (element type still `ImGuiAppControlBase*`, generalized in N1). No behavior change.
+- **N1** — machinery up the tree. Mirror-surface virtuals moved `ImGuiAppControlBase` →
+  `ImGuiAppNodeBase` with inert defaults (D3); `ImGuiAppControlBase` is now a pure type marker.
+  `Children`, `app->Controls`, and `UpdateOrder` element type generalized to
+  `ImGuiAppNodeBase*`. `ForEachAppControl` → `ForEachAppNode`, `ShutdownAppControls` →
+  `ShutdownAppNodes`; no adapter change was needed (Base parameter unchanged).
 
 ## Phases (each lands green: build + 7 ctest suites incl. style/section/indent ratchets)
-
-- **N1 — machinery up the tree.** Mirror-surface virtuals move `ImGuiAppControlBase` →
-  `ImGuiAppNodeBase` with empty defaults (D3). `Children` generalizes to
-  `ImVector<ImGuiAppNodeBase*>`. `ForEachAppControl` becomes a node walk that filters by kind.
-  `ImGuiAppInterfaceAdapter<Base, ...>` already takes any base (the DependencySlots /
-  MirrorAdapter / Labeled factoring prepared this); no adapter change expected.
 - **N2 — Layer is a node.** `ImGuiAppLayerBase` folds onto `ImGuiAppNodeBase`; reconcile
   OnAttach/OnDetach vs OnInitialize/OnShutdown (one lifecycle pair survives). App becomes the
   root node owning the layer list as Children (ordered walk preserved).

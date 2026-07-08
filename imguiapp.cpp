@@ -447,7 +447,7 @@ void ImGuiAppTaskLayer::OnUpdate(ImGuiApp* app, float dt) const
     // OnUpdate consumes the TempData recorded by last frame's OnDraw and mutates PersistData; runs before
     // the Command layer collects OnGetCommand, so state updated this frame can emit a command the same frame.
     // Dependency order: every producer updates before its consumers, regardless of hosting order.
-    const ImVector<ImGuiAppControlBase*>* order = ImGui::AppRebuildUpdateOrder(app);
+    const ImVector<ImGuiAppNodeBase*>* order = ImGui::AppRebuildUpdateOrder(app);
     for (int i = 0; i < order->Size; i++)
         order->Data[i]->OnUpdate(app, dt);
 }
@@ -475,7 +475,7 @@ void ImGuiAppCommandLayer::OnUpdate(ImGuiApp* app, float dt) const
     // Dedup scans linearly: apps extend the enum past ImGuiAppCommand_COUNT, so a COUNT-sized
     // bit array cannot represent user commands.
     ImVector<ImGuiAppCommand> cmds;
-    ImGui::ForEachAppControl(app, [app, &cmds](ImGuiAppControlBase* control, ImGuiAppWindowBase* host)
+    ImGui::ForEachAppNode(app, [app, &cmds](ImGuiAppNodeBase* control, ImGuiAppWindowBase* host)
                              {
         IM_UNUSED(host);
         ImGuiAppCommand cmd = ImGuiAppCommand_None;
@@ -633,20 +633,20 @@ void PopItemStyle(ImGuiAppStyleScope s)
 }
 } // namespace
 
-// ImGuiAppControlBase: inert defaults for the live-mirror data-identity surface. ImGuiAppControlMirrorAdapter<>
+// ImGuiAppNodeBase: inert defaults for the live-mirror data-identity surface. ImGuiAppControlMirrorAdapter<>
 // overrides every one of these from its (PersistDataT, TempDataT, DataDependencies...) pack; a plain
-// ImGuiAppControlBase (or a control with nothing reflectable) keeps them.
-ImGuiID ImGuiAppControlBase::GetDataID() const { return 0; }
-int     ImGuiAppControlBase::GetDependencyIDs(ImGuiID* out, int cap) const { IM_UNUSED(out); IM_UNUSED(cap); return 0; }
-int     ImGuiAppControlBase::GetDependencyTypeIDs(ImGuiID* out, int cap) const { IM_UNUSED(out); IM_UNUSED(cap); return 0; }
-int     ImGuiAppControlBase::GetDependencyOptional(bool* out, int cap) const { IM_UNUSED(out); IM_UNUSED(cap); return 0; }
-void    ImGuiAppControlBase::GetDataTypeName(char* out, int out_size) const { if (out && out_size > 0) out[0] = 0; }
-void    ImGuiAppControlBase::GetTempDataTypeName(char* out, int out_size) const { if (out && out_size > 0) out[0] = 0; }
-int     ImGuiAppControlBase::GetFields(ImGuiAppLiveFieldDesc* out, int cap, bool temp_data) const { IM_UNUSED(out); IM_UNUSED(cap); IM_UNUSED(temp_data); return 0; }
-bool    ImGuiAppControlBase::IsDataReflectable(bool temp_data) const { IM_UNUSED(temp_data); return false; }
-bool    ImGuiAppControlBase::GetLiveData(const void** out_persist, const void** out_temp) const { IM_UNUSED(out_persist); IM_UNUSED(out_temp); return false; }
-void    ImGuiAppControlBase::RefreshDependencyData(const ImGuiApp* app) { IM_UNUSED(app); }
-bool    ImGuiAppControlBase::SetDependencyBinding(ImGuiApp* app, const ImGuiAppDataBinding* bind) { IM_UNUSED(app); IM_UNUSED(bind); return false; }
+// node (or one with nothing reflectable) keeps them.
+ImGuiID ImGuiAppNodeBase::GetDataID() const { return 0; }
+int     ImGuiAppNodeBase::GetDependencyIDs(ImGuiID* out, int cap) const { IM_UNUSED(out); IM_UNUSED(cap); return 0; }
+int     ImGuiAppNodeBase::GetDependencyTypeIDs(ImGuiID* out, int cap) const { IM_UNUSED(out); IM_UNUSED(cap); return 0; }
+int     ImGuiAppNodeBase::GetDependencyOptional(bool* out, int cap) const { IM_UNUSED(out); IM_UNUSED(cap); return 0; }
+void    ImGuiAppNodeBase::GetDataTypeName(char* out, int out_size) const { if (out && out_size > 0) out[0] = 0; }
+void    ImGuiAppNodeBase::GetTempDataTypeName(char* out, int out_size) const { if (out && out_size > 0) out[0] = 0; }
+int     ImGuiAppNodeBase::GetFields(ImGuiAppLiveFieldDesc* out, int cap, bool temp_data) const { IM_UNUSED(out); IM_UNUSED(cap); IM_UNUSED(temp_data); return 0; }
+bool    ImGuiAppNodeBase::IsDataReflectable(bool temp_data) const { IM_UNUSED(temp_data); return false; }
+bool    ImGuiAppNodeBase::GetLiveData(const void** out_persist, const void** out_temp) const { IM_UNUSED(out_persist); IM_UNUSED(out_temp); return false; }
+void    ImGuiAppNodeBase::RefreshDependencyData(const ImGuiApp* app) { IM_UNUSED(app); }
+bool    ImGuiAppNodeBase::SetDependencyBinding(ImGuiApp* app, const ImGuiAppDataBinding* bind) { IM_UNUSED(app); IM_UNUSED(bind); return false; }
 
 //-----------------------------------------------------------------------------
 // [SECTION] Display layer (windows, sidebars, hosted controls, .ini handler)
@@ -745,7 +745,7 @@ void ImGuiAppDisplayLayer::OnDraw(const ImGuiApp* app) const
         PopItemStyle(sidebar_scope);
 
         // Controls render their own windows; submit them outside the sidebar's Begin/End.
-        for (ImGuiAppControlBase* control : sidebar->Children)
+        for (ImGuiAppNodeBase* control : sidebar->Children)
         {
             const ImGuiAppStyleScope control_scope = PushItemStyle(control);
             control->OnDraw(app);
@@ -787,7 +787,7 @@ void ImGuiAppDisplayLayer::OnDraw(const ImGuiApp* app) const
 
             // Hosted controls render INSIDE the host window (child regions, not their own Begin/End).
             // Style mods bracket OnDraw only: they style the control's region but not its popups.
-            for (ImGuiAppControlBase* control : window->Children)
+            for (ImGuiAppNodeBase* control : window->Children)
             {
                 const ImGuiAppStyleScope control_scope = PushItemStyle(control);
                 control->OnDraw(app);
@@ -799,7 +799,7 @@ void ImGuiAppDisplayLayer::OnDraw(const ImGuiApp* app) const
         PopItemStyle(window_scope);
     }
 
-    for (ImGuiAppControlBase* control : app->Controls)
+    for (ImGuiAppNodeBase* control : app->Controls)
     {
         const ImGuiAppStyleScope control_scope = PushItemStyle(control);
         control->OnDraw(app);
@@ -885,7 +885,7 @@ IMGUI_API void ShutdownApp(ImGuiApp* app)
         PopAppSidebar(app);
     while (!app->Windows.empty())
         PopAppWindow(app);
-    ShutdownAppControls(app, app->Controls);
+    ShutdownAppNodes(app, app->Controls);
     while (!app->Layers.empty())
         PopAppLayer(app);
 
@@ -953,7 +953,7 @@ void PopAppSidebar(ImGuiApp* app)
     ImGuiAppSidebarBase* sidebar = app->Sidebars.back();
     app->Sidebars.pop_back();
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "pop sidebar '%s'", sidebar->Label);
-    ShutdownAppControls(app, sidebar->Children);
+    ShutdownAppNodes(app, sidebar->Children);
     sidebar->OnShutdown(app);
     IM_DELETE(sidebar);
 }
@@ -972,7 +972,7 @@ void PopAppWindow(ImGuiApp* app)
     ImGuiAppWindowBase* window = app->Windows.back();
     app->Windows.pop_back();
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "pop window '%s'", window->Label);
-    ShutdownAppControls(app, window->Children);
+    ShutdownAppNodes(app, window->Children);
     window->OnShutdown(app);
     IM_DELETE(window);
 }
@@ -988,7 +988,7 @@ void PopAppControl(ImGuiApp* app)
         return;
     }
 
-    ImGuiAppControlBase* control = app->Controls.back();
+    ImGuiAppNodeBase* control = app->Controls.back();
     app->Controls.pop_back();
     if (app->WAL != nullptr)
     {
@@ -1014,7 +1014,7 @@ IMGUI_API ImGuiID GetAppCompositionID(const ImGuiApp* app)
         h = ImHashStr(app->Windows.Data[i]->Label, 0, h);
     for (int i = 0; i < app->Sidebars.Size; i++)
         h = ImHashStr(app->Sidebars.Data[i]->Label, 0, h);
-    ForEachAppControl(app, [&h](const ImGuiAppControlBase* control, const ImGuiAppWindowBase* host)
+    ForEachAppNode(app, [&h](const ImGuiAppNodeBase* control, const ImGuiAppWindowBase* host)
                       {
         IM_UNUSED(host);
         const ImGuiID id = control->GetDataID();
@@ -1089,10 +1089,10 @@ IMGUI_API void AppControlRegisterStorage(ImGuiApp* app, ImGuiAppControlBase* con
     RegisterAppControlStorage(app, id, instance_data, snapshottable, inst_size, temp_offset, temp_size, destroy);
 }
 
-IMGUI_API void AppControlPush(ImGuiApp* app, ImVector<ImGuiAppControlBase*>* list, ImGuiAppControlBase* control)
+IMGUI_API void AppControlPush(ImGuiApp* app, ImVector<ImGuiAppNodeBase*>* list, ImGuiAppNodeBase* node)
 {
-    list->push_back(control);
-    control->OnInitialize(app);
+    list->push_back(node);
+    node->OnInitialize(app);
 }
 
 IMGUI_API void UnregisterAppStorage(ImGuiApp* app, ImGuiID id)
@@ -1187,7 +1187,7 @@ IMGUI_API void AppRegisterSidebar(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, c
     sidebar->OnInitialize(app);
 }
 
-IMGUI_API const ImVector<ImGuiAppControlBase*>* AppRebuildUpdateOrder(ImGuiApp* app)
+IMGUI_API const ImVector<ImGuiAppNodeBase*>* AppRebuildUpdateOrder(ImGuiApp* app)
 {
     IM_ASSERT(app != nullptr && "NULL ImGuiApp!");
 
@@ -1197,8 +1197,8 @@ IMGUI_API const ImVector<ImGuiAppControlBase*>* AppRebuildUpdateOrder(ImGuiApp* 
     if (app->CompositionRevision != app->UpdateOrderRevision)
     {
         app->UpdateOrder.resize(0);
-        ImVector<ImGuiAppControlBase*> nodes;
-        ForEachAppControl(app, [&nodes](ImGuiAppControlBase* control, ImGuiAppWindowBase* host)
+        ImVector<ImGuiAppNodeBase*> nodes;
+        ForEachAppNode(app, [&nodes](ImGuiAppNodeBase* control, ImGuiAppWindowBase* host)
                           {
             IM_UNUSED(host);
             nodes.push_back(control);
@@ -1251,14 +1251,14 @@ IMGUI_API const ImVector<ImGuiAppControlBase*>* AppRebuildUpdateOrder(ImGuiApp* 
 }
 
 // Composition push/pop helpers (declarations in imguiapp.h; the Push* templates there call these).
-void ShutdownAppControls(ImGuiApp* app, ImVector<ImGuiAppControlBase*>& controls)
+void ShutdownAppNodes(ImGuiApp* app, ImVector<ImGuiAppNodeBase*>& nodes)
 {
     IM_ASSERT(app != nullptr && "NULL ImGuiApp!");
 
-    while (!controls.empty())
+    while (!nodes.empty())
     {
-        ImGuiAppControlBase* control = controls.back();
-        controls.pop_back();
+        ImGuiAppNodeBase* control = nodes.back();
+        nodes.pop_back();
         if (app->WAL != nullptr)
         {
             char dt[IM_LABEL_SIZE];

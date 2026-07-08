@@ -1268,14 +1268,14 @@ IMGUI_API const ImGuiAppFileSystemFuncs* AppFileSystemFuncs();
 
 namespace ImGui
 {
-// Controls sorted by the resolved dependency wiring: every producer before its consumers, composition
+// Nodes sorted by the resolved dependency wiring: every producer before its consumers, composition
 // order among independents; rebuilt on composition change. ONLY the Task layer's OnUpdate pass iterates
 // this -- command collection and rendering stay composition order.
-IMGUI_API const ImVector<ImGuiAppControlBase*>* AppRebuildUpdateOrder(ImGuiApp* app);
+IMGUI_API const ImVector<ImGuiAppNodeBase*>* AppRebuildUpdateOrder(ImGuiApp* app);
 
-// Shut down + free every control in `controls` (OnShutdown, unregister its storage, delete). Internal:
+// Shut down + free every node in `nodes` (OnShutdown, unregister its storage, delete). Internal:
 // called only by the Pop* composition functions (imguiapp.cpp).
-IMGUI_API void ShutdownAppControls(ImGuiApp* app, ImVector<ImGuiAppControlBase*>& controls);
+IMGUI_API void ShutdownAppNodes(ImGuiApp* app, ImVector<ImGuiAppNodeBase*>& nodes);
 
 // AV: encoder teardown + image codec + meta-stream verify/parse
 // Close (if open) then Destroy any provider's encoder via its vtable. Null-safe.

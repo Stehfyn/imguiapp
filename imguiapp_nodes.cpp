@@ -8070,7 +8070,7 @@ static void AppLiveFieldValueText(const ImGuiAppLiveFieldDesc* f, const void* ba
 // Read-only live field table for one struct (Persist or Temp) of a RUNNING control.
 // Values are read from the live instance every frame -- they change as the app runs.
 #ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
-static void AppLiveFieldsTable(const char* str_id, const ImGuiAppControlBase* ctrl, bool temp_data, const void* base)
+static void AppLiveFieldsTable(const char* str_id, const ImGuiAppNodeBase* ctrl, bool temp_data, const void* base)
 {
     ImGuiAppLiveFieldDesc fields[64];
     const int n = ctrl->GetFields(fields, IM_ARRAYSIZE(fields), temp_data);
@@ -8127,8 +8127,8 @@ static ImGuiAppNodeBase* AppGraphFindLiveItem(ImGuiApp* app, const ImGuiAppNode*
     }
     else if (n->Kind == ImGuiAppNodeKind_Control)
     {
-        ImGuiAppControlBase* found = nullptr;
-        ForEachAppControl(app, [&](ImGuiAppControlBase* ctrl, ImGuiAppWindowBase*)
+        ImGuiAppNodeBase* found = nullptr;
+        ForEachAppNode(app, [&](ImGuiAppNodeBase* ctrl, ImGuiAppWindowBase*)
                                  {
         if (found == nullptr && ctrl->GetDataID() == n->LiveKey)
           found = ctrl;
@@ -8274,7 +8274,7 @@ void EditAppNodeInspectorEx(ImGuiAppGraph* g, int node_id, ImGuiApp* live_app)
         // re-read every frame (this is the running binary's memory, not a draft).
         if (n->Kind == ImGuiAppNodeKind_Control && item != nullptr)
         {
-            const ImGuiAppControlBase* ctrl = (const ImGuiAppControlBase*)item;
+            const ImGuiAppNodeBase* ctrl = item;
             const void* live_persist = nullptr;
             const void* live_temp = nullptr;
             ctrl->GetLiveData(&live_persist, &live_temp);
@@ -12322,7 +12322,7 @@ static bool AppEmitLiveControlCode(const ImGuiAppGraph* g, ImGuiApp* live_app, c
         out->appendf("// live control '%s': runtime object unavailable\n\n", n->Draft.Name);
         return false;
     }
-    const ImGuiAppControlBase* ctrl = (const ImGuiAppControlBase*)item;
+    const ImGuiAppNodeBase* ctrl = item;
 
     char pname[IM_LABEL_SIZE];
     char tname[IM_LABEL_SIZE];
@@ -14925,7 +14925,7 @@ void BuildAppLiveGraph(const ImGuiApp* app, ImGuiAppGraph* g)
     // Snapshot one control (app-level or hosted). Keyed by its runtime PersistData id (app->Data is keyed by
     // type id, so the id is unique per app -> no collision between app-level and hosted controls). parent_key is
     // the host window/sidebar Key for a hosted control, 0 for an app-level control.
-    auto PushControlWant = [&](const ImGuiAppControlBase* ctrl, ImGuiID parent_key)
+    auto PushControlWant = [&](const ImGuiAppNodeBase* ctrl, ImGuiID parent_key)
     {
         if (ctrl == nullptr)
             return;
