@@ -284,6 +284,26 @@ near a known doc-tracked debt, drop the tag at the site; (3) add F20 tag-census 
    opt-out guards + pragma-comment auto-linking); I28 (tables as big-subsystem reference:
    splitter channels, ImSpan arenas, Commentary). Every core TU now has both structural and
    content-level coverage.
+9. **Four-agent .cpp deep survey integrated** (2026-07-08; parallel evidence-cited sweeps of
+   imgui.cpp / widgets / draw+tables / demo+cross-TU): 24 new rules + 5 wart entries.
+   N22-N24 (IMGUI_CDECL comparator grammar + ImQsort-only; UPPER_SNAKE tunable registers;
+   subsystem noun-first naming + Queue infix); F24-F28 micro-lexicon (uppercase hex + mandatory
+   float suffixes, never-fall-through switches with no bare default, `for (;;)` + `n` index +
+   explicit-type range-for, purpose-keyed stack buffer sizes, sizeof(expr) self-sizing);
+   A29-A32 (three debug-switch registers, three self-documenting analysis-suppression forms,
+   embedded-binary provenance, in-body version-stamp format); G23-G24 (deferred-mutation
+   *Request/Queue* grammar + typed sentinels, NULL-format protocol + Adjust-flags sanitizer
+   stanza); I29-I41 (per-feature C++11 dialect pin — range-for yes / auto+capturing-lambdas+
+   constexpr no / IM_UNUSED canon; ImGuiIO Ctx-backpointer rule; ContextHook deferred removal;
+   test-engine ITEM_INFO on every exit path; hovered/held/pressed + return-local naming +
+   MarkItemEdited obligation + backup_ prefix; nav contract; Mask_-group flag defaulting +
+   3-state color pick; multi-select as optional-subsystem hook template; g.LogEnabled mirror;
+   ownership-CAPS boundary comments; tessellation sentinel + hot-path macro hazard contracts +
+   IM_COL32 texel/theme boundary; [Part N] + allocation ledgers; ImFontLoader C-vtable seam);
+   D7-D9 (DemoMarker plumbing + sneaky-extern idiom, helper-struct register + vintage split,
+   demo austerity: local shims, raw qsort, no raw UTF-8, copy-pasteability warts-off). Warts
+   6-10 added (InputText anti-precedent, minority color form, bare N.f cluster, (void)
+   stragglers + cross-enum zero-init, the one goto). Spec now 181 rules.
 
 ## Sequencing (each wave gated: imguix-tests + imguix-core-tests + imguix-headless-verify green, codegen corpus byte-identical, style ratchet re-pinned monotonically down)
 
