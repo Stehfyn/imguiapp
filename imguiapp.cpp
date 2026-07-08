@@ -264,7 +264,7 @@ bool ImGuiApp::Initialize(const ImGuiAppConfig* config)
 
 void ImGuiApp::Shutdown()
 {
-    if (!Initialized && PlatformData == nullptr && Layers.empty() && Windows.empty() && Sidebars.empty() && StorageEntries.empty())
+    if (!Initialized && PlatformData == nullptr && Children.empty() && Windows.empty() && Sidebars.empty() && StorageEntries.empty())
         return;
 
     // One paced app per process by design. The funcs' teardown hook releases its wait
@@ -829,8 +829,8 @@ IMGUI_API void InitializeApp(ImGuiApp* app, const ImGuiAppConfig* config)
 {
     IMGUIAPP_CHECKVERSION();
     IM_ASSERT(app != nullptr && "NULL ImGuiApp!");
-    IM_ASSERT(app->Layers.empty() && "ImGui app already has layers. ShutdownApp() before re-initializing.");
-    if (app == nullptr || !app->Layers.empty())
+    IM_ASSERT(app->Children.empty() && "ImGui app already has layers. ShutdownApp() before re-initializing.");
+    if (app == nullptr || !app->Children.empty())
         return;
 
     if (config != nullptr)
@@ -886,7 +886,7 @@ IMGUI_API void ShutdownApp(ImGuiApp* app)
     while (!app->Windows.empty())
         PopAppWindow(app);
     ShutdownAppNodes(app, app->Controls);
-    while (!app->Layers.empty())
+    while (!app->Children.empty())
         PopAppLayer(app);
 
     ClearAppStorage(app);
@@ -903,7 +903,7 @@ IMGUI_API void UpdateApp(ImGuiApp* app, float dt)
     IM_ASSERT(app != nullptr && "NULL ImGuiApp!");
 
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Frame, "frame update begin");
-    for (ImGuiAppLayerBase* layer : app->Layers)
+    for (ImGuiAppNodeBase* layer : app->Children)
     {
         AppWALWrite(app->WAL, ImGuiAppWALLevel_Frame, "update %s", layer->Label);
         layer->OnUpdate(app, dt);
@@ -915,7 +915,7 @@ IMGUI_API void RenderApp(const ImGuiApp* app)
     IM_ASSERT(app != nullptr && "NULL ImGuiApp!");
 
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Frame, "frame render begin");
-    for (ImGuiAppLayerBase* layer : app->Layers)
+    for (ImGuiAppNodeBase* layer : app->Children)
     {
         AppWALWrite(app->WAL, ImGuiAppWALLevel_Frame, "render %s", layer->Label);
         layer->OnDraw(app);
@@ -926,15 +926,15 @@ void PopAppLayer(ImGuiApp* app)
 {
     IM_ASSERT(app != nullptr && "NULL ImGuiApp!");
 
-    if (app->Layers.empty())
+    if (app->Children.empty())
     {
         IM_ASSERT_USER_ERROR(0, "Calling PopAppLayer() too many times!");
         AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "overpop: PopAppLayer with none pushed");
         return;
     }
 
-    ImGuiAppLayerBase* layer = app->Layers.back();
-    app->Layers.pop_back();
+    ImGuiAppNodeBase* layer = app->Children.back();
+    app->Children.pop_back();
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "pop layer %s", layer->Label);
     layer->OnDetach(app);
     layer->OnShutdown(app);
@@ -1013,7 +1013,7 @@ IMGUI_API ImGuiID GetAppCompositionID(const ImGuiApp* app)
     if (app == nullptr)
         return 0;
 
-    ImGuiID h = ImHashData(&app->Layers.Size, sizeof(app->Layers.Size), 0);
+    ImGuiID h = ImHashData(&app->Children.Size, sizeof(app->Children.Size), 0);
     for (int i = 0; i < app->Windows.Size; i++)
         h = ImHashStr(app->Windows.Data[i]->Label, 0, h);
     for (int i = 0; i < app->Sidebars.Size; i++)
@@ -1162,7 +1162,7 @@ void AppDeduplicateItemLabel(char* label, int label_size, const ImVector<ImGuiAp
 IMGUI_API void AppRegisterLayer(ImGuiApp* app, ImGuiAppLayerBase* layer, const char* name)
 {
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push layer %s", name);
-    app->Layers.push_back(layer);
+    app->Children.push_back(layer);
     if (layer->Label[0] == 0) // default Label to the type name
         ImStrncpy(layer->Label, name, IM_ARRAYSIZE(layer->Label));
     layer->OnInitialize(app);

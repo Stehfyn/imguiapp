@@ -6392,7 +6392,7 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
     // running app -- blue = a live mirror node, green = a design node already running (promoted), amber = a
     // design node that is NOT in the running app yet (drift). Only meaningful once the app is initialized.
     {
-        const bool app_running = app != nullptr && app->Layers.Size > 0;   // composed; Initialized is platform-only
+        const bool app_running = app != nullptr && app->Children.Size > 0;   // composed; Initialized is platform-only
         ImDrawList* dl = GetWindowDrawList();
         const float r = GetFontSize() * 0.28f;
         for (int i = 0; i < g->Nodes.Size; i++)
@@ -14956,7 +14956,7 @@ void BuildAppLiveGraph(const ImGuiApp* app, ImGuiAppGraph* g)
     // Layers: stable order from InitializeApp (Task, Command, Status, Window; anything after is a custom
     // subclass), keyed by index. The AUTHORED foundation is canonical for CORE phases -- a design layer of a
     // core type represents the live layer (one stack, never design/live twins). Custom live layers always mirror.
-    for (int i = 0; i < app->Layers.Size; i++)
+    for (int i = 0; i < app->Children.Size; i++)
     {
         const ImGuiAppLayerType lt = (i <= (int)ImGuiAppLayerType_Display) ? (ImGuiAppLayerType)i : ImGuiAppLayerType_Custom;
         if (AppLayerIsCore(lt))
@@ -14972,8 +14972,8 @@ void BuildAppLiveGraph(const ImGuiApp* app, ImGuiAppGraph* g)
         w.Flags = 0; w.HasPlacement = false; w.InitialPos = ImVec2(0.0f, 0.0f); w.InitialSize = ImVec2(0.0f, 0.0f); w.DockDir = ImGuiDir_None; w.DockSize = 0.0f;
         w.Item = nullptr;
         w.LayerType = lt;
-        if (app->Layers.Data[i]->Label[0])   // PushAppLayer stamps the class name
-            ImStrncpy(w.Name, app->Layers.Data[i]->Label, IM_ARRAYSIZE(w.Name));
+        if (app->Children.Data[i]->Label[0])   // PushAppLayer stamps the class name
+            ImStrncpy(w.Name, app->Children.Data[i]->Label, IM_ARRAYSIZE(w.Name));
         else
             ImFormatString(w.Name, IM_ARRAYSIZE(w.Name), "%s", AppLayerNodeName(lt));
         want.push_back(w);

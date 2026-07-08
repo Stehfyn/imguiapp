@@ -56,7 +56,9 @@ kinds — so the mirror becomes an isomorphism instead of a translation.
   WindowBase/ControlBase derive it; display lists (`Children`, `app->Controls`) are display-typed,
   `UpdateOrder` stays node-typed. The shared OnUpdate hook takes a mutable app (layers rebuild
   order/dispatch through it; the control adapter ignores it). All push/pop paths fire the D7
-  double bracket. IMGUIAPP_PREVIEW_ABI bumped.
+  double bracket. `app->Layers` → `app->Children` (`ImGuiAppNodeBase*`): the root node owns the
+  layer list as its children and walks them through the node hooks, no layer-typed access left
+  in the frame path. IMGUIAPP_PREVIEW_ABI bumped.
 
 ## Phases (each lands green: build + 7 ctest suites incl. style/section/indent ratchets)
 - **N3 — collections migrate into their layers.** `app->Windows/Sidebars/Controls` flat vectors

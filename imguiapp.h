@@ -1003,7 +1003,7 @@ struct ImGuiApp : ImGuiAppBase
     // State: composition (push order), platform/presentation, services (null = inactive)
     ImGuiStorage                       Data;                          // id-keyed instance storage (controls' Persist/Temp blocks)
     ImVector<ImGuiAppStorageEntry>     StorageEntries;
-    ImVector<ImGuiAppLayerBase*>       Layers;
+    ImVector<ImGuiAppNodeBase*>        Children;                      // layer nodes, in stack order (the root node's children)
     ImVector<ImGuiAppWindowBase*>      Windows;
     ImVector<ImGuiAppSidebarBase*>     Sidebars;
     ImVector<ImGuiAppDisplayNodeBase*> Controls;

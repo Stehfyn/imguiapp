@@ -1750,8 +1750,8 @@ struct ImGuiAppStatusStripControl : ImGuiAppControl<ImGuiAppStatusStripData, ImG
         if (data->HasMirror)
         {
             const ImGuiApp* a = doc->Mirror;
-            ImFormatString(data->MirrorCounts, IM_ARRAYSIZE(data->MirrorCounts), "L%d W%d S%d C%d", a->Layers.Size, a->Windows.Size, a->Sidebars.Size, a->Controls.Size);
-            data->MirrorInit = a->Layers.Size > 0;   // "composed"; Initialized is the platform flag
+            ImFormatString(data->MirrorCounts, IM_ARRAYSIZE(data->MirrorCounts), "L%d W%d S%d C%d", a->Children.Size, a->Windows.Size, a->Sidebars.Size, a->Controls.Size);
+            data->MirrorInit = a->Children.Size > 0;   // "composed"; Initialized is the platform flag
         }
 
         ImGui::AppGraphSelectionBreadcrumb(&doc->Graph, doc->Selection, data->Breadcrumb, IM_ARRAYSIZE(data->Breadcrumb));
