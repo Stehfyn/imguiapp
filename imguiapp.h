@@ -29,7 +29,7 @@ Index of this file:
 #define IMGUI_APPLAYER_VERSION "0.4.1"
 #define IMGUI_APPLAYER_VERSION_NUM 401
 
-// Template composition front only (docs/style-deltas.md Δ2); the C seam is AppRegister*/AppControl*.
+// Template composition front only (docs/house-style-audit.md Δ2); the C seam is AppRegister*/AppControl*.
 #include <tuple>       // std::tuple, std::apply (typed dependency fan-out)
 #include <type_traits> // std::is_trivially_copyable_v (control storage contract)
 
@@ -506,7 +506,7 @@ struct ImGuiAppRecorder
     ImVector<char> EmbedStream;         // framed chunk stamped into the strip
     bool           EmbedTooShortWarned; // frame shorter than EmbedRows: WAL once
 
-    // Encoder thread + bounded queue (normal mode only). Thread opaque (docs/style-deltas.md Δ2); null in ring mode.
+    // Encoder thread + bounded queue (normal mode only). Thread opaque (docs/house-style-audit.md Δ2); null in ring mode.
     ImGuiAppRecorderThread*   Thread;
     ImVector<ImGuiAppAVJob*>  Queue; // FIFO; front = index 0; guarded by Thread->Mutex while recording
     int                       QueueDepth;
@@ -653,7 +653,7 @@ IMGUI_API const ImGuiAppPlatformBackend* ImGuiApp_GetPlatformBackend();
 
 // Polymorphic root of the app object model: the common base the app owns layers/items/adapters by, deleted
 // virtually through a base pointer. Carries NO data -- identity (Label) lives on the concrete branches, so
-// a mixed-in secondary interface adds no duplicate Label. Virtuals: this hierarchy ONLY (style-deltas.md Δ1).
+// a mixed-in secondary interface adds no duplicate Label. Virtuals: this hierarchy ONLY (house-style-audit.md Δ1).
 struct ImGuiAppInterface
 {
     ImGuiAppInterface()          = default;

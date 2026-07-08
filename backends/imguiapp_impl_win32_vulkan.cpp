@@ -95,7 +95,7 @@ namespace
         ImVector<char>  CaptureRgba;            // RGBA8 conversion buffer handed to CaptureFrame callers
     };
 
-    // IM_NEW'd at Init (value-init: MainWindow keeps upstream ctor defaults), freed by ShutdownBackend (docs/style-deltas.md Δ 4).
+    // IM_NEW'd at Init (value-init: MainWindow keeps upstream ctor defaults), freed by ShutdownBackend (docs/house-style-audit.md Δ4).
     ImGuiApp_ImplWin32Vulkan_Data* GBackend = nullptr;
 
     ImGuiApp_ImplWin32Vulkan_Data* ImGuiApp_ImplWin32Vulkan_GetBackendData() { return GBackend; }

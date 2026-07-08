@@ -43,7 +43,7 @@ namespace
         ImGuiApp_ImplSDL2WGPU_Data() { memset((void*)this, 0, sizeof(*this)); }
     };
 
-    // IM_NEW'd at Init, freed by ShutdownBackend (docs/style-deltas.md Δ4).
+    // IM_NEW'd at Init, freed by ShutdownBackend (docs/house-style-audit.md Δ4).
     ImGuiApp_ImplSDL2WGPU_Data* GBackend = nullptr;
 
     bool IsInitInfoValid(const ImGuiApp_ImplSDL2WGPU_InitInfo* init_info)

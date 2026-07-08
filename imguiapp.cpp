@@ -24766,7 +24766,7 @@ IMGUI_API void ImGui::AppAVDestroyEncoder(ImGuiAppAVEncoder* encoder)
 // [SECTION] Encoder thread + queue
 //-----------------------------------------------------------------------------
 
-// Default ImGuiAppThreadFuncs: std::thread behind void* handles (docs/style-deltas.md Δ2).
+// Default ImGuiAppThreadFuncs: std::thread behind void* handles (docs/house-style-audit.md Δ2).
 #ifndef IMGUIAPP_DISABLE_DEFAULT_THREAD_FUNCS
 static void* AppThreadCreateDefault(void (*fn)(void*), void* arg) { return IM_NEW(std::thread)(fn, arg); }
 static void  AppThreadJoinDefault(void* t)                        { std::thread* th = (std::thread*)t; if (th->joinable()) th->join(); IM_DELETE(th); }

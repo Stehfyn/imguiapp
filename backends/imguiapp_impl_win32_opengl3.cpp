@@ -52,7 +52,7 @@ namespace
         ImGuiApp_ImplWin32OpenGL3_Data() { memset((void*)this, 0, sizeof(*this)); }
     };
 
-    // IM_NEW'd at Init, freed by ShutdownBackend; viewport hooks reach it via the accessor (docs/style-deltas.md Δ4).
+    // IM_NEW'd at Init, freed by ShutdownBackend; viewport hooks reach it via the accessor (docs/house-style-audit.md Δ4).
     ImGuiApp_ImplWin32OpenGL3_Data* GBackend = nullptr;
 
     ImGuiApp_ImplWin32OpenGL3_Data* ImGuiApp_ImplWin32OpenGL3_GetBackendData() { return GBackend; }
