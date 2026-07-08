@@ -4501,7 +4501,7 @@ static void ComposerRenderStateAtTick(ImGuiAppComposerTransport* tr, ImGuiApp* m
 
     // Restore-only (this tick is a snapshot): bracket the live Mirror's state, reconstruct, read, restore.
     // The scratch restore is read-only debugger state, not a real transition -- silence the Mirror's WAL.
-    ImGuiAppWAL* saved_wal = mirror->WAL;
+    ImGuiAppWAL* backup_wal = mirror->WAL;
     mirror->WAL = nullptr;
     ImGuiAppStateHistory live;
     const bool saved = ImGui::AppStateSnapshot(mirror, &live);
@@ -4510,7 +4510,7 @@ static void ComposerRenderStateAtTick(ImGuiAppComposerTransport* tr, ImGuiApp* m
     const ImGuiID recon_hash = ImGui::AppStateHash(mirror);
     if (saved)
         ImGui::AppStateRestore(mirror, &live, 0);   // return the Mirror to its live state
-    mirror->WAL = saved_wal;
+    mirror->WAL = backup_wal;
 
     if (ok)
         ImGui::Text("values: restored snapshot   hash 0x%08X %s   %d Persist/Temp slot(s)",
@@ -6531,6 +6531,10 @@ struct ComposerWindow : ImGuiAppWindow<ComposerWindow>
 
 // Toggle values + "applied" bookkeeping live in PersistData; OnRender records MenuItem results into
 // TempData; OnUpdate writes them back.
+// Demo host slot (Δ6 accessor idiom): set by ShowAppDemo each call; lets host-less demo
+// controls (DemoMenu) reach host-scoped introspection accessors.
+static ImGuiApp*& AppDemoHost() { static ImGuiApp* host = nullptr; return host; }
+
 struct ImGuiAppDemoMenuData
 {
     bool ShowBaseWindow;
@@ -6610,6 +6614,15 @@ struct ImGuiAppDemoMenuControl : ImGuiAppControl<ImGuiAppDemoMenuData, ImGuiAppD
         {
             ImGui::TextDisabled("See Tools > Composer -> status strip for composition, lifecycle and FPS.");
         }
+#ifndef IMGUI_DISABLE_DEBUG_TOOLS
+        if (ImGui::CollapsingHeader("Debug"))
+        {
+            if (ImGuiAppGraph* doc = AppDemoHost() != nullptr ? ImGui::AppLayerDemoGraph(AppDemoHost()) : nullptr)
+                ImGui::DebugNodeAppGraph(doc, "Composer document");
+            else
+                ImGui::TextDisabled("No Composer document yet (open Tools > Composer).");
+        }
+#endif // #ifndef IMGUI_DISABLE_DEBUG_TOOLS
 
         temp_data->ShowBaseWindow = show_base;
         temp_data->ShowStatusBar  = show_status;
@@ -6726,6 +6739,8 @@ IMGUI_API void ShowAppDemo(bool* p_open, ImGuiApp* host)
 
     // Chrome composition, once. Examples are pushed/popped AFTER the chrome, so they are always
     // the tail of their vectors and the toggle rebuild below can pop them back off.
+    AppDemoHost() = app;
+
     static ImGuiApp* s_composed = nullptr;
     IM_ASSERT((s_composed == nullptr || s_composed == app) && "One composed application per process.");
     if (s_composed != app)
@@ -11314,10 +11329,10 @@ static void AppGraphSetOpOperator(ImGuiAppGraph* g, ImGuiAppNode* n, const char*
 {
     if (n == nullptr || token == nullptr || n->Kind != ImGuiAppNodeKind_Op || strcmp(n->TypeName, token) == 0)
         return;
-    const int old_arity = AppOpArity(n->TypeName);
+    const int backup_arity = AppOpArity(n->TypeName);
     const int new_arity = AppOpArity(token);
     ImStrncpy(n->TypeName, token, IM_ARRAYSIZE(n->TypeName));
-    if (old_arity == new_arity)
+    if (backup_arity == new_arity)
         return;   // pin shape unchanged: an operator-only swap keeps the existing operand wires
     for (int li = g->Links.Size - 1; li >= 0; li--)
         if (AppGraphPortOwnerId(g, g->Links.Data[li].StartAttr) == n->Id
@@ -13799,16 +13814,16 @@ void AppScopeSequenceIds(const ImGuiAppGraph* g, ImVector<int>* out)
 // load-time validation (f) enforces -- the write gestures refuse a move that would trip it.
 static bool AppScopeOrderIsCorePermuted(const ImGuiAppGraph* g, const ImVector<int>& ids)
 {
-    int prev_rank = -1;
+    int backup_rank = -1;
     for (int k = 0; k < ids.Size; k++)
     {
         const ImGuiAppNode* ln = AppGraphFindNode(g, ids.Data[k]);
         if (ln == nullptr || ln->IsLive || ln->Kind != ImGuiAppNodeKind_Layer || !AppLayerIsCore(ln->LayerType))
             continue;
         const int rank = (int)ln->LayerType;
-        if (rank < prev_rank)
+        if (rank < backup_rank)
             return true;
-        prev_rank = rank;
+        backup_rank = rank;
     }
     return false;
 }
@@ -18010,6 +18025,42 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
     AppGraphCheckpoint(g);
 }
 
+#ifndef IMGUI_DISABLE_DEBUG_TOOLS
+// Metrics-style debug introspection (M28): TreeNode dumps of the document graph and canvas engine.
+void DebugNodeAppNode(const ImGuiAppNode* n)
+{
+    if (n == nullptr)
+        return;
+    if (!ImGui::TreeNode((void*)(intptr_t)n->Id, "Node %d '%s'%s", n->Id, n->Draft.Name, n->IsLive ? " (live)" : ""))
+        return;
+    ImGui::Text("Kind %d, LayerType %d, TypeName '%s'", (int)n->Kind, (int)n->LayerType, n->TypeName);
+    ImGui::Text("Ports %d, Commands %d, GridPos (%.0f,%.0f)%s", n->Ports.Size, n->Commands.Size, n->GridPos.x, n->GridPos.y, n->HasGridPos ? "" : " (unplaced)");
+    ImGui::TreePop();
+}
+
+void DebugNodeAppGraph(const ImGuiAppGraph* g, const char* label)
+{
+    if (g == nullptr)
+        return;
+    if (!ImGui::TreeNode(label, "%s: %d nodes, %d links", label, g->Nodes.Size, g->Links.Size))
+        return;
+    for (const ImGuiAppNode& n : g->Nodes)
+        DebugNodeAppNode(&n);
+    ImGui::TreePop();
+}
+
+void DebugNodeCanvas(const ImGuiCanvasState* c, const char* label)
+{
+    if (c == nullptr)
+        return;
+    if (!ImGui::TreeNode(label, "%s: %d wires", label, c->Wires.Size))
+        return;
+    ImGui::Text("Zoom %.2f, FontRatio %.2f, HoveredPin %d", c->Zoom, c->FontRatio, c->HoveredPin);
+    ImGui::TreePop();
+}
+#endif // #ifndef IMGUI_DISABLE_DEBUG_TOOLS
+
+
 void AppGraphShowKeymapEditor(ImGuiAppGraph* g)
 {
     IM_ASSERT(g != nullptr);
@@ -18394,19 +18445,19 @@ void AppGraphValidate(const ImGuiAppGraph* g, ImVector<ImGuiAppGraphIssue>* out)
     for (int oi = 0; oi < g->ScopeOrders.Size; oi++)
     {
         const ImGuiAppScopeOrder* ord = &g->ScopeOrders.Data[oi];
-        int prev_rank = -1;
+        int backup_rank = -1;
         for (int k = 0; k < ord->NodeIds.Size; k++)
         {
             const ImGuiAppNode* ln = AppGraphFindNode(g, ord->NodeIds.Data[k]);
             if (ln == nullptr || ln->IsLive || ln->Kind != ImGuiAppNodeKind_Layer || !AppLayerIsCore(ln->LayerType))
                 continue;
             const int rank = (int)ln->LayerType;
-            if (rank < prev_rank)
+            if (rank < backup_rank)
             {
                 AppValidatePushIssue(out, ln->Id, 2, "order record reorders core phase layer '%s' -- the foundation layers run in a fixed sequence", AppLayerNodeName(ln->LayerType));
                 break;
             }
-            prev_rank = rank;
+            backup_rank = rank;
         }
     }
 
@@ -21879,10 +21930,10 @@ void AppGraphCheckpoint(ImGuiAppGraph* g)
     ImStrncpy(label, "Edit", IM_ARRAYSIZE(label));
     if (AppGraphEditorState(g)->Undo.Cursor >= 0)
     {
-        char* prev_text = AppUndoStrdup(AppGraphEditorState(g)->Undo.Snaps.Data[AppGraphEditorState(g)->Undo.Cursor]);   // deserialize mutates in place
+        char* backup_text = AppUndoStrdup(AppGraphEditorState(g)->Undo.Snaps.Data[AppGraphEditorState(g)->Undo.Cursor]);   // deserialize mutates in place
         ImGuiAppGraph prev;
-        AppGraphDeserialize(&prev, prev_text);
-        IM_FREE(prev_text);
+        AppGraphDeserialize(&prev, backup_text);
+        IM_FREE(backup_text);
         AppUndoDeriveLabel(&prev, g, label, IM_ARRAYSIZE(label));
         prev.Nodes.clear_destruct();   // scratch graph owns its nodes' inner vectors; ImVector never destructs elements
     }
@@ -21936,10 +21987,10 @@ static bool AppIsIdInSet(const ImVector<int>& s, int id)
     return false;
 }
 
-static int AppMapFind(const ImVector<int>& olds, const ImVector<int>& news, int old_id)
+static int AppMapFind(const ImVector<int>& olds, const ImVector<int>& news, int backup_id)
 {
     for (int i = 0; i < olds.Size; i++)
-        if (olds.Data[i] == old_id)
+        if (olds.Data[i] == backup_id)
             return news.Data[i];
     return -1;
 }
@@ -22053,19 +22104,19 @@ static int AppGraphImportSerialized(ImGuiAppGraph* g, const char* serialized, Im
         return 0;
 
     // Allocate fresh ids for every node, body-attr, and port; remember the old->new maps.
-    ImVector<int> old_node, new_node;
-    ImVector<int> old_port, new_port;
+    ImVector<int> backup_node, new_node;
+    ImVector<int> backup_port, new_port;
     for (int i = 0; i < tmp.Nodes.Size; i++)
     {
         ImGuiAppNode* tn = &tmp.Nodes.Data[i];
-        old_node.push_back(tn->Id);
+        backup_node.push_back(tn->Id);
         const int nid = g->NextId++;
         new_node.push_back(nid);
         tn->Id = nid;
         tn->BodyAttrId = g->NextId++;
         for (int p = 0; p < tn->Ports.Size; p++)
         {
-            old_port.push_back(tn->Ports.Data[p].Id);
+            backup_port.push_back(tn->Ports.Data[p].Id);
             const int pid = g->NextId++;
             new_port.push_back(pid);
             tn->Ports.Data[p].Id = pid;
@@ -22076,8 +22127,8 @@ static int AppGraphImportSerialized(ImGuiAppGraph* g, const char* serialized, Im
     for (int i = 0; i < tmp.Nodes.Size; i++)
     {
         ImGuiAppNode* tn = &tmp.Nodes.Data[i];
-        if (tn->PersistStructId >= 0) tn->PersistStructId = AppMapFind(old_node, new_node, tn->PersistStructId);
-        if (tn->TempStructId >= 0)    tn->TempStructId = AppMapFind(old_node, new_node, tn->TempStructId);
+        if (tn->PersistStructId >= 0) tn->PersistStructId = AppMapFind(backup_node, new_node, tn->PersistStructId);
+        if (tn->TempStructId >= 0)    tn->TempStructId = AppMapFind(backup_node, new_node, tn->TempStructId);
         tn->GridPos += offset;
         tn->HasGridPos = true;
         tn->_NeedsPlace = true;
@@ -22089,19 +22140,19 @@ static int AppGraphImportSerialized(ImGuiAppGraph* g, const char* serialized, Im
 
     for (int i = 0; i < tmp.Links.Size; i++)
     {
-        const int s = AppMapFind(old_port, new_port, tmp.Links.Data[i].StartAttr);
-        const int e = AppMapFind(old_port, new_port, tmp.Links.Data[i].EndAttr);
+        const int s = AppMapFind(backup_port, new_port, tmp.Links.Data[i].StartAttr);
+        const int e = AppMapFind(backup_port, new_port, tmp.Links.Data[i].EndAttr);
         if (s < 0 || e < 0)
             continue;
         ImGuiAppNodeLink l = tmp.Links.Data[i];
-        const int old_link = l.Id;
+        const int backup_link = l.Id;
         l.Id = g->NextId++;
         l.StartAttr = s;
         l.EndAttr = e;
         g->Links.push_back(l);
         for (int bi = 0; bi < tmp.Bindings.Size; bi++)
         {
-            if (tmp.Bindings.Data[bi].LinkId != old_link)
+            if (tmp.Bindings.Data[bi].LinkId != backup_link)
                 continue;
             ImGuiAppFieldBinding b = tmp.Bindings.Data[bi];
             b.LinkId = l.Id;
@@ -27145,8 +27196,8 @@ IMGUI_API int ImGui::AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessC
     ImGuiAppWAL wal;
     const bool wal_open = AppWALOpen(&wal, wal_path, config->WALLevel);
     wal.FrameID = &app->FrameID;
-    ImGuiAppWAL* prev_wal = app->WAL;
-    app->WAL = wal_open ? &wal : prev_wal;
+    ImGuiAppWAL* backup_wal = app->WAL;
+    app->WAL = wal_open ? &wal : backup_wal;
     SetAppAssertWAL(wal_open ? &wal : nullptr);
 
     app->Pacer.Mode = config->PacerMode;
@@ -27175,7 +27226,7 @@ IMGUI_API int ImGui::AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessC
     {
         fprintf(stderr, "[harness] app initialization failed\n");
         SetAppAssertWAL(nullptr);
-        app->WAL = prev_wal;
+        app->WAL = backup_wal;
         AppWALClose(&wal);
         return 2;
     }
@@ -27250,8 +27301,8 @@ IMGUI_API int ImGui::AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessC
     ImVector<ImU64> ft_frame;
     ImVector<ImU64> ft_tsc;
     ImVector<double> ft_ms;
-    ImU64 prev_tsc = 0;
-    double prev_sec = 0.0;
+    ImU64 backup_tsc = 0;
+    double backup_sec = 0.0;
     bool aborted = false;
     int frame = 0;
     const int max_frames = 200000;
@@ -27270,11 +27321,11 @@ IMGUI_API int ImGui::AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessC
         if (frame > 0)
         {
             ft_frame.push_back(app->FrameID.FrameIndex);
-            ft_tsc.push_back(app->FrameID.Tsc - prev_tsc);
-            ft_ms.push_back((app->FrameID.TimeSec - prev_sec) * 1000.0);
+            ft_tsc.push_back(app->FrameID.Tsc - backup_tsc);
+            ft_ms.push_back((app->FrameID.TimeSec - backup_sec) * 1000.0);
         }
-        prev_tsc = app->FrameID.Tsc;
-        prev_sec = app->FrameID.TimeSec;
+        backup_tsc = app->FrameID.Tsc;
+        backup_sec = app->FrameID.TimeSec;
 
         if (frame > 4 && ImGuiTestEngine_IsTestQueueEmpty(engine))
             break;
@@ -27359,7 +27410,7 @@ IMGUI_API int ImGui::AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessC
     const bool run_passed = all_passed && !verify_failed;
 
     SetAppAssertWAL(nullptr);
-    app->WAL = prev_wal;
+    app->WAL = backup_wal;
     AppWALClose(&wal);
 
     if (run_passed && !config->KeepArtifactsOnPass)

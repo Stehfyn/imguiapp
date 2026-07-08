@@ -928,8 +928,8 @@ struct ImGuiAppEditorState
     int                            AppliedSel = -1;
     int                            OutlinerRename = -1;                // node id being renamed in the tree, -1 = none
     bool                           OutlinerRenameFocus = false;
-    bool                           OutlinerKindVis[ImGuiAppNodeKind_COUNT] = { true, true, true, true, true, true, true, true, true };
-    IM_STATIC_ASSERT(ImGuiAppNodeKind_COUNT == 9); // OutlinerKindVis initializer is hand-counted: extend it with the enum
+    bool                           OutlinerKindVis[ImGuiAppNodeKind_COUNT] = { true, true, true, true, true, true, true, true, true, true };
+    IM_STATIC_ASSERT(ImGuiAppNodeKind_COUNT == 10); // OutlinerKindVis initializer is hand-counted: extend it with the enum (9-entry form zero-filled Layout invisible)
     ImGuiTextFilter                OutlinerFilter;
     bool                           OutputShowErr = true;               // Output panel severity filters
     bool                           OutputShowWarn = true;
@@ -1519,6 +1519,13 @@ IMGUI_API void                                ShowAppGraphEditor(ImGuiApp* app, 
 // stubbed overrides. A String field emits char[N], which falls outside the reflection subset.
 // Appends to *out.
 IMGUI_API void AppControlCodeGenerate(const ImGuiAppNodeDraft* draft, ImGuiTextBuffer* out);
+
+#ifndef IMGUI_DISABLE_DEBUG_TOOLS
+// Debug introspection (Metrics-style TreeNode dumps).
+IMGUI_API void                                DebugNodeAppGraph(const ImGuiAppGraph* g, const char* label);
+IMGUI_API void                                DebugNodeAppNode(const ImGuiAppNode* n);
+IMGUI_API void                                DebugNodeCanvas(const ImGuiCanvasState* c, const char* label);
+#endif // #ifndef IMGUI_DISABLE_DEBUG_TOOLS
 
 IMGUI_API int                                 AppGraphEditorCommandCount();
 IMGUI_API const ImGuiAppEditorCommand*        AppGraphEditorCommandAt(int index);
