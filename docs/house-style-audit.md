@@ -12,10 +12,10 @@ codegen corpus byte-identical, style ratchet monotonically down.
 
 | Dimension | Conform | Partial | Violation | Top open item |
 |---|---|---|---|---|
-| §2 Naming (N1-N24) | 7 | 10 | 7 | k-tier (243 uses); `ImGuiCanvas*` squat |
-| §3 Formatting (F1-F28) | 10 | 8 | 3 (+6 gate-covered) | bare `default:` 50:1 (S9) |
-| §4 Architecture (A1-A32) | 8 | 6 | 7 (+2 n/a) | no `IMGUI_DISABLE` wrap in the core TUs (backends done) |
-| §5 API grammar (G1-G24) | 4 | 5 | 2 | silent overpop in all four `PopApp*`; no V twins |
+| §2 Naming (N1-N24) | 7 | 10 | 7 | `ImGuiCanvas*` squat (R2) |
+| §3 Formatting (F1-F28) | 10 | 8 | 3 (+6 gate-covered) | 6 semantic bare `default:` (S9 residue) |
+| §4 Architecture (A1-A32) | 8 | 6 | 7 (+2 n/a) | deprecation/breaking-change machinery absent (S5) |
+| §5 API grammar (G1-G24) | 4 | 5 | 2 | silent overpop in all four `PopApp*` (S8) |
 | §6 Backends (B1-B18) | hosts ✓ | B5 | — | — |
 | §7 Idioms (I1-I41) | 8 | 5 | 3 | dialect breach (43 `auto`, 33 capturing lambdas) |
 | §8 Demo (D1-D9) | 3 | 2 | 3 slips | sample controls not in user register |
@@ -31,8 +31,7 @@ lambdas (sdl2_wgpu `:99,:131`) + `auto` casts (win32_vulkan `:670,:844`). Canon:
 captureless-C-callback-only, range-for explicit-typed. Capturing-lambda-as-local-function is
 structural in the editor UI — **decide Δ8 (license capturing lambdas as scoped local functions in
 tool/editor regions, core stays clean) or schedule the rewrite** (`struct Func` + explicit types,
-~90 sites). Range-for `auto&` → explicit element types is mechanical either way (13 sites, F26);
-fix regardless of the Δ8 outcome.
+~90 sites). (Range-for `auto&` → explicit element types: done.)
 
 ### R2. `ImGuiCanvas*` tier squat — N1 (HIGH)
 6 structs + 4 enums (`imguiapp_internal.h:119-124`, `:1786-1898`, `:2170-2172`; `ImGuiCanvasState`
@@ -75,9 +74,9 @@ the tag-census check to `tests/style` (fail TODO/HACK/XXX outside string literal
 ### S8. Recoverable-error machinery — G4/G19 (HIGH)
 **Silent overpop**: all four `PopApp*` `if (empty) return;` — no assert, no WAL record
 (`imguiapp.cpp:988-1031`) — the exact "100%-silent recovery" canon refuses; G4's named overpop
-assert missing. 0 `IM_ASSERT_USER_ERROR`; 11/152 asserts messaged (7%); invisible-trailing-comment
-anti-pattern persists (`:482`). Route Pop/registration misuse through `IM_ASSERT_USER_ERROR` + WAL;
-sweep user-reachable asserts into sentence-with-hint form.
+assert missing. 0 `IM_ASSERT_USER_ERROR`; ~14/152 asserts messaged (trailing-comment anti-pattern
+instances fixed). Route Pop/registration misuse through `IM_ASSERT_USER_ERROR` + WAL; sweep
+user-reachable asserts into sentence-with-hint form.
 
 ### S9. Micro-lexicon residue — F25 (LOW; remainder of the fixed wave)
 6 bare `default:` with load-bearing bodies remain (each needs a per-site named-case merge or a
@@ -90,54 +89,16 @@ fall-out-of-switch restructure; the mergeable/no-op 9 are fixed). House index na
 
 | # | Rule | Finding | Fix |
 |---|---|---|---|
-| M1 | gate | style gate still pins 26 `text`-class findings (missing `} // namespace` closers) | add closers; re-pin baseline down |
-| M3 | N18 | macro namespace split 3 ways over 7 macros (`IMGUI_APPLAYER_*`/`IMGUIAPP_*`/`IMGUIX_*`); `imappconfig.h` mixes two | rule: `IMGUIAPP_` = library defines, `IMGUIX_` = umbrella switches; rename `IMGUI_APPLAYER_VERSION*` → `IMGUIAPP_VERSION*`; document in imappconfig.h |
-| M5 | A1 | 0 file banners, 0 `IMGUI_DISABLE` wraps, all 22 files | banner + role line + guard + echoed endif |
-| M6 | A3 | pragma block MSVC-only, 1 warning, imguiapp.h only | 3-compiler push/pop in all three TUs |
-| M7 | A8 | `internal.h:43-48` + cpp `:25-30` includes uncommented; `<string>` (`internal.h:46`) outside Δ2's licensed list | add symbol comments; license or drop `<string>` |
-| M8 | A9 | config include 3rd (`imguiapp.h:24`); redundant `imgui_internal.h` re-include (cpp `:26`); cpp spine jumbled | config first; delete; reorder |
-| M9 | A10 | no CHECKVERSION analog | `IMGUIAPP_CHECKVERSION()` + sizeof asserts, called in `InitializeApp` |
-| M10 | A13 | version `"0.4.1"`/401: no ` WIP`, no scheme comment | ` WIP` suffix + monotonic NUM + scheme comment (with M3 rename) |
-| M11 | A17 | no cpp `[SECTION] Forward Declarations`; stray fwd decl `:13170` | add per Δ7 region |
-| M13 | G7 | `AppRegisterSidebar` flags no `= 0` (`imguiapp.h:163`) | add `= 0` |
-| M14 | G9/N10 | `AppWALWrite` (`imguiapp.h:212`) + `AppGraphNotify` (cpp `:13170`) variadic, no V twins, 0 `IM_FMTLIST` | add `*V(va_list)` twins, re-implement over them |
-| M15 | G4 | Push*Control "No Pop" decl comment absent (`imguiapp.h:128-130`) | add comment |
-| M16 | N4 | 7 enums unpaired (`ImGuiAppControlMethod_`, `ImGuiAppCmdSurface_`, `ImAppEase_`, `ImGuiCanvasInteraction_`, 3 pin enums); dup typedefs `h:90/294`, `h:91/302` | add `typedef int` pairs, retype raw-int fields, delete dupes |
-| M17 | N5 | 3 stem mismatches (`ImGuiCanvasPinKind_`→`ImGuiCanvasPin_*` `internal.h:2170`; `AppAlignMode_` cpp `:14764`; `ComposerPillState` cpp `:5079`, also no trailing `_`) | rename stems (fold into R2/S10 batches) |
-| M18 | N6 | flags `ImGuiAppCmdSurface_` (`internal.h:693`) + `ComposerLayoutVis_` (cpp `:3934`) lack `_None = 0`; `AVMetaRecordType_` starts at 1 | add `_None = 0` |
-| M19 | N8 | `ImGuiAppCommandPrivate` in public header (`imguiapp.h:272-274`), drops public stem | move to internal.h; `ImGuiAppCommand_PrivateBegin_ = ImGuiAppCommand_COUNT` |
-| M21 | F21 | 8 bare `#endif` on >20-line guards incl. one 512-line (cpp `:7379`; sdl2_wgpu `:147,:216`) | add condition echoes |
-| M22 | F11 | public typedefs (h `:85-91`) lack 3rd column; internal (`:130-138`) lack `Enum:`/`Flags:` prefix; `internal.h:139` uncommented | complete the triple-column |
-| M26 | I21/G18 | 11/152 asserts messaged; trailing-comment hint at `:482` invisible in dialogs | sentence-with-hint in-expression for user-reachable asserts |
-| M28 | I22 | 0 DebugNode introspection | `DebugNodeAppGraph/AppNode/Canvas` under `IMGUI_DISABLE_DEBUG_TOOLS`, hooked to a Tools window |
 | M29 | I20 | ListClipper ×1; 0 `IM_MSVC_RUNTIME_CHECKS_*` | low priority; after profiling |
-| M31 | N3 | fn-ptr members lack `*Fn` on all 3 vtables (`ImGuiAppAVEncoder` h:374-377, `ImGuiAppThreadFuncs` h:444-452, `ImGuiAppPlatformBackend` h:637-641); sole typedef uses `Fn` where `Func` belongs | suffix members `*Fn`; typedef → `*Func` |
-| M32 | N24 | 28/259 internal decls verb-first (`BeginAppNode`, `EditAppNodeDraft*`, `GenerateApp*Code`, `Save/LoadAppGraph` clusters, `internal.h:1360-1670`) | noun-first renames in the AST batch; `Request` (not `Queue`) recorded as the deferred infix |
-| M33 | N9 | `ImGuiApp_GetPlatformBackend` underscore grammar in public header (`imguiapp.h:644`); `PushAppControl`/`AppControlPush` grammar-flipped twins unnamed | rename; name the seam-vs-front pattern in Δ2 |
-| M34 | F12 | backend public definitions unpadded (0/12); `IMGUI_API` repeated on definitions (libav `:325+`, qoi `:150+`) | pad name column; strip repeats |
-| M35 | F27 | 83/90 off-census buffers uncommented; de-facto keys (560 paths ×8, 1200 cmdlines ×7) undocumented | reason comments or document the census |
-| M36 | F18 | 7 lowercase sentence-starts (h `:716`, internal `:1241`, cpp ×5) | capitalize |
-| M37 | A18 | `kAppDockDirNames[4]` (cpp `:12192`) unlocked; `OutlinerKindVis` hand-9 initializer (`internal.h:918`) zero-fills on enum growth | `IM_STATIC_ASSERT` locks |
-| M38 | A32 | no version-stamp grammar; `IMGUIAPP_PREVIEW_ABI 20260706u` ad-hoc date tag | adopt "Since 0.Y.Z (Month Year, NUM)" with S5 |
-| M39 | — | dead empty `#ifdef IMGUIX_HAS_LIBAV` pair (cpp `:3468-3469`); BOMs on 6 backend headers | delete; strip |
-| M40 | A24 | `internal.h` Macros section precedes Forward declarations (inverted vs canon) | swap sections |
-| M41 | A26 | `ShowAppGraphEditor` defined in Scope-interior section (`:15090`) not editor-render; 6 residual rank descents | move with the Phase C section restructure |
-| M42 | I40 | 2,835-line `ShowAppGraphEditor` without a `[Part N]` spine (local `// Pass 1/2/3` at `:15620` shows the form known); also `AppGraphValidate` 323 L, `CanvasEnd` 297 L | number the parts |
-| M43 | I33 | `clicked`/`changed` + `saved_`/`prev_`/`old_` (14 sites, 0 `backup_`) vs canon `pressed`/`value_changed`/`backup_` | rename locals |
-| M44 | I35 | 3 minority `held ? Active : Hovered` picks (cpp `:7531,:7553,:7778`) — spec wart 7 form | `(held && hovered)` form |
-| M45 | G2 | `CanvasBegin` void + unconditional `CanvasEnd`; `CanvasBeginNode` bool ignored by own consumer (`:15794`); no pairing comments on the 4 decls | pairing comments + decide the conditional-End contract |
+| M41 | A26 | `ShowAppGraphEditor` defined in Scope-interior section not editor-render; 6 residual rank descents | move with the Phase C section restructure |
+| M43b | I33 | `clicked` ×30 (+ `changed` locals) vs canon `pressed`/`value_changed` (`backup_` family done) | AST-scoped local rename (plain sed corrupts comments) |
 
 ## Sequencing (each wave gated)
 
 1. **Wave R — decisions**: R1-R3, R7. Everything below assumes the outcomes.
-2. **Wave L — lint first**: S6 tag census + N22/N23 greps into `tests/style`, so no fixed class
-   regresses again.
-3. **Wave M — sed batch**: M13, M15, M18, M21, M22, M26, M34, M36, M37, M39, M44, F26 explicit-type
-   range-fors, F14 casts, F28 sizeof, F25 default merges, M8, M7.
-4. **Wave N — AST rename batch**: S9 k-tier → UPPER_SNAKE, M3+M10, M16, M17,
-   M19, M31, M32, M33, R2 outcome.
-5. **Wave F — functional adds**: S8 (USER_ERROR + overpop + WAL), M9, M14, S5+M38, S6 adoption,
-   M28, M42, M45, M11/M40/M41 with the section restructure.
+2. **Wave L — lint**: S6 tag census + N22/N23 greps into `tests/style`, so no fixed class regresses.
+3. **Wave F — functional adds**: S8 (USER_ERROR + overpop + WAL), S5, S6 adoption, M43b, and
+   M41/M29 with the Phase C restructure / profiling pass.
 
 ---
 
@@ -173,6 +134,10 @@ throughout — audit confirms 0 raw allocation, 0 std::min/max). Three bounded l
 - **OS/harness glue** (`imguiapp.cpp` harness + file scan): `std::filesystem` where no Im*
   equivalent exists. Plain-libc/algorithm slips (`std::sort`, `snprintf`) are NOT licensed — use
   `ImQsort`/`ImFormatString`.
+
+Naming note (the seam-vs-front grammar): PascalCase verb-first names the template FRONT
+(`PushAppControl`), noun-first names the C seam TAIL beneath it (`AppControlPush`); the
+linked-backend accessor `ImGuiAppGetPlatformBackend()` follows the front grammar.
 
 **Not licensed anywhere**: STL types as public struct members visible to every consumer. The
 recorder's encoder-thread state lives behind the opaque `ImGuiAppRecorderThread*` pimpl over the
