@@ -79,6 +79,8 @@ template <typename PersistDataT, typename TempDataT, typename... DataDependencie
 struct ImGuiAppInterfaceAdapterBase;
 
 // Forward declarations: ImGuiAppDisplay layer
+template <typename T, typename Base>
+struct ImGuiAppLabeled;
 struct ImGuiAppWindowBase;
 
 // Forward declarations: ImGuiAppSidebar layer
@@ -1190,8 +1192,15 @@ struct ImGuiAppControl : ImGuiAppControlMirrorAdapter<PersistDataT, TempDataT, D
     ImGuiAppControl() { ImGui::AppEnsureTypeRegistered<PersistDataT>(); ImGui::AppEnsureTypeRegistered<TempDataT>(); } // materialize both data manifests into the schema registry
 };
 
+// Type identity, shared by every item shell: the concrete T stamps its Label at construction.
+template <typename T, typename Base>
+struct ImGuiAppLabeled : Base
+{
+    ImGuiAppLabeled() { ImAppFormatLabel<T>(this->Label, sizeof(this->Label)); }
+};
+
 template <typename T>
-struct ImGuiAppWindow : ImGuiAppWindowBase
+struct ImGuiAppWindow : ImGuiAppLabeled<T, ImGuiAppWindowBase>
 {
     virtual void OnInitialize(ImGuiApp*) const override {};
     virtual void OnShutdown(ImGuiApp*) const override {};
@@ -1201,7 +1210,7 @@ struct ImGuiAppWindow : ImGuiAppWindowBase
 };
 
 template <typename T>
-struct ImGuiAppSidebar : ImGuiAppSidebarBase
+struct ImGuiAppSidebar : ImGuiAppLabeled<T, ImGuiAppSidebarBase>
 {
     virtual void OnInitialize(ImGuiApp*) const override {};
     virtual void OnShutdown(ImGuiApp*) const override {};
@@ -1261,16 +1270,15 @@ namespace ImGui
     inline T* AppControlCreate(ImGuiApp* app, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count, const char* host_kind, const char* host_label)
     {
         IM_ASSERT(app);
-        char label[IM_LABEL_SIZE];
-        ImAppFormatLabel<T>(label, sizeof(label));
         T* control = IM_NEW(T)();
+        ImAppFormatLabel<T>(control->Label, sizeof(control->Label));
         using Inst = typename T::ControlInstanceDataType;
         Inst* instance_data = IM_NEW(Inst)();
         ImGuiID data_type_id = ImGuiAppType<typename T::ControlDataType>::ID;
 
         // Instance data is keyed by (control data type, instance); AppControlRegisterStorage hashes + asserts uniqueness.
         // Trivially-copyable instance data is snapshottable (size + TempData byte range); heap-owning data is opaque.
-        AppControlRegisterStorage(app, control, label, data_type_id, instance, instance_data,
+        AppControlRegisterStorage(app, control, control->Label, data_type_id, instance, instance_data,
                                   std::is_trivially_copyable_v<Inst>, (int)sizeof(Inst),
                                   (int)offsetof(Inst, TempData),
                                   (int)sizeof(instance_data->TempData),

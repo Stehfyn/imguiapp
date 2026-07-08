@@ -1303,8 +1303,6 @@ IMGUI_API void AppRegisterLayer(ImGuiApp* app, ImGuiAppLayerBase* layer, const c
 IMGUI_API void AppRegisterWindow(ImGuiApp* app, ImGuiAppWindowBase* window, const char* name)
 {
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push window %s", name);
-    if (window->Label[0] == 0) // default Label to the type name (the one labeling path: push formats, this tail stamps)
-        ImStrncpy(window->Label, name, IM_ARRAYSIZE(window->Label));
     AppDeduplicateItemLabel(window->Label, IM_ARRAYSIZE(window->Label), &app->Windows, &app->Sidebars);
     app->Windows.push_back(window);
     window->OnInitialize(app);
@@ -1313,8 +1311,6 @@ IMGUI_API void AppRegisterWindow(ImGuiApp* app, ImGuiAppWindowBase* window, cons
 IMGUI_API void AppRegisterSidebar(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, const char* name, ImGuiViewport* vp, ImGuiDir dir, float size, ImGuiWindowFlags flags)
 {
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push sidebar %s", name);
-    if (sidebar->Label[0] == 0) // default Label to the type name (the one labeling path: push formats, this tail stamps)
-        ImStrncpy(sidebar->Label, name, IM_ARRAYSIZE(sidebar->Label));
     AppDeduplicateItemLabel(sidebar->Label, IM_ARRAYSIZE(sidebar->Label), &app->Windows, &app->Sidebars);
     sidebar->Viewport = vp;
     sidebar->DockDir  = dir;
