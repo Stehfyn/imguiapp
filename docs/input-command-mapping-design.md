@@ -39,8 +39,10 @@ layered table (not a per-graph diff), and command dispatch as a recorded, replay
 ### 1.1 Identity: dotted string names are the serialized identity; ints never persist
 
 Every command carries a stable dotted name (`"edit.paste"`, `"host.export.png"`). Dense int ids are
-minted per run at registration and never leave the process. Keymap files, WAL lines, and recordings
-store the NAME. Registration asserts duplicate names; `NameHash` (`ImHashStr`) is a lookup
+minted per run at registration and never leave the process. Keymap files and WAL lines store the
+NAME; recordings store `name_hash` per record plus a hash→name definition record emitted once per
+command (§1.5), so the stream stays self-describing without repeating strings at dispatch rate.
+Registration asserts duplicate names; `NameHash` (`ImHashStr`) is a lookup
 accelerator only — every hash hit confirms with `strcmp`, so a hash collision degrades to a slow
 path, never a wrong verb. The existing editor int `Id` + dispatch switch stay untouched;
 `AppCommandFindByName()` is the one bridge.
@@ -100,7 +102,11 @@ verb returns. Never silently deleted, never a crash.
 
 ### 1.5 Determinism spine: the resolved command is the recorded unit
 
-New meta record type `ImGuiAppAVMetaRecordType_Command`: `(tick, seq, name_hash, surface, operand)`.
+Two new meta record types: `ImGuiAppAVMetaRecordType_Command` `(tick, seq, name_hash, surface,
+operand)` and `ImGuiAppAVMetaRecordType_CommandNameDef` `(name_hash, name)`, the latter emitted
+lazily before a command's first Command record — register-by-use means names appear after stream
+start, and lazy defs keep a crash-truncated stream self-describing for every command it actually
+used. Hash collisions between defs are detectable at load, not silently resolved.
 The mapper (chords, arbitration, veto) lives OUTSIDE the deterministic core; the core consumes only
 command events. During playback the live mapper is hard-disabled and dispatch is fed from the stream
 — a command can never fire "extra" in replay because the mapper is not consulted. Recordings become
@@ -126,11 +132,14 @@ untouched.
 
 ## 2. Known unknowns, defaults, pivot signals
 
-- **Dear ImGui shortcut routing.** ImGui has `Shortcut()`/routing ownership that already solves the
-  text-input capture fight. Default: own arbiter with the `WantTextInput` veto (matches the existing
-  editor handlers). Pivot signal: if reading `imgui.h`/`imgui_internal.h` routing (verify against the
-  vendored version — never assume upstream API from memory) shows owner-scoped routing covers the
-  veto + focus-scope cases, route chord matching through it instead of hand-rolling.
+- **Dear ImGui shortcut routing.** RESOLVED against vendored 1.92.9 WIP: `Shortcut()` + routing
+  (RouteFocused/Global/Always, key ownership) exists but is call-site/focus-scoped, while this
+  arbiter is central and must hard-disable during replay — a poor fit. Decision: own arbiter with
+  the `WantTextInput` veto (matches editor handlers, `imguiapp.cpp:14401`/`15448`); exact-mods
+  chord matching makes longest-mods-wins inherent. Residual gap: the arbiter ignores ImGui key
+  ownership, so popup Escape claims or InputText-internal Ctrl+A/C/V/X can double-fire against a
+  bound verb. Pivot signal: first observed double-fire of that class — add a `TestKeyOwner`
+  (`imgui_internal.h`) check beside the veto rather than adopting routing wholesale.
 - **Host-command seam fold-in.** Default: `AppGraphSetHostCommands` stays; a later adapter registers
   host commands into the app registry under `host.*`. Pivot signal: if the adapter is under ~50
   lines, fold immediately and deprecate the parallel path.
@@ -158,8 +167,9 @@ untouched.
    WAL `via %s` attribution.
 4. **InputMapping:** layer resolver, sorted-line file IO, tombstones, chord-conflict lint, preset
    pack loader.
-5. **Determinism:** command meta record type + framing round-trip in `tests/imguiapp_flow_tests.cpp`
-   (framing proven before the mapper consumes it); replay feed path; meta-stream version bump;
+5. **Determinism:** Command + CommandNameDef meta record types + framing round-trip in
+   `tests/imguiapp_flow_tests.cpp` (framing proven before the mapper consumes it, including a
+   truncated-stream case — defs precede first use); replay feed path; meta-stream version bump;
    replay conformance test (dispatch fires with the verb's call-site window toggled off — pins
    record-the-id-not-the-chord).
 6. **Diagnostics:** why-not ring buffer (fixed POD ring: chord, candidate, rejection enum) + Input
@@ -177,13 +187,86 @@ untouched.
 - Grace-window ("coyote time") availability — availability time-travel in tool apps.
 - Auto-GC of dead bindings on save — silent data loss; tombstones strictly better.
 
-## 5. Review request
+## 5. Review outcome
 
-1. **Identity (§1.1):** dotted string names as the only serialized identity — yes/no? (Most
-   expensive to reverse.)
-2. **API (§1.2):** register-by-use `AppCommand()` in v1, or declared-table only with register-by-use
-   later?
-3. **Spine (§1.5):** determinism integration in v1 (meta record type from day one), or ship
-   registry+mapping first and bump the stream format in a second release?
-4. **Naming:** `ImGuiAppCommandMapping` = registry+dispatch, `ImGuiAppInputMapping` = binding layers
-   — keep both names, or fold to one type with two tables?
+All review questions resolved, positions as written: dotted string names are the only serialized
+identity (recordings: hash-per-record + CommandNameDef, §1.5); register-by-use `AppCommand()` ships
+in v1; the determinism spine ships in v1 — deferring it would force replay to re-arbitrate chords,
+the exact class §1.5 rejects; both type names stay (`ImGuiAppCommandMapping` has process lifetime,
+`ImGuiAppInputMapping` has file lifetime, and F74 later reads through the latter alone).
+
+## 6. Implementation checklist (v1, sequenced; one code change per box)
+
+Each box is one small, buildable change; order within a phase matters, phases follow §3. Test boxes
+land in the same change as the code they pin unless marked otherwise.
+
+### 6.1 Identity (additive, zero behavior change)
+
+- [ ] Add `Name`/`NameHash` fields to `ImGuiAppEditorCommand` (`imguiapp_internal.h:720`), defaults `""`/0.
+- [ ] Put dotted names on every `s_editor_commands[]` row (`imguiapp.cpp:17827`).
+- [ ] Mint `NameHash` via `ImHashStr` once where the editor table is first consulted.
+- [ ] Assign `host.*` fallback names to host rows inside `AppGraphSetHostCommands` registration.
+- [ ] Add `AppCommandFindByName()` (hash probe, `strcmp` confirm) beside the existing id lookup.
+- [ ] Extend `step72_command_registry_four_roads` (`imguiapp_nodes_tests.cpp:5557`): name non-empty leg.
+- [ ] Same test: name matches `^[a-z0-9]+(\.[a-z0-9]+)+$` leg.
+- [ ] Same test: Source-prefix leg (`host.*` rows have `Source == Host`, editor rows don't).
+- [ ] Same test: duplicate-free leg (NameHash bucket + strcmp over the whole registry).
+
+### 6.2 Registry + register-by-use
+
+- [ ] Declare `ImGuiAppCommandDesc` POD in `imguiapp.h`, field-identical to `ImGuiAppEditorCommand`.
+- [ ] Add per-app registry storage: `ImVector<row>` + `ImGuiStorage` hash→index map (internal header).
+- [ ] Implement registration insert with duplicate-name assert.
+- [ ] Implement `AppCommand(name)`: register-on-first-call, stamp `LastSeenFrame`, clear-on-read pull.
+- [ ] Implement `AppCommandSetup(name, &desc)` upsert of chord/icon/label/surfaces.
+- [ ] Derive default label from the dotted name (`edit.paste` → "Edit: Paste").
+- [ ] Palette renders the union of declared + auto rows.
+- [ ] Palette greys rows whose `LastSeenFrame` is stale.
+- [ ] Registry liveness debug window (name, hash, last-seen, source).
+- [ ] Test: `AppCommand` twice same frame = one row, one dispatch slot.
+
+### 6.3 Arbiter
+
+- [ ] Add pending-command slot (resolved id + surface) to framework TempData.
+- [ ] Implement per-frame chord scan over the merged binding view at input-record time.
+- [ ] Apply `WantTextInput` veto (match existing handlers, `imguiapp.cpp:14401`/`15448`).
+- [ ] Exact-mods chord matching (longest-mods-wins falls out; assert no same-tick double match).
+- [ ] Enforce at most one dispatch per id per tick.
+- [ ] Re-check availability at execute; log lying-palette diagnostic to WAL instead of dispatching.
+- [ ] Change WAL line to `"execute command %08X:%s via %s"` with surface attribution.
+- [ ] Test: chord pressed before first registration drops silently (one-frame warmup).
+
+### 6.4 ImGuiAppInputMapping
+
+- [ ] Add chord parse/format helpers (`"Ctrl+Shift+V"` ↔ key+mods), round-trip tested.
+- [ ] Declare `ImGuiAppInputMapping` with layer 0/1/2 tables (`{Name, SourceKind, Code, Mods}` rows).
+- [ ] Implement the merged-view resolver (one function, last-writer-wins by name).
+- [ ] Save: sorted one-binding-per-line text, empty right side = explicit unbind.
+- [ ] Load: parse lines, unresolvable names become tombstones kept verbatim, WAL-logged once.
+- [ ] Tombstone revival when the verb registers later.
+- [ ] Same-layer same-surface chord conflict = lint assert.
+- [ ] Cross-layer shadowing kept inert and queryable (for the keymap UI grey-out).
+- [ ] Preset pack loader: layer-1 table from a data asset via the same line parser.
+- [ ] Test: save→load→save byte-identical (sorted, tombstones preserved).
+
+### 6.5 Determinism spine
+
+- [ ] Append `ImGuiAppAVMetaRecordType_Command` + `_CommandNameDef` AFTER `_AudioPcm` (`imguiapp_internal.h:161`; serialized values, never renumber).
+- [ ] Bump the Identity schema so old readers refuse new streams.
+- [ ] Define operand tagged POD union `{none, i64, f64, name_hash, selection_ref}` with record-time tag assert.
+- [ ] Writer: emit `CommandNameDef (name_hash, name)` lazily before a hash's first Command record.
+- [ ] Writer: emit `Command (tick, seq, name_hash, surface, operand)` when the arbiter fills the pending slot.
+- [ ] Count both record types in the stream-stats switch (`imguiapp.cpp:26260` region).
+- [ ] Framing round-trip test in `tests/imguiapp_flow_tests.cpp` BEFORE the mapper consumes records.
+- [ ] Truncated-stream test: every Command record in a cut stream has a preceding NameDef.
+- [ ] Replay: hard-disable the live arbiter when a stream is driving.
+- [ ] Replay: feed Command records into the pending slot by tick (hash→name via the def table).
+- [ ] Replay: unknown `name_hash` (verb gone) = logged skip, never a crash.
+- [ ] Conformance test: rebind between record and replay, same verbs fire (pins record-the-id-not-the-chord).
+- [ ] Conformance test: dispatch fires with the verb's call-site window toggled off.
+
+### 6.6 Diagnostics
+
+- [ ] Why-not ring buffer: fixed POD ring `(chord, candidate id, rejection enum)`, never serialized.
+- [ ] Arbiter writes a ring entry on every rejected candidate (veto, availability, shadowed, warmup).
+- [ ] Input Doctor panel rendering the ring newest-first.
