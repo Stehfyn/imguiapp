@@ -274,6 +274,16 @@ near a known doc-tracked debt, drop the tag at the site; (3) add F20 tag-census 
    with deprecated entries sinking to the tail, includes dependency-first, primary-first monitor
    lists; unstated direction = spec bug). Closes the ordering gaps found by interrogating the
    spec per the updated house-style-survey skill.
+8. **Implementation-file content gaps closed** (2026-07-08, after a per-TU coverage audit —
+   citation density was imgui.cpp 43 / widgets 19 / draw 8 / tables 7): N21 (subsystem-object
+   function tier: `<TypeName><Op>` global-scope IMGUI_API functions in the type's own internal.h
+   section, e.g. `ImFontAtlasBuild*` — the positive rule for what N11 had only defined
+   negatively); I16 extended (ShadeVerts* = namespace-ImGui internal API, ImTriangulator* = A23
+   TU-local types); I26 (ImGuiSettingsHandler anatomy + .ini format + registration-order caveat
+   and the Composer sidecar precedent); I27 (PLATFORM DEPENDENT HELPERS section: two-level
+   opt-out guards + pragma-comment auto-linking); I28 (tables as big-subsystem reference:
+   splitter channels, ImSpan arenas, Commentary). Every core TU now has both structural and
+   content-level coverage.
 
 ## Sequencing (each wave gated: imguix-tests + imguix-core-tests + imguix-headless-verify green, codegen corpus byte-identical, style ratchet re-pinned monotonically down)
 
