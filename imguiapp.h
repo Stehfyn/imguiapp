@@ -71,7 +71,6 @@ struct ImGuiAppControl;
 struct ImGuiAppControlBase;
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
 struct ImGuiAppControlMirrorAdapter;
-struct ImGuiAppControlMirrorBase;
 template <typename... DataDependencies>
 struct ImGuiAppDependencySlots;
 template <typename Base, typename PersistDataT, typename TempDataT, typename... DataDependencies>
@@ -799,30 +798,28 @@ struct ImGuiAppSidebarBase : ImGuiAppWindowBase
     float    Size    = 0.0f;
 };
 
-// NOTE: ImGuiAppLiveFieldKind / ImGuiAppLiveFieldDesc (the reflected-member manifest referenced by the
-// virtuals below) live in imguiapp_reflect.h, included at the top of this file.
-
-// Live-mirror reflection surface: compile-time-erased data identity re-exposed on the type-erased
-// ImGuiAppControlBase*, so tools inspect a control without knowing its concrete template pack. A pure
-// interface like ImGuiAppItemBase; every hook defaults inert, ImGuiAppControl<> overrides each from its pack.
-struct ImGuiAppControlMirrorBase : ImGuiAppInterface
+// A control: an authorable item + the live-mirror surface -- compile-time-erased data identity
+// re-exposed on the type-erased base, so tools inspect a control without knowing its concrete
+// template pack. Hooks default inert (imguiapp.cpp); ImGuiAppControlMirrorAdapter<> overrides each
+// from its pack. (ImGuiAppLiveFieldDesc lives in imguiapp_reflect.h, included at the top.)
+struct ImGuiAppControlBase : ImGuiAppItemBase
 {
-    virtual ImGuiID GetControlDataID() const;                                                     // instance-qualified storage key of PersistData
-    virtual int     GetControlDependencyIDs(ImGuiID* out, int cap) const;                          // RESOLVED producer keys -- where each slot is wired NOW (out null = count)
-    virtual int     GetControlDependencyTypeIDs(ImGuiID* out, int cap) const;                      // DECLARED dependency type ids -- the compile-time pack, what CAN be wired
-    virtual int     GetControlDependencyOptional(bool* out, int cap) const;                        // per-slot Optional flags, same order as the id queries
-    virtual void    GetControlDataTypeName(char* out, int out_size) const;                         // PersistData type name
-    virtual void    GetControlTempDataTypeName(char* out, int out_size) const;                     // TempData type name
-    virtual int     GetControlFields(ImGuiAppLiveFieldDesc* out, int cap, bool temp_data) const;   // reflected members of Persist (false) / Temp (true); out null = count
-    virtual bool    IsControlDataReflectable(bool temp_data) const;                                // false = not trivially copyable: opaque, exactly like snapshots
-    virtual bool    GetControlLiveData(const void** out_persist, const void** out_temp) const;     // live instance memory of the RUNNING control (read-only); false before init
-    virtual void    RefreshControlDependencyData(const ImGuiApp* app);                             // rebind cached dependency pointers from resolved keys (AppRebuildUpdateOrder, after any push/pop)
-    virtual bool    SetControlDependencyBinding(ImGuiApp* app, const ImGuiAppDataBinding* bind);   // re-route one declared dependency at runtime (Composer rewiring); false = TypeID not in pack
-};
+    // Data identity
+    virtual ImGuiID GetDataID() const;                                                  // instance-qualified storage key of PersistData
+    virtual void    GetDataTypeName(char* out, int out_size) const;                     // PersistData type name
+    virtual void    GetTempDataTypeName(char* out, int out_size) const;                 // TempData type name
 
-// A control = an authorable item (ImGuiAppItemBase) + the live-mirror surface (ImGuiAppControlMirrorBase).
-struct ImGuiAppControlBase : ImGuiAppItemBase, ImGuiAppControlMirrorBase
-{
+    // Reflection + live memory
+    virtual int     GetFields(ImGuiAppLiveFieldDesc* out, int cap, bool temp_data) const; // reflected members of Persist (false) / Temp (true); out null = count
+    virtual bool    IsDataReflectable(bool temp_data) const;                            // false = not trivially copyable: opaque, exactly like snapshots
+    virtual bool    GetLiveData(const void** out_persist, const void** out_temp) const; // live instance memory of the RUNNING control (read-only); false before init
+
+    // Dependency wiring
+    virtual int     GetDependencyIDs(ImGuiID* out, int cap) const;                      // RESOLVED producer keys -- where each slot is wired NOW (out null = count)
+    virtual int     GetDependencyTypeIDs(ImGuiID* out, int cap) const;                  // DECLARED dependency type ids -- the compile-time pack, what CAN be wired
+    virtual int     GetDependencyOptional(bool* out, int cap) const;                    // per-slot Optional flags, same order as the id queries
+    virtual void    RefreshDependencyData(const ImGuiApp* app);                         // rebind cached dependency pointers from resolved keys (AppRebuildUpdateOrder, after any push/pop)
+    virtual bool    SetDependencyBinding(ImGuiApp* app, const ImGuiAppDataBinding* bind); // re-route one declared dependency at runtime (Composer rewiring); false = TypeID not in pack
 };
 
 // The reflectability contracts, type-schema registry, and reflection field-walk these adapters drive
@@ -1092,9 +1089,9 @@ struct ImGuiAppControlMirrorAdapter : ImGuiAppInterfaceAdapter<ImGuiAppControlBa
 {
     // Instance-qualified storage keys -- the same keys app->Data uses. Dependency ids are the
     // RESOLVED producer keys (push-time routing), so mirrors draw the actual wiring.
-    virtual ImGuiID GetControlDataID() const override final { return ImAppHashType(ImGuiAppType<PersistDataT>::ID, this->_InstanceID); }
+    virtual ImGuiID GetDataID() const override final { return ImAppHashType(ImGuiAppType<PersistDataT>::ID, this->_InstanceID); }
 
-    virtual int GetControlDependencyIDs(ImGuiID* out, int cap) const override final
+    virtual int GetDependencyIDs(ImGuiID* out, int cap) const override final
     {
         const int count = (int)(sizeof...(DataDependencies));
         if (out == nullptr || cap <= 0)
@@ -1105,10 +1102,10 @@ struct ImGuiAppControlMirrorAdapter : ImGuiAppInterfaceAdapter<ImGuiAppControlBa
         return n;
     }
 
-    virtual void GetControlDataTypeName(char* out, int out_size) const override final { ImAppFormatLabel<PersistDataT>(out, (size_t)out_size); }
-    virtual void GetControlTempDataTypeName(char* out, int out_size) const override final { ImAppFormatLabel<TempDataT>(out, (size_t)out_size); }
+    virtual void GetDataTypeName(char* out, int out_size) const override final { ImAppFormatLabel<PersistDataT>(out, (size_t)out_size); }
+    virtual void GetTempDataTypeName(char* out, int out_size) const override final { ImAppFormatLabel<TempDataT>(out, (size_t)out_size); }
 
-    virtual int GetControlFields(ImGuiAppLiveFieldDesc* out, int cap, bool temp_data) const override final
+    virtual int GetFields(ImGuiAppLiveFieldDesc* out, int cap, bool temp_data) const override final
     {
 #ifdef IMGUIAPP_HAS_REFLECT
         return temp_data ? ImGui::AppReflectFields<TempDataT>(out, cap) : ImGui::AppReflectFields<PersistDataT>(out, cap);
@@ -1120,17 +1117,17 @@ struct ImGuiAppControlMirrorAdapter : ImGuiAppInterfaceAdapter<ImGuiAppControlBa
 #endif
     }
 
-    virtual bool IsControlDataReflectable(bool temp_data) const override final
+    virtual bool IsDataReflectable(bool temp_data) const override final
     {
         return temp_data ? ImAppDataReflectable<TempDataT> : ImAppDataReflectable<PersistDataT>;
     }
 
-    virtual void RefreshControlDependencyData(const ImGuiApp* app) override final
+    virtual void RefreshDependencyData(const ImGuiApp* app) override final
     {
         this->RebindDependencies(app);
     }
 
-    virtual int GetControlDependencyTypeIDs(ImGuiID* out, int cap) const override final
+    virtual int GetDependencyTypeIDs(ImGuiID* out, int cap) const override final
     {
         const int count = (int)(sizeof...(DataDependencies));
         if (out == nullptr || cap <= 0)
@@ -1142,7 +1139,7 @@ struct ImGuiAppControlMirrorAdapter : ImGuiAppInterfaceAdapter<ImGuiAppControlBa
         return n;
     }
 
-    virtual int GetControlDependencyOptional(bool* out, int cap) const override final
+    virtual int GetDependencyOptional(bool* out, int cap) const override final
     {
         const int count = (int)(sizeof...(DataDependencies));
         if (out == nullptr || cap <= 0)
@@ -1153,7 +1150,7 @@ struct ImGuiAppControlMirrorAdapter : ImGuiAppInterfaceAdapter<ImGuiAppControlBa
         return n;
     }
 
-    virtual bool SetControlDependencyBinding(ImGuiApp* app, const ImGuiAppDataBinding* bind) override final
+    virtual bool SetDependencyBinding(ImGuiApp* app, const ImGuiAppDataBinding* bind) override final
     {
         if (app == nullptr || bind == nullptr)
             return false;
@@ -1172,7 +1169,7 @@ struct ImGuiAppControlMirrorAdapter : ImGuiAppInterfaceAdapter<ImGuiAppControlBa
         return false;
     }
 
-    virtual bool GetControlLiveData(const void** out_persist, const void** out_temp) const override final
+    virtual bool GetLiveData(const void** out_persist, const void** out_temp) const override final
     {
         if (this->_InstanceData == nullptr)
             return false;
@@ -1196,8 +1193,6 @@ struct ImGuiAppControl : ImGuiAppControlMirrorAdapter<PersistDataT, TempDataT, D
 template <typename T>
 struct ImGuiAppWindow : ImGuiAppWindowBase
 {
-    ImGuiAppWindow() { ImAppFormatLabel<T>(this->Label, sizeof(this->Label)); } // bare class name; PushAppWindow suffixes only real duplicates
-
     virtual void OnInitialize(ImGuiApp*) const override {};
     virtual void OnShutdown(ImGuiApp*) const override {};
     virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*) const override {};
@@ -1208,8 +1203,6 @@ struct ImGuiAppWindow : ImGuiAppWindowBase
 template <typename T>
 struct ImGuiAppSidebar : ImGuiAppSidebarBase
 {
-    ImGuiAppSidebar() { ImAppFormatLabel<T>(this->Label, sizeof(this->Label)); } // bare class name; PushAppSidebar suffixes only real duplicates
-
     virtual void OnInitialize(ImGuiApp*) const override {};
     virtual void OnShutdown(ImGuiApp*) const override {};
     virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*) const override {};

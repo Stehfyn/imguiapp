@@ -770,20 +770,20 @@ void PopItemStyle(ImGuiAppItemStyleScope s)
 }
 } // namespace
 
-// ImGuiAppControlMirrorBase: inert defaults for the live-mirror data-identity surface. ImGuiAppControl<>
+// ImGuiAppControlBase: inert defaults for the live-mirror data-identity surface. ImGuiAppControlMirrorAdapter<>
 // overrides every one of these from its (PersistDataT, TempDataT, DataDependencies...) pack; a plain
 // ImGuiAppControlBase (or a control with nothing reflectable) keeps them.
-ImGuiID ImGuiAppControlMirrorBase::GetControlDataID() const { return 0; }
-int     ImGuiAppControlMirrorBase::GetControlDependencyIDs(ImGuiID* out, int cap) const { IM_UNUSED(out); IM_UNUSED(cap); return 0; }
-int     ImGuiAppControlMirrorBase::GetControlDependencyTypeIDs(ImGuiID* out, int cap) const { IM_UNUSED(out); IM_UNUSED(cap); return 0; }
-int     ImGuiAppControlMirrorBase::GetControlDependencyOptional(bool* out, int cap) const { IM_UNUSED(out); IM_UNUSED(cap); return 0; }
-void    ImGuiAppControlMirrorBase::GetControlDataTypeName(char* out, int out_size) const { if (out && out_size > 0) out[0] = 0; }
-void    ImGuiAppControlMirrorBase::GetControlTempDataTypeName(char* out, int out_size) const { if (out && out_size > 0) out[0] = 0; }
-int     ImGuiAppControlMirrorBase::GetControlFields(ImGuiAppLiveFieldDesc* out, int cap, bool temp_data) const { IM_UNUSED(out); IM_UNUSED(cap); IM_UNUSED(temp_data); return 0; }
-bool    ImGuiAppControlMirrorBase::IsControlDataReflectable(bool temp_data) const { IM_UNUSED(temp_data); return false; }
-bool    ImGuiAppControlMirrorBase::GetControlLiveData(const void** out_persist, const void** out_temp) const { IM_UNUSED(out_persist); IM_UNUSED(out_temp); return false; }
-void    ImGuiAppControlMirrorBase::RefreshControlDependencyData(const ImGuiApp* app) { IM_UNUSED(app); }
-bool    ImGuiAppControlMirrorBase::SetControlDependencyBinding(ImGuiApp* app, const ImGuiAppDataBinding* bind) { IM_UNUSED(app); IM_UNUSED(bind); return false; }
+ImGuiID ImGuiAppControlBase::GetDataID() const { return 0; }
+int     ImGuiAppControlBase::GetDependencyIDs(ImGuiID* out, int cap) const { IM_UNUSED(out); IM_UNUSED(cap); return 0; }
+int     ImGuiAppControlBase::GetDependencyTypeIDs(ImGuiID* out, int cap) const { IM_UNUSED(out); IM_UNUSED(cap); return 0; }
+int     ImGuiAppControlBase::GetDependencyOptional(bool* out, int cap) const { IM_UNUSED(out); IM_UNUSED(cap); return 0; }
+void    ImGuiAppControlBase::GetDataTypeName(char* out, int out_size) const { if (out && out_size > 0) out[0] = 0; }
+void    ImGuiAppControlBase::GetTempDataTypeName(char* out, int out_size) const { if (out && out_size > 0) out[0] = 0; }
+int     ImGuiAppControlBase::GetFields(ImGuiAppLiveFieldDesc* out, int cap, bool temp_data) const { IM_UNUSED(out); IM_UNUSED(cap); IM_UNUSED(temp_data); return 0; }
+bool    ImGuiAppControlBase::IsDataReflectable(bool temp_data) const { IM_UNUSED(temp_data); return false; }
+bool    ImGuiAppControlBase::GetLiveData(const void** out_persist, const void** out_temp) const { IM_UNUSED(out_persist); IM_UNUSED(out_temp); return false; }
+void    ImGuiAppControlBase::RefreshDependencyData(const ImGuiApp* app) { IM_UNUSED(app); }
+bool    ImGuiAppControlBase::SetDependencyBinding(ImGuiApp* app, const ImGuiAppDataBinding* bind) { IM_UNUSED(app); IM_UNUSED(bind); return false; }
 
 //-----------------------------------------------------------------------------
 // [SECTION] Display layer (windows, sidebars, hosted controls, .ini handler)
@@ -1130,11 +1130,11 @@ void PopAppControl(ImGuiApp* app)
     if (app->WAL != nullptr)
     {
         char dt[IM_LABEL_SIZE];
-        control->GetControlDataTypeName(dt, IM_ARRAYSIZE(dt));
+        control->GetDataTypeName(dt, IM_ARRAYSIZE(dt));
         AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "pop control <%s>", dt);
     }
     control->OnShutdown(app);
-    const ImGuiID data_id = control->GetControlDataID();   // read before delete; pop frees what push registered
+    const ImGuiID data_id = control->GetDataID();   // read before delete; pop frees what push registered
     IM_DELETE(control);
     if (data_id != 0)
         UnregisterAppStorage(app, data_id);
@@ -1154,7 +1154,7 @@ IMGUI_API ImGuiID GetAppCompositionID(const ImGuiApp* app)
     ForEachAppControl(app, [&h](const ImGuiAppControlBase* control, const ImGuiAppWindowBase* host)
                       {
         IM_UNUSED(host);
-        const ImGuiID id = control->GetControlDataID();
+        const ImGuiID id = control->GetDataID();
         h = ImHashData(&id, sizeof(id), h);
       });
     return h;
@@ -1303,6 +1303,8 @@ IMGUI_API void AppRegisterLayer(ImGuiApp* app, ImGuiAppLayerBase* layer, const c
 IMGUI_API void AppRegisterWindow(ImGuiApp* app, ImGuiAppWindowBase* window, const char* name)
 {
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push window %s", name);
+    if (window->Label[0] == 0) // default Label to the type name (the one labeling path: push formats, this tail stamps)
+        ImStrncpy(window->Label, name, IM_ARRAYSIZE(window->Label));
     AppDeduplicateItemLabel(window->Label, IM_ARRAYSIZE(window->Label), &app->Windows, &app->Sidebars);
     app->Windows.push_back(window);
     window->OnInitialize(app);
@@ -1311,6 +1313,8 @@ IMGUI_API void AppRegisterWindow(ImGuiApp* app, ImGuiAppWindowBase* window, cons
 IMGUI_API void AppRegisterSidebar(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, const char* name, ImGuiViewport* vp, ImGuiDir dir, float size, ImGuiWindowFlags flags)
 {
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push sidebar %s", name);
+    if (sidebar->Label[0] == 0) // default Label to the type name (the one labeling path: push formats, this tail stamps)
+        ImStrncpy(sidebar->Label, name, IM_ARRAYSIZE(sidebar->Label));
     AppDeduplicateItemLabel(sidebar->Label, IM_ARRAYSIZE(sidebar->Label), &app->Windows, &app->Sidebars);
     sidebar->Viewport = vp;
     sidebar->DockDir  = dir;
@@ -1353,11 +1357,11 @@ IMGUI_API const ImVector<ImGuiAppControlBase*>* AppRebuildUpdateOrder(ImGuiApp* 
                 if (emitted[i])
                     continue;
                 ImGuiID deps[64];
-                const int dep_count = nodes[i]->GetControlDependencyIDs(deps, IM_ARRAYSIZE(deps));
+                const int dep_count = nodes[i]->GetDependencyIDs(deps, IM_ARRAYSIZE(deps));
                 bool ready = true;
                 for (int d = 0; d < dep_count && ready; d++)
                     for (int j = 0; j < nodes.Size && ready; j++)
-                        if (!emitted[j] && j != i && nodes[j]->GetControlDataID() == deps[d])
+                        if (!emitted[j] && j != i && nodes[j]->GetDataID() == deps[d])
                             ready = false;
                 if (!ready)
                     continue;
@@ -1376,7 +1380,7 @@ IMGUI_API const ImVector<ImGuiAppControlBase*>* AppRebuildUpdateOrder(ImGuiApp* 
             remaining -= progressed;
         }
         for (int i = 0; i < app->UpdateOrder.Size; i++)
-            app->UpdateOrder.Data[i]->RefreshControlDependencyData(app);
+            app->UpdateOrder.Data[i]->RefreshDependencyData(app);
         app->UpdateOrderRevision = app->CompositionRevision;
         AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "update order rebuilt (%d controls, revision %d)", app->UpdateOrder.Size, app->CompositionRevision);
     }
@@ -1395,11 +1399,11 @@ void ShutdownAppControls(ImGuiApp* app, ImVector<ImGuiAppControlBase*>& controls
         if (app->WAL != nullptr)
         {
             char dt[IM_LABEL_SIZE];
-            control->GetControlDataTypeName(dt, IM_ARRAYSIZE(dt));
+            control->GetDataTypeName(dt, IM_ARRAYSIZE(dt));
             AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "shutdown control <%s>", dt);
         }
         control->OnShutdown(app);
-        const ImGuiID data_id = control->GetControlDataID();   // read before delete
+        const ImGuiID data_id = control->GetDataID();   // read before delete
         IM_DELETE(control);
         if (data_id != 0)
             UnregisterAppStorage(app, data_id);
@@ -15580,17 +15584,17 @@ static void AppLiveFieldValueText(const ImGuiAppLiveFieldDesc* f, const void* ba
 static void AppLiveFieldsTable(const char* str_id, const ImGuiAppControlBase* ctrl, bool temp_data, const void* base)
 {
     ImGuiAppLiveFieldDesc fields[64];
-    const int n = ctrl->GetControlFields(fields, IM_ARRAYSIZE(fields), temp_data);
+    const int n = ctrl->GetFields(fields, IM_ARRAYSIZE(fields), temp_data);
     if (n <= 0)
     {
         // Outside the field-enumeration contract (non-aggregate or tagged opaque).
-        if (!ctrl->IsControlDataReflectable(temp_data))
+        if (!ctrl->IsDataReflectable(temp_data))
             TextDisabled("(opaque to reflection)");
         else
             TextDisabled("(no members)");
         return;
     }
-    if (!ctrl->IsControlDataReflectable(temp_data))
+    if (!ctrl->IsDataReflectable(temp_data))
         TextDisabled("(snapshot-opaque -- fields via build-time reflection)");
     if (BeginTable(str_id, 3, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
     {
@@ -15637,7 +15641,7 @@ static ImGuiAppItemBase* AppGraphFindLiveItem(ImGuiApp* app, const ImGuiAppNode*
         ImGuiAppControlBase* found = nullptr;
         ForEachAppControl(app, [&](ImGuiAppControlBase* ctrl, ImGuiAppWindowBase*)
                                  {
-        if (found == nullptr && ctrl->GetControlDataID() == n->LiveKey)
+        if (found == nullptr && ctrl->GetDataID() == n->LiveKey)
           found = ctrl;
       });
         return found;
@@ -15784,7 +15788,7 @@ void EditAppNodeInspectorEx(ImGuiAppGraph* g, int node_id, ImGuiApp* live_app)
             const ImGuiAppControlBase* ctrl = (const ImGuiAppControlBase*)item;
             const void* live_persist = nullptr;
             const void* live_temp = nullptr;
-            ctrl->GetControlLiveData(&live_persist, &live_temp);
+            ctrl->GetLiveData(&live_persist, &live_temp);
             if (AppInspectorSection("##sec_live_data", ICON_FA_DATABASE, "Data (live)", nullptr, nullptr))
                 AppLiveFieldsTable("##live_persist", ctrl, false, live_persist);
             if (AppInspectorSection("##sec_live_temp", ICON_FA_BOLT, "Temp (live)", nullptr, nullptr))
@@ -19819,7 +19823,7 @@ static void AppEmitSchemaFieldDeps(const ImGuiAppLiveFieldDesc* fields, int coun
 }
 
 // Reflected data shapes + the control's interface shell with its dependency pack (from the live
-// data edges GetControlDependencyIDs produced). Returns false when the runtime object is gone.
+// data edges GetDependencyIDs produced). Returns false when the runtime object is gone.
 static bool AppEmitLiveControlCode(const ImGuiAppGraph* g, ImGuiApp* live_app, const ImGuiAppNode* n, ImGuiTextBuffer* out, ImGuiStorage* emitted)
 {
     ImGuiAppItemBase* item = AppGraphFindLiveItem(live_app, n);
@@ -19832,8 +19836,8 @@ static bool AppEmitLiveControlCode(const ImGuiAppGraph* g, ImGuiApp* live_app, c
 
     char pname[IM_LABEL_SIZE];
     char tname[IM_LABEL_SIZE];
-    ctrl->GetControlDataTypeName(pname, IM_ARRAYSIZE(pname));
-    ctrl->GetControlTempDataTypeName(tname, IM_ARRAYSIZE(tname));
+    ctrl->GetDataTypeName(pname, IM_ARRAYSIZE(pname));
+    ctrl->GetTempDataTypeName(tname, IM_ARRAYSIZE(tname));
     if (pname[0] == 0)
     {
         out->appendf("// live control '%s': no data type name\n\n", n->Draft.Name);
@@ -19848,8 +19852,8 @@ static bool AppEmitLiveControlCode(const ImGuiAppGraph* g, ImGuiApp* live_app, c
 
     ImGuiAppLiveFieldDesc fields[64];
     ImGuiAppLiveFieldDesc temp_fields[64];
-    const int nf = ctrl->GetControlFields(fields, IM_ARRAYSIZE(fields), false);
-    const int nt = ctrl->GetControlFields(temp_fields, IM_ARRAYSIZE(temp_fields), true);
+    const int nf = ctrl->GetFields(fields, IM_ARRAYSIZE(fields), false);
+    const int nt = ctrl->GetFields(temp_fields, IM_ARRAYSIZE(temp_fields), true);
 
     // Nested schema'd types first (ImGuiAppGraph and friends): the reflected structs below
     // declare members of these types.
@@ -19858,19 +19862,19 @@ static bool AppEmitLiveControlCode(const ImGuiAppGraph* g, ImGuiApp* live_app, c
 
     out->appendf("// reflected from the running control\nstruct %s\n{\n", pname);
     if (nf <= 0)
-        out->appendf(ctrl->IsControlDataReflectable(false) ? "  // (no members)\n" : "  // opaque: not reflectable\n");
+        out->appendf(ctrl->IsDataReflectable(false) ? "  // (no members)\n" : "  // opaque: not reflectable\n");
     int type_w = AppLiveFieldDeclTypeWidth(fields, nf);
     for (int i = 0; i < nf; i++)
         AppEmitLiveFieldDecl(out, &fields[i], type_w);
     out->appendf("};\n\nstruct %s\n{\n", temp_type);
     if (nt <= 0)
-        out->appendf(ctrl->IsControlDataReflectable(true) ? "  // (no members)\n" : "  // opaque: not reflectable\n");
+        out->appendf(ctrl->IsDataReflectable(true) ? "  // (no members)\n" : "  // opaque: not reflectable\n");
     type_w = AppLiveFieldDeclTypeWidth(temp_fields, nt);
     for (int i = 0; i < nt; i++)
         AppEmitLiveFieldDecl(out, &temp_fields[i], type_w);
     out->appendf("};\n\n");
 
-    // Dependency producers, from the live data edges (rebuilt each frame from GetControlDependencyIDs).
+    // Dependency producers, from the live data edges (rebuilt each frame from GetDependencyIDs).
     ImVector<int> deps;
     AppGraphConsumerDeps(g, n->Id, &deps);
 
@@ -20190,7 +20194,7 @@ void AppPreviewModuleCodeGenerate(const ImGuiAppGraph* g, ImGuiTextBuffer* out)
     out->appendf("static ImGuiAppStorageEntry* ImGuiAppPreview_Entry(AppShell* app, const char* label)\n{\n");
     out->appendf("  for (int i = 0; i < app->Controls.Size; i++)\n");
     out->appendf("    if (strcmp(app->Controls[i]->Label, label) == 0)\n    {\n");
-    out->appendf("      ImGuiID id = app->Controls[i]->GetControlDataID();\n");
+    out->appendf("      ImGuiID id = app->Controls[i]->GetDataID();\n");
     out->appendf("      for (int e = 0; e < app->StorageEntries.Size; e++)\n");
     out->appendf("        if (app->StorageEntries[e].ID == id) return &app->StorageEntries[e];\n");
     out->appendf("    }\n  return nullptr;\n}\n\n");
@@ -22433,7 +22437,7 @@ void BuildAppLiveGraph(const ImGuiApp* app, ImGuiAppGraph* g)
     {
         if (ctrl == nullptr)
             return;
-        ImGuiID id = ctrl->GetControlDataID();
+        ImGuiID id = ctrl->GetDataID();
         if (id == 0)
             return;
         ImGuiAppLiveWant w; w.Kind = ImGuiAppNodeKind_Control; w.Key = id; w.DataId = id; w.LayerType = ImGuiAppLayerType_Task;
@@ -22441,19 +22445,19 @@ void BuildAppLiveGraph(const ImGuiApp* app, ImGuiAppGraph* g)
         w.Flags = 0; w.HasPlacement = false; w.InitialPos = ImVec2(0.0f, 0.0f); w.InitialSize = ImVec2(0.0f, 0.0f); w.DockDir = ImGuiDir_None; w.DockSize = 0.0f;
         w.Item = ctrl;
         // Name: the control class (Push*Control stamps the Label). DataType: the PersistData type.
-        ctrl->GetControlDataTypeName(w.DataType, IM_ARRAYSIZE(w.DataType));
+        ctrl->GetDataTypeName(w.DataType, IM_ARRAYSIZE(w.DataType));
         if (ctrl->Label[0])
             ImStrncpy(w.Name, ctrl->Label, IM_ARRAYSIZE(w.Name));
         else if (w.DataType[0])
             ImStrncpy(w.Name, w.DataType, IM_ARRAYSIZE(w.Name));
         else
             ImStrncpy(w.Name, "Control", IM_ARRAYSIZE(w.Name));
-        int n = ctrl->GetControlDependencyIDs(w.Deps, IM_ARRAYSIZE(w.Deps));
+        int n = ctrl->GetDependencyIDs(w.Deps, IM_ARRAYSIZE(w.Deps));
         if (n < 0) n = 0; if (n > IM_ARRAYSIZE(w.Deps)) n = IM_ARRAYSIZE(w.Deps);
         w.DepCount = n;
         for (int d = 0; d < IM_ARRAYSIZE(w.DepSoft); d++)
             w.DepSoft[d] = false;
-        ctrl->GetControlDependencyOptional(w.DepSoft, n);
+        ctrl->GetDependencyOptional(w.DepSoft, n);
         want.push_back(w);
     };
 
@@ -24274,7 +24278,7 @@ struct ImGuiAppPreviewControl : ImGuiAppControlBase
     ImGuiAppPvInstance*   Inst = nullptr;
     bool             Hosted = false;   // window/sidebar-hosted -> render the field panel (design 4.6 / 8.1)
 
-    virtual ImGuiID GetControlDataID() const override final { return Inst != nullptr ? Inst->DataTypeId : 0; }
+    virtual ImGuiID GetDataID() const override final { return Inst != nullptr ? Inst->DataTypeId : 0; }
 
     virtual void OnInitialize(ImGuiApp* app) const override final
     {

@@ -1566,7 +1566,7 @@ IMGUI_API bool                                AppInspectorSection(const char* st
 IMGUI_API void                                AppGraphSelectionBreadcrumb(const ImGuiAppGraph* g, int node_id, char* buf, int buf_size);
 
 // Mirror the running app's controls into *g: remove all prior live nodes, add one read-only live
-// Control node per pushed control (keyed by GetControlDataID) plus their data edges, and flag design
+// Control node per pushed control (keyed by GetDataID) plus their data edges, and flag design
 // controls whose emitted data type matches a live node. Design nodes untouched. Safe every frame.
 IMGUI_API void                                BuildAppLiveGraph(const ImGuiApp* app, ImGuiAppGraph* g);
 
