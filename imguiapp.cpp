@@ -15177,6 +15177,7 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
     IM_UNUSED(app);
     ImGuiCanvasState* cv = AppEditorCanvas(g);
 
+    // [Part 1/6] View state upkeep + deferred-request staging
     // Snap-to-grid: toggled by the G key (latched in the shared view state, applied to the canvas style).
     // When on, the engine snaps node origins to the grid as they're dragged. View state lives behind
     // AppGraphViewState(g) so the host can persist it across sessions.
@@ -15298,6 +15299,7 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
     // Camera bindings (LMB-drag pan, RMB pan + short-click menu, cursor-anchored wheel zoom) are the
     // engine's IO defaults.
 
+    // [Part 2/6] Canvas begin + static decorations (pipeline box, layer column, walls, group frames)
     // The canvas: the engine owns the camera, the zoomed font + layout metrics for node content, the
     // grid, wire editing (detach + snap-create), and the interaction FSM.
     ImGui::CanvasBegin(cv, "##app_canvas", ImVec2(0.0f, 0.0f));
@@ -15735,6 +15737,7 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
     if (!at_root)
         AppScopeSequenceIds(g, &scope_seq);
 
+    // [Part 3/6] Node submission (live + design nodes, bodies, pills, badges)
     // Last frame's submitted ids, kept for the re-entry check below; the current list is rebuilt from
     // scratch every frame: exactly the ids this submission puts on the canvas.
     AppGraphEditorState(g)->PrevPoolIds.swap(AppGraphEditorState(g)->PoolIds);
@@ -16228,6 +16231,7 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
             g->EditingNodeId = -1;
     }
 
+    // [Part 4/6] Links, minimap, deferred group-drag, diff dots, tooltips, layout persistence
     // Draw links. When live nodes are hidden, skip any link incident on a hidden (live) owner: that attribute
     // was never submitted this frame, so the wire has no live anchor. (Inlined: DrawAppNodeLinks can't resolve
     // owners.)
@@ -16544,6 +16548,7 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
     AppGraphViewState(g)->Zoom = ImGui::CanvasGetZoom(cv);   // mirror the live camera into the saved view state
     AppDrawScopeBreadcrumb(g, selected_node_id, editor_min);
 
+    // [Part 5/6] Add palette, telegraph, context menus, delete
     // In-widget node palette: right-click the canvas to add any node kind. Hover and menu requests come
     // latched from CanvasEnd (the engine's RMB short-click already disambiguated pan).
     const int  hovered_node = ImGui::CanvasHoveredNode(cv);
@@ -16724,6 +16729,7 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
         return any;
     };
 
+    // [Part 6/6] Input->command dispatch, navigation, deferred apply, undo capture
     // F74 remappable input->command binding: the ONE dispatcher for every editor verb -- the reified
     // command->execute(). The Space palette and a resolved key chord both run through this, so a rebind takes
     // effect on every surface. `at` is the model-space seat for add/paste verbs (the view center on the keyboard).

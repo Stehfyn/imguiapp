@@ -929,6 +929,7 @@ struct ImGuiAppEditorState
     int                            OutlinerRename = -1;                // node id being renamed in the tree, -1 = none
     bool                           OutlinerRenameFocus = false;
     bool                           OutlinerKindVis[ImGuiAppNodeKind_COUNT] = { true, true, true, true, true, true, true, true, true };
+    IM_STATIC_ASSERT(ImGuiAppNodeKind_COUNT == 9); // OutlinerKindVis initializer is hand-counted: extend it with the enum
     ImGuiTextFilter                OutlinerFilter;
     bool                           OutputShowErr = true;               // Output panel severity filters
     bool                           OutputShowWarn = true;
@@ -1047,7 +1048,7 @@ struct ImGuiAppComposerControl : ImGuiAppControl<ImGuiAppComposerControlData, Im
 //-----------------------------------------------------------------------------
 // [SECTION] Animation builtins (was imguiapp_anim.h)
 //-----------------------------------------------------------------------------
-// dt-driven Task-phase animators; each a compiled ImGuiAppControl, accumulator in PersistData (so
+// The dt-driven Task-phase animators; each a compiled ImGuiAppControl, accumulator in PersistData (so
 // snapshot/replay reproduces it). Registered via AppGraphAddBuiltin.
 
 // Ease selector for ImAppTween (no typedef pair: ImAppEase names the curve function below).
@@ -1370,13 +1371,13 @@ inline bool EditAppField(const char* label, T* value)
 
 // Node rendering (canvas)
 // Canvas-engine node scaffold (see imguiapp_canvas.h): titled node between CanvasBegin/End.
-IMGUI_API void        AppNodeBegin(::ImGuiCanvasState* c, int id, const char* title);
-IMGUI_API void        EndAppNode(::ImGuiCanvasState* c);
+IMGUI_API void        AppNodeBegin(ImGuiCanvasState* c, int id, const char* title);
+IMGUI_API void        EndAppNode(ImGuiCanvasState* c);
 
 // Renamable node scaffold: the title bar shows *name, turns into an inline text box when clicked.
 // Commits on Enter or focus loss, cancels on Escape. *editing_node_id is caller-owned (-1 = none);
 // set on title click, cleared when the edit ends. Pair with EndAppNode().
-IMGUI_API void        AppNodeBeginRenamable(::ImGuiCanvasState* c, int id, char* name, int name_size, int* editing_node_id);
+IMGUI_API void        AppNodeBeginRenamable(ImGuiCanvasState* c, int id, char* name, int name_size, int* editing_node_id);
 
 // Render every reflected field of an aggregate as read-only labelled rows in the current node.
 template <typename T>
@@ -1430,11 +1431,11 @@ IMGUI_API void AppNodeDraftFieldsEdit(ImGuiAppNodeDraft* draft);
 IMGUI_API void DrawAppNodeDraft(const ImGuiAppNodeDraft* draft);
 
 // Draw the model's links as wires on the canvas (between CanvasBegin/End).
-IMGUI_API void DrawAppNodeLinks(::ImGuiCanvasState* c, const ImVector<ImGuiAppNodeLink>* links);
+IMGUI_API void DrawAppNodeLinks(ImGuiCanvasState* c, const ImVector<ImGuiAppNodeLink>* links);
 
 // After CanvasEnd: fold the canvas's wire events into the link model. New links take ids from
 // *next_link_id (incremented). Returns true if the model changed.
-IMGUI_API bool CaptureAppNodeLinks(::ImGuiCanvasState* c, ImVector<ImGuiAppNodeLink>* links, int* next_link_id);
+IMGUI_API bool CaptureAppNodeLinks(ImGuiCanvasState* c, ImVector<ImGuiAppNodeLink>* links, int* next_link_id);
 
 // Persist / restore a draft and its links as imgui-style text. Return false on file error.
 IMGUI_API bool SaveAppNodeGraph(const char* path, const ImGuiAppNodeDraft* draft, const ImVector<ImGuiAppNodeLink>* links);
@@ -2112,8 +2113,10 @@ IMGUI_API void              CanvasStyleFromTheme(ImGuiCanvasStyle* style);
 // CanvasBegin opens the child (fills the available region unless size is given), draws the grid, applies
 // camera input per the IO policy. Submit nodes/pins/wires between Begin/End; CanvasEnd draws wires + pins
 // from THIS frame's geometry, resolves hover, runs the interaction FSM, latches events (valid until next CanvasBegin).
+// CanvasBegin/CanvasEnd: ALWAYS paired, unconditionally -- Begin is void and End must run even for
+// a fully culled canvas (it resolves hover + retires per-frame wire/pin state).
 IMGUI_API void              CanvasBegin(ImGuiCanvasState* c, const char* str_id, ImVec2 size /*= 0,0*/);
-IMGUI_API void              CanvasEnd(ImGuiCanvasState* c);
+IMGUI_API void              CanvasEnd(ImGuiCanvasState* c);   // always call (pairs CanvasBegin)
 
 // Decoration hook: returns the canvas draw list switched to the BACKGROUND channel (above the grid,
 // below node plates; wires land in the same channel later, so they draw over these decorations).
@@ -2165,8 +2168,8 @@ IMGUI_API void              CanvasNextNodeAlpha(ImGuiCanvasState* c, float alpha
 // title bar bound to buf and clears *editing when it deactivates. Pair with CanvasNodeDoubleClicked
 // to enter the state (the host decides whether a double-click renames or drills).
 IMGUI_API void              CanvasNextNodeTitleEditable(ImGuiCanvasState* c, char* buf, int buf_size, bool* editing, ImU32 title_color);
-IMGUI_API bool              CanvasBeginNode(ImGuiCanvasState* c, int node_id);   // false if culled (off-screen): body may be skipped, geometry persists
-IMGUI_API void              CanvasEndNode(ImGuiCanvasState* c);
+IMGUI_API bool              CanvasBeginNode(ImGuiCanvasState* c, int node_id);   // false if culled (off-screen): body may be skipped, geometry persists; ALWAYS call CanvasEndNode regardless
+IMGUI_API void              CanvasEndNode(ImGuiCanvasState* c);   // always call (pairs CanvasBeginNode, even when it returned false)
 IMGUI_API ImVec2            CanvasNodePos(const ImGuiCanvasState* c, int node_id);        // model
 IMGUI_API void              CanvasSetNodePos(ImGuiCanvasState* c, int node_id, ImVec2 model_pos);
 IMGUI_API ImVec2            CanvasNodeSize(const ImGuiCanvasState* c, int node_id);       // model; this frame if submitted, else last known
@@ -2264,7 +2267,7 @@ IMGUI_API ::ImGuiAppGraph* AppLayerDemoGraph(ImGuiApp* host);
 
 // Monospace font for the generated-code inspector (space-padded alignment needs fixed width). Register
 // at font-init; null leaves the inspector on the UI font. (Was in imguiapp.h; tool-coupled.)
-IMGUI_API void             SetAppCodeFont(::ImGuiAppGraph* g, ImFont* font);
+IMGUI_API void             SetAppCodeFont(ImGuiAppGraph* g, ImFont* font);
 
 // Composer introspection accessors (relocated from imguiapp.h; tool-coupled, "exposed for tests").
 // App-time transport (F29): number of state snapshots the running composer has recorded of its

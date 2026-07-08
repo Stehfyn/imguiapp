@@ -692,7 +692,7 @@ inline static bool ImAppChanged(bool now, bool last) { return now ^ last; }
 template <typename T>
 inline static bool ImAppChanged(const T& now, const T& last) { return !(now == last); }
 
-// splitmix64, no global state. Keep the seed in PersistData (seed in OnInitialize, step only through the
+// Splitmix64, no global state. Keep the seed in PersistData (seed in OnInitialize, step only through the
 // seed) so snapshots and replay reproduce it; hidden effect sources (rand(), clocks) break replay.
 inline static ImU64 ImAppRandom(ImU64* seed)
 {
