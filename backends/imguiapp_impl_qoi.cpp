@@ -156,10 +156,10 @@ ImGuiAppAVEncoder* ImGuiApp_ImplQoi_CreateEncoder()
     ImGuiAppAVEncoder* enc = IM_NEW(ImGuiAppAVEncoder)();
     enc->Name = "qoi-sequence";
     enc->SupportsRealtimePts = true;
-    enc->Open = ImGuiApp_ImplQoi_Open;
-    enc->WriteFrame = ImGuiApp_ImplQoi_WriteFrame;
-    enc->Close = ImGuiApp_ImplQoi_Close;
-    enc->Destroy = ImGuiApp_ImplQoi_Destroy;
+    enc->OpenFn = ImGuiApp_ImplQoi_Open;
+    enc->WriteFrameFn = ImGuiApp_ImplQoi_WriteFrame;
+    enc->CloseFn = ImGuiApp_ImplQoi_Close;
+    enc->DestroyFn = ImGuiApp_ImplQoi_Destroy;
     enc->UserData = IM_NEW(ImGuiApp_ImplQoi_Data)();
     return enc;
 }

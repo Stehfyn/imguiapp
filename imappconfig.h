@@ -1,6 +1,10 @@
 #pragma once
 
-// Applayer compile-time configuration (the imconfig.h analog): #define switches only.
+// dear imgui app, v0.5.0 WIP
+// (applayer compile-time configuration -- the imconfig.h analog: #define switches only)
+
+// Macro namespaces (N18): IMGUIAPP_* = applayer library defines; IMGUIX_* = imguix umbrella
+// build switches. Nothing else claims either prefix.
 
 // Export grammar (B4): applayer + backends/* export through IMGUI_API (the applayer ships as
 // part of the imgui build unit); IMGUIX_API belongs to the imguix umbrella TU alone.

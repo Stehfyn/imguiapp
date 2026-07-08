@@ -1,3 +1,6 @@
+// dear imgui app, v0.5.0 WIP
+// (main application-layer code)
+
 // ImGuiAppLayer core: frame pipeline, typed app composition (layers / windows / sidebars / controls),
 // state discipline (docs/bug-classes.md).
 //
@@ -23,6 +26,20 @@
 
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "imguiapp.h"
+#ifndef IMGUI_DISABLE
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wold-style-cast"
+#pragma clang diagnostic ignored "-Wunused-function"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpragmas"
+#pragma GCC diagnostic ignored "-Wclass-memaccess"
+#endif
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 26495) // [Static Analyzer] uninitialized member (type.6); memset ctors
+#endif
 #include "imguiapp_internal.h"   // core model/codegen (nodes.h) + interpreter (preview.h) + tool-UI decls
 #include "IconsFontAwesome6.h"   // ICON_FA_* glyph macros used by core node/layer icon helpers
 #ifndef IMGUIAPP_DISABLE_DEFAULT_THREAD_FUNCS
@@ -30,8 +47,7 @@
 #include <mutex>
 #include <condition_variable>
 #endif
-#include <chrono>
-#include "imgui_internal.h"
+#include <chrono>                // std::chrono (recorder thread timing)
 
 #include <ctime>
 #include <cstdio>
@@ -171,7 +187,7 @@ bool ImGuiApp::OnInitializePlatform(ImGuiAppConfig& config)
     IM_ASSERT(config.WindowWidth  >  0       && "WindowWidth must be set in config passed to Initialize");
     IM_ASSERT(config.WindowHeight >  0       && "WindowHeight must be set in config passed to Initialize");
 
-    if (!ImGuiApp_GetPlatformBackend()->InitPlatform(this, config))
+    if (!ImGuiAppGetPlatformBackend()->InitPlatformFn(this, config))
     {
         OnShutdownPlatform();
         return false;
@@ -181,7 +197,7 @@ bool ImGuiApp::OnInitializePlatform(ImGuiAppConfig& config)
 
 void ImGuiApp::OnShutdownPlatform()
 {
-    ImGuiApp_GetPlatformBackend()->ShutdownPlatform(this);
+    ImGuiAppGetPlatformBackend()->ShutdownPlatformFn(this);
     PlatformData = nullptr;
 }
 
@@ -193,7 +209,7 @@ int ImGuiApp::Run(int argc, char** argv)
         return 1;
     }
 
-    return ImGuiApp_GetPlatformBackend()->RunLoop(this);
+    return ImGuiAppGetPlatformBackend()->RunLoopFn(this);
 }
 
 #ifdef _WIN32
@@ -414,7 +430,7 @@ void ImGuiApp::OnDrawFrame()
     FrameID.Tsc = AppClockTsc();
     FrameID.TimeSec = AppClockNowSec() - epoch;
 
-    ImGuiApp_GetPlatformBackend()->NewFrame();
+    ImGuiAppGetPlatformBackend()->NewFrameFn();
     ImGui::NewFrame();
     DrawFrame(this);
 }
@@ -424,7 +440,7 @@ void ImGuiApp::OnRenderFrame()
     ImGuiAppFrameConfig frame_config;
     frame_config.ClearColor = ClearColor;
     ImGui::Render();
-    ImGuiApp_GetPlatformBackend()->RenderDrawData(ImGui::GetDrawData(), &frame_config);
+    ImGuiAppGetPlatformBackend()->RenderDrawDataFn(ImGui::GetDrawData(), &frame_config);
 }
 
 void ImGuiApp::OnEncodeFrame()
@@ -437,12 +453,12 @@ void ImGuiApp::OnEncodeFrame()
 
 void ImGuiApp::OnPresentFrame()
 {
-    const ImGuiAppPlatformBackend* backend = ImGuiApp_GetPlatformBackend();
-    if (backend->PresentFrame == nullptr)   // legacy single-hook: RenderDrawData presented
+    const ImGuiAppPlatformBackend* backend = ImGuiAppGetPlatformBackend();
+    if (backend->PresentFrameFn == nullptr)   // legacy single-hook: RenderDrawData presented
         return;
     ImGuiAppFrameConfig frame_config;
     frame_config.ClearColor = ClearColor;
-    backend->PresentFrame(&frame_config);
+    backend->PresentFrameFn(&frame_config);
 }
 
 void ImGuiApp::OnExecuteCommand(ImGuiAppCommand cmd)
@@ -891,8 +907,21 @@ namespace ImGui
 // [SECTION] App bring-up (InitializeApp / UpdateApp / RenderApp / storage)
 //-----------------------------------------------------------------------------
 
+// IMGUIAPP_CHECKVERSION() target: the compiled library and the including TU must agree on the
+// version string and the core struct layouts (a mismatch = mixed headers/binaries).
+IMGUI_API bool AppDebugCheckVersionAndDataLayout(const char* version, size_t sz_app, size_t sz_config, size_t sz_frame_config)
+{
+    bool error = false;
+    if (strcmp(version, IMGUIAPP_VERSION) != 0)          { error = true; IM_ASSERT(strcmp(version, IMGUIAPP_VERSION) == 0 && "Mismatched IMGUIAPP_VERSION!"); }
+    if (sz_app != sizeof(ImGuiApp))                      { error = true; IM_ASSERT(sz_app == sizeof(ImGuiApp) && "Mismatched sizeof(ImGuiApp)!"); }
+    if (sz_config != sizeof(ImGuiAppConfig))             { error = true; IM_ASSERT(sz_config == sizeof(ImGuiAppConfig) && "Mismatched sizeof(ImGuiAppConfig)!"); }
+    if (sz_frame_config != sizeof(ImGuiAppFrameConfig))  { error = true; IM_ASSERT(sz_frame_config == sizeof(ImGuiAppFrameConfig) && "Mismatched sizeof(ImGuiAppFrameConfig)!"); }
+    return !error;
+}
+
 IMGUI_API void InitializeApp(ImGuiApp* app, const ImGuiAppConfig* config)
 {
+    IMGUIAPP_CHECKVERSION();
     IM_ASSERT(app);
     IM_ASSERT(app->Layers.empty() && "ImGui app already has layers. ShutdownApp() before re-initializing.");
     if (app == nullptr || !app->Layers.empty())
@@ -2484,7 +2513,7 @@ static void CanvasUpdateInput(ImGuiCanvasState* c, bool canvas_item_hovered, boo
                 // Normalize to (out, in) when the kinds disagree: hosts get a stable orientation.
                 const ImGuiCanvasPinRec* pf = CanvasFindPin(c, c->DragWireFromPin);
                 const ImGuiCanvasPinRec* pt = CanvasFindPin(c, c->HoveredPin);
-                if (pf != nullptr && pt != nullptr && pf->Kind == ImGui::ImGuiCanvasPin_In && pt->Kind == ImGui::ImGuiCanvasPin_Out)
+                if (pf != nullptr && pt != nullptr && pf->Kind == ImGui::ImGuiCanvasPinKind_In && pt->Kind == ImGui::ImGuiCanvasPinKind_Out)
                 {
                     c->CreatedPinA = pt->Id;
                     c->CreatedPinB = pf->Id;
@@ -2948,7 +2977,7 @@ void CanvasNextPinSide(ImGuiCanvasState* c, int side)
 static int CanvasResolvePinSide(ImGuiCanvasState* c, int kind)
 {
     const int side = c->NextPinSide >= 0 ? c->NextPinSide
-                   : (kind == ImGuiCanvasPin_In ? ImGuiCanvasPinSide_Left : ImGuiCanvasPinSide_Right);
+                   : (kind == ImGuiCanvasPinKind_In ? ImGuiCanvasPinSide_Left : ImGuiCanvasPinSide_Right);
     c->NextPinSide = -1;
     return side;
 }
@@ -3287,7 +3316,7 @@ void CanvasEnd(ImGuiCanvasState* c)
                     continue;
                 ImVec2 a = to_mini(pa->Anchor);
                 ImVec2 b = to_mini(pb->Anchor);
-                if (pa->Kind == ImGuiCanvasPin_In)   // orient start at the Out end
+                if (pa->Kind == ImGuiCanvasPinKind_In)   // orient start at the Out end
                     ImSwap(a, b);
                 const float  len = ImSqrt(ImLengthSqr(b - a));
                 const ImVec2 ctrl(0.25f * len, 0.0f);
@@ -3474,8 +3503,6 @@ bool CanvasMenuRequestEmpty(const ImGuiCanvasState* c, ImVec2* out_model_pos)
 // [SECTION] Composer host window + demo menu
 // [SECTION] Demo bring-up (ShowAppDemo: ONE application)
 
-#ifdef IMGUIX_HAS_LIBAV
-#endif
 
 
 namespace
@@ -3942,6 +3969,7 @@ enum ImGuiAppComposerLayoutPreset_
 };
 enum ImGuiAppComposerLayoutVis_          // one bit per toggleable surface
 {
+    ImGuiAppComposerLayoutVis_None = 0,
     ImGuiAppComposerLayoutVis_Tree = 1 << 0,
     ImGuiAppComposerLayoutVis_Insp = 1 << 1,
     ImGuiAppComposerLayoutVis_Code = 1 << 2,
@@ -6567,7 +6595,7 @@ struct ImGuiAppDemoMenuControl : ImGuiAppControl<ImGuiAppDemoMenuData, ImGuiAppD
             ImGui::EndMenuBar();
         }
 
-        ImGui::Text("ImGuiAppLayer says hello! (%s) (%d)", IMGUI_APPLAYER_VERSION, IMGUI_APPLAYER_VERSION_NUM);
+        ImGui::Text("ImGuiAppLayer says hello! (%s) (%d)", IMGUIAPP_VERSION, IMGUIAPP_VERSION_NUM);
         ImGui::Spacing();
         ImGui::TextWrapped("%s", "Enable examples from the Examples menu to push/pop them on a live "
                                  "ImGuiApp. The Breathing control breathes while hovered for a duration taken from the "
@@ -15845,12 +15873,12 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
             if (port->Kind == ImGuiAppPortKind_ChildOut)
             {
                 ImGui::CanvasNextPinColor(cv, AppPinColor(port->Kind));
-                ImGui::CanvasEdgePin(cv, port->Id, ImGui::ImGuiCanvasPin_In, ImGui::ImGuiCanvasPinShape_Square, ImGui::ImGuiCanvasPinSide_Top);
+                ImGui::CanvasEdgePin(cv, port->Id, ImGui::ImGuiCanvasPinKind_In, ImGui::ImGuiCanvasPinShape_Square, ImGui::ImGuiCanvasPinSide_Top);
             }
             else if (port->Kind == ImGuiAppPortKind_ChildIn)
             {
                 ImGui::CanvasNextPinColor(cv, AppPinColor(port->Kind));
-                ImGui::CanvasEdgePin(cv, port->Id, ImGui::ImGuiCanvasPin_Out, ImGui::ImGuiCanvasPinShape_Square, ImGui::ImGuiCanvasPinSide_Bottom);
+                ImGui::CanvasEdgePin(cv, port->Id, ImGui::ImGuiCanvasPinKind_Out, ImGui::ImGuiCanvasPinShape_Square, ImGui::ImGuiCanvasPinSide_Bottom);
             }
         }
 
@@ -15868,7 +15896,7 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
             // graphs and port lookups; the ROW reads the wired producers' names (the relationship
             // itself), falling back to "dependencies" only as the unwired drop-target affordance.
             ImGui::CanvasNextPinColor(cv, AppPinColor(port->Kind));
-            ImGui::CanvasBeginPin(cv, port->Id, ImGui::ImGuiCanvasPin_In, ImGui::ImGuiCanvasPinShape_Circle);
+            ImGui::CanvasBeginPin(cv, port->Id, ImGui::ImGuiCanvasPinKind_In, ImGui::ImGuiCanvasPinShape_Circle);
             if (strcmp(port->Name, "deps") == 0)
             {
                 int named = 0;
@@ -15909,7 +15937,7 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
                     continue;
                 const int pin = AppNodeFindPortByName(n, temp ? "temp" : "persist");
                 ImGui::CanvasNextPinColor(cv, AppPinTieColor());
-                ImGui::CanvasBeginPin(cv, pin, ImGui::ImGuiCanvasPin_In, ImGui::ImGuiCanvasPinShape_Circle);
+                ImGui::CanvasBeginPin(cv, pin, ImGui::ImGuiCanvasPinKind_In, ImGui::ImGuiCanvasPinShape_Circle);
                 ImGui::PushID(100 + list);
                 if (AppBlDisclosure("##tie", true))
                 {
@@ -16172,7 +16200,7 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
             if (port->Kind != ImGuiAppPortKind_DataOut)
                 continue;
             ImGui::CanvasNextPinColor(cv, AppPinColor(port->Kind));
-            ImGui::CanvasBeginPin(cv, port->Id, ImGui::ImGuiCanvasPin_Out, ImGui::ImGuiCanvasPinShape_Circle);
+            ImGui::CanvasBeginPin(cv, port->Id, ImGui::ImGuiCanvasPinKind_Out, ImGui::ImGuiCanvasPinShape_Circle);
             ImGui::TextUnformatted(port->Name);
             ImGui::CanvasEndPin(cv);
         }
@@ -24810,10 +24838,10 @@ IMGUI_API void ImGui::AppAVDestroyEncoder(ImGuiAppAVEncoder* encoder)
         return;
     // Providers must make Close idempotent; the recorder closes exactly once after the
     // last WriteFrame, so a second Close here on an already-closed encoder is a no-op.
-    if (encoder->Close != nullptr)
-        encoder->Close(encoder);
-    if (encoder->Destroy != nullptr)
-        encoder->Destroy(encoder);
+    if (encoder->CloseFn != nullptr)
+        encoder->CloseFn(encoder);
+    if (encoder->DestroyFn != nullptr)
+        encoder->DestroyFn(encoder);
 }
 
 //-----------------------------------------------------------------------------
@@ -24875,18 +24903,18 @@ static void AvEncoderThread(void* arg)
     for (;;)
     {
         ImGuiAppAVJob* job = nullptr;
-        tf->MutexLock(rec->Thread->Mutex);
+        tf->MutexLockFn(rec->Thread->Mutex);
         while (rec->Queue.Size == 0 && !rec->ThreadStop)
-            tf->CondWait(rec->Thread->CvPop, rec->Thread->Mutex);
+            tf->CondWaitFn(rec->Thread->CvPop, rec->Thread->Mutex);
         if (rec->Queue.Size == 0 && rec->ThreadStop)
         {
-            tf->MutexUnlock(rec->Thread->Mutex);
+            tf->MutexUnlockFn(rec->Thread->Mutex);
             return;
         }
         job = rec->Queue.Data[0];
         rec->Queue.erase(rec->Queue.begin());
-        tf->CondSignal(rec->Thread->CvPush);
-        tf->MutexUnlock(rec->Thread->Mutex);
+        tf->CondSignalFn(rec->Thread->CvPush);
+        tf->MutexUnlockFn(rec->Thread->Mutex);
 
         ImGuiAppAVFrame frame;
         frame.Width = job->Width;
@@ -24894,7 +24922,7 @@ static void AvEncoderThread(void* arg)
         frame.PitchBytes = job->Width * 4;
         frame.Pixels = job->Pixels.Data;
         frame.FrameID = job->FrameID;
-        if (!rec->Encoder->WriteFrame(rec->Encoder, &frame))
+        if (!rec->Encoder->WriteFrameFn(rec->Encoder, &frame))
             rec->EncodeFailed = true;   // sticky; reported at AppRecordEnd
         IM_DELETE(job);
     }
@@ -24904,14 +24932,14 @@ static void AvEncoderThread(void* arg)
 static bool AvQueuePush(ImGuiAppRecorder* rec, ImGuiAppAVJob* job)
 {
     const ImGuiAppThreadFuncs* tf = GAppThreadFuncs;
-    tf->MutexLock(rec->Thread->Mutex);
+    tf->MutexLockFn(rec->Thread->Mutex);
     if (rec->QueuePolicy == ImGuiAppRecordQueuePolicy_Block)
     {
         while (rec->Queue.Size >= rec->QueueDepth && !rec->ThreadStop)
-            tf->CondWait(rec->Thread->CvPush, rec->Thread->Mutex);
+            tf->CondWaitFn(rec->Thread->CvPush, rec->Thread->Mutex);
         if (rec->ThreadStop)
         {
-            tf->MutexUnlock(rec->Thread->Mutex);
+            tf->MutexUnlockFn(rec->Thread->Mutex);
             IM_DELETE(job);
             return false;
         }
@@ -24919,13 +24947,13 @@ static bool AvQueuePush(ImGuiAppRecorder* rec, ImGuiAppAVJob* job)
     else if (rec->Queue.Size >= rec->QueueDepth)
     {
         rec->DroppedFrames++;
-        tf->MutexUnlock(rec->Thread->Mutex);
+        tf->MutexUnlockFn(rec->Thread->Mutex);
         IM_DELETE(job);
         return false;
     }
     rec->Queue.push_back(job);
-    tf->CondSignal(rec->Thread->CvPop);
-    tf->MutexUnlock(rec->Thread->Mutex);
+    tf->CondSignalFn(rec->Thread->CvPop);
+    tf->MutexUnlockFn(rec->Thread->Mutex);
     return true;
 }
 
@@ -25052,7 +25080,7 @@ static void AvBuildIdentityRecord(ImVector<char>* out, const ImGuiApp* app, int 
         *out_schema = schema;
 
     ImVector<char> payload;
-    const ImU32 applayer_ver = (ImU32)IMGUI_APPLAYER_VERSION_NUM;
+    const ImU32 applayer_ver = (ImU32)IMGUIAPP_VERSION_NUM;
     const ImU32 imgui_ver = (ImU32)IMGUI_VERSION_NUM;
     const ImU32 comp = (ImU32)ImGui::GetAppCompositionID(app);
     const ImU32 schema32 = (ImU32)schema;
@@ -25435,8 +25463,8 @@ IMGUI_API void ImGui::AppRecordPump(ImGuiAppRecorder* rec)
     if (rec == nullptr || !rec->Active)
         return;
 
-    const ImGuiAppPlatformBackend* backend = ImGuiApp_GetPlatformBackend();
-    if (backend->CaptureFrame == nullptr)
+    const ImGuiAppPlatformBackend* backend = ImGuiAppGetPlatformBackend();
+    if (backend->CaptureFrameFn == nullptr)
         return;
 
     // Explicit ring subsampling (Ring.Fps > 0) opts OUT of the encode-every-frame
@@ -25444,7 +25472,7 @@ IMGUI_API void ImGui::AppRecordPump(ImGuiAppRecorder* rec)
     const bool subsampled = rec->IsRing && rec->Ring.Fps > 0.0f;
 
     ImGuiAppAVFrame captured;
-    const bool have_frame = backend->CaptureFrame(rec->App, &captured)
+    const bool have_frame = backend->CaptureFrameFn(rec->App, &captured)
                        && captured.Pixels != nullptr && captured.Width > 0 && captured.Height > 0;
     if (!have_frame)
     {
@@ -25573,8 +25601,8 @@ static ImGuiAppRecorder* AvBeginCommon(ImGuiApp* app, ImGuiAppAVEncoder* encoder
     IM_ASSERT(app != nullptr && encoder != nullptr && config != nullptr && config->OutputPath != nullptr);
     if (app == nullptr || encoder == nullptr || config == nullptr || config->OutputPath == nullptr)
         return nullptr;
-    const ImGuiAppPlatformBackend* backend = ImGuiApp_GetPlatformBackend();
-    if (backend->CaptureFrame == nullptr)
+    const ImGuiAppPlatformBackend* backend = ImGuiAppGetPlatformBackend();
+    if (backend->CaptureFrameFn == nullptr)
     {
         AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "av: begin refused, platform backend has no CaptureFrame");
         return nullptr;
@@ -25632,7 +25660,7 @@ IMGUI_API ImGuiAppRecorder* AppRecordBegin(ImGuiApp* app, ImGuiAppAVEncoder* enc
     if (rec == nullptr)
         return nullptr;
 
-    if (!encoder->Open(encoder, &rec->Config))
+    if (!encoder->OpenFn(encoder, &rec->Config))
     {
         AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "av: encoder '%s' failed to open '%s'", encoder->Name, rec->OutputPath);
         IM_DELETE(rec);
@@ -25643,10 +25671,10 @@ IMGUI_API ImGuiAppRecorder* AppRecordBegin(ImGuiApp* app, ImGuiAppAVEncoder* enc
     rec->Active = true;
     IM_ASSERT(GAppThreadFuncs != nullptr && "No thread backend: call ImGui::SetAppThreadFuncs() (IMGUIAPP_DISABLE_DEFAULT_THREAD_FUNCS is set).");
     rec->Thread = IM_NEW(ImGuiAppRecorderThread)();
-    rec->Thread->Mutex  = GAppThreadFuncs->MutexCreate();
-    rec->Thread->CvPush = GAppThreadFuncs->CondCreate();
-    rec->Thread->CvPop  = GAppThreadFuncs->CondCreate();
-    rec->Thread->Worker = GAppThreadFuncs->ThreadCreate(AvEncoderThread, rec);
+    rec->Thread->Mutex  = GAppThreadFuncs->MutexCreateFn();
+    rec->Thread->CvPush = GAppThreadFuncs->CondCreateFn();
+    rec->Thread->CvPop  = GAppThreadFuncs->CondCreateFn();
+    rec->Thread->Worker = GAppThreadFuncs->ThreadCreateFn(AvEncoderThread, rec);
     if (app->Recorder == nullptr)
         app->Recorder = rec;   // OnEncodeFrame pumps it; explicit AppRecordPump remains valid
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "av: recording '%s' via %s (%s)", rec->OutputPath, encoder->Name,
@@ -25671,11 +25699,11 @@ IMGUI_API void AppRecordSetQueuePolicy(ImGuiAppRecorder* rec, ImGuiAppRecordQueu
         return;
     if (rec->Thread != nullptr)
     {
-        GAppThreadFuncs->MutexLock(rec->Thread->Mutex);
+        GAppThreadFuncs->MutexLockFn(rec->Thread->Mutex);
         rec->QueuePolicy = policy;
         rec->QueueDepth = depth;
-        GAppThreadFuncs->CondBroadcast(rec->Thread->CvPush);
-        GAppThreadFuncs->MutexUnlock(rec->Thread->Mutex);
+        GAppThreadFuncs->CondBroadcastFn(rec->Thread->CvPush);
+        GAppThreadFuncs->MutexUnlockFn(rec->Thread->Mutex);
         return;
     }
     rec->QueuePolicy = policy;   // no encoder thread yet (ring mode / before begin): plain writes
@@ -25701,21 +25729,21 @@ IMGUI_API void AppRecordEnd(ImGuiAppRecorder* rec)
         if (rec->Thread != nullptr)
         {
             const ImGuiAppThreadFuncs* tf = GAppThreadFuncs;
-            tf->MutexLock(rec->Thread->Mutex);
+            tf->MutexLockFn(rec->Thread->Mutex);
             rec->ThreadStop = true;
-            tf->CondBroadcast(rec->Thread->CvPop);
-            tf->CondBroadcast(rec->Thread->CvPush);
-            tf->MutexUnlock(rec->Thread->Mutex);
-            tf->ThreadJoin(rec->Thread->Worker);
-            tf->CondDestroy(rec->Thread->CvPop);
-            tf->CondDestroy(rec->Thread->CvPush);
-            tf->MutexDestroy(rec->Thread->Mutex);
+            tf->CondBroadcastFn(rec->Thread->CvPop);
+            tf->CondBroadcastFn(rec->Thread->CvPush);
+            tf->MutexUnlockFn(rec->Thread->Mutex);
+            tf->ThreadJoinFn(rec->Thread->Worker);
+            tf->CondDestroyFn(rec->Thread->CvPop);
+            tf->CondDestroyFn(rec->Thread->CvPush);
+            tf->MutexDestroyFn(rec->Thread->Mutex);
             IM_DELETE(rec->Thread);
             rec->Thread = nullptr;
         }
         if (rec->EncoderOpen)
         {
-            rec->Encoder->Close(rec->Encoder);
+            rec->Encoder->CloseFn(rec->Encoder);
             rec->EncoderOpen = false;
         }
         if (rec->MetaPending.Size > rec->MetaPendingCursor)
@@ -25827,7 +25855,7 @@ IMGUI_API bool AppRecordDumpRing(ImGuiAppRecorder* rec, const char* reason)
     dump_config.OutputPath = path;
     dump_config.Width = rec->RingEntries.Data[0]->Width;
     dump_config.Height = rec->RingEntries.Data[0]->Height;
-    if (!rec->Encoder->Open(rec->Encoder, &dump_config))
+    if (!rec->Encoder->OpenFn(rec->Encoder, &dump_config))
     {
         AppWALWrite(rec->App->WAL, ImGuiAppWALLevel_Lifecycle, "av: ring dump failed, encoder '%s' would not open", rec->Encoder->Name);
         return false;
@@ -25891,13 +25919,13 @@ IMGUI_API bool AppRecordDumpRing(ImGuiAppRecorder* rec, const char* reason)
         frame.PitchBytes = w * 4;
         frame.Pixels = rgba.Data;
         frame.FrameID = entry->FrameID;
-        if (!rec->Encoder->WriteFrame(rec->Encoder, &frame))
+        if (!rec->Encoder->WriteFrameFn(rec->Encoder, &frame))
         {
             ok = false;
             break;
         }
     }
-    rec->Encoder->Close(rec->Encoder);
+    rec->Encoder->CloseFn(rec->Encoder);
     if (cursor < stream.Size)
         AppWALWrite(rec->App->WAL, ImGuiAppWALLevel_Lifecycle, "av: ring dump stream truncated (%d of %d bytes carried)", cursor, stream.Size);
     return ok;
@@ -26993,8 +27021,6 @@ bool AppAVImageDecode(const void* bytes, int size, ImVector<char>* out_rgba, int
 // frame encoding + WAL, one entry point, one frame id across every artifact
 // (docs/designs.md (av-design)). The only applayer TU that links the imgui test engine.
 
-#ifdef IMGUIX_HAS_LIBAV
-#endif
 
 #include <cstdio>
 #include <cstring>
@@ -27326,3 +27352,14 @@ IMGUI_API int ImGui::AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessC
     return run_passed ? 0 : 1;
 }
 #endif // IMGUI_ENABLE_TEST_ENGINE
+
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+
+#endif // #ifndef IMGUI_DISABLE

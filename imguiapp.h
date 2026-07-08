@@ -1,3 +1,6 @@
+// dear imgui app, v0.5.0 WIP
+// (main application-layer header; internal API in imguiapp_internal.h; config in imappconfig.h)
+
 #pragma once
 
 /*
@@ -19,15 +22,21 @@ Index of this file:
 // [SECTION] Header mess
 //-----------------------------------------------------------------------------
 
+#include "imappconfig.h"    // applayer compile-time switches (first, like imconfig.h)
 #include "imgui.h"          // IMGUI_API, ImGuiID, ImGuiStorage, ImBitArray, ImGuiTextIndex, ImChunkStream
 #include "imgui_internal.h" // ImStrncpy
-#include "imappconfig.h"
 // windows.h's min/max macros (leaked by platform-backend TUs) break imguiapp_reflect.h's std::min.
 #include "imguiapp_reflect.h" // compile-time type-identity + reflection (qlibs/reflect port): ImGuiAppStatic/Type, ImApp{GenerateLabel,TypeDisplayName,NulTerminate}, field walk (AppReflectFields), ImGuiAppLiveFieldDesc/ImGuiAppTypeSchema
 
-// Keep VERSION and VERSION_NUM in sync.
-#define IMGUI_APPLAYER_VERSION "0.4.1"
-#define IMGUI_APPLAYER_VERSION_NUM 401
+// Version scheme: "0.Y.Z WIP" while unreleased; NUM = Y*100 + Z, strictly monotonic (keep both in
+// sync). Version-stamp grammar for comments: "Since 0.Y.Z (Month Year, NUM)".
+#define IMGUIAPP_VERSION     "0.5.0 WIP"
+#define IMGUIAPP_VERSION_NUM 500
+// Assert the compiled library and the including TU agree on version + core struct layouts.
+// ImGui::InitializeApp calls it; apps embedding the applayer as a DLL should call it too.
+#define IMGUIAPP_CHECKVERSION() ImGui::AppDebugCheckVersionAndDataLayout(IMGUIAPP_VERSION, sizeof(ImGuiApp), sizeof(ImGuiAppConfig), sizeof(ImGuiAppFrameConfig))
+
+#ifndef IMGUI_DISABLE
 
 // Template composition front only (docs/house-style-audit.md Δ2); the C seam is AppRegister*/AppControl*.
 #include <tuple>       // std::tuple, std::apply (typed dependency fan-out)
@@ -37,6 +46,15 @@ Index of this file:
 #ifdef _MSC_VER
 #pragma warning(push)
 #pragma warning(disable : 26495) // [Static Analyzer] Variable 'XXX' is uninitialized. Always initialize a member variable (type.6).
+#endif
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wold-style-cast"
+#pragma clang diagnostic ignored "-Wunused-function"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpragmas"
+#pragma GCC diagnostic ignored "-Wclass-memaccess"
 #endif
 //-----------------------------------------------------------------------------
 // [SECTION] Forward declarations and basic types
@@ -83,13 +101,13 @@ struct ImGuiAppWAL;
 enum ImGuiAppCommand : int;            // -> enum ImGuiAppCommand         // dispatched app command
 
 // Flags (full enum lists in [SECTION] Flags & Enumerations below).
-typedef int ImGuiAppAVTimingMode;      // -> enum ImGuiAppAVTimingMode_
-typedef int ImGuiAppFrameFlags;        // -> enum ImGuiAppFrameFlags_
-typedef int ImGuiAppHeadlessMode;      // -> enum ImGuiAppHeadlessMode_
-typedef int ImGuiAppPacerMode;         // -> enum ImGuiAppPacerMode_
-typedef int ImGuiAppRecordQueuePolicy; // -> enum ImGuiAppRecordQueuePolicy_
-typedef int ImGuiAppStyle;             // -> enum ImGuiAppStyle_
-typedef int ImGuiAppWALLevel;          // -> enum ImGuiAppWALLevel_
+typedef int ImGuiAppAVTimingMode;      // -> enum ImGuiAppAVTimingMode_      // Enum: what time the recorded video claims
+typedef int ImGuiAppFrameFlags;        // -> enum ImGuiAppFrameFlags_        // Flags: per-frame clear/present/platform-window control
+typedef int ImGuiAppHeadlessMode;      // -> enum ImGuiAppHeadlessMode_      // Enum: windowed / null / offscreen
+typedef int ImGuiAppPacerMode;         // -> enum ImGuiAppPacerMode_         // Enum: advisory frame-pacer level
+typedef int ImGuiAppRecordQueuePolicy; // -> enum ImGuiAppRecordQueuePolicy_ // Enum: encoder queue overflow policy
+typedef int ImGuiAppStyle;             // -> enum ImGuiAppStyle_             // Enum: bundled style preset
+typedef int ImGuiAppWALLevel;          // -> enum ImGuiAppWALLevel_          // Enum: write-ahead-log verbosity
 
 //-----------------------------------------------------------------------------
 // [SECTION] Dear ImGui end-user API functions
@@ -98,6 +116,7 @@ typedef int ImGuiAppWALLevel;          // -> enum ImGuiAppWALLevel_
 namespace ImGui
 {
     // Lifecycle
+    IMGUI_API bool        AppDebugCheckVersionAndDataLayout(const char* version, size_t sz_app, size_t sz_config, size_t sz_frame_config); // IMGUIAPP_CHECKVERSION() target
     IMGUI_API void        InitializeApp(ImGuiApp* app, const ImGuiAppConfig* config = nullptr);
     IMGUI_API void        ShutdownApp(ImGuiApp* app);
     IMGUI_API void        UpdateApp(ImGuiApp* app);           // dt = GetIO().DeltaTime
@@ -125,6 +144,8 @@ namespace ImGui
     template <typename T>
     IMGUI_API inline void PushAppControl(ImGuiApp* app, ImGuiID instance = 0, const ImGuiAppDataBinding* binds = nullptr, int binds_count = 0);
     IMGUI_API void        PopAppControl(ImGuiApp* app);
+    // No PopWindowControl/PopSidebarControl: a window/sidebar control is owned by its host item
+    // and pops with it (PopAppWindow / PopAppSidebar).
     template <typename T>
     IMGUI_API inline void PushWindowControl(ImGuiApp* app, ImGuiAppWindowBase* window, ImGuiID instance = 0, const ImGuiAppDataBinding* binds = nullptr, int binds_count = 0);
     template <typename T>
@@ -161,7 +182,7 @@ namespace ImGui
     // The template caller constructs the item (IM_NEW<T>) and its type name; these do everything else, in imguiapp.cpp.
     IMGUI_API void        AppRegisterLayer(ImGuiApp* app, ImGuiAppLayerBase* layer, const char* name);
     IMGUI_API void        AppRegisterWindow(ImGuiApp* app, ImGuiAppWindowBase* window, const char* name);
-    IMGUI_API void        AppRegisterSidebar(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, const char* name, ImGuiViewport* vp, ImGuiDir dir, float size, ImGuiWindowFlags flags);
+    IMGUI_API void        AppRegisterSidebar(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, const char* name, ImGuiViewport* vp, ImGuiDir dir, float size, ImGuiWindowFlags flags = 0);
 
     // State snapshot / time-travel
     // Snapshot appends snapshottable state to the ring (layout rebuilt + history cleared on composition
@@ -270,11 +291,6 @@ enum ImGuiAppCommand : int
     ImGuiAppCommand_COUNT,
 };
 
-enum ImGuiAppCommandPrivate : int
-{
-    ImGuiAppCommandPrivate_ = ImGuiAppCommand_COUNT,
-};
-
 // Advisory frame pacer level (see ImGuiAppPacer).
 enum ImGuiAppPacerMode_
 {
@@ -292,7 +308,6 @@ enum ImGuiAppWALLevel_
 };
 
 // What time the video claims. A video is honest about realtime only under Realtime.
-typedef int ImGuiAppAVTimingMode;
 enum ImGuiAppAVTimingMode_
 {
     ImGuiAppAVTimingMode_Auto = 0, // follow the pacer: Fixed pacer -> Constant, else Realtime
@@ -300,7 +315,6 @@ enum ImGuiAppAVTimingMode_
     ImGuiAppAVTimingMode_Realtime, // VFR: PTS = FrameID.TimeSec (wall clock; a 50ms hitch plays as 50ms)
 };
 
-typedef int ImGuiAppRecordQueuePolicy;
 enum ImGuiAppRecordQueuePolicy_
 {
     ImGuiAppRecordQueuePolicy_Block = 0,  // never drop (benchmarks/tests); app stalls when the queue is full
@@ -372,10 +386,10 @@ struct ImGuiAppAVEncoder
 {
     const char* Name;
     bool        SupportsRealtimePts; // provider can carry per-frame wall-clock PTS (true VFR)
-    bool        (*Open)(ImGuiAppAVEncoder* self, const ImGuiAppAVEncodeConfig* config);
-    bool        (*WriteFrame)(ImGuiAppAVEncoder* self, const ImGuiAppAVFrame* frame); // PTS from frame->FrameID.TimeSec under Realtime
-    void        (*Close)(ImGuiAppAVEncoder* self);
-    void        (*Destroy)(ImGuiAppAVEncoder* self);
+    bool        (*OpenFn)(ImGuiAppAVEncoder* self, const ImGuiAppAVEncodeConfig* config);
+    bool        (*WriteFrameFn)(ImGuiAppAVEncoder* self, const ImGuiAppAVFrame* frame); // PTS from frame->FrameID.TimeSec under Realtime
+    void        (*CloseFn)(ImGuiAppAVEncoder* self);
+    void        (*DestroyFn)(ImGuiAppAVEncoder* self);
     void*       UserData; // provider state
 
     ImGuiAppAVEncoder() { memset((void*)this, 0, sizeof(*this)); }
@@ -442,17 +456,17 @@ struct ImGuiAppAVRingEntry
 // override via SetAppThreadFuncs() BEFORE recording starts. All hooks required.
 struct ImGuiAppThreadFuncs
 {
-    void* (*ThreadCreate)(void (*fn)(void*), void* arg); // start a thread running fn(arg); returns handle
-    void  (*ThreadJoin)(void* thread);                   // join + destroy the handle
-    void* (*MutexCreate)();
-    void  (*MutexDestroy)(void* mutex);
-    void  (*MutexLock)(void* mutex);
-    void  (*MutexUnlock)(void* mutex);
-    void* (*CondCreate)();
-    void  (*CondDestroy)(void* cond);
-    void  (*CondWait)(void* cond, void* mutex);          // atomically unlock, wait, relock
-    void  (*CondSignal)(void* cond);
-    void  (*CondBroadcast)(void* cond);
+    void* (*ThreadCreateFn)(void (*fn)(void*), void* arg); // start a thread running fn(arg); returns handle
+    void  (*ThreadJoinFn)(void* thread);                    // join + destroy the handle
+    void* (*MutexCreateFn)();
+    void  (*MutexDestroyFn)(void* mutex);
+    void  (*MutexLockFn)(void* mutex);
+    void  (*MutexUnlockFn)(void* mutex);
+    void* (*CondCreateFn)();
+    void  (*CondDestroyFn)(void* cond);
+    void  (*CondWaitFn)(void* cond, void* mutex);           // atomically unlock, wait, relock
+    void  (*CondSignalFn)(void* cond);
+    void  (*CondBroadcastFn)(void* cond);
 };
 
 struct ImGuiAppRecorderThread; // Opaque encoder-thread state (handles from ImGuiAppThreadFuncs), defined in imguiapp.cpp
@@ -630,27 +644,27 @@ struct ImGuiAppWAL
 };
 
 // Platform backend interface. The core app layer depends only on this vtable. Exactly one backend
-// translation unit is linked per build; it defines ImGuiApp_GetPlatformBackend().
+// translation unit is linked per build; it defines ImGuiAppGetPlatformBackend().
 struct ImGuiAppPlatformBackend
 {
-    bool (*InitPlatform)(ImGuiApp* app, ImGuiAppConfig& config);
-    void (*ShutdownPlatform)(ImGuiApp* app);
-    int (*RunLoop)(ImGuiApp* app);
+    bool (*InitPlatformFn)(ImGuiApp* app, ImGuiAppConfig& config);
+    void (*ShutdownPlatformFn)(ImGuiApp* app);
+    int (*RunLoopFn)(ImGuiApp* app);
     // Optional (null = backend cannot capture; recording fails with a clear error). Readback in the encode
     // phase (after render, before present). Encode-every-frame contract: steady state may return frame N-1's
     // pixels (FrameID stamped at copy time), drain the tail by re-calling, never block, never repeat a FrameIndex.
-    bool (*CaptureFrame)(ImGuiApp* app, ImGuiAppAVFrame* out_frame);
+    bool (*CaptureFrameFn)(ImGuiApp* app, ImGuiAppAVFrame* out_frame);
     // Frame lifecycle: the backend's exposed ImGuiApp_ImplXXX_* functions (imgui impl pattern),
     // driven by the app's frame phases (OnDrawFrame/OnRenderFrame/OnPresentFrame). PresentFrame
     // optional (null = RenderDrawData presents, legacy single-hook).
     const char* Name;
-    void (*Shutdown)();
-    void (*NewFrame)();
-    void (*RenderDrawData)(ImDrawData* draw_data, const ImGuiAppFrameConfig* config);
-    void (*PresentFrame)(const ImGuiAppFrameConfig* config);
+    void (*ShutdownFn)();
+    void (*NewFrameFn)();
+    void (*RenderDrawDataFn)(ImDrawData* draw_data, const ImGuiAppFrameConfig* config);
+    void (*PresentFrameFn)(const ImGuiAppFrameConfig* config);
 };
 
-IMGUI_API const ImGuiAppPlatformBackend* ImGuiApp_GetPlatformBackend();
+IMGUI_API const ImGuiAppPlatformBackend* ImGuiAppGetPlatformBackend();
 
 //-----------------------------------------------------------------------------
 // [SECTION] Helpers (interface base, state-delta events, RNG, diagnostics, style/color/data descs)
@@ -1342,3 +1356,10 @@ namespace ImGui
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
+#endif // #ifndef IMGUI_DISABLE

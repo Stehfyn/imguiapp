@@ -1,5 +1,5 @@
-// imguiapp, internal structures/api
-// (the imgui_internal.h analog for the applayer)
+// dear imgui app, v0.5.0 WIP
+// (internal structures/api -- the imgui_internal.h analog for the applayer)
 
 // You may use this file to debug, understand or extend the applayer; no guarantee of forward compatibility.
 
@@ -8,8 +8,8 @@
 Index of this file:
 
 // [SECTION] Header mess
-// [SECTION] Macros
 // [SECTION] Forward declarations
+// [SECTION] Macros
 // [SECTION] AV meta stream + recorder + run artifacts (was imguiapp_av.h)
 // [SECTION] Meta stream (embedded in the video)
 // [SECTION] Meta-only recorder + stream stats
@@ -41,21 +41,11 @@ Index of this file:
 // (the tail) compiles out in a lean build. Public runtime + AV recording types live in imguiapp.h.
 
 #include "imguiapp.h"
+#ifndef IMGUI_DISABLE
 #include "imgui_internal.h"   // ImFormatString
-#include <format>
-#include <string>
-#include <string_view>
-#include <type_traits>
-
-//-----------------------------------------------------------------------------
-// [SECTION] Macros
-//-----------------------------------------------------------------------------
-
-#define IMGUIAPP_CONTROL_BODY_MAX 2048   // ImGuiAppNodeDraft per-method custom C++ body cap (fixed buffer -> draft stays memcpy-safe)
-
-#ifndef IMGUIAPP_PREVIEW_ABI
-#define IMGUIAPP_PREVIEW_ABI 20260706u   // host<->DLL preview ABI tag (F78); bump on any layout/vtable/signature change
-#endif
+#include <format>             // std::format_to_n (reflection layer, docs/house-style-audit.md Δ2)
+#include <string_view>        // std::string_view (reflection layer, Δ2)
+#include <type_traits>        // std::is_trivially_copyable_v (storage/snapshot contracts, Δ2)
 
 //-----------------------------------------------------------------------------
 // [SECTION] Forward declarations
@@ -132,11 +122,27 @@ typedef int ImGuiAppEdgeKind;          // -> enum ImGuiAppEdgeKind_          // 
 typedef int ImGuiAppEventAction;       // -> enum ImGuiAppEventAction_       // event action
 typedef int ImGuiAppEventEdge;         // -> enum ImGuiAppEventEdge_         // event trigger edge
 typedef int ImGuiAppFieldType;         // -> enum ImGuiAppFieldType_         // draft field scalar type
-typedef int ImGuiAppHoverSource;
+typedef int ImGuiAppHoverSource;       // -> enum ImGuiAppHoverSource_       // Enum: what the editor hover targets
 typedef int ImGuiAppLayerType;         // -> enum ImGuiAppLayerType_         // layer discriminator
 typedef int ImGuiAppNodeKind;          // -> enum ImGuiAppNodeKind_          // node discriminator
 typedef int ImGuiAppPortKind;          // -> enum ImGuiAppPortKind_          // port discriminator
 typedef int ImGuiAppTransportSource;   // -> enum ImGuiAppTransportSource_   // LiveRing vs FileRun
+
+//-----------------------------------------------------------------------------
+// [SECTION] Macros
+//-----------------------------------------------------------------------------
+
+#define IMGUIAPP_CONTROL_BODY_MAX 2048   // ImGuiAppNodeDraft per-method custom C++ body cap (fixed buffer -> draft stays memcpy-safe)
+
+#ifndef IMGUIAPP_PREVIEW_ABI
+#define IMGUIAPP_PREVIEW_ABI 20260706u   // host<->DLL preview ABI tag (F78); bump on any layout/vtable/signature change. Since 0.4.1 (July 2026, 401)
+#endif
+
+// Private command range: dispatch ids above the public ImGuiAppCommand_COUNT.
+enum ImGuiAppCommandPrivate : int
+{
+    ImGuiAppCommand_PrivateBegin_ = ImGuiAppCommand_COUNT,
+};
 
 //-----------------------------------------------------------------------------
 // [SECTION] AV meta stream + recorder + run artifacts (was imguiapp_av.h)
@@ -153,6 +159,7 @@ typedef int ImGuiAppTransportSource;   // -> enum ImGuiAppTransportSource_   // 
 // (magic "IMAVMETA", version, fps, start TSC + QPC Hz), then {u32 type, u32 size, payload}.
 enum ImGuiAppAVMetaRecordType_
 {
+    ImGuiAppAVMetaRecordType_None  = 0,      // invalid/unset
     ImGuiAppAVMetaRecordType_Frame = 1,      // frame_index, tsc, time_sec, user blob
     ImGuiAppAVMetaRecordType_InputHdr,       // ImGuiAppInputLog layout (composition id, slot table); once per take. OPT-IN (AppRecordAttachInputLog)
     ImGuiAppAVMetaRecordType_InputFrame,     // frame_index + one input-log frame (TempData + dt) + state hash. OPT-IN derived checkpoint
@@ -368,6 +375,7 @@ struct ImGuiAppFieldDesc
 
 // The control's four authorable virtual methods (F78.5). A hand-written body opts one method out of the
 // modeled/stub codegen: the emitter emits the body verbatim, and the DLL preview compiles + runs it.
+typedef int ImGuiAppControlMethod;   // -> enum ImGuiAppControlMethod_   // Enum: authorable control virtual method
 enum ImGuiAppControlMethod_
 {
     ImGuiAppControlMethod_OnInitialize = 0,
@@ -690,8 +698,10 @@ struct ImGuiAppEditorUndo
 // Editor command registry (F34): one table is the single source for the editor's verbs. Each declares
 // the surfaces it appears on (bitmask); the Space palette renders from it, and the four-roads
 // completeness test iterates it to check every verb is reachable from every surface it declares.
+typedef int ImGuiAppCmdSurface;   // -> enum ImGuiAppCmdSurface_   // Flags: command availability surfaces
 enum ImGuiAppCmdSurface_
 {
+    ImGuiAppCmdSurface_None     = 0,
     ImGuiAppCmdSurface_Palette  = 1 << 0,   // the Space operator palette
     ImGuiAppCmdSurface_Menu     = 1 << 1,   // a right-click context menu
     ImGuiAppCmdSurface_Shortcut = 1 << 2,   // a keyboard shortcut
@@ -1037,7 +1047,7 @@ struct ImGuiAppComposerControl : ImGuiAppControl<ImGuiAppComposerControlData, Im
 // dt-driven Task-phase animators; each a compiled ImGuiAppControl, accumulator in PersistData (so
 // snapshot/replay reproduces it). Registered via AppGraphAddBuiltin.
 
-// Ease selector for ImAppTween.
+// Ease selector for ImAppTween (no typedef pair: ImAppEase names the curve function below).
 enum ImAppEase_
 {
     ImAppEase_Linear = 0,
@@ -1868,7 +1878,7 @@ struct ImGuiCanvasPinRec
 {
     int    Id;
     int    NodeId;
-    int    Kind;       // ImGuiCanvasPin_In / _Out (interaction role)
+    int    Kind;       // ImGuiCanvasPinKind_In / _Out (interaction role)
     int    Side;       // ImGuiCanvasPinSide_ (which node edge; Left/Right = data, Top/Bottom = containment)
     int    Shape;      // circle (data) / square (containment)
     ImU32  Color;      // 0 = style (by shape); set via CanvasNextPinColor
@@ -1886,6 +1896,7 @@ struct ImGuiCanvasWireRec  // per-frame submission, rebuilt every frame
     bool  Dashed; // optional dependency: dashed body (form carrier; dimming is the color coat)
 };
 
+typedef int ImGuiCanvasInteraction;   // -> enum ImGuiCanvasInteraction_   // Enum: canvas interaction mode
 enum ImGuiCanvasInteraction_
 {
     ImGuiCanvasInteraction_None = 0,
@@ -2167,8 +2178,11 @@ IMGUI_API void              CanvasAddSolidRect(ImGuiCanvasState* c, ImVec2 model
 // Kind is the interaction role (which end pairs with which when wiring). Side is the node edge the
 // pin sits on and the direction its wire leaves -- orthogonal to Kind. Left/Right give the classic
 // horizontal data read; Top/Bottom give a vertical owner-over-child containment read.
-enum ImGuiCanvasPinKind_ { ImGuiCanvasPin_In = 0, ImGuiCanvasPin_Out = 1 };
+typedef int ImGuiCanvasPinKind;   // -> enum ImGuiCanvasPinKind_
+enum ImGuiCanvasPinKind_ { ImGuiCanvasPinKind_In = 0, ImGuiCanvasPinKind_Out = 1 };
+typedef int ImGuiCanvasPinShape;  // -> enum ImGuiCanvasPinShape_
 enum ImGuiCanvasPinShape_ { ImGuiCanvasPinShape_Circle = 0, ImGuiCanvasPinShape_Square = 1 };
+typedef int ImGuiCanvasPinSide;   // -> enum ImGuiCanvasPinSide_
 enum ImGuiCanvasPinSide_ { ImGuiCanvasPinSide_Left = 0, ImGuiCanvasPinSide_Right = 1, ImGuiCanvasPinSide_Top = 2, ImGuiCanvasPinSide_Bottom = 3 };
 IMGUI_API void              CanvasNextPinColor(ImGuiCanvasState* c, ImU32 color);   // 0 -> style (by shape); consumed by the next CanvasBeginPin
 IMGUI_API void              CanvasNextPinSide(ImGuiCanvasState* c, int side);   // override the next pin's edge; default derives from Kind (In->Left, Out->Right)
@@ -2298,3 +2312,5 @@ IMGUI_API int  AppPreviewTakeClickedNode(ImGuiAppPreview* session);
 } // namespace ImGui
 
 #endif // IMGUIX_DISABLE_TOOLS
+
+#endif // #ifndef IMGUI_DISABLE

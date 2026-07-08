@@ -468,6 +468,6 @@ static const ImGuiAppPlatformBackend GPlatformBackend =
     ImGuiApp_ImplWin32OpenGL3_PresentFrame,
 };
 
-const ImGuiAppPlatformBackend* ImGuiApp_GetPlatformBackend() { return &GPlatformBackend; }
+const ImGuiAppPlatformBackend* ImGuiAppGetPlatformBackend() { return &GPlatformBackend; }
 
 #endif // #ifndef IMGUI_DISABLE

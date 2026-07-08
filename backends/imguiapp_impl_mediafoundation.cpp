@@ -321,10 +321,10 @@ ImGuiAppAVEncoder* ImGuiApp_ImplMediaFoundation_CreateEncoder()
     ImGuiAppAVEncoder* enc = IM_NEW(ImGuiAppAVEncoder)();
     enc->Name = "mediafoundation";
     enc->SupportsRealtimePts = false;   // sink writer resamples to CFR (see ImGuiApp_ImplMediaFoundation_BeginWriting); duration honest, PTS quantized
-    enc->Open = ImGuiApp_ImplMediaFoundation_Open;
-    enc->WriteFrame = ImGuiApp_ImplMediaFoundation_WriteFrame;
-    enc->Close = ImGuiApp_ImplMediaFoundation_Close;
-    enc->Destroy = ImGuiApp_ImplMediaFoundation_Destroy;
+    enc->OpenFn = ImGuiApp_ImplMediaFoundation_Open;
+    enc->WriteFrameFn = ImGuiApp_ImplMediaFoundation_WriteFrame;
+    enc->CloseFn = ImGuiApp_ImplMediaFoundation_Close;
+    enc->DestroyFn = ImGuiApp_ImplMediaFoundation_Destroy;
     enc->UserData = IM_NEW(ImGuiApp_ImplMediaFoundation_Data)();
     return enc;
 }

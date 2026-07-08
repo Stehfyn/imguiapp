@@ -335,10 +335,10 @@ ImGuiAppAVEncoder* ImGuiApp_ImplLibav_CreateEncoder()
     ImGuiAppAVEncoder* enc = IM_NEW(ImGuiAppAVEncoder)();
     enc->Name = "libav";
     enc->SupportsRealtimePts = true;
-    enc->Open = ImGuiApp_ImplLibav_Open;
-    enc->WriteFrame = ImGuiApp_ImplLibav_WriteFrame;
-    enc->Close = ImGuiApp_ImplLibav_Close;
-    enc->Destroy = ImGuiApp_ImplLibav_Destroy;
+    enc->OpenFn = ImGuiApp_ImplLibav_Open;
+    enc->WriteFrameFn = ImGuiApp_ImplLibav_WriteFrame;
+    enc->CloseFn = ImGuiApp_ImplLibav_Close;
+    enc->DestroyFn = ImGuiApp_ImplLibav_Destroy;
     enc->UserData = IM_NEW(ImGuiApp_ImplLibav_Data)();
     return enc;
 }
