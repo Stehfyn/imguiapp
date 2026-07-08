@@ -64,7 +64,7 @@ struct ImGuiAppRunIndex;        // tick-keyed index over a reconstructed stream
 struct ImGuiAppRunMeta;         // per-run header decoded from the stream
 struct ImGuiAppRunState;        // reconstructed values at a scrubbed tick
 struct ImGuiAppRunTick;         // one tick's landing (offset + payload)
-struct ImGuiAppRunTransport;    // App-time transport view (LiveRing vs FileRun)
+struct ImGuiAppRunView;         // App-time transport view (LiveRing vs FileRun)
 
 // Graph model + editor
 struct ImGuiAppCommandDesc;     // authored command on a node
@@ -94,7 +94,6 @@ struct ImGuiAppGraph;           // the authored document graph
 // Embeddable Composer control
 struct ImGuiAppComposerControl;
 struct ImGuiAppComposerControlData;
-struct ImGuiAppComposerControlTempData;
 
 // Animation builtins
 struct ImAppPulse;   struct ImAppPulseData;   struct ImAppPulseTempData;
@@ -113,7 +112,6 @@ struct ImGuiAppCanvasState;        // canvas engine state (opaque to callers)
 struct ImGuiAppCanvasStyle;        // canvas visual style
 struct ImGuiAppCanvasWireRec;      // per-frame wire submission
 
-struct ImGuiAppGraphHostCmd;   // fwd (declared with the palette API below)
 struct ImGuiAppGraphIssue;     // fwd (declared with the validation API below)
 
 // Enumerations / Flags (full lists at their [SECTION]s)
@@ -329,7 +327,7 @@ typedef bool (*ImGuiAppRunFrameDecodeFn)(void* user, int frame_ordinal, ImVector
 // FILE-mode transport source (F63): a borrowed run index + frame decoder behind Count()/Show(int). Show(i)
 // records ShownTick = Ticks[i].Tick (a scrub/step ALWAYS lands an exact tick, no interpolation) and decodes
 // that tick's frame image into Pixels. State rides the caller's transport object; nothing here is global.
-struct ImGuiAppRunTransport
+struct ImGuiAppRunView
 {
     ImGuiAppRunIndex*        Run;        // borrowed (AppRunOpen'd + AppRunClose'd by the owner), not owned here
     ImGuiAppRunFrameDecodeFn Decode;     // per-backend frame decode; null = tick-only scrub (no blit)
@@ -341,7 +339,7 @@ struct ImGuiAppRunTransport
     ImU64                    ShownTick;  // tick of the frame currently in Pixels (== Ticks[Scrub].Tick)
     int                      ShownImage; // frame ordinal decoded into Pixels (-1 = none decoded)
 
-    ImGuiAppRunTransport() { Run = nullptr; Decode = nullptr; DecodeUser = nullptr; Scrub = 0; Width = 0; Height = 0; ShownTick = 0; ShownImage = -1; }
+    ImGuiAppRunView() { Run = nullptr; Decode = nullptr; DecodeUser = nullptr; Scrub = 0; Width = 0; Height = 0; ShownTick = 0; ShownImage = -1; }
 };
 
 //-----------------------------------------------------------------------------
@@ -711,16 +709,25 @@ enum ImGuiAppCmdSurface_
     ImGuiAppCmdSurface_Gizmo    = 1 << 3,   // an on-canvas gizmo/overlay button
 };
 
+typedef int ImGuiAppCommandSource;   // -> enum ImGuiAppCommandSource_   // Enum: who owns a palette entry
+enum ImGuiAppCommandSource_
+{
+    ImGuiAppCommandSource_Editor = 0, // built-in verb (s_editor_commands; dispatched by the palette run() switch)
+    ImGuiAppCommandSource_Host,       // host verb (AppGraphSetHostCommands each frame, pointers outliving it; a pick comes back through AppGraphConsumeHostCommand, one-frame latency)
+};
+
+// One palette entry, editor-built-in or host-registered (Source discriminates).
 struct ImGuiAppEditorCommand
 {
-    int              Id;         // dispatch id (matches the palette run() switch)
-    const char*      Icon;       // FontAwesome glyph, or "" if none
-    const char*      Label;      // "Edit: Delete selection"
-    const char*      Shortcut;   // display string, e.g. "Ctrl+Z" or ""
-    ImGuiKey         Key;        // shortcut key (ImGuiKey_None if none)
-    int              Mods;       // ImGuiMod_* for the shortcut
-    int              Surfaces;   // ImGuiAppCmdSurface_ bitmask
-    ImGuiAppNodeKind AddKind;    // add verbs carry their kind; ImGuiAppNodeKind_COUNT otherwise
+    int                   Id       = 0;                          // dispatch id (editor: the run() switch; host: returned by AppGraphConsumeHostCommand)
+    const char*           Icon     = "";                         // FontAwesome glyph, or "" if none
+    const char*           Label    = "";                         // "Edit: Delete selection"
+    const char*           Shortcut = "";                         // display string, e.g. "Ctrl+Z" or ""
+    ImGuiKey              Key      = ImGuiKey_None;              // shortcut key
+    int                   Mods     = 0;                          // ImGuiMod_* for the shortcut
+    ImGuiAppCmdSurface    Surfaces = ImGuiAppCmdSurface_Palette; // availability bitmask
+    ImGuiAppNodeKind      AddKind  = ImGuiAppNodeKind_COUNT;     // add verbs carry their kind
+    ImGuiAppCommandSource Source   = ImGuiAppCommandSource_Editor;
 };
 
 // One problem found by AppGraphValidate. Severity: 1 = warning, 2 = error. NodeId is the node to
@@ -745,18 +752,6 @@ enum ImGuiAppHoverSource_
     ImGuiAppHoverSource_Tree,        // the outliner
     ImGuiAppHoverSource_Inspector,   // inspector / binding rows
     ImGuiAppHoverSource_External,    // problems list, code panel, any host-app panel
-};
-
-// Host verbs surfaced in the canvas command palette (workbench W2). Register each frame before
-// ShowAppGraphEditor (pointers must outlive the frame); a picked command is reported back through
-// AppGraphConsumeHostCommand (one-frame latency, the editor never calls the host).
-struct ImGuiAppGraphHostCmd
-{
-    const char* Label;    // e.g. "File: Save graph"
-    const char* Shortcut; // displayed dim + right-aligned; "" = none
-    int         Id;       // host-defined, returned by AppGraphConsumeHostCommand
-    ImGuiKey    Key = ImGuiKey_None;   // optional keyboard road; the editor records a match, host owns the meaning
-    int         Mods = 0;              // ImGuiMod_ combo required with Key
 };
 
 // Composer chrome palette, derived from the current ImGuiStyle theme (AppComposerStyleFromTheme):
@@ -901,7 +896,7 @@ struct ImGuiAppEditorState
     ImVec2                         EditorRectMax = ImVec2(0.0f, 0.0f);
     ImVec2                         GizmoCenters[8] = {};               // F40: viewport gizmo centres (screen), in draw order, for the click-path test
     int                            GizmoCount = 0;
-    const ImGuiAppGraphHostCmd*    HostCmds = nullptr;                 // registered per frame; host-owned
+    const ImGuiAppEditorCommand*   HostCmds = nullptr;                 // registered per frame; host-owned (Source_Host entries)
     int                            HostCmdCount = 0;
     int                            HostCmdPicked = -1;
     bool                           AddPaletteRequest = false;          // one-shot
@@ -1033,14 +1028,10 @@ struct ImGuiAppComposerControlData
     int           Selected = -1;
 };
 
-struct ImGuiAppComposerControlTempData
-{
-};
-
-struct ImGuiAppComposerControl : ImGuiAppControl<ImGuiAppComposerControlData, ImGuiAppComposerControlTempData>
+struct ImGuiAppComposerControl : ImGuiAppControl<ImGuiAppComposerControlData, ImGuiAppNoTempData>
 {
     virtual void OnInitialize(ImGuiApp* app, ImGuiAppComposerControlData* data) const override;
-    virtual void OnRender(const ImGuiAppComposerControlData* data, ImGuiAppComposerControlTempData* temp_data) const override;
+    virtual void OnRender(const ImGuiAppComposerControlData* data, ImGuiAppNoTempData* temp_data) const override;
 };
 
 // Interpreter core (a second graph backend beside codegen; API in the core namespace below) has no
@@ -1260,8 +1251,8 @@ IMGUI_API bool                   AppRunAttachWal(ImGuiAppRunIndex* run, const ch
 // FILE-mode transport view over a run index (playback-debugger-design section 4). Count == AppRunTickCount;
 // Show(view, i) sets ShownTick = Ticks[i].Tick and decodes its FrameImage into view->Pixels via view->Decode.
 // False only on an invalid index or hard decode failure; a ring-dump gap or null Decode still lands the tick.
-IMGUI_API int               AppRunTransportCount(const ImGuiAppRunTransport* view);
-IMGUI_API bool              AppRunTransportShow(ImGuiAppRunTransport* view, int i);
+IMGUI_API int               AppRunViewCount(const ImGuiAppRunView* view);
+IMGUI_API bool              AppRunViewShow(ImGuiAppRunView* view, int i);
 
 // encoder is REQUIRED (providers live in backends/imguiapp_impl_*.h; the core seam
 // cannot pick one). Fails (null) when the platform backend has no CaptureFrame.
@@ -1611,7 +1602,7 @@ IMGUI_API void                                AppGraphHoverLink(const ImGuiAppGr
 IMGUI_API int                                 AppGraphHoveredNode(const ImGuiAppGraph* g, ImGuiAppHoverSource* out_source);   // -1 = none; out_source may be null
 IMGUI_API int                                 AppGraphHoveredLink(const ImGuiAppGraph* g, ImGuiAppHoverSource* out_source);
 
-IMGUI_API void                                AppGraphSetHostCommands(const ImGuiAppGraph* g, const ImGuiAppGraphHostCmd* cmds, int count);
+IMGUI_API void                                AppGraphSetHostCommands(const ImGuiAppGraph* g, const ImGuiAppEditorCommand* cmds, int count);
 IMGUI_API int                                 AppGraphConsumeHostCommand(const ImGuiAppGraph* g);   // picked host cmd id since last call, or -1
 
 // One-shot: open the add-node palette at the canvas center on the editor's next submission (same

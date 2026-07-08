@@ -96,7 +96,7 @@ struct ImGuiAppViewportPace
 struct ImGuiAppPacerState
 {
     const ImGuiApp* App          = nullptr;
-    double          NextDeadline = -1.0; // on the impl's monotonic clock; < 0 = chain not started
+    double          NextDeadline = -1.0; // on the funcs' monotonic clock; < 0 = chain not started
     double          LastEnter    = -1.0; // previous AppPacerWait entry (feeds LastFrameMs)
     ImVector<ImGuiAppViewportPace> ViewportPace; // secondary-window present deadlines
 };
@@ -311,16 +311,16 @@ int ImGuiApp::Run(int argc, char** argv)
 static ImGuiAppPacerState& AppPacer() { return AppState().Pacer; }
 
 // Optional-hook fallbacks (null hook or non-positive answer = the documented default).
-static float AppPacerImplPrimaryHz(const ImGuiAppPacerImpl* impl)
+static float AppPacerFuncsPrimaryHz(const ImGuiAppPacerFuncs* funcs)
 {
-    const float hz = impl != nullptr && impl->PrimaryRefreshHzFn != nullptr ? impl->PrimaryRefreshHzFn() : 0.0f;
+    const float hz = funcs != nullptr && funcs->PrimaryRefreshHzFn != nullptr ? funcs->PrimaryRefreshHzFn() : 0.0f;
     return hz > 0.0f ? hz : 60.0f;
 }
 
-static float AppPacerImplViewportHz(const ImGuiAppPacerImpl* impl, const ImGuiViewport* viewport)
+static float AppPacerFuncsViewportHz(const ImGuiAppPacerFuncs* funcs, const ImGuiViewport* viewport)
 {
-    const float hz = impl->ViewportRefreshHzFn != nullptr ? impl->ViewportRefreshHzFn(viewport) : 0.0f;
-    return hz > 0.0f ? hz : AppPacerImplPrimaryHz(impl);
+    const float hz = funcs->ViewportRefreshHzFn != nullptr ? funcs->ViewportRefreshHzFn(viewport) : 0.0f;
+    return hz > 0.0f ? hz : AppPacerFuncsPrimaryHz(funcs);
 }
 
 bool ImGuiApp::Initialize(const ImGuiAppConfig* config)
@@ -347,7 +347,7 @@ void ImGuiApp::Shutdown()
     if (!Initialized && PlatformData == nullptr && Layers.empty() && Windows.empty() && Sidebars.empty() && StorageEntries.empty())
         return;
 
-    // One paced app per process by design. The impl's teardown hook releases its wait
+    // One paced app per process by design. The funcs' teardown hook releases its wait
     // machinery (timers, thread QoS registrations); it must run on the paced (main) thread.
     ImGuiAppPacerState& pacer = AppPacer();
     if (pacer.App == this)
@@ -356,8 +356,8 @@ void ImGuiApp::Shutdown()
         pacer.NextDeadline = -1.0;
         pacer.LastEnter = -1.0;
     }
-    if (Pacer.Impl != nullptr && Pacer.Impl->ShutdownFn != nullptr)
-        Pacer.Impl->ShutdownFn();
+    if (Pacer.Funcs != nullptr && Pacer.Funcs->ShutdownFn != nullptr)
+        Pacer.Funcs->ShutdownFn();
 
     ImGui::ShutdownApp(this);
     OnShutdownPlatform();
@@ -685,7 +685,7 @@ ImGuiAppPacer::ImGuiAppPacer()
     Mode            = ImGuiAppPacerMode_Off;
     TargetHz        = 0.0f;
     SleepSlackMs    = 2.0f;
-    Impl            = nullptr;
+    Funcs           = nullptr;
     LastFrameMs     = 0.0;
     LastWaitMs      = 0.0;
     MissedDeadlines = 0;
@@ -696,21 +696,22 @@ ImGuiAppPacer::ImGuiAppPacer()
 // toggles mid-frame. File-local render-loop detail, not a polymorphic hook -- items expose StyleMods/ColorMods as data.
 namespace
 {
-struct ImGuiAppItemStyleScope
+// Push-count receipt for a paired style pop (the item render loop and the Blender-field widgets).
+struct ImGuiAppStyleScope
 {
     int Vars   = 0;
     int Colors = 0;
 };
 
-ImGuiAppItemStyleScope PushItemStyle(const ImGuiAppItemBase* item)
+ImGuiAppStyleScope PushItemStyle(const ImGuiAppItemBase* item)
 {
-    ImGuiAppItemStyleScope s;
+    ImGuiAppStyleScope s;
     s.Vars   = ImGui::PushAppStyleMods(item->StyleMods.Data, item->StyleMods.Size);
     s.Colors = ImGui::PushAppColorMods(item->ColorMods.Data, item->ColorMods.Size);
     return s;
 }
 
-void PopItemStyle(ImGuiAppItemStyleScope s)
+void PopItemStyle(ImGuiAppStyleScope s)
 {
     if (s.Colors > 0)
         ImGui::PopStyleColor(s.Colors);
@@ -800,7 +801,7 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
 {
     for (ImGuiAppSidebarBase* sidebar : app->Sidebars)
     {
-        const ImGuiAppItemStyleScope sidebar_scope = PushItemStyle(sidebar);
+        const ImGuiAppStyleScope sidebar_scope = PushItemStyle(sidebar);
 
         if (sidebar->Window && (sidebar->Flags & ImGuiWindowFlags_AlwaysAutoResize))
         {
@@ -833,7 +834,7 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
         // Controls render their own windows; submit them outside the sidebar's Begin/End.
         for (ImGuiAppControlBase* control : sidebar->Controls)
         {
-            const ImGuiAppItemStyleScope control_scope = PushItemStyle(control);
+            const ImGuiAppStyleScope control_scope = PushItemStyle(control);
             control->OnRender(app);
             PopItemStyle(control_scope);
         }
@@ -846,7 +847,7 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
         if (!window->Open)
             continue;
 
-        const ImGuiAppItemStyleScope window_scope = PushItemStyle(window);
+        const ImGuiAppStyleScope window_scope = PushItemStyle(window);
 
         // Never fight a dock binding: SetNextWindowPos undocks a docked window by design
         // (BeginDocked's PosUndock), so placement only applies to windows with no dock home
@@ -875,7 +876,7 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
             // Style mods bracket OnRender only: they style the control's region but not its popups.
             for (ImGuiAppControlBase* control : window->Controls)
             {
-                const ImGuiAppItemStyleScope control_scope = PushItemStyle(control);
+                const ImGuiAppStyleScope control_scope = PushItemStyle(control);
                 control->OnRender(app);
                 PopItemStyle(control_scope);
             }
@@ -887,7 +888,7 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
 
     for (ImGuiAppControlBase* control : app->Controls)
     {
-        const ImGuiAppItemStyleScope control_scope = PushItemStyle(control);
+        const ImGuiAppStyleScope control_scope = PushItemStyle(control);
         control->OnRender(app);
         PopItemStyle(control_scope);
     }
@@ -1599,12 +1600,12 @@ IMGUI_API void AppPacerWait(ImGuiApp* app)
         return;
 
     ImGuiAppPacer* p = &app->Pacer;
-    const ImGuiAppPacerImpl* impl = p->Impl;
+    const ImGuiAppPacerFuncs* funcs = p->Funcs;
 
     float hz = p->TargetHz;
     if (hz <= 0.0f)
     {
-        hz = AppPacerImplPrimaryHz(impl);
+        hz = AppPacerFuncsPrimaryHz(funcs);
         // Fixed mode's dt injection (DrawFrame) reads TargetHz; resolve it ONCE so the
         // deterministic timestep exists and never re-tracks a monitor change mid-run.
         if (p->Mode == ImGuiAppPacerMode_Fixed)
@@ -1612,14 +1613,14 @@ IMGUI_API void AppPacerWait(ImGuiApp* app)
     }
     const double period = 1.0 / (double)hz;
 
-    // No impl installed: nothing to wait WITH. Fixed keeps its deterministic dt (resolved
+    // No funcs installed: nothing to wait WITH. Fixed keeps its deterministic dt (resolved
     // above); the loop free-runs at whatever the present mode allows.
-    if (impl == nullptr)
+    if (funcs == nullptr)
         return;
-    IM_ASSERT(impl->NowFn != nullptr && impl->WaitUntilFn != nullptr && "ImGuiAppPacer::Impl: NowFn and WaitUntilFn are required.");
+    IM_ASSERT(funcs->NowFn != nullptr && funcs->WaitUntilFn != nullptr && "ImGuiAppPacer::Funcs: NowFn and WaitUntilFn are required.");
 
     ImGuiAppPacerState& pacer = AppPacer();
-    const double now = impl->NowFn();
+    const double now = funcs->NowFn();
     if (pacer.App != app || pacer.NextDeadline < 0.0)
     {
         // First paced frame (or the paced app changed): establish the deadline chain, no wait.
@@ -1642,9 +1643,9 @@ IMGUI_API void AppPacerWait(ImGuiApp* app)
         deadline = now;
     }
 
-    impl->WaitUntilFn(deadline, p->SleepSlackMs);
+    funcs->WaitUntilFn(deadline, p->SleepSlackMs);
 
-    p->LastWaitMs = (impl->NowFn() - now) * 1000.0;
+    p->LastWaitMs = (funcs->NowFn() - now) * 1000.0;
     pacer.NextDeadline = deadline + period;
 }
 
@@ -1653,7 +1654,7 @@ IMGUI_API float AppPacerResolveHz(const ImGuiApp* app)
     IM_ASSERT(app != nullptr);
     if (app == nullptr)
         return 60.0f;
-    return app->Pacer.TargetHz > 0.0f ? app->Pacer.TargetHz : AppPacerImplPrimaryHz(app->Pacer.Impl);
+    return app->Pacer.TargetHz > 0.0f ? app->Pacer.TargetHz : AppPacerFuncsPrimaryHz(app->Pacer.Funcs);
 }
 
 IMGUI_API bool AppPacerViewportShouldPresent(ImGuiApp* app, ImGuiViewport* viewport)
@@ -1665,13 +1666,13 @@ IMGUI_API bool AppPacerViewportShouldPresent(ImGuiApp* app, ImGuiViewport* viewp
     if (viewport == GetMainViewport())
         return true;   // the run loop's AppPacerWait already paces the main viewport
 
-    const ImGuiAppPacerImpl* impl = app->Pacer.Impl;
-    if (impl == nullptr || impl->NowFn == nullptr)
-        return true;   // no impl = no clock to gate with; present every frame
+    const ImGuiAppPacerFuncs* funcs = app->Pacer.Funcs;
+    if (funcs == nullptr || funcs->NowFn == nullptr)
+        return true;   // no funcs = no clock to gate with; present every frame
 
-    const float hz = AppPacerImplViewportHz(impl, viewport);
+    const float hz = AppPacerFuncsViewportHz(funcs, viewport);
     const double period = 1.0 / (double)(hz > 1.0f ? hz : 60.0f);
-    const double now = impl->NowFn();
+    const double now = funcs->NowFn();
 
     ImVector<ImGuiAppViewportPace>& vp_pace = AppPacer().ViewportPace;
     ImGuiAppViewportPace* pace = nullptr;
@@ -1738,7 +1739,7 @@ IMGUI_API void AppWALClose(ImGuiAppWAL* wal)
     if (wal == nullptr || wal->File == nullptr)
         return;
     AppWALWrite(wal, ImGuiAppWALLevel_Lifecycle, "wal close");
-    fclose((FILE*)wal->File);
+    ImFileClose(wal->File);
     wal->File = nullptr;
     wal->Level = ImGuiAppWALLevel_Off;
 }
@@ -1753,7 +1754,7 @@ IMGUI_API void AppWALWriteV(ImGuiAppWAL* wal, ImGuiAppWALLevel level, const char
 
     // WAL must also work before/after the ImGui context's lifetime.
     const int frame = GetCurrentContext() != nullptr ? GetFrameCount() : -1;
-    ImFileHandle f = (ImFileHandle)wal->File;
+    ImFileHandle f = wal->File;
     if (wal->FrameID != nullptr)
         ImFilePrintf(f, "[%06d f%05d] [tick:%llu tsc:%llu] %s\n", wal->Seq++, frame,
                      (unsigned long long)wal->FrameID->FrameIndex, (unsigned long long)wal->FrameID->Tsc, msg);
@@ -3696,15 +3697,14 @@ struct BaseInfoData
 {
     int Frames;
 };
-struct BaseInfoTempData {};
-struct BaseInfoControl : ImGuiAppControl<BaseInfoData, BaseInfoTempData>
+struct BaseInfoControl : ImGuiAppControl<BaseInfoData, ImGuiAppNoTempData>
 {
     virtual void OnInitialize(ImGuiApp*, BaseInfoData* data) const override final
     {
         data->Frames = 0;
     }
 
-    virtual void OnUpdate(float dt, BaseInfoData* data, const BaseInfoTempData* temp_data, const BaseInfoTempData* last_temp_data) const override final
+    virtual void OnUpdate(float dt, BaseInfoData* data, const ImGuiAppNoTempData* temp_data, const ImGuiAppNoTempData* last_temp_data) const override final
     {
         IM_UNUSED(dt);
         IM_UNUSED(temp_data);
@@ -3712,7 +3712,7 @@ struct BaseInfoControl : ImGuiAppControl<BaseInfoData, BaseInfoTempData>
         data->Frames++;
     }
 
-    virtual void OnRender(const BaseInfoData* data, BaseInfoTempData* temp_data) const override final
+    virtual void OnRender(const BaseInfoData* data, ImGuiAppNoTempData* temp_data) const override final
     {
         IM_UNUSED(temp_data);
         ImGui::Separator();
@@ -3806,7 +3806,7 @@ struct ImGuiAppComposerTransport
     int                  Source = ImGuiAppTransportSource_LiveRing;
     bool                 PlaybackOpen = false;                 // the FILE playback timeline window is showing
     ImGuiAppRunIndex*    Run = nullptr;                        // the opened run (owned; AppRunClose on close/reopen)
-    ImGuiAppRunTransport FileView;                             // run index + decoder behind Count()/Show(int)
+    ImGuiAppRunView      FileView;                             // run index + decoder behind Count()/Show(int)
     ImVector<ImU64>      CommandTicks;                         // ticks with a WAL "execute command" dispatch (marker source)
     ImTextureData*       FrameTex = nullptr;                   // GPU texture holding the decoded frame (lazy)
     int                  FrameTexTick = -1;                    // tick uploaded to FrameTex (decode/upload cache)
@@ -3845,7 +3845,6 @@ struct ImGuiAppGraphDocData
     int                  NumUnbuilt;      // per-frame count: authored nodes with no live counterpart in the running
                                           // binary -- nonzero == stale until Generate + recompile + relaunch
 };
-struct ImGuiAppGraphDocTempData {};
 
 // PersistData aliases the start of InstanceData.
 static ImGuiAppGraphDocData* GetGraphDoc(ImGuiApp* app)
@@ -3860,15 +3859,15 @@ static ImGuiAppGraphDocData* GetGraphDoc(ImGuiApp* app)
 
 static const char* COMPOSER_LAYOUT_PATH = "imguix_composer_layout.ini";
 
-struct ImGuiAppComposerLayoutFields
+struct ImGuiAppComposerLayout
 {
-    float TreeW, InspW, CodeH;
-    bool                          ShowLive;
+    float                  TreeW, InspW, CodeH;
+    bool                   ShowLive;
     ImGuiAppGraphViewState View;
 };
-static ImGuiAppComposerLayoutFields ComposerLayoutCapture(const ImGuiAppGraphDocData* doc)
+static ImGuiAppComposerLayout ComposerLayoutCapture(const ImGuiAppGraphDocData* doc)
 {
-    ImGuiAppComposerLayoutFields f;
+    ImGuiAppComposerLayout f;
     memset(&f, 0, sizeof(f));   // padding participates in the hash -- keep it deterministic
     f.TreeW = doc->TreeW; f.InspW = doc->InspW; f.CodeH = doc->CodeH;
     f.ShowLive = doc->ShowLive;
@@ -3906,7 +3905,7 @@ static void ComposerLayoutLoad(ImGuiAppGraphDocData* doc)
         p = eol + 1;
     }
     IM_FREE(text);
-    const ImGuiAppComposerLayoutFields f = ComposerLayoutCapture(doc);
+    const ImGuiAppComposerLayout f = ComposerLayoutCapture(doc);
     doc->LayoutSavedHash = ImHashData(&f, sizeof(f));
 }
 
@@ -3917,7 +3916,7 @@ static void ComposerLayoutSaveIfChanged(ImGuiAppGraphDocData* doc, float dt)
     if (doc->LayoutSaveT > 0.0f || ImGui::IsMouseDown(ImGuiMouseButton_Left))
         return;
     doc->LayoutSaveT = 1.0f;
-    const ImGuiAppComposerLayoutFields f = ComposerLayoutCapture(doc);
+    const ImGuiAppComposerLayout f = ComposerLayoutCapture(doc);
     const ImGuiID h = ImHashData(&f, sizeof(f));
     if (h == doc->LayoutSavedHash)
         return;
@@ -4014,7 +4013,7 @@ static void ComposerGenerateHeader(ImGuiAppGraphDocData* doc)
         DocLog(doc, 2, "could not open %s for writing", doc->HeaderPath);
 }
 
-struct GraphDocControl : ImGuiAppControl<ImGuiAppGraphDocData, ImGuiAppGraphDocTempData>
+struct GraphDocControl : ImGuiAppControl<ImGuiAppGraphDocData, ImGuiAppNoTempData>
 {
     virtual void OnInitialize(ImGuiApp* app, ImGuiAppGraphDocData* data) const override final
     {
@@ -4046,7 +4045,7 @@ struct GraphDocControl : ImGuiAppControl<ImGuiAppGraphDocData, ImGuiAppGraphDocT
         }
         ImGui::AppGraphRequestFitAll(&data->Graph);
     }
-    virtual void OnUpdate(float dt, ImGuiAppGraphDocData* data, const ImGuiAppGraphDocTempData*, const ImGuiAppGraphDocTempData*) const override final
+    virtual void OnUpdate(float dt, ImGuiAppGraphDocData* data, const ImGuiAppNoTempData*, const ImGuiAppNoTempData*) const override final
     {
         ComposerLayoutSaveIfChanged(data, dt);
 
@@ -4157,7 +4156,7 @@ static void EditorToolSep(float em)
 // [SECTION] Playback debugger -- FILE-mode transport (F63)
 //-----------------------------------------------------------------------------
 // The App-time transport's FILE source: open a recorded QOI run through F62's AppRunOpen,
-// scrub it via the shared AppRunTransportShow (Count()/Show(int)) reader, and blit the decoded
+// scrub it via the shared AppRunViewShow (Count()/Show(int)) reader, and blit the decoded
 // frame at the slider tick. All state rides ImGuiAppComposerTransport -- no TU globals.
 
 // Adapt the QOI provider's frame decode to the core ImGuiAppRunFrameDecodeFn seam (user = the
@@ -4243,7 +4242,7 @@ static void ComposerPreviewRecordStop(ImGuiAppEditorState* ed, ImGuiAppComposerT
             tr->FileView.DecodeUser = nullptr;
             tr->Source = ImGuiAppTransportSource_FileRun;
             ImStrncpy(tr->RunName, ed->PreviewRecPath, sizeof(tr->RunName));
-            ImGui::AppRunTransportShow(&tr->FileView, 0);   // land on the first tick
+            ImGui::AppRunViewShow(&tr->FileView, 0);   // land on the first tick
         }
         else
         {
@@ -4298,14 +4297,14 @@ static void ComposerOpenRun(ImGuiAppComposerTransport* tr)
     tr->FileView.Scrub = 0;
     tr->FrameTexTick = -1;
     ComposerLoadWalCommandTicks(tr);
-    ImGui::AppRunTransportShow(&tr->FileView, 0);   // land on the first tick
+    ImGui::AppRunViewShow(&tr->FileView, 0);   // land on the first tick
 }
 
 // Upload the FILE view's decoded RGBA into the transport's GPU texture (created once per run size,
 // then full-rect updated on each scrub). Returns true when FrameTex holds tick-current pixels.
 static bool ComposerSyncFrameTexture(ImGuiAppComposerTransport* tr)
 {
-    const ImGuiAppRunTransport* v = &tr->FileView;
+    const ImGuiAppRunView* v = &tr->FileView;
     const int need = v->Width * v->Height * 4;
     if (v->ShownImage < 0 || v->Width <= 0 || v->Height <= 0 || v->Pixels.Size < need)
         return false;
@@ -4385,7 +4384,7 @@ static ImTextureRef ComposerUploadRgbaTexture(ImTextureData** tex, int* tw, int*
 // current tick; click/drag scrubs. Returns picked scrub index (-1 = unchanged). The addressable SliderInt is for tests.
 static int ComposerPlaybackTimeline(ImGuiAppComposerTransport* tr, float em, const ImGuiStyle& style)
 {
-    const int count = ImGui::AppRunTransportCount(&tr->FileView);
+    const int count = ImGui::AppRunViewCount(&tr->FileView);
     if (count <= 0)
         return -1;
     const ImGuiAppRunIndex* run = tr->Run;
@@ -4543,7 +4542,7 @@ static void ComposerRenderPlayback(ImGuiAppComposerTransport* tr, ImGuiApp* mirr
         return;
     }
 
-    const int count = ImGui::AppRunTransportCount(&tr->FileView);
+    const int count = ImGui::AppRunViewCount(&tr->FileView);
 
     // Identity + integrity line.
     ImGui::Separator();
@@ -4572,7 +4571,7 @@ static void ComposerRenderPlayback(ImGuiAppComposerTransport* tr, ImGuiApp* mirr
         scrub = strip_pick;
 
     if (scrub != tr->FileView.Scrub)
-        ImGui::AppRunTransportShow(&tr->FileView, scrub);   // shared reader: decode + ShownTick = Ticks[scrub].Tick
+        ImGui::AppRunViewShow(&tr->FileView, scrub);   // shared reader: decode + ShownTick = Ticks[scrub].Tick
 
     // Per-tick readout: the shown tick IS the slider tick (Show addresses Ticks[i].Tick directly).
     const ImGuiAppRunTick* cur = ImGui::AppRunTickAt(tr->Run, tr->FileView.Scrub);
@@ -5966,18 +5965,19 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
             if (ImGui::BeginChild("##NodeGraph", ImVec2(col_w, canvas_h), ImGuiChildFlags_Borders))
             {
                 // Document verbs for the canvas palette; the pick comes back through AppGraphConsumeHostCommand.
-                static const ImGuiAppGraphHostCmd host_cmds[] =
-          {
-                    { "File: Save graph", "Ctrl+S", ImGuiAppComposerHostCmd_Save, ImGuiKey_S, ImGuiMod_Ctrl },
-                    { "File: Load graph", "", ImGuiAppComposerHostCmd_Load },
-                    { "File: Generate C++ header", "", ImGuiAppComposerHostCmd_Generate },
-                    { "File: Copy generated C++", "", ImGuiAppComposerHostCmd_CopyCode },
-                    { "File: Diff vs saved -> clipboard", "", ImGuiAppComposerHostCmd_Diff },
-                    { "Panel: Code", "", ImGuiAppComposerHostCmd_PanelCode },
-                    { "Panel: Project", "", ImGuiAppComposerHostCmd_PanelProject },
-                    { "Panel: Preview", "", ImGuiAppComposerHostCmd_PanelPreview },
-                    { "Panel: Output", "", ImGuiAppComposerHostCmd_PanelOutput },
-                    { "View: Toggle live mirror", "", ImGuiAppComposerHostCmd_ToggleLive },
+                static const ImGuiAppEditorCommand host_cmds[] =
+                {
+                    // Id                                   Icon Label                               Shortcut  Key            Mods           Surfaces                    AddKind                  Source
+                    { ImGuiAppComposerHostCmd_Save,         "",  "File: Save graph",                 "Ctrl+S", ImGuiKey_S,    ImGuiMod_Ctrl, ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT,  ImGuiAppCommandSource_Host },
+                    { ImGuiAppComposerHostCmd_Load,         "",  "File: Load graph",                 "",       ImGuiKey_None, 0,             ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT,  ImGuiAppCommandSource_Host },
+                    { ImGuiAppComposerHostCmd_Generate,     "",  "File: Generate C++ header",        "",       ImGuiKey_None, 0,             ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT,  ImGuiAppCommandSource_Host },
+                    { ImGuiAppComposerHostCmd_CopyCode,     "",  "File: Copy generated C++",         "",       ImGuiKey_None, 0,             ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT,  ImGuiAppCommandSource_Host },
+                    { ImGuiAppComposerHostCmd_Diff,         "",  "File: Diff vs saved -> clipboard", "",       ImGuiKey_None, 0,             ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT,  ImGuiAppCommandSource_Host },
+                    { ImGuiAppComposerHostCmd_PanelCode,    "",  "Panel: Code",                      "",       ImGuiKey_None, 0,             ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT,  ImGuiAppCommandSource_Host },
+                    { ImGuiAppComposerHostCmd_PanelProject, "",  "Panel: Project",                   "",       ImGuiKey_None, 0,             ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT,  ImGuiAppCommandSource_Host },
+                    { ImGuiAppComposerHostCmd_PanelPreview, "",  "Panel: Preview",                   "",       ImGuiKey_None, 0,             ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT,  ImGuiAppCommandSource_Host },
+                    { ImGuiAppComposerHostCmd_PanelOutput,  "",  "Panel: Output",                    "",       ImGuiKey_None, 0,             ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT,  ImGuiAppCommandSource_Host },
+                    { ImGuiAppComposerHostCmd_ToggleLive,   "",  "View: Toggle live mirror",         "",       ImGuiKey_None, 0,             ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT,  ImGuiAppCommandSource_Host },
                 };
                 ImGui::AppGraphSetHostCommands(graph, host_cmds, IM_ARRAYSIZE(host_cmds));
 
@@ -7849,8 +7849,7 @@ namespace
 
 // Returns the pushed counts; pop with AppBlPopStyle. The PopupRounding desc's Active flag gates the
 // popup half of the scope.
-struct ImGuiAppBlStyleScope { int Colors; int Vars; };
-static ImGuiAppBlStyleScope AppBlPushStyle(const ImGuiAppColorModDesc* cols, int ncols, bool with_popup)
+static ImGuiAppStyleScope AppBlPushStyle(const ImGuiAppColorModDesc* cols, int ncols, bool with_popup)
 {
     const float r = GetFrameHeight() * BL_ROUNDING;
     const ImGuiAppStyleModDesc vars[] =
@@ -7858,13 +7857,13 @@ static ImGuiAppBlStyleScope AppBlPushStyle(const ImGuiAppColorModDesc* cols, int
         { ImGuiStyleVar_FrameRounding, ImVec2(r, 0.0f) },
         { ImGuiStyleVar_PopupRounding, ImVec2(r, 0.0f), with_popup },
     };
-    ImGuiAppBlStyleScope s;
+    ImGuiAppStyleScope s;
     s.Colors = PushAppColorMods(cols, ncols);
     s.Vars = PushAppStyleMods(vars, IM_ARRAYSIZE(vars));
     return s;
 }
 
-static void AppBlPopStyle(const ImGuiAppBlStyleScope& s)
+static void AppBlPopStyle(const ImGuiAppStyleScope& s)
 {
     if (s.Vars > 0)
         PopStyleVar(s.Vars);
@@ -7962,7 +7961,7 @@ static bool AppBlInputText(const char* str_id, char* buf, size_t buf_size, float
         AppBlFieldBg(dl, mn, mx, true, true);
         SetCursorScreenPos(mn);
         SetNextItemWidth(width);
-        const ImGuiAppBlStyleScope sc = AppBlPushStyle(AppGraphChromeTheme()->Edit, IM_ARRAYSIZE(AppGraphChromeTheme()->Edit), false);
+        const ImGuiAppStyleScope sc = AppBlPushStyle(AppGraphChromeTheme()->Edit, IM_ARRAYSIZE(AppGraphChromeTheme()->Edit), false);
         if (st->GetBool(APP_KEY_BL_FOCUS, false)) { SetKeyboardFocusHere(); st->SetBool(APP_KEY_BL_FOCUS, false); }
         PushID(id);
         value_changed = InputText("##e", buf, buf_size, ImGuiInputTextFlags_AutoSelectAll);
@@ -7990,7 +7989,7 @@ static bool AppBlEnum(const char* str_id, float width, int* v, const char* (*nam
     // and lets the click fall through to the node/window drag.
     bool value_changed = false;
 
-    const ImGuiAppBlStyleScope sc = AppBlPushStyle(AppGraphChromeTheme()->Combo, IM_ARRAYSIZE(AppGraphChromeTheme()->Combo), true);
+    const ImGuiAppStyleScope sc = AppBlPushStyle(AppGraphChromeTheme()->Combo, IM_ARRAYSIZE(AppGraphChromeTheme()->Combo), true);
 
     SetNextItemWidth(width);
     PushID(str_id);
@@ -8037,7 +8036,7 @@ static bool AppBlDragInt(const char* str_id, float width, int* v, int vmin, int 
         AppBlFieldBg(dl, mn, mx, true, true);
         SetCursorScreenPos(mn);
         SetNextItemWidth(width);
-        const ImGuiAppBlStyleScope sc = AppBlPushStyle(AppGraphChromeTheme()->Edit, IM_ARRAYSIZE(AppGraphChromeTheme()->Edit), false);
+        const ImGuiAppStyleScope sc = AppBlPushStyle(AppGraphChromeTheme()->Edit, IM_ARRAYSIZE(AppGraphChromeTheme()->Edit), false);
         if (st->GetBool(APP_KEY_BL_FOCUS, false)) { SetKeyboardFocusHere(); st->SetBool(APP_KEY_BL_FOCUS, false); }
         PushID(id);
         value_changed = InputInt("##e", v, 0, 0, ImGuiInputTextFlags_AutoSelectAll);
@@ -8122,7 +8121,7 @@ static void EditAppFieldTypeControls(ImGuiAppFieldDesc* f, float type_w, const I
     else if (f->Type == ImGuiAppFieldType_Struct)
     {
         SameLine();
-        const ImGuiAppBlStyleScope sc = AppBlPushStyle(AppGraphChromeTheme()->Combo, IM_ARRAYSIZE(AppGraphChromeTheme()->Combo), true);
+        const ImGuiAppStyleScope sc = AppBlPushStyle(AppGraphChromeTheme()->Combo, IM_ARRAYSIZE(AppGraphChromeTheme()->Combo), true);
         SetNextItemWidth(GetFontSize() * 8.0f);
         if (BeginCombo("##stype", f->StructType[0] ? f->StructType : "<struct>", ImGuiComboFlags_NoArrowButton))
         {
@@ -11610,7 +11609,7 @@ int AppGraphHoveredLink(const ImGuiAppGraph* g, ImGuiAppHoverSource* out_source)
     return AppGraphEditorState(g)->HoverPrevLink;
 }
 
-void AppGraphSetHostCommands(const ImGuiAppGraph* g, const ImGuiAppGraphHostCmd* cmds, int count)
+void AppGraphSetHostCommands(const ImGuiAppGraph* g, const ImGuiAppEditorCommand* cmds, int count)
 {
     AppGraphEditorState(g)->HostCmds = cmds;
     AppGraphEditorState(g)->HostCmdCount = cmds != nullptr ? count : 0;
@@ -14410,7 +14409,7 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
         // records the pick exactly as a palette click would -- the editor never acts on the host's behalf.
         for (int i = 0; i < AppGraphEditorState(g)->HostCmdCount; i++)
         {
-            const ImGuiAppGraphHostCmd* hc = &AppGraphEditorState(g)->HostCmds[i];
+            const ImGuiAppEditorCommand* hc = &AppGraphEditorState(g)->HostCmds[i];
             if (hc->Key != ImGuiKey_None && IsKeyChordPressed((ImGuiKeyChord)(hc->Key | hc->Mods)))
                 AppGraphEditorState(g)->HostCmdPicked = hc->Id;
         }
@@ -21599,12 +21598,15 @@ static void AppImportCustomLayers(ImGuiAppGraph* g, const char* code)
     }
 }
 
+// One PushXxx< scan spec shared by the host/control importers (Local = the emitted local-variable
+// prefix; "" for hosts, which have none).
+struct ImGuiAppImportSpec { const char* Push; const char* Local; ImGuiAppNodeKind Kind; };
+
 // Import Window / Sidebar host nodes from their `ImGui::PushAppWindow<Name>` / `PushAppSidebar<Name>`
 // lines, in source order (= the emitter's node order among hosts).
 static void AppImportHosts(ImGuiAppGraph* g, const char* code)
 {
-    struct Spec { const char* Push; ImGuiAppNodeKind Kind; };
-    const Spec specs[] = { { "PushAppWindow<", ImGuiAppNodeKind_Window }, { "PushAppSidebar<", ImGuiAppNodeKind_Sidebar } };
+    const ImGuiAppImportSpec specs[] = { { "PushAppWindow<", "", ImGuiAppNodeKind_Window }, { "PushAppSidebar<", "", ImGuiAppNodeKind_Sidebar } };
     for (int si = 0; si < IM_ARRAYSIZE(specs); si++)
     {
         const char* p = code;
@@ -21639,8 +21641,7 @@ static void AppImportHosting(ImGuiAppGraph* g, const char* code)
                 return &g->Nodes.Data[i];
         return nullptr;
     };
-    struct Spec { const char* Push; const char* Local; ImGuiAppNodeKind Kind; };
-    const Spec specs[] = { { "PushWindowControl<", "win_", ImGuiAppNodeKind_Window }, { "PushSidebarControl<", "sb_", ImGuiAppNodeKind_Sidebar } };
+    const ImGuiAppImportSpec specs[] = { { "PushWindowControl<", "win_", ImGuiAppNodeKind_Window }, { "PushSidebarControl<", "sb_", ImGuiAppNodeKind_Sidebar } };
     for (int si = 0; si < IM_ARRAYSIZE(specs); si++)
     {
         const char* p = code;
@@ -23397,7 +23398,7 @@ void ImGuiAppComposerControl::OnInitialize(ImGuiApp* app, ImGuiAppComposerContro
     ImGui::AppGraphEnsureFoundation(&data->Graph);     // an empty composition still shows its foundation stack
 }
 
-void ImGuiAppComposerControl::OnRender(const ImGuiAppComposerControlData* data, ImGuiAppComposerControlTempData* temp_data) const
+void ImGuiAppComposerControl::OnRender(const ImGuiAppComposerControlData* data, ImGuiAppNoTempData* temp_data) const
 {
     IM_UNUSED(temp_data);
     // The editor edits the owned graph in place; render is where the Composer authors, mirroring the
@@ -25007,7 +25008,7 @@ static void AvEncoderThread(void* arg)
     const ImGuiAppThreadFuncs* tf = AppThreadFuncs();
     for (;;)
     {
-        ImGuiAppAVJob* job = nullptr;
+        ImGuiAppAVQueuedFrame* job = nullptr;
         tf->MutexLockFn(rec->Thread->Mutex);
         while (rec->Queue.Size == 0 && !rec->ThreadStop)
             tf->CondWaitFn(rec->Thread->CvPop, rec->Thread->Mutex);
@@ -25034,7 +25035,7 @@ static void AvEncoderThread(void* arg)
 }
 
 // Push with the configured full-queue policy. Returns false when the frame was dropped.
-static bool AvQueuePush(ImGuiAppRecorder* rec, ImGuiAppAVJob* job)
+static bool AvQueuePush(ImGuiAppRecorder* rec, ImGuiAppAVQueuedFrame* job)
 {
     const ImGuiAppThreadFuncs* tf = AppThreadFuncs();
     tf->MutexLockFn(rec->Thread->Mutex);
@@ -25488,7 +25489,7 @@ static void AvEmitFrame(ImGuiAppRecorder* rec, const ImGuiAppAVFrame* frame, boo
             rec->EmitDigestNext = false;
         }
 
-        ImGuiAppAVJob* job = IM_NEW(ImGuiAppAVJob)();
+        ImGuiAppAVQueuedFrame* job = IM_NEW(ImGuiAppAVQueuedFrame)();
         job->Width = frame->Width;
         job->Height = frame->Height;
         job->FrameID = frame->FrameID;
@@ -26575,12 +26576,12 @@ IMGUI_API const ImGuiAppRunTick* AppRunTickAt(const ImGuiAppRunIndex* run, int i
     return &run->Ticks.Data[i];
 }
 
-IMGUI_API int AppRunTransportCount(const ImGuiAppRunTransport* view)
+IMGUI_API int AppRunViewCount(const ImGuiAppRunView* view)
 {
     return view != nullptr ? AppRunTickCount(view->Run) : 0;
 }
 
-IMGUI_API bool AppRunTransportShow(ImGuiAppRunTransport* view, int i)
+IMGUI_API bool AppRunViewShow(ImGuiAppRunView* view, int i)
 {
     if (view == nullptr)
         return false;

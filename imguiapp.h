@@ -443,7 +443,7 @@ struct ImGuiAppRingConfig
 };
 
 // One queued frame, pixels owned (CaptureFrame pixels are only valid until the next capture).
-struct ImGuiAppAVJob
+struct ImGuiAppAVQueuedFrame
 {
     int             Width;
     int             Height;
@@ -553,13 +553,13 @@ struct ImGuiAppRecorder
     bool           EmbedTooShortWarned; // frame shorter than EmbedRows: WAL once
 
     // Encoder thread + bounded queue (normal mode only). Thread opaque (docs/house-style-audit.md Δ2); null in ring mode.
-    ImGuiAppRecorderThread*   Thread;
-    ImVector<ImGuiAppAVJob*>  Queue; // FIFO; front = index 0; guarded by Thread->Mutex while recording
-    int                       QueueDepth;
-    ImGuiAppRecordQueuePolicy QueuePolicy;
-    bool                      ThreadStop;
-    bool                      EncodeFailed;
-    ImU64                     DroppedFrames;
+    ImGuiAppRecorderThread*          Thread;
+    ImVector<ImGuiAppAVQueuedFrame*> Queue; // FIFO; front = index 0; guarded by Thread->Mutex while recording
+    int                              QueueDepth;
+    ImGuiAppRecordQueuePolicy        QueuePolicy;
+    bool                             ThreadStop;
+    bool                             EncodeFailed;
+    ImU64                            DroppedFrames;
 
     // Ring mode
     bool                           IsRing;
@@ -640,13 +640,13 @@ struct ImGuiAppConfig
     IMGUI_API ImGuiAppConfig();
 };
 
-// Pacer implementation seam (pimpl): the platform half of pacing behind one vtable, like
+// Pacer platform seam: the platform half of pacing behind one function table, like
 // ImGuiAppPlatformBackend. The pacer owns the deadline chain (imguiapp.cpp, platform-free);
-// the CLIENT installs an impl supplying the clock, the wait, and the refresh queries.
-// Install BEFORE pacing starts. Null Impl = no wait machinery: the loop free-runs (Fixed
+// the CLIENT installs the funcs supplying the clock, the wait, and the refresh queries.
+// Install BEFORE pacing starts. Null Funcs = no wait machinery: the loop free-runs (Fixed
 // mode still forces its deterministic dt). NowFn/WaitUntilFn required; the rest optional
 // (null = the documented fallback).
-struct ImGuiAppPacerImpl
+struct ImGuiAppPacerFuncs
 {
     double (*NowFn)();                                             // monotonic seconds (the pacer's time domain)
     void   (*WaitUntilFn)(double time_sec, float sleep_slack_ms);  // block until NowFn() >= time_sec, landing it exactly; slack = spin-window hint
@@ -663,7 +663,7 @@ struct ImGuiAppPacer
     ImGuiAppPacerMode Mode;            // = ImGuiAppPacerMode_Off
     float             TargetHz;        // = 0.0f  // <= 0 with Mode_Target = pace to primary monitor refresh
     float             SleepSlackMs;    // = 2.0f  // spin the last N ms (OS sleep granularity guard)
-    const ImGuiAppPacerImpl* Impl;     // = NULL  // pimpl seam, client-installed; null = free-run (no wait)
+    const ImGuiAppPacerFuncs* Funcs;   // = NULL  // platform seam, client-installed; null = free-run (no wait)
     double            LastFrameMs;     // = 0.0
     double            LastWaitMs;      // = 0.0
     ImU64             MissedDeadlines; // = 0     // frames that arrived after their deadline
@@ -675,7 +675,7 @@ struct ImGuiAppPacer
 // a crash the file tail names the in-flight operation. Attach to ImGuiApp::WAL; null = silent.
 struct ImGuiAppWAL
 {
-    void*                  File; // FILE*; typed void* to keep <cstdio> out of this header
+    ImFileHandle           File; // libc handle behind the ImFile* seam (imgui_internal.h typedef)
     int                    Seq;  // monotonic record number
     ImGuiAppWALLevel       Level;
     const ImGuiAppFrameID* FrameID; // optional (point at ImGuiApp::FrameID): prefixes records "[tick:N tsc:T]"
@@ -863,6 +863,10 @@ struct ImGuiAppControlBase : ImGuiAppItemBase
 // The reflectability contracts, type-schema registry, and reflection field-walk these adapters drive
 // (ImAppDataReflectable, ImGuiAppTypeSchema, AppReflectFields, AppEnsureTypeRegistered, ImAppFormatLabel, ...)
 // all live in imguiapp_reflect.h, included at the top of this file.
+
+// TempData for a control with no per-frame input: pass as TempDataT instead of authoring an
+// empty per-control struct (OnRender records nothing, OnUpdate compares nothing).
+struct ImGuiAppNoTempData {};
 
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
 struct ImGuiAppInterfaceAdapterBase : ImGuiAppInterface
