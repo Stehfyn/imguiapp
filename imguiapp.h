@@ -334,7 +334,7 @@ struct ImGuiAppAVFrame
     int             PitchBytes; // row stride; encoders must honor it
     const void*     Pixels;     // RGBA8
     ImGuiAppFrameID FrameID;
-    const void*     UserData; // optional per-frame blob (meta stream record, never visible pixels)
+    const void*     UserData;   // optional per-frame blob (meta stream record, never visible pixels)
     int             UserDataSize;
 
     ImGuiAppAVFrame() { memset((void*)this, 0, sizeof(*this)); }
@@ -342,8 +342,8 @@ struct ImGuiAppAVFrame
 
 struct ImGuiAppAVEncodeConfig
 {
-    const char*          OutputPath; // container path, or directory for sequence providers
-    float                Fps;        // Constant mode: the frame rate. Realtime mode: nominal rate hint only
+    const char*          OutputPath;  // container path, or directory for sequence providers
+    float                Fps;         // Constant mode: the frame rate. Realtime mode: nominal rate hint only
     ImGuiAppAVTimingMode Timing;
     int                  Width;       // 0 = first frame's size (fixed thereafter; resize aborts recording)
     int                  Height;
@@ -351,7 +351,7 @@ struct ImGuiAppAVEncodeConfig
                                       // Metadata lives IN the video: while recording, the meta record stream is
                                       // chunked across the frames' bottom EmbedRows pixel rows as 4x4 luma blocks
                                       // (survives lossy encode). Format frozen: see docs/designs.md (av-design).
-    int EmbedRows;                    // reserved bottom rows; multiple of 4
+    int                  EmbedRows;   // reserved bottom rows; multiple of 4
 
     ImGuiAppAVEncodeConfig()
     {
