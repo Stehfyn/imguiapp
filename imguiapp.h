@@ -992,14 +992,14 @@ struct ImGuiAppInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistData
             {
                 _DependencyKeys[slot]     = ImAppHashType(type_id, binds[i].Instance);
                 _DependencyOptional[slot] = binds[i].Optional;
-                Dep* data                 = static_cast<Dep*>(app->Data.GetVoidPtr(_DependencyKeys[slot]));
+                Dep* data                 = (Dep*)app->Data.GetVoidPtr(_DependencyKeys[slot]);
                 IM_ASSERT(data != nullptr || binds[i].Optional);
                 return data;
             }
         if (_InstanceID != 0)
         {
             const ImGuiID own_key = ImAppHashType(type_id, _InstanceID);
-            Dep*          data    = static_cast<Dep*>(app->Data.GetVoidPtr(own_key));
+            Dep*          data    = (Dep*)app->Data.GetVoidPtr(own_key);
             if (data != nullptr)
             {
                 _DependencyKeys[slot] = own_key;
@@ -1007,7 +1007,7 @@ struct ImGuiAppInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistData
             }
         }
         _DependencyKeys[slot] = type_id;
-        Dep* data             = static_cast<Dep*>(app->Data.GetVoidPtr(type_id));
+        Dep* data             = (Dep*)app->Data.GetVoidPtr(type_id);
         IM_ASSERT(data != nullptr);
         return data;
     }
@@ -1024,7 +1024,7 @@ struct ImGuiAppInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistData
     template <typename Dep>
     inline Dep* LookupDependency(const ImGuiApp* app, int slot) const
     {
-        Dep* data = static_cast<Dep*>(app->Data.GetVoidPtr(_DependencyKeys[slot]));
+        Dep* data = (Dep*)app->Data.GetVoidPtr(_DependencyKeys[slot]);
         IM_ASSERT(data != nullptr || _DependencyOptional[slot]);
         return data;
     }
@@ -1219,7 +1219,7 @@ namespace ImGui
     template <typename T>
     inline void DestroyAppStorageValue(void* ptr)
     {
-        IM_DELETE(static_cast<T*>(ptr));
+        IM_DELETE((T*)ptr);
     }
 
     template <typename T>

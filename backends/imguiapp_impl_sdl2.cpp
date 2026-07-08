@@ -39,7 +39,7 @@ int ImGuiApp_ImplSDL2_RunLoop(ImGuiApp* app)
 {
     emscripten_set_main_loop_arg([](void* ud)
     {
-        ImGuiApp* app = static_cast<ImGuiApp*>(ud);
+        ImGuiApp* app = (ImGuiApp*)ud;
         if (app->PlatformData == nullptr) // not initialized, or already shut down
             return;
 
