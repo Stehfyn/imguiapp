@@ -110,6 +110,15 @@ comment naming why it is process-wide (the `MfStartupRefs` precedent, `mediafoun
 ## Tier 2 — Systemic drift (real work, mostly already planned as Phase C)
 
 ### S1. `imguiapp.cpp` definition order ⊥ header order; five files folded into one — A16 (SEVERE)
+> **RESOLVED 2026-07-07** (unity file kept — Δ7 ratified in style-deltas.md; ordering fixed).
+> Public API rank sequence is now `1..37,39,40` in core (+`41` demo, `38` av — region-local per Δ7).
+> Core tail rebuilt in header order under new banners (App bring-up → snapshots → Frame pacing →
+> WAL → Authored style/color mods; top index updated, 10 sections 1:1). Folded regions: defs
+> permuted into internal.h decl order within each `[SECTION]` (gate-scope aware); statics relocated
+> above their earliest caller where the permutation demanded (~60 moves). Residual (6 descents):
+> 2 fold-boundary artifacts (Δ7-fine), 4 in nodes `Scope interior` where `ShowAppGraphEditor`-class
+> gated editor fns sit across `IMGUIX_DISABLE_TOOLS` boundaries — deferred to Phase C proper
+> (section restructure + S4). Gate: suites green, codegen corpus byte-identical.
 Quantified: header decl ranks map to cpp definition order as
 `34,29,28,…,1,2,3,4,37` — grossly non-monotonic; lifecycle (`InitializeApp` etc., header ranks
 1-4) is defined at `:1693-1777` *after* mid-header subsystems defined at `:65-1106`. File is
