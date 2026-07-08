@@ -307,7 +307,7 @@ struct ImGuiAppRunState
 // running app; FileRun decodes the recorded frame image at a tick and blits its pixels -- no app driven.
 enum ImGuiAppTransportSource_
 {
-    ImGuiAppTransportSource_LiveRing = 0,   // the ComposerTransport state ring + the live mirror
+    ImGuiAppTransportSource_LiveRing = 0,   // the ImGuiAppComposerTransport state ring + the live mirror
     ImGuiAppTransportSource_FileRun,        // a recorded run opened by AppRunOpen (this file's index)
 };
 
@@ -2241,7 +2241,7 @@ IMGUI_API bool                AppPreviewDllRasterizeFrame(ImGuiAppPreviewDll* se
 
 
 // Composer editor hooks + introspection accessors
-// The demo Composer's document graph inside `host` (its GraphDocData storage entry), or null before
+// The demo Composer's document graph inside `host` (its ImGuiAppGraphDocData storage entry), or null before
 // composition. Test harnesses drive the editor camera through it. (Was in imguiapp.h; tool-coupled.)
 IMGUI_API ::ImGuiAppGraph* AppLayerDemoGraph(ImGuiApp* host);
 

@@ -12,7 +12,7 @@ codegen corpus byte-identical, style ratchet monotonically down.
 
 | Dimension | Conform | Partial | Violation | Top open item |
 |---|---|---|---|---|
-| §2 Naming (N1-N24) | 7 | 10 | 7 | k-tier (243 uses); ~55 unprefixed TU-local types; `ImGuiCanvas*` squat |
+| §2 Naming (N1-N24) | 7 | 10 | 7 | k-tier (243 uses); `ImGuiCanvas*` squat |
 | §3 Formatting (F1-F28) | 10 | 8 | 3 (+6 gate-covered) | bare `default:` 50:1 (S9) |
 | §4 Architecture (A1-A32) | 7 | 7 | 7 (+2 n/a) | no `IMGUI_DISABLE` wrap anywhere |
 | §5 API grammar (G1-G24) | 4 | 5 | 2 | silent overpop in all four `PopApp*`; no V twins |
@@ -93,15 +93,6 @@ N22's exact fenced hazard → `struct Func { static int IMGUI_CDECL SampleCompar
 k-tier: 56 defs / 61 names / 243 uses, 0 UPPER_SNAKE tunables (86% in the graph-editor region) —
 target N23 form, ID-key blocks get rationale comments.
 
-### S10. TU-local type prefixes — A23/N12 (HIGH)
-~55 unprefixed TU-local types in engine/tool regions (of 71; 16 demo-register sanctioned): the
-12-type `AppPv*` interpreter family (`:23368-24419`), Composer chrome ~20 (`GraphDocData :3791`,
-`ComposerTransport :3771`, `ToolbarControl :4612`, `StatusStripControl :5135`,
-`EditorBodyControl :5631`, `ProjFile :5487`, `SavedControl :7136`, `AppOpDesc :8720`,
-`AppTreeCtx :22548`), pacer `CachedHz :280`, `AppBlStyleScope :7743`, + 7 local enums
-(`ComposerPanel_/ComposerHostCmd_/ComposerLayoutPreset_/ComposerLayoutVis_/ComposerPillState/`
-`AppOpClass_/AppAlignMode_`). Rename to `ImGuiApp*` ("App"/"Composer" are not tier prefixes).
-
 ---
 
 ## Mechanical fixes (M-table)
@@ -152,7 +143,7 @@ target N23 form, ID-key blocks get rationale comments.
    regresses again.
 3. **Wave M — sed batch**: M13, M15, M18, M21, M22, M26, M34, M36, M37, M39, M44, F26 explicit-type
    range-fors, F14 casts, F28 sizeof, F25 default merges, M8, M7.
-4. **Wave N — AST rename batch**: S9 k-tier → UPPER_SNAKE, S10 type prefixes, M3+M10, M16, M17,
+4. **Wave N — AST rename batch**: S9 k-tier → UPPER_SNAKE, M3+M10, M16, M17,
    M19, M31, M32, M33, R2 outcome.
 5. **Wave F — functional adds**: S8 (USER_ERROR + overpop + WAL), M9, M14, S5+M38, S6 adoption,
    M28, M42, M45, M11/M40/M41 with the section restructure.

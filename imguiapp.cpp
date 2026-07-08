@@ -277,12 +277,12 @@ static float AppPacerPrimaryRefreshHz()
 static float AppPacerViewportRefreshHz(const ImGuiViewport* viewport)
 {
 #ifdef _WIN32
-    struct CachedHz
+    struct ImGuiAppCachedHz
     {
         void* Handle;
         float Hz;
     };
-    static ImVector<CachedHz> s_monitor_hz;
+    static ImVector<ImGuiAppCachedHz> s_monitor_hz;
 
     const ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
     const short monitor_idx = ((const ImGuiViewportP*)viewport)->PlatformMonitor;   // internal field; public ImGuiViewport has no monitor index
@@ -307,7 +307,7 @@ static float AppPacerViewportRefreshHz(const ImGuiViewport* viewport)
         if (::EnumDisplaySettingsExA(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm, 0) && dm.dmDisplayFrequency > 1)
             hz = (float)dm.dmDisplayFrequency;
     }
-    CachedHz cached;
+    ImGuiAppCachedHz cached;
     cached.Handle = hmon;
     cached.Hz = hz;
     s_monitor_hz.push_back(cached);
@@ -3467,7 +3467,7 @@ bool CanvasMenuRequestEmpty(const ImGuiCanvasState* c, ImVec2* out_model_pos)
 //
 // Index of this file (search for "[SECTION]"):
 // [SECTION] Sample controls (RandomTime, Breathing) -- the framework idioms, showcased
-// [SECTION] Composer document (GraphDocData) + workspace layout persistence
+// [SECTION] Composer document (ImGuiAppGraphDocData) + workspace layout persistence
 // [SECTION] Playback debugger -- FILE-mode transport (F63)
 // [SECTION] Composer toolbar (flow-ordered: compose -> iterate -> persist -> produce | observe)
 // [SECTION] Composer status strip (keymap hints + document counts)
@@ -3748,38 +3748,38 @@ void ShowNodePalette(ImGuiAppGraph* graph)
 // writer; panels read it as a typed dependency and mutate through a cached pointer (deliberate escape
 // from the read-only dependency rule until an edit-intent bus lands).
 //-----------------------------------------------------------------------------
-// [SECTION] Composer document (GraphDocData) + workspace layout persistence
+// [SECTION] Composer document (ImGuiAppGraphDocData) + workspace layout persistence
 //-----------------------------------------------------------------------------
 
 // Bottom-bar panel identities for the one-shot reveal intent.
-enum ComposerPanel_
+enum ImGuiAppComposerPanel_
 {
-    ComposerPanel_None = 0,
-    ComposerPanel_Code,
-    ComposerPanel_Project,
-    ComposerPanel_Preview,
-    ComposerPanel_Output,
+    ImGuiAppComposerPanel_None = 0,
+    ImGuiAppComposerPanel_Code,
+    ImGuiAppComposerPanel_Project,
+    ImGuiAppComposerPanel_Preview,
+    ImGuiAppComposerPanel_Output,
 };
 
 // Document verbs registered into the canvas command palette; the toolbar consumes the pick.
-enum ComposerHostCmd_
+enum ImGuiAppComposerHostCmd_
 {
-    ComposerHostCmd_Save = 1,
-    ComposerHostCmd_Load,
-    ComposerHostCmd_Generate,
-    ComposerHostCmd_CopyCode,
-    ComposerHostCmd_Diff,
-    ComposerHostCmd_PanelCode,
-    ComposerHostCmd_PanelProject,
-    ComposerHostCmd_PanelPreview,
-    ComposerHostCmd_PanelOutput,
-    ComposerHostCmd_ToggleLive,
+    ImGuiAppComposerHostCmd_Save = 1,
+    ImGuiAppComposerHostCmd_Load,
+    ImGuiAppComposerHostCmd_Generate,
+    ImGuiAppComposerHostCmd_CopyCode,
+    ImGuiAppComposerHostCmd_Diff,
+    ImGuiAppComposerHostCmd_PanelCode,
+    ImGuiAppComposerHostCmd_PanelProject,
+    ImGuiAppComposerHostCmd_PanelPreview,
+    ImGuiAppComposerHostCmd_PanelOutput,
+    ImGuiAppComposerHostCmd_ToggleLive,
 };
 
 // App-time transport (F29): a per-frame snapshot ring of the mirror's snapshottable (trivially-copyable)
-// controls plus the scrub position. Lives OFF GraphDocData's snapshotted bytes (the doc is opaque, so
+// controls plus the scrub position. Lives OFF ImGuiAppGraphDocData's snapshotted bytes (the doc is opaque, so
 // AppStateSnapshot never captures this history). Heap, process lifetime. F63 adds the LIVE vs FILE source switch.
-struct ComposerTransport
+struct ImGuiAppComposerTransport
 {
     ImGuiAppStateHistory History;
     bool                 Frozen = false;   // engaged: hold + scrub instead of record
@@ -3799,7 +3799,7 @@ struct ComposerTransport
     char                 OpenErr[160] = "";                    // last open failure, shown in the window
 };
 
-struct GraphDocData
+struct ImGuiAppGraphDocData
 {
     ImGuiAppGraph Graph;
     int           Selection;    // node selection shared by tree + canvas
@@ -3820,21 +3820,21 @@ struct GraphDocData
     char    HeaderPath[256];
     struct DocLogLine { int Severity; char Text[184]; };
     ImVector<DocLogLine> Log;             // newest last; capped in DocLog()
-    int                  RevealPanel;     // one-shot ComposerPanel_*: reveal + select that bottom tab (0 = none)
+    int                  RevealPanel;     // one-shot ImGuiAppComposerPanel_*: reveal + select that bottom tab (0 = none)
     int                  LinkErrSeqSeen;  // last Graph.LastLinkErrSeq folded into the log
     ImGuiID              LayoutSavedHash; // hash of the last-persisted layout fields (change detection)
     float                LayoutSaveT;     // debounce: seconds until the next layout-save check
     ImGuiApp*            Mirror;          // THE running app: the one hosting this control (set in OnInitialize)
-    ComposerTransport*   Transport;       // App-time scrubber state (heap; opaque, never snapshotted) -- F29
+    ImGuiAppComposerTransport*   Transport;       // App-time scrubber state (heap; opaque, never snapshotted) -- F29
     int                  NumUnbuilt;      // per-frame count: authored nodes with no live counterpart in the running
                                           // binary -- nonzero == stale until Generate + recompile + relaunch
 };
-struct GraphDocTempData {};
+struct ImGuiAppGraphDocTempData {};
 
 // PersistData aliases the start of InstanceData.
-static GraphDocData* GetGraphDoc(ImGuiApp* app)
+static ImGuiAppGraphDocData* GetGraphDoc(ImGuiApp* app)
 {
-    return static_cast<GraphDocData*>(app->Data.GetVoidPtr(ImGuiAppType<GraphDocData>::ID));
+    return static_cast<ImGuiAppGraphDocData*>(app->Data.GetVoidPtr(ImGuiAppType<ImGuiAppGraphDocData>::ID));
 }
 
 //-----------------------------------------------------------------------------
@@ -3844,15 +3844,15 @@ static GraphDocData* GetGraphDoc(ImGuiApp* app)
 
 static const char* kComposerLayoutPath = "imguix_composer_layout.ini";
 
-struct ComposerLayoutFields
+struct ImGuiAppComposerLayoutFields
 {
     float TreeW, InspW, CodeH;
     bool                          ShowLive;
     ImGuiAppGraphViewState View;
 };
-static ComposerLayoutFields ComposerLayoutCapture(const GraphDocData* doc)
+static ImGuiAppComposerLayoutFields ComposerLayoutCapture(const ImGuiAppGraphDocData* doc)
 {
-    ComposerLayoutFields f;
+    ImGuiAppComposerLayoutFields f;
     memset(&f, 0, sizeof(f));   // padding participates in the hash -- keep it deterministic
     f.TreeW = doc->TreeW; f.InspW = doc->InspW; f.CodeH = doc->CodeH;
     f.ShowLive = doc->ShowLive;
@@ -3860,7 +3860,7 @@ static ComposerLayoutFields ComposerLayoutCapture(const GraphDocData* doc)
     return f;
 }
 
-static void ComposerLayoutLoad(GraphDocData* doc)
+static void ComposerLayoutLoad(ImGuiAppGraphDocData* doc)
 {
     size_t size = 0;
     char* text = (char*)ImFileLoadToMemory(kComposerLayoutPath, "rb", &size, 1);
@@ -3890,18 +3890,18 @@ static void ComposerLayoutLoad(GraphDocData* doc)
         p = eol + 1;
     }
     IM_FREE(text);
-    const ComposerLayoutFields f = ComposerLayoutCapture(doc);
+    const ImGuiAppComposerLayoutFields f = ComposerLayoutCapture(doc);
     doc->LayoutSavedHash = ImHashData(&f, sizeof(f));
 }
 
 // At most one disk check per second, skipped mid-gesture so a drag lands once.
-static void ComposerLayoutSaveIfChanged(GraphDocData* doc, float dt)
+static void ComposerLayoutSaveIfChanged(ImGuiAppGraphDocData* doc, float dt)
 {
     doc->LayoutSaveT -= dt;
     if (doc->LayoutSaveT > 0.0f || ImGui::IsMouseDown(ImGuiMouseButton_Left))
         return;
     doc->LayoutSaveT = 1.0f;
-    const ComposerLayoutFields f = ComposerLayoutCapture(doc);
+    const ImGuiAppComposerLayoutFields f = ComposerLayoutCapture(doc);
     const ImGuiID h = ImHashData(&f, sizeof(f));
     if (h == doc->LayoutSavedHash)
         return;
@@ -3919,9 +3919,9 @@ static void ComposerLayoutSaveIfChanged(GraphDocData* doc, float dt)
 }
 
 // Severity: 0 info, 1 warning, 2 error. OnUpdate paths only -- the log is document state.
-static void DocLog(GraphDocData* doc, int severity, const char* fmt, ...)
+static void DocLog(ImGuiAppGraphDocData* doc, int severity, const char* fmt, ...)
 {
-    GraphDocData::DocLogLine line;
+    ImGuiAppGraphDocData::DocLogLine line;
     line.Severity = severity;
     va_list args;
     va_start(args, fmt);
@@ -3935,53 +3935,53 @@ static void DocLog(GraphDocData* doc, int severity, const char* fmt, ...)
 // Layout presets (F36): named workspace configs over the sidebar / bottom-panel / live visibilities.
 // The active preset is derived, not stored -- it is whichever config the current visibilities match,
 // so a manual toggle simply un-lights the preset. Visibilities persist through the layout sidecar.
-enum ComposerLayoutPreset_
+enum ImGuiAppComposerLayoutPreset_
 {
-    ComposerLayoutPreset_None = 0,
-    ComposerLayoutPreset_Compose,   // authoring: both sidebars, no bottom panel, live hidden
-    ComposerLayoutPreset_Review,    // compare design vs generated: sidebars + code panel + live
-    ComposerLayoutPreset_Observe,   // watch the running app: canvas + bottom panel + live, no sidebars
+    ImGuiAppComposerLayoutPreset_None = 0,
+    ImGuiAppComposerLayoutPreset_Compose,   // authoring: both sidebars, no bottom panel, live hidden
+    ImGuiAppComposerLayoutPreset_Review,    // compare design vs generated: sidebars + code panel + live
+    ImGuiAppComposerLayoutPreset_Observe,   // watch the running app: canvas + bottom panel + live, no sidebars
 };
-enum ComposerLayoutVis_          // one bit per toggleable surface
+enum ImGuiAppComposerLayoutVis_          // one bit per toggleable surface
 {
-    ComposerLayoutVis_Tree = 1 << 0,
-    ComposerLayoutVis_Insp = 1 << 1,
-    ComposerLayoutVis_Code = 1 << 2,
-    ComposerLayoutVis_Live = 1 << 3,
+    ImGuiAppComposerLayoutVis_Tree = 1 << 0,
+    ImGuiAppComposerLayoutVis_Insp = 1 << 1,
+    ImGuiAppComposerLayoutVis_Code = 1 << 2,
+    ImGuiAppComposerLayoutVis_Live = 1 << 3,
 };
 static int ComposerLayoutPresetMask(int preset)
 {
     switch (preset)
     {
-    case ComposerLayoutPreset_Compose: return ComposerLayoutVis_Tree | ComposerLayoutVis_Insp;
-    case ComposerLayoutPreset_Review:  return ComposerLayoutVis_Tree | ComposerLayoutVis_Insp | ComposerLayoutVis_Code | ComposerLayoutVis_Live;
-    case ComposerLayoutPreset_Observe: return ComposerLayoutVis_Code | ComposerLayoutVis_Live;
+    case ImGuiAppComposerLayoutPreset_Compose: return ImGuiAppComposerLayoutVis_Tree | ImGuiAppComposerLayoutVis_Insp;
+    case ImGuiAppComposerLayoutPreset_Review:  return ImGuiAppComposerLayoutVis_Tree | ImGuiAppComposerLayoutVis_Insp | ImGuiAppComposerLayoutVis_Code | ImGuiAppComposerLayoutVis_Live;
+    case ImGuiAppComposerLayoutPreset_Observe: return ImGuiAppComposerLayoutVis_Code | ImGuiAppComposerLayoutVis_Live;
     default:                           return 0;
     }
 }
-static int ComposerLayoutVisFlags(GraphDocData* doc)
+static int ComposerLayoutVisFlags(ImGuiAppGraphDocData* doc)
 {
     const ImGuiAppGraphViewState* v = ImGui::AppGraphViewState(&doc->Graph);
-    return (v->TreeOpen ? ComposerLayoutVis_Tree : 0)
-         | (v->InspOpen ? ComposerLayoutVis_Insp : 0)
-         | (doc->CodeH > 0.0f ? ComposerLayoutVis_Code : 0)
-         | (doc->ShowLive ? ComposerLayoutVis_Live : 0);
+    return (v->TreeOpen ? ImGuiAppComposerLayoutVis_Tree : 0)
+         | (v->InspOpen ? ImGuiAppComposerLayoutVis_Insp : 0)
+         | (doc->CodeH > 0.0f ? ImGuiAppComposerLayoutVis_Code : 0)
+         | (doc->ShowLive ? ImGuiAppComposerLayoutVis_Live : 0);
 }
-static void ComposerApplyLayoutPreset(GraphDocData* doc, int preset)
+static void ComposerApplyLayoutPreset(ImGuiAppGraphDocData* doc, int preset)
 {
-    if (preset == ComposerLayoutPreset_None)
+    if (preset == ImGuiAppComposerLayoutPreset_None)
         return;
     const int m = ComposerLayoutPresetMask(preset);
     ImGuiAppGraphViewState* v = ImGui::AppGraphViewState(&doc->Graph);
-    v->TreeOpen = (m & ComposerLayoutVis_Tree) != 0;
-    v->InspOpen = (m & ComposerLayoutVis_Insp) != 0;
-    doc->CodeH = (m & ComposerLayoutVis_Code) != 0 ? ImGui::GetFontSize() * 12.0f : 0.0f;
-    doc->ShowLive = (m & ComposerLayoutVis_Live) != 0;
+    v->TreeOpen = (m & ImGuiAppComposerLayoutVis_Tree) != 0;
+    v->InspOpen = (m & ImGuiAppComposerLayoutVis_Insp) != 0;
+    doc->CodeH = (m & ImGuiAppComposerLayoutVis_Code) != 0 ? ImGui::GetFontSize() * 12.0f : 0.0f;
+    doc->ShowLive = (m & ImGuiAppComposerLayoutVis_Live) != 0;
 }
 
 // Generate the whole-graph C++ to the header path + stamp the fresh baseline. Shared by the toolbar
 // Generate button and the status-bar freshness zone (F32) so both take the identical road.
-static void ComposerGenerateHeader(GraphDocData* doc)
+static void ComposerGenerateHeader(ImGuiAppGraphDocData* doc)
 {
     ImGuiTextBuffer full;
     ImGui::GenerateAppGraphCode(&doc->Graph, &full);
@@ -3997,9 +3997,9 @@ static void ComposerGenerateHeader(GraphDocData* doc)
         DocLog(doc, 2, "could not open %s for writing", doc->HeaderPath);
 }
 
-struct GraphDocControl : ImGuiAppControl<GraphDocData, GraphDocTempData>
+struct GraphDocControl : ImGuiAppControl<ImGuiAppGraphDocData, ImGuiAppGraphDocTempData>
 {
-    virtual void OnInitialize(ImGuiApp* app, GraphDocData* data) const override final
+    virtual void OnInitialize(ImGuiApp* app, ImGuiAppGraphDocData* data) const override final
     {
         data->Selection   = -1;
         data->ShowLive    = false;   // live mirror is opt-in (the toolbar eye)
@@ -4012,12 +4012,12 @@ struct GraphDocControl : ImGuiAppControl<GraphDocData, GraphDocTempData>
         data->NumWarnings = 0;
         data->CodegenWarnCount = 0;
         data->CodegenWarnSig   = 0;
-        data->RevealPanel = ComposerPanel_None;
+        data->RevealPanel = ImGuiAppComposerPanel_None;
         data->LinkErrSeqSeen = 0;
         data->LayoutSavedHash = 0;
         data->LayoutSaveT = 0.0f;
         data->Mirror      = app;     // ONE application: the mirror IS the app hosting this control
-        data->Transport   = IM_NEW(ComposerTransport)();   // App-time scrubber (F29); heap, process lifetime
+        data->Transport   = IM_NEW(ImGuiAppComposerTransport)();   // App-time scrubber (F29); heap, process lifetime
         data->NumUnbuilt  = 0;
         ImStrncpy(data->GraphPath,  "imguix_node_graph.txt",      sizeof(data->GraphPath));
         ImStrncpy(data->HeaderPath, "imguix_generated_control.h", sizeof(data->HeaderPath));
@@ -4029,7 +4029,7 @@ struct GraphDocControl : ImGuiAppControl<GraphDocData, GraphDocTempData>
         }
         ImGui::AppGraphRequestFitAll(&data->Graph);
     }
-    virtual void OnUpdate(float dt, GraphDocData* data, const GraphDocTempData*, const GraphDocTempData*) const override final
+    virtual void OnUpdate(float dt, ImGuiAppGraphDocData* data, const ImGuiAppGraphDocTempData*, const ImGuiAppGraphDocTempData*) const override final
     {
         ComposerLayoutSaveIfChanged(data, dt);
 
@@ -4045,7 +4045,7 @@ struct GraphDocControl : ImGuiAppControl<GraphDocData, GraphDocTempData>
         // rewinds). F70: the LIVE ring's source is the PREVIEW app when a session runs, else the host live-mirror.
         if (data->Transport != nullptr)
         {
-            ComposerTransport* tr = data->Transport;
+            ImGuiAppComposerTransport* tr = data->Transport;
             ImGuiAppEditorState* ed = ImGui::AppGraphEditorState(&data->Graph);
             ImGuiApp* preview_app = (ed != nullptr && ed->Preview != nullptr && ed->PreviewRun) ? ImGui::AppPreviewApp(ed->Preview) : nullptr;
             ImGuiApp* live_app = preview_app != nullptr ? preview_app : (data->ShowLive ? data->Mirror : nullptr);
@@ -4141,7 +4141,7 @@ static void EditorToolSep(float em)
 //-----------------------------------------------------------------------------
 // The App-time transport's FILE source: open a recorded QOI run through F62's AppRunOpen,
 // scrub it via the shared AppRunTransportShow (Count()/Show(int)) reader, and blit the decoded
-// frame at the slider tick. All state rides ComposerTransport -- no TU globals.
+// frame at the slider tick. All state rides ImGuiAppComposerTransport -- no TU globals.
 
 // Adapt the QOI provider's frame decode to the core ImGuiAppRunFrameDecodeFn seam (user = the
 // recording directory). The core index stays provider-agnostic; the demo names the provider.
@@ -4159,7 +4159,7 @@ static bool ComposerLibavDecodeFrame(void* user, int frame_ordinal, ImVector<cha
 // WAL command dispatches, bucketed by tick: the sibling <name>.wal's "[tick:N] ... execute command" lines
 // correlate through F62's index (AppRunAttachWal fills run->Commands + WalFirst/WalCount). Optional -- the
 // recording is authoritative; a missing WAL just omits markers. CommandTicks mirrors ticks for the timeline strip.
-static void ComposerLoadWalCommandTicks(ComposerTransport* tr)
+static void ComposerLoadWalCommandTicks(ImGuiAppComposerTransport* tr)
 {
     tr->CommandTicks.clear();
     if (tr->Run == nullptr)
@@ -4171,7 +4171,7 @@ static void ComposerLoadWalCommandTicks(ComposerTransport* tr)
         tr->CommandTicks.push_back(tr->Run->Commands.Data[c].Tick);
 }
 
-static void ComposerCloseRun(ComposerTransport* tr)
+static void ComposerCloseRun(ImGuiAppComposerTransport* tr)
 {
     if (tr->Run != nullptr)
         ImGui::AppRunClose(tr->Run);
@@ -4199,7 +4199,7 @@ static void ComposerPreviewRecordPump(ImGuiAppEditorState* ed, float dt)
     ImGui::AppMetaRecordTick(ed->PreviewRec, tick, (double)(tick - 1) / 60.0, snap);
 }
 
-static void ComposerPreviewRecordStop(ImGuiAppEditorState* ed, ComposerTransport* tr)
+static void ComposerPreviewRecordStop(ImGuiAppEditorState* ed, ImGuiAppComposerTransport* tr)
 {
     if (ed->PreviewRec == nullptr)
         return;
@@ -4238,7 +4238,7 @@ static void ComposerPreviewRecordStop(ImGuiAppEditorState* ed, ComposerTransport
 // Open RunName as a recorded take: an mp4 (<name>.mp4, when libav is built) or a QOI directory
 // (<name>/NNNNNN.qoi). Extract the embedded meta stream, build the F62 index, wire the matching
 // frame decoder. Frame images decode on demand at the scrub position (never a full preload).
-static void ComposerOpenRun(ComposerTransport* tr)
+static void ComposerOpenRun(ImGuiAppComposerTransport* tr)
 {
     tr->OpenErr[0] = 0;
     ComposerCloseRun(tr);
@@ -4286,7 +4286,7 @@ static void ComposerOpenRun(ComposerTransport* tr)
 
 // Upload the FILE view's decoded RGBA into the transport's GPU texture (created once per run size,
 // then full-rect updated on each scrub). Returns true when FrameTex holds tick-current pixels.
-static bool ComposerSyncFrameTexture(ComposerTransport* tr)
+static bool ComposerSyncFrameTexture(ImGuiAppComposerTransport* tr)
 {
     const ImGuiAppRunTransport* v = &tr->FileView;
     const int need = v->Width * v->Height * 4;
@@ -4366,7 +4366,7 @@ static ImTextureRef ComposerUploadRgbaTexture(ImTextureData** tex, int* tw, int*
 // Timeline strip: the F29 slider widened into a marked rail. Per-tick markers from the F62 index (snapshot
 // points, opt-in input frames, chain divergence) plus WAL command dispatches; the scrub cursor rides the
 // current tick; click/drag scrubs. Returns picked scrub index (-1 = unchanged). The addressable SliderInt is for tests.
-static int ComposerPlaybackTimeline(ComposerTransport* tr, float em, const ImGuiStyle& style)
+static int ComposerPlaybackTimeline(ImGuiAppComposerTransport* tr, float em, const ImGuiStyle& style)
 {
     const int count = ImGui::AppRunTransportCount(&tr->FileView);
     if (count <= 0)
@@ -4424,7 +4424,7 @@ static int ComposerPlaybackTimeline(ComposerTransport* tr, float em, const ImGui
 // FILE playback window: open/close a run, timeline strip, exact-tick step + slider, decoded frame + per-tick
 // readout. F64 reconstruction restores recorded state into the live Mirror bracketed by a save/restore of
 // its own state; replay-needed ticks are NOT reconstructed live (OnUpdate would re-dispatch) -- degrade, don't fake.
-static void ComposerRenderStateAtTick(ComposerTransport* tr, ImGuiApp* mirror, int scrub)
+static void ComposerRenderStateAtTick(ImGuiAppComposerTransport* tr, ImGuiApp* mirror, int scrub)
 {
     const ImGuiAppRunIndex* run = tr->Run;
     const ImGuiAppRunTick* cur = ImGui::AppRunTickAt(run, scrub);
@@ -4490,7 +4490,7 @@ static void ComposerRenderStateAtTick(ComposerTransport* tr, ImGuiApp* mirror, i
         ImGui::TextDisabled("values: reconstruction unavailable at this tick");
 }
 
-static void ComposerRenderPlayback(ComposerTransport* tr, ImGuiApp* mirror, float em, const ImGuiStyle& style)
+static void ComposerRenderPlayback(ImGuiAppComposerTransport* tr, ImGuiApp* mirror, float em, const ImGuiStyle& style)
 {
     if (!tr->PlaybackOpen)
         return;
@@ -4595,13 +4595,13 @@ static void ComposerRenderPlayback(ComposerTransport* tr, ImGuiApp* mirror, floa
 // [SECTION] Composer toolbar (flow-ordered: compose -> iterate -> persist -> produce | observe)
 //-----------------------------------------------------------------------------
 
-// Declared GraphDocData dependency orders updates producer-first; the Doc pointer is the write half only.
-struct ToolbarData
+// Declared ImGuiAppGraphDocData dependency orders updates producer-first; the Doc pointer is the write half only.
+struct ImGuiAppToolbarData
 {
-    GraphDocData* Doc;
+    ImGuiAppGraphDocData* Doc;
 };
 // Actions captured in OnRender, applied in OnUpdate -- TempData is the edit-intent bus.
-struct ToolbarTempData
+struct ImGuiAppToolbarTempData
 {
     bool Save;
     bool Load;
@@ -4616,21 +4616,21 @@ struct ToolbarTempData
     bool HistoryGotoSet; // history dropdown picked a step
     int  HistoryGotoIdx;
     bool CopyCode;       // Generate menu: copy the generated C++ to the clipboard
-    int  RevealPanel;    // ComposerPanel_* intent from a palette pick (0 = none)
+    int  RevealPanel;    // ImGuiAppComposerPanel_* intent from a palette pick (0 = none)
     bool AddNode;        // toolbar "+ Add" -> open the canvas add palette (the loop's entry point)
-    int  ApplyPreset;    // ComposerLayoutPreset_* intent from a preset button (0 = none)
+    int  ApplyPreset;    // ImGuiAppComposerLayoutPreset_* intent from a preset button (0 = none)
 };
-struct ToolbarControl : ImGuiAppControl<ToolbarData, ToolbarTempData, GraphDocData>
+struct ImGuiAppToolbarControl : ImGuiAppControl<ImGuiAppToolbarData, ImGuiAppToolbarTempData, ImGuiAppGraphDocData>
 {
-    virtual void OnInitialize(ImGuiApp* app, ToolbarData* data, const GraphDocData*) const override final
+    virtual void OnInitialize(ImGuiApp* app, ImGuiAppToolbarData* data, const ImGuiAppGraphDocData*) const override final
     {
         data->Doc = GetGraphDoc(app);   // write half only; reads flow through the declared dep
     }
 
-    virtual void OnUpdate(float dt, ToolbarData* data, const ToolbarTempData* temp_data, const ToolbarTempData* last_temp_data, const GraphDocData*) const override final
+    virtual void OnUpdate(float dt, ImGuiAppToolbarData* data, const ImGuiAppToolbarTempData* temp_data, const ImGuiAppToolbarTempData* last_temp_data, const ImGuiAppGraphDocData*) const override final
     {
         IM_UNUSED(dt);
-        GraphDocData* doc = data->Doc;
+        ImGuiAppGraphDocData* doc = data->Doc;
         if (temp_data->Save)
         {
             ImGui::SaveAppGraph(doc->GraphPath, &doc->Graph);
@@ -4661,7 +4661,7 @@ struct ToolbarControl : ImGuiAppControl<ToolbarData, ToolbarTempData, GraphDocDa
         {
             ImGui::AppGraphViewState(&doc->Graph)->InspOpen = !ImGui::AppGraphViewState(&doc->Graph)->InspOpen;
         }
-        if (temp_data->ApplyPreset != ComposerLayoutPreset_None)
+        if (temp_data->ApplyPreset != ImGuiAppComposerLayoutPreset_None)
         {
             ComposerApplyLayoutPreset(doc, temp_data->ApplyPreset);
         }
@@ -4685,7 +4685,7 @@ struct ToolbarControl : ImGuiAppControl<ToolbarData, ToolbarTempData, GraphDocDa
             ImFormatString(doc->WriteMsg, IM_ARRAYSIZE(doc->WriteMsg), "generated C++ -> clipboard");
             DocLog(doc, 0, "copied generated C++ -> clipboard");
         }
-        if (temp_data->RevealPanel != ComposerPanel_None)
+        if (temp_data->RevealPanel != ImGuiAppComposerPanel_None)
         {
             doc->RevealPanel = temp_data->RevealPanel;
         }
@@ -4712,9 +4712,9 @@ struct ToolbarControl : ImGuiAppControl<ToolbarData, ToolbarTempData, GraphDocDa
         }
     }
 
-    virtual void OnRender(const ToolbarData* data, ToolbarTempData* temp_data, const GraphDocData*) const override final
+    virtual void OnRender(const ImGuiAppToolbarData* data, ImGuiAppToolbarTempData* temp_data, const ImGuiAppGraphDocData*) const override final
     {
-        GraphDocData*     doc       = data->Doc;
+        ImGuiAppGraphDocData*     doc       = data->Doc;
         const float       em        = ImGui::GetFontSize();
         const ImGuiStyle& style     = ImGui::GetStyle();
         const bool        code_open = doc->CodeH > 0.0f;
@@ -4863,7 +4863,7 @@ struct ToolbarControl : ImGuiAppControl<ToolbarData, ToolbarTempData, GraphDocDa
                     ImFormatString(prob_lbl, IM_ARRAYSIZE(prob_lbl), ICON_FA_TRIANGLE_EXCLAMATION "  %d###problems", nprob);
                     if (ImGui::Button(prob_lbl))
                     {
-                        temp_data->RevealPanel = ComposerPanel_Output;
+                        temp_data->RevealPanel = ImGuiAppComposerPanel_Output;
                         ImGuiAppEditorState* ed = ImGui::AppGraphEditorState(&doc->Graph);
                         ed->OutputShowErr  = true;
                         ed->OutputShowWarn = true;
@@ -4874,14 +4874,14 @@ struct ToolbarControl : ImGuiAppControl<ToolbarData, ToolbarTempData, GraphDocDa
                 }
             }
 
-            temp_data->ApplyPreset = ComposerLayoutPreset_None;
+            temp_data->ApplyPreset = ImGuiAppComposerLayoutPreset_None;
 
             // App-time transport (F29/F63): a SOURCE switch (LIVE ring vs a recorded FILE run) then the
             // source-agnostic scrub chrome. Flow-placed (left of the right-aligned observe cluster); only
             // offered with the live mirror. LIVE freezes + scrubs the running app; FILE opens the playback window.
             if (show_live && doc->Transport != nullptr)
             {
-                ComposerTransport* tr = doc->Transport;
+                ImGuiAppComposerTransport* tr = doc->Transport;
                 const bool file_src = tr->Source == ImGuiAppTransportSource_FileRun;
                 EditorToolSep(em);
                 // Source switch (icon-only to keep the flow row narrow, so the right-aligned observe cluster
@@ -4954,10 +4954,10 @@ struct ToolbarControl : ImGuiAppControl<ToolbarData, ToolbarTempData, GraphDocDa
 
             // Layout preset (F36): compact dropdown; its label shows the active preset when the current
             // visibilities match one. A view control, so it lives in the right cluster and the flow row is left alone.
-            int cur_preset = ComposerLayoutPreset_None;
+            int cur_preset = ImGuiAppComposerLayoutPreset_None;
             {
                 const int cur = ComposerLayoutVisFlags(doc);
-                for (int p = ComposerLayoutPreset_Compose; p <= ComposerLayoutPreset_Observe; p++)
+                for (int p = ImGuiAppComposerLayoutPreset_Compose; p <= ImGuiAppComposerLayoutPreset_Observe; p++)
                     if (cur == ComposerLayoutPresetMask(p))
                         cur_preset = p;
             }
@@ -4977,7 +4977,7 @@ struct ToolbarControl : ImGuiAppControl<ToolbarData, ToolbarTempData, GraphDocDa
             const ImVec4 sync_ink = stale ? ImLerp(kDemoGold, style.Colors[ImGuiCol_Text], 0.25f) : style.Colors[ImGuiCol_TextDisabled];
             ImGui::PushStyleColor(ImGuiCol_Text, sync_ink);
             if (ImGui::Button(sync_lbl))
-                temp_data->RevealPanel = ComposerPanel_Code;
+                temp_data->RevealPanel = ImGuiAppComposerPanel_Code;
             ImGui::PopStyleColor();
             if (stale)
                 ImGui::SetItemTooltip("Authored changes are NOT in the running app yet.\n"
@@ -5022,40 +5022,40 @@ struct ToolbarControl : ImGuiAppControl<ToolbarData, ToolbarTempData, GraphDocDa
             ImGui::SameLine();
 
             // Layout dropdown (F36): rightmost in the observe cluster; the picked preset is applied in OnUpdate.
-            if (cur_preset != ComposerLayoutPreset_None)
+            if (cur_preset != ImGuiAppComposerLayoutPreset_None)
                 ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonActive]);
             if (ImGui::Button(layout_lbl))
                 ImGui::OpenPopup("##layout_presets");
-            if (cur_preset != ComposerLayoutPreset_None)
+            if (cur_preset != ImGuiAppComposerLayoutPreset_None)
                 ImGui::PopStyleColor();
-            if (cur_preset != ComposerLayoutPreset_None)
+            if (cur_preset != ImGuiAppComposerLayoutPreset_None)
                 ImGui::SetItemTooltip("Workspace layout: %s", preset_names[cur_preset]);
             else
                 ImGui::SetItemTooltip("Workspace layout presets (Compose / Review / Observe)");
             if (ImGui::BeginPopup("##layout_presets"))
             {
-                if (ImGui::MenuItem("Compose###preset-compose", nullptr, cur_preset == ComposerLayoutPreset_Compose))
-                    temp_data->ApplyPreset = ComposerLayoutPreset_Compose;
-                if (ImGui::MenuItem("Review###preset-review", nullptr, cur_preset == ComposerLayoutPreset_Review))
-                    temp_data->ApplyPreset = ComposerLayoutPreset_Review;
-                if (ImGui::MenuItem("Observe###preset-observe", nullptr, cur_preset == ComposerLayoutPreset_Observe))
-                    temp_data->ApplyPreset = ComposerLayoutPreset_Observe;
+                if (ImGui::MenuItem("Compose###preset-compose", nullptr, cur_preset == ImGuiAppComposerLayoutPreset_Compose))
+                    temp_data->ApplyPreset = ImGuiAppComposerLayoutPreset_Compose;
+                if (ImGui::MenuItem("Review###preset-review", nullptr, cur_preset == ImGuiAppComposerLayoutPreset_Review))
+                    temp_data->ApplyPreset = ImGuiAppComposerLayoutPreset_Review;
+                if (ImGui::MenuItem("Observe###preset-observe", nullptr, cur_preset == ImGuiAppComposerLayoutPreset_Observe))
+                    temp_data->ApplyPreset = ImGuiAppComposerLayoutPreset_Observe;
                 ImGui::EndPopup();
             }
 
             // Palette pick from last frame's canvas folds into the same temp flags the buttons set.
             switch (ImGui::AppGraphConsumeHostCommand(&doc->Graph))
             {
-            case ComposerHostCmd_Save:         temp_data->Save = true; break;
-            case ComposerHostCmd_Load:         temp_data->Load = true; break;
-            case ComposerHostCmd_Generate:     temp_data->WriteHeader = true; break;
-            case ComposerHostCmd_CopyCode:     temp_data->CopyCode = true; break;
-            case ComposerHostCmd_Diff:         temp_data->Diff = true; break;
-            case ComposerHostCmd_PanelCode:    temp_data->RevealPanel = ComposerPanel_Code; break;
-            case ComposerHostCmd_PanelProject: temp_data->RevealPanel = ComposerPanel_Project; break;
-            case ComposerHostCmd_PanelPreview: temp_data->RevealPanel = ComposerPanel_Preview; break;
-            case ComposerHostCmd_PanelOutput:  temp_data->RevealPanel = ComposerPanel_Output; break;
-            case ComposerHostCmd_ToggleLive:   temp_data->ToggleLive = true; break;
+            case ImGuiAppComposerHostCmd_Save:         temp_data->Save = true; break;
+            case ImGuiAppComposerHostCmd_Load:         temp_data->Load = true; break;
+            case ImGuiAppComposerHostCmd_Generate:     temp_data->WriteHeader = true; break;
+            case ImGuiAppComposerHostCmd_CopyCode:     temp_data->CopyCode = true; break;
+            case ImGuiAppComposerHostCmd_Diff:         temp_data->Diff = true; break;
+            case ImGuiAppComposerHostCmd_PanelCode:    temp_data->RevealPanel = ImGuiAppComposerPanel_Code; break;
+            case ImGuiAppComposerHostCmd_PanelProject: temp_data->RevealPanel = ImGuiAppComposerPanel_Project; break;
+            case ImGuiAppComposerHostCmd_PanelPreview: temp_data->RevealPanel = ImGuiAppComposerPanel_Preview; break;
+            case ImGuiAppComposerHostCmd_PanelOutput:  temp_data->RevealPanel = ImGuiAppComposerPanel_Output; break;
+            case ImGuiAppComposerHostCmd_ToggleLive:   temp_data->ToggleLive = true; break;
             default: break;
             }
 
@@ -5087,22 +5087,23 @@ struct ToolbarControl : ImGuiAppControl<ToolbarData, ToolbarTempData, GraphDocDa
 
 // Status-pill grammar (F33): one shared primitive with one colour source, so no call site repeats a
 // status colour triple. ok = green, warn = amber, err = red, neutral = disabled ink.
-enum ComposerPillState { ComposerPill_Neutral, ComposerPill_Ok, ComposerPill_Warn, ComposerPill_Err };
+typedef int ImGuiAppComposerPillState;
+enum ImGuiAppComposerPillState_ { ImGuiAppComposerPillState_Neutral, ImGuiAppComposerPillState_Ok, ImGuiAppComposerPillState_Warn, ImGuiAppComposerPillState_Err };
 
-static ImVec4 ComposerPillColor(ComposerPillState s)
+static ImVec4 ComposerPillColor(ImGuiAppComposerPillState s)
 {
     switch (s)
     {
-    case ComposerPill_Ok:   return ImVec4(0.42f, 0.74f, 0.47f, 1.0f);
-    case ComposerPill_Warn: return ImVec4(0.85f, 0.68f, 0.35f, 1.0f);
-    case ComposerPill_Err:  return ImVec4(0.90f, 0.42f, 0.38f, 1.0f);
+    case ImGuiAppComposerPillState_Ok:   return ImVec4(0.42f, 0.74f, 0.47f, 1.0f);
+    case ImGuiAppComposerPillState_Warn: return ImVec4(0.85f, 0.68f, 0.35f, 1.0f);
+    case ImGuiAppComposerPillState_Err:  return ImVec4(0.90f, 0.42f, 0.38f, 1.0f);
     default:                return ImGui::GetStyle().Colors[ImGuiCol_TextDisabled];
     }
 }
 
 // A small rounded pill: tinted background + state-coloured label. `id` keeps a stable widget identity
 // while the label swings. Returns true on click.
-static bool ComposerStatusPill(const char* id, ComposerPillState s, const char* label)
+static bool ComposerStatusPill(const char* id, ImGuiAppComposerPillState s, const char* label)
 {
     const ImVec4 col = ComposerPillColor(s);
     const float  em  = ImGui::GetFontSize();
@@ -5121,9 +5122,9 @@ static bool ComposerStatusPill(const char* id, ComposerPillState s, const char* 
 
 // Rendered last -> window bottom. Keymap hints left, document counts right; all right-side text is
 // derived in OnUpdate, OnRender only lays out text.
-struct StatusStripData
+struct ImGuiAppStatusStripData
 {
-    GraphDocData* Doc;
+    ImGuiAppGraphDocData* Doc;
     char          CountMsg[96];                  // "design N  live N  promoted N"
     bool          HasMirror;                     // doc->Mirror != nullptr
     bool          MirrorInit;                    // mirror app initialized
@@ -5135,7 +5136,7 @@ struct StatusStripData
     ImVector<int> CycleNodes;                    // those node ids -- the Select verb's target
     ImGuiID       CycleSig;                      // FrameSig the cycle was last computed at (recompute gate)
 };
-struct StatusStripTempData
+struct ImGuiAppStatusStripTempData
 {
     bool SelectCycle;   // the Select verb was clicked this frame -> jump selection to the cycle nodes (applied next update)
     bool SelectScope;   // F32 breadcrumb zone -> select the current scope owner
@@ -5143,9 +5144,9 @@ struct StatusStripTempData
     bool ToggleLive;    // F32 mirror zone     -> toggle the live mirror
     bool Generate;      // F32 freshness zone  -> generate the header
 };
-struct StatusStripControl : ImGuiAppControl<StatusStripData, StatusStripTempData, GraphDocData>
+struct ImGuiAppStatusStripControl : ImGuiAppControl<ImGuiAppStatusStripData, ImGuiAppStatusStripTempData, ImGuiAppGraphDocData>
 {
-    virtual void OnInitialize(ImGuiApp* app, StatusStripData* data, const GraphDocData*) const override final
+    virtual void OnInitialize(ImGuiApp* app, ImGuiAppStatusStripData* data, const ImGuiAppGraphDocData*) const override final
     {
         data->Doc = GetGraphDoc(app);
         data->CycleMsg[0] = 0;
@@ -5153,10 +5154,10 @@ struct StatusStripControl : ImGuiAppControl<StatusStripData, StatusStripTempData
         data->CycleSig    = 0;
     }
 
-    virtual void OnUpdate(float dt, StatusStripData* data, const StatusStripTempData* temp_data, const StatusStripTempData*, const GraphDocData*) const override final
+    virtual void OnUpdate(float dt, ImGuiAppStatusStripData* data, const ImGuiAppStatusStripTempData* temp_data, const ImGuiAppStatusStripTempData*, const ImGuiAppGraphDocData*) const override final
     {
         IM_UNUSED(dt);
-        GraphDocData* doc = data->Doc;
+        ImGuiAppGraphDocData* doc = data->Doc;
 
         int nd = 0;
         int nl = 0;
@@ -5246,7 +5247,7 @@ struct StatusStripControl : ImGuiAppControl<StatusStripData, StatusStripTempData
             ComposerGenerateHeader(doc);
     }
 
-    virtual void OnRender(const StatusStripData* data, StatusStripTempData* temp_data, const GraphDocData* doc_dep) const override final
+    virtual void OnRender(const ImGuiAppStatusStripData* data, ImGuiAppStatusStripTempData* temp_data, const ImGuiAppGraphDocData* doc_dep) const override final
     {
         const float       em    = ImGui::GetFontSize();
         const ImGuiStyle& style = ImGui::GetStyle();
@@ -5287,34 +5288,34 @@ struct StatusStripControl : ImGuiAppControl<StatusStripData, StatusStripTempData
             // HEALTH pill (F33): the whole graph's state in the shared pill grammar. Cycle -> err + name and a
             // click selects the cycle (folds in F21's Select verb); errors -> err "codegen blocked"; warnings
             // -> warn; else ok "graph ok". The transient keymap notice rides the feedback slot, not here.
-            ComposerPillState hstate = ComposerPill_Ok;
+            ImGuiAppComposerPillState hstate = ImGuiAppComposerPillState_Ok;
             char hlabel[96] = "graph ok";
             if (data->CycleCount > 0)
             {
-                hstate = ComposerPill_Err;
+                hstate = ImGuiAppComposerPillState_Err;
                 ImFormatString(hlabel, IM_ARRAYSIZE(hlabel), ICON_FA_TRIANGLE_EXCLAMATION " %s", data->CycleMsg);
             }
             else if (doc_dep->NumErrors > 0)
             {
-                hstate = ComposerPill_Err;
+                hstate = ImGuiAppComposerPillState_Err;
                 ImFormatString(hlabel, IM_ARRAYSIZE(hlabel), ICON_FA_TRIANGLE_EXCLAMATION " codegen blocked");
             }
             else if (doc_dep->NumWarnings > 0)
             {
-                hstate = ComposerPill_Warn;
+                hstate = ImGuiAppComposerPillState_Warn;
                 ImFormatString(hlabel, IM_ARRAYSIZE(hlabel), "%d warning%s", doc_dep->NumWarnings, doc_dep->NumWarnings == 1 ? "" : "s");
             }
             ImGui::AlignTextToFramePadding();
             // Id encodes the state so the state is externally observable (test) and the pill re-identifies when
             // it changes class.
-            const char* hid = hstate == ComposerPill_Err ? "health-err" : hstate == ComposerPill_Warn ? "health-warn" : "health-ok";
+            const char* hid = hstate == ImGuiAppComposerPillState_Err ? "health-err" : hstate == ImGuiAppComposerPillState_Warn ? "health-warn" : "health-ok";
             if (ComposerStatusPill(hid, hstate, hlabel) && data->CycleCount > 0)
                 temp_data->SelectCycle = true;
             if (data->CycleCount > 0)
                 ImGui::SetItemTooltip("Dependency cycle blocks codegen -- click to select the %d node(s)", data->CycleCount);
-            else if (hstate == ComposerPill_Err)
+            else if (hstate == ImGuiAppComposerPillState_Err)
                 ImGui::SetItemTooltip("%d error(s) in the graph -- see Output", doc_dep->NumErrors);
-            else if (hstate == ComposerPill_Warn)
+            else if (hstate == ImGuiAppComposerPillState_Warn)
                 ImGui::SetItemTooltip("%d warning(s) in the graph", doc_dep->NumWarnings);
             else
                 ImGui::SetItemTooltip("Graph validates clean");
@@ -5324,7 +5325,7 @@ struct StatusStripControl : ImGuiAppControl<StatusStripData, StatusStripTempData
             const ImGuiIO& io = ImGui::GetIO();
             char plabel[48];
             ImFormatString(plabel, IM_ARRAYSIZE(plabel), "%.0f fps  %.1f ms", io.Framerate, io.Framerate > 0.0f ? 1000.0f / io.Framerate : 0.0f);
-            ComposerStatusPill("perf", ComposerPill_Neutral, plabel);
+            ComposerStatusPill("perf", ImGuiAppComposerPillState_Neutral, plabel);
             if (ImGui::IsItemHovered())
             {
                 const ImDrawData* dd = ImGui::GetDrawData();
@@ -5353,7 +5354,7 @@ struct StatusStripControl : ImGuiAppControl<StatusStripData, StatusStripTempData
             const bool fresh = ImGui::AppGraphIsCodeFresh(&doc_dep->Graph);
             char frz[48];
             ImFormatString(frz, IM_ARRAYSIZE(frz), "%s  %s", fresh ? ICON_FA_CIRCLE_CHECK : ICON_FA_FILE_EXPORT, fresh ? "fresh" : "generate");
-            if (zone(A_fresh, slot, "###zfresh", frz, ComposerPillColor(fresh ? ComposerPill_Ok : ComposerPill_Warn)))
+            if (zone(A_fresh, slot, "###zfresh", frz, ComposerPillColor(fresh ? ImGuiAppComposerPillState_Ok : ImGuiAppComposerPillState_Warn)))
                 temp_data->Generate = true;
             ImGui::SetItemTooltip(fresh ? "Header matches the graph" : "Generate the whole-graph header");
         }
@@ -5470,9 +5471,9 @@ static void ShowGeneratedCodeView(const ImGuiAppGraph* graph, const char* str_id
 // [SECTION] Composer editor body (outliner | canvas + bottom console | inspector; project inspector)
 //-----------------------------------------------------------------------------
 
-struct EditorBodyData
+struct ImGuiAppEditorBodyData
 {
-    GraphDocData*                     Doc;                     // shared doc, cached non-const in OnInitialize
+    ImGuiAppGraphDocData*                     Doc;                     // shared doc, cached non-const in OnInitialize
     bool                              TreeDragging;            // tree splitter drag FSM (advanced only in OnUpdate)
     float                             TreeDragDX;              // grab offset within the grip, captured at drag start
     bool                              InspDragging;            // inspector splitter drag FSM (advanced only in OnUpdate)
@@ -5495,12 +5496,12 @@ struct EditorBodyData
     ImVector<ImGuiAppGraphIssue>        Issues;   // validation problems, recomputed while the panel is open
 
     // Project tab: the document's files on disk, rescanned on a slow cadence in OnUpdate.
-    struct ProjFile { char Name[160]; unsigned long long Size; bool IsGraph; bool IsHeader; };
-    ImVector<ProjFile> ProjFiles;
+    struct ImGuiAppProjFile { char Name[160]; unsigned long long Size; bool IsGraph; bool IsHeader; };
+    ImVector<ImGuiAppProjFile> ProjFiles;
     float              ProjRescan; // seconds until the next directory scan
 };
 // Raw input recorded by OnRender (the only place ImGui item geometry exists), consumed by OnUpdate.
-struct EditorBodyTempData
+struct ImGuiAppEditorBodyTempData
 {
     bool  TreeGripActivated; // drag started on the tree grip this frame
     bool  MouseLeftDown;     // left button held
@@ -5525,7 +5526,7 @@ struct EditorBodyTempData
 };
 
 // Empty selection shows the document, in the same section grammar as the node inspector.
-static void ShowComposerProjectInspector(GraphDocData* doc, ImGuiAppGraph* graph, EditorBodyTempData* temp_data)
+static void ShowComposerProjectInspector(ImGuiAppGraphDocData* doc, ImGuiAppGraph* graph, ImGuiAppEditorBodyTempData* temp_data)
 {
     const float em = ImGui::GetFontSize();
     const float label_w = em * 5.5f;
@@ -5639,9 +5640,9 @@ static void ShowComposerProjectInspector(GraphDocData* doc, ImGuiAppGraph* graph
         }
     }
 }
-struct EditorBodyControl : ImGuiAppControl<EditorBodyData, EditorBodyTempData, GraphDocData>
+struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGuiAppEditorBodyTempData, ImGuiAppGraphDocData>
 {
-    virtual void OnInitialize(ImGuiApp* app, EditorBodyData* data, const GraphDocData*) const override final
+    virtual void OnInitialize(ImGuiApp* app, ImGuiAppEditorBodyData* data, const ImGuiAppGraphDocData*) const override final
     {
         data->Doc = GetGraphDoc(app);
         data->CodeSig = 0;
@@ -5652,9 +5653,9 @@ struct EditorBodyControl : ImGuiAppControl<EditorBodyData, EditorBodyTempData, G
         data->HasDiff = false;
     }
 
-    virtual void OnUpdate(float dt, EditorBodyData* data, const EditorBodyTempData* temp_data, const EditorBodyTempData* last_temp_data, const GraphDocData*) const override final
+    virtual void OnUpdate(float dt, ImGuiAppEditorBodyData* data, const ImGuiAppEditorBodyTempData* temp_data, const ImGuiAppEditorBodyTempData* last_temp_data, const ImGuiAppGraphDocData*) const override final
     {
-        GraphDocData* doc = data->Doc;
+        ImGuiAppGraphDocData* doc = data->Doc;
 
         // Tree splitter FSM, driven by input captured last render.
         if (temp_data->TreeGripActivated)
@@ -5699,11 +5700,11 @@ struct EditorBodyControl : ImGuiAppControl<EditorBodyData, EditorBodyTempData, G
 
         // Revealing a bottom tab opens the bar if collapsed -- an intent must never land on a closed panel.
         if (temp_data->OpenOutput)
-            doc->RevealPanel = ComposerPanel_Output;
-        if (doc->RevealPanel != ComposerPanel_None && doc->CodeH <= 0.0f)
+            doc->RevealPanel = ImGuiAppComposerPanel_Output;
+        if (doc->RevealPanel != ImGuiAppComposerPanel_None && doc->CodeH <= 0.0f)
             doc->CodeH = ImGui::GetFontSize() * 12.0f;
         if (temp_data->AckReveal)
-            doc->RevealPanel = ComposerPanel_None;
+            doc->RevealPanel = ImGuiAppComposerPanel_None;
         if (temp_data->ClearLog)
         {
             doc->Log.resize(0);
@@ -5736,7 +5737,7 @@ struct EditorBodyControl : ImGuiAppControl<EditorBodyData, EditorBodyTempData, G
                 const std::string ext = p.extension().string();
                 if (ext != ".txt" && ext != ".h" && ext != ".wal" && ext != ".ini")
                     continue;
-                EditorBodyData::ProjFile f;
+                ImGuiAppEditorBodyData::ImGuiAppProjFile f;
                 ImFormatString(f.Name, IM_ARRAYSIZE(f.Name), "%s", p.filename().string().c_str());
                 f.Size = (unsigned long long)entry.file_size(fs_ec);
                 f.IsGraph  = strcmp(f.Name, doc->GraphPath) == 0;
@@ -5814,9 +5815,9 @@ struct EditorBodyControl : ImGuiAppControl<EditorBodyData, EditorBodyTempData, G
         }
     }
 
-    virtual void OnRender(const EditorBodyData* data, EditorBodyTempData* temp_data, const GraphDocData*) const override final
+    virtual void OnRender(const ImGuiAppEditorBodyData* data, ImGuiAppEditorBodyTempData* temp_data, const ImGuiAppGraphDocData*) const override final
     {
-        GraphDocData* doc = data->Doc;
+        ImGuiAppGraphDocData* doc = data->Doc;
         if (doc->Mirror == nullptr)
         {
             return;
@@ -5943,16 +5944,16 @@ struct EditorBodyControl : ImGuiAppControl<EditorBodyData, EditorBodyTempData, G
                 // Document verbs for the canvas palette; the pick comes back through AppGraphConsumeHostCommand.
                 static const ImGuiAppGraphHostCmd host_cmds[] =
           {
-                    { "File: Save graph", "Ctrl+S", ComposerHostCmd_Save, ImGuiKey_S, ImGuiMod_Ctrl },
-                    { "File: Load graph", "", ComposerHostCmd_Load },
-                    { "File: Generate C++ header", "", ComposerHostCmd_Generate },
-                    { "File: Copy generated C++", "", ComposerHostCmd_CopyCode },
-                    { "File: Diff vs saved -> clipboard", "", ComposerHostCmd_Diff },
-                    { "Panel: Code", "", ComposerHostCmd_PanelCode },
-                    { "Panel: Project", "", ComposerHostCmd_PanelProject },
-                    { "Panel: Preview", "", ComposerHostCmd_PanelPreview },
-                    { "Panel: Output", "", ComposerHostCmd_PanelOutput },
-                    { "View: Toggle live mirror", "", ComposerHostCmd_ToggleLive },
+                    { "File: Save graph", "Ctrl+S", ImGuiAppComposerHostCmd_Save, ImGuiKey_S, ImGuiMod_Ctrl },
+                    { "File: Load graph", "", ImGuiAppComposerHostCmd_Load },
+                    { "File: Generate C++ header", "", ImGuiAppComposerHostCmd_Generate },
+                    { "File: Copy generated C++", "", ImGuiAppComposerHostCmd_CopyCode },
+                    { "File: Diff vs saved -> clipboard", "", ImGuiAppComposerHostCmd_Diff },
+                    { "Panel: Code", "", ImGuiAppComposerHostCmd_PanelCode },
+                    { "Panel: Project", "", ImGuiAppComposerHostCmd_PanelProject },
+                    { "Panel: Preview", "", ImGuiAppComposerHostCmd_PanelPreview },
+                    { "Panel: Output", "", ImGuiAppComposerHostCmd_PanelOutput },
+                    { "View: Toggle live mirror", "", ImGuiAppComposerHostCmd_ToggleLive },
                 };
                 ImGui::AppGraphSetHostCommands(graph, host_cmds, IM_ARRAYSIZE(host_cmds));
 
@@ -6044,7 +6045,7 @@ struct EditorBodyControl : ImGuiAppControl<EditorBodyData, EditorBodyTempData, G
                     if (ImGui::BeginTabBar("##bottomtabs"))
                     {
                         temp_data->ToggleDiffMode = false;
-                        if (ImGui::BeginTabItem("Code", nullptr, doc->RevealPanel == ComposerPanel_Code ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
+                        if (ImGui::BeginTabItem("Code", nullptr, doc->RevealPanel == ImGuiAppComposerPanel_Code ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
                         {
                             // Shared tab header grammar: context label left, actions right.
                             ImGui::AlignTextToFramePadding();
@@ -6104,7 +6105,7 @@ struct EditorBodyControl : ImGuiAppControl<EditorBodyData, EditorBodyTempData, G
                             }
                             ImGui::EndTabItem();
                         }
-                        if (ImGui::BeginTabItem("Project", nullptr, doc->RevealPanel == ComposerPanel_Project ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
+                        if (ImGui::BeginTabItem("Project", nullptr, doc->RevealPanel == ImGuiAppComposerPanel_Project ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
                         {
                             temp_data->ProjLoadGraph = false;
                             ImGui::AlignTextToFramePadding();
@@ -6122,7 +6123,7 @@ struct EditorBodyControl : ImGuiAppControl<EditorBodyData, EditorBodyTempData, G
                                 const bool fresh = ImGui::AppGraphIsCodeFresh(&doc->Graph);
                                 for (int i = 0; i < data->ProjFiles.Size; i++)
                                 {
-                                    const EditorBodyData::ProjFile& f = data->ProjFiles.Data[i];
+                                    const ImGuiAppEditorBodyData::ImGuiAppProjFile& f = data->ProjFiles.Data[i];
                                     ImGui::PushID(i);
                                     ImGui::TableNextRow();
                                     ImGui::TableNextColumn();
@@ -6160,7 +6161,7 @@ struct EditorBodyControl : ImGuiAppControl<EditorBodyData, EditorBodyTempData, G
                         // Preview (F68): run the composed graph live -- the interpreter (imguiapp_preview) builds a real
                         // ImGuiApp from the graph and renders its controls' widgets here, interactive. Edits apply next
                         // frame (preserve-by-(name,type) reconcile); selection brushes both ways with the canvas/tree.
-                        if (ImGui::BeginTabItem("Preview", nullptr, doc->RevealPanel == ComposerPanel_Preview ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
+                        if (ImGui::BeginTabItem("Preview", nullptr, doc->RevealPanel == ImGuiAppComposerPanel_Preview ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
                         {
                             ImGuiAppEditorState* ed = ImGui::AppGraphEditorState(graph);
 
@@ -6324,8 +6325,8 @@ struct EditorBodyControl : ImGuiAppControl<EditorBodyData, EditorBodyTempData, G
                             ImFormatString(output_label, IM_ARRAYSIZE(output_label), "Output (%d)###output", data->Issues.Size);
                         else
                             ImStrncpy(output_label, "Output###output", IM_ARRAYSIZE(output_label));
-                        temp_data->AckReveal = doc->RevealPanel != ComposerPanel_None;   // consume the one-shot select
-                        if (ImGui::BeginTabItem(output_label, nullptr, doc->RevealPanel == ComposerPanel_Output ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
+                        temp_data->AckReveal = doc->RevealPanel != ImGuiAppComposerPanel_None;   // consume the one-shot select
+                        if (ImGui::BeginTabItem(output_label, nullptr, doc->RevealPanel == ImGuiAppComposerPanel_Output ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
                         {
                             int nerr2 = 0, nwarn2 = 0;
                             for (int i = 0; i < data->Issues.Size; i++)
@@ -6384,7 +6385,7 @@ struct EditorBodyControl : ImGuiAppControl<EditorBodyData, EditorBodyTempData, G
                                     ImGui::TextDisabled("(log empty -- actions, file IO and refused links land here)");
                                 for (int i = doc->Log.Size - 1; i >= 0; i--)   // newest first
                                 {
-                                    const GraphDocData::DocLogLine& ln = doc->Log.Data[i];
+                                    const ImGuiAppGraphDocData::DocLogLine& ln = doc->Log.Data[i];
                                     if ((ln.Severity >= 2 && !ed->OutputShowErr) || (ln.Severity == 1 && !ed->OutputShowWarn) || (ln.Severity == 0 && !ed->OutputShowInfo)
                         || !ed->OutputFilter.PassFilter(ln.Text))
                                         continue;
@@ -6499,7 +6500,7 @@ struct ComposerWindow : ImGuiAppWindow<ComposerWindow>
 
 // Toggle values + "applied" bookkeeping live in PersistData; OnRender records MenuItem results into
 // TempData; OnUpdate writes them back.
-struct DemoMenuData
+struct ImGuiAppDemoMenuData
 {
     bool ShowBaseWindow;
     bool ShowStatusBar;
@@ -6511,7 +6512,7 @@ struct DemoMenuData
     bool AppliedRandomTime;
     bool AppliedBreathing;
 };
-struct DemoMenuTempData
+struct ImGuiAppDemoMenuTempData
 {
     bool Rendered; // false until OnRender ran once (the first OnUpdate must not consume zeroed toggles)
     bool ShowBaseWindow;
@@ -6520,9 +6521,9 @@ struct DemoMenuTempData
     bool ShowBreathing;
     bool ShowMetrics;
 };
-struct DemoMenuControl : ImGuiAppControl<DemoMenuData, DemoMenuTempData>
+struct ImGuiAppDemoMenuControl : ImGuiAppControl<ImGuiAppDemoMenuData, ImGuiAppDemoMenuTempData>
 {
-    virtual void OnInitialize(ImGuiApp* app, DemoMenuData* data) const override final
+    virtual void OnInitialize(ImGuiApp* app, ImGuiAppDemoMenuData* data) const override final
     {
         IM_UNUSED(app);
         data->ShowRandomTime = true;
@@ -6530,7 +6531,7 @@ struct DemoMenuControl : ImGuiAppControl<DemoMenuData, DemoMenuTempData>
         data->ShowMetrics    = true;
     }
 
-    virtual void OnUpdate(float dt, DemoMenuData* data, const DemoMenuTempData* temp_data, const DemoMenuTempData* last_temp_data) const override final
+    virtual void OnUpdate(float dt, ImGuiAppDemoMenuData* data, const ImGuiAppDemoMenuTempData* temp_data, const ImGuiAppDemoMenuTempData* last_temp_data) const override final
     {
         IM_UNUSED(dt);
         if (!temp_data->Rendered)   // first update precedes any render: zeroed temp must not wipe the defaults
@@ -6542,7 +6543,7 @@ struct DemoMenuControl : ImGuiAppControl<DemoMenuData, DemoMenuTempData>
         data->ShowMetrics    = temp_data->ShowMetrics;
     }
 
-    virtual void OnRender(const DemoMenuData* data, DemoMenuTempData* temp_data) const override final
+    virtual void OnRender(const ImGuiAppDemoMenuData* data, ImGuiAppDemoMenuTempData* temp_data) const override final
     {
         temp_data->Rendered = true;
         bool show_base    = data->ShowBaseWindow;
@@ -6587,9 +6588,9 @@ struct DemoMenuControl : ImGuiAppControl<DemoMenuData, DemoMenuTempData>
     }
 };
 
-static DemoMenuData* GetDemoMenu(ImGuiApp* app)
+static ImGuiAppDemoMenuData* GetDemoMenu(ImGuiApp* app)
 {
-    return static_cast<DemoMenuData*>(app->Data.GetVoidPtr(ImGuiAppType<DemoMenuData>::ID));
+    return static_cast<ImGuiAppDemoMenuData*>(app->Data.GetVoidPtr(ImGuiAppType<ImGuiAppDemoMenuData>::ID));
 }
 
 struct DemoPanelWindow : ImGuiAppWindow<DemoPanelWindow>
@@ -6609,7 +6610,7 @@ IMGUI_API ImGuiAppGraph* AppLayerDemoGraph(ImGuiApp* host)
         return nullptr;
     // Instance data is keyed by data type id in app->Data regardless of which window hosts
     // the control (GraphDocControl is Composer-window-hosted, never in host->Controls).
-    GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiAppType<GraphDocData>::ID);
+    ImGuiAppGraphDocData* doc = (ImGuiAppGraphDocData*)host->Data.GetVoidPtr(ImGuiAppType<ImGuiAppGraphDocData>::ID);
     if (doc == nullptr)
         return nullptr;
     return &doc->Graph;
@@ -6621,7 +6622,7 @@ IMGUI_API int AppComposerAppTimeFrames(ImGuiApp* host)
 {
     if (host == nullptr)
         return 0;
-    GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiAppType<GraphDocData>::ID);
+    ImGuiAppGraphDocData* doc = (ImGuiAppGraphDocData*)host->Data.GetVoidPtr(ImGuiAppType<ImGuiAppGraphDocData>::ID);
     if (doc == nullptr || doc->Transport == nullptr)
         return 0;
     return doc->Transport->History.Count;
@@ -6632,7 +6633,7 @@ IMGUI_API int AppComposerTransportSource(ImGuiApp* host)
 {
     if (host == nullptr)
         return ImGuiAppTransportSource_LiveRing;
-    GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiAppType<GraphDocData>::ID);
+    ImGuiAppGraphDocData* doc = (ImGuiAppGraphDocData*)host->Data.GetVoidPtr(ImGuiAppType<ImGuiAppGraphDocData>::ID);
     if (doc == nullptr || doc->Transport == nullptr)
         return ImGuiAppTransportSource_LiveRing;
     return doc->Transport->Source;
@@ -6644,7 +6645,7 @@ IMGUI_API ImU64 AppComposerFileRunShownTick(ImGuiApp* host)
 {
     if (host == nullptr)
         return 0;
-    GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiAppType<GraphDocData>::ID);
+    ImGuiAppGraphDocData* doc = (ImGuiAppGraphDocData*)host->Data.GetVoidPtr(ImGuiAppType<ImGuiAppGraphDocData>::ID);
     if (doc == nullptr || doc->Transport == nullptr || doc->Transport->Run == nullptr)
         return 0;
     return doc->Transport->FileView.ShownTick;
@@ -6655,7 +6656,7 @@ IMGUI_API float AppComposerOutlinerWidth(ImGuiApp* host)
 {
     if (host == nullptr)
         return 0.0f;
-    GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiAppType<GraphDocData>::ID);
+    ImGuiAppGraphDocData* doc = (ImGuiAppGraphDocData*)host->Data.GetVoidPtr(ImGuiAppType<ImGuiAppGraphDocData>::ID);
     return doc != nullptr ? doc->TreeW : 0.0f;
 }
 
@@ -6664,7 +6665,7 @@ IMGUI_API int AppComposerLayoutFlags(ImGuiApp* host)
 {
     if (host == nullptr)
         return 0;
-    GraphDocData* doc = (GraphDocData*)host->Data.GetVoidPtr(ImGuiAppType<GraphDocData>::ID);
+    ImGuiAppGraphDocData* doc = (ImGuiAppGraphDocData*)host->Data.GetVoidPtr(ImGuiAppType<ImGuiAppGraphDocData>::ID);
     return doc != nullptr ? ComposerLayoutVisFlags(doc) : 0;
 }
 
@@ -6706,16 +6707,16 @@ IMGUI_API void ShowAppDemo(bool* p_open, ImGuiApp* host)
         metrics->InitialSize = ImVec2(vp->WorkSize.x * 0.66f, vp->WorkSize.y * 0.66f);
         metrics->InitialPos  = vp->WorkPos + ImVec2(vp->WorkSize.x * 0.10f, vp->WorkSize.y * 0.10f);
         PushWindowControl<GraphDocControl>(app, metrics);   // producer: owns the doc (push first)
-        PushWindowControl<ToolbarControl>(app, metrics);    // consumers depend on GraphDocData
-        PushWindowControl<EditorBodyControl>(app, metrics);
-        PushWindowControl<StatusStripControl>(app, metrics);   // status bar renders LAST -> window bottom
+        PushWindowControl<ImGuiAppToolbarControl>(app, metrics);    // consumers depend on ImGuiAppGraphDocData
+        PushWindowControl<ImGuiAppEditorBodyControl>(app, metrics);
+        PushWindowControl<ImGuiAppStatusStripControl>(app, metrics);   // status bar renders LAST -> window bottom
 
         PushAppWindow<DemoPanelWindow>(app);
         ImGuiAppWindowBase* panel = app->Windows.back();
         panel->HasInitialPlacement = true;
         panel->InitialSize = ImVec2(vp->WorkSize.x * 0.30f, vp->WorkSize.y * 0.40f);
         panel->InitialPos  = vp->WorkPos + ImVec2(vp->WorkSize.x * 0.02f, vp->WorkSize.y * 0.04f);
-        PushWindowControl<DemoMenuControl>(app, panel);
+        PushWindowControl<ImGuiAppDemoMenuControl>(app, panel);
         s_composed = app;
     }
 
@@ -6729,7 +6730,7 @@ IMGUI_API void ShowAppDemo(bool* p_open, ImGuiApp* host)
         else if (strcmp(app->Windows.Data[i]->Label, "ImGuiAppComposer") == 0)
             metrics = app->Windows.Data[i];
     }
-    DemoMenuData* st = GetDemoMenu(app);
+    ImGuiAppDemoMenuData* st = GetDemoMenu(app);
     IM_ASSERT(panel != nullptr && metrics != nullptr && st != nullptr);
 
     // This call sits AFTER this frame's window render: consume the X buttons first, then impose
@@ -7163,21 +7164,21 @@ bool AppPreviewDllReload(ImGuiAppPreviewDll* s, const ImGuiAppGraph* graph, char
     }
 
     // Preserve every control's Persist bytes across the swap: copied OUT keyed by label, then back IN.
-    // SavedControl is POD (fixed buffer, not a nested ImVector) because ImVector::push_back memcpys its
+    // ImGuiAppSavedControl is POD (fixed buffer, not a nested ImVector) because ImVector::push_back memcpys its
     // element -- a heap-owning member would alias then double-free / dangle (the F58 nested-ImVector use-after-free).
-    struct SavedControl
+    struct ImGuiAppSavedControl
     {
         char Label[IM_LABEL_SIZE];
         char Bytes[1024];
         int  Len;
     };
-    ImVector<SavedControl> saved;
+    ImVector<ImGuiAppSavedControl> saved;
     for (int i = 0; i < graph->Nodes.Size; i++)
     {
         const ImGuiAppNode* nd = &graph->Nodes.Data[i];
         if (nd->Kind != ImGuiAppNodeKind_Control || nd->IsLive)
             continue;
-        SavedControl sc;
+        ImGuiAppSavedControl sc;
         ImStrncpy(sc.Label, nd->Draft.Name, IM_ARRAYSIZE(sc.Label));
         sc.Len = s->CopyOut(s->Handle, sc.Label, 0, sc.Bytes, (int)sizeof(sc.Bytes));
         if (sc.Len > 0)
@@ -7787,8 +7788,8 @@ namespace
 
 // Returns the pushed counts; pop with AppBlPopStyle. The PopupRounding desc's Active flag gates the
 // popup half of the scope.
-struct AppBlStyleScope { int Colors; int Vars; };
-static AppBlStyleScope AppBlPushStyle(const ImGuiAppColorModDesc* cols, int ncols, bool with_popup)
+struct ImGuiAppBlStyleScope { int Colors; int Vars; };
+static ImGuiAppBlStyleScope AppBlPushStyle(const ImGuiAppColorModDesc* cols, int ncols, bool with_popup)
 {
     const float r = ImGui::GetFrameHeight() * kBlRounding;
     const ImGuiAppStyleModDesc vars[] =
@@ -7796,13 +7797,13 @@ static AppBlStyleScope AppBlPushStyle(const ImGuiAppColorModDesc* cols, int ncol
         { ImGuiStyleVar_FrameRounding, ImVec2(r, 0.0f) },
         { ImGuiStyleVar_PopupRounding, ImVec2(r, 0.0f), with_popup },
     };
-    AppBlStyleScope s;
+    ImGuiAppBlStyleScope s;
     s.Colors = ImGui::PushAppColorMods(cols, ncols);
     s.Vars = ImGui::PushAppStyleMods(vars, IM_ARRAYSIZE(vars));
     return s;
 }
 
-static void AppBlPopStyle(const AppBlStyleScope& s)
+static void AppBlPopStyle(const ImGuiAppBlStyleScope& s)
 {
     if (s.Vars > 0)
         ImGui::PopStyleVar(s.Vars);
@@ -7900,7 +7901,7 @@ static bool AppBlInputText(const char* str_id, char* buf, size_t buf_size, float
         AppBlFieldBg(dl, mn, mx, true, true);
         ImGui::SetCursorScreenPos(mn);
         ImGui::SetNextItemWidth(width);
-        const AppBlStyleScope sc = AppBlPushStyle(AppGraphChromeTheme()->Edit, IM_ARRAYSIZE(AppGraphChromeTheme()->Edit), false);
+        const ImGuiAppBlStyleScope sc = AppBlPushStyle(AppGraphChromeTheme()->Edit, IM_ARRAYSIZE(AppGraphChromeTheme()->Edit), false);
         if (st->GetBool(kAppKeyBlFocus, false)) { ImGui::SetKeyboardFocusHere(); st->SetBool(kAppKeyBlFocus, false); }
         ImGui::PushID(id);
         changed = ImGui::InputText("##e", buf, buf_size, ImGuiInputTextFlags_AutoSelectAll);
@@ -7928,7 +7929,7 @@ static bool AppBlEnum(const char* str_id, float width, int* v, const char* (*nam
     // and lets the click fall through to the node/window drag.
     bool changed = false;
 
-    const AppBlStyleScope sc = AppBlPushStyle(AppGraphChromeTheme()->Combo, IM_ARRAYSIZE(AppGraphChromeTheme()->Combo), true);
+    const ImGuiAppBlStyleScope sc = AppBlPushStyle(AppGraphChromeTheme()->Combo, IM_ARRAYSIZE(AppGraphChromeTheme()->Combo), true);
 
     ImGui::SetNextItemWidth(width);
     ImGui::PushID(str_id);
@@ -7975,7 +7976,7 @@ static bool AppBlDragInt(const char* str_id, float width, int* v, int vmin, int 
         AppBlFieldBg(dl, mn, mx, true, true);
         ImGui::SetCursorScreenPos(mn);
         ImGui::SetNextItemWidth(width);
-        const AppBlStyleScope sc = AppBlPushStyle(AppGraphChromeTheme()->Edit, IM_ARRAYSIZE(AppGraphChromeTheme()->Edit), false);
+        const ImGuiAppBlStyleScope sc = AppBlPushStyle(AppGraphChromeTheme()->Edit, IM_ARRAYSIZE(AppGraphChromeTheme()->Edit), false);
         if (st->GetBool(kAppKeyBlFocus, false)) { ImGui::SetKeyboardFocusHere(); st->SetBool(kAppKeyBlFocus, false); }
         ImGui::PushID(id);
         changed = ImGui::InputInt("##e", v, 0, 0, ImGuiInputTextFlags_AutoSelectAll);
@@ -8060,7 +8061,7 @@ static void EditAppFieldTypeControls(ImGuiAppFieldDesc* f, float type_w, const I
     else if (f->Type == ImGuiAppFieldType_Struct)
     {
         ImGui::SameLine();
-        const AppBlStyleScope sc = AppBlPushStyle(AppGraphChromeTheme()->Combo, IM_ARRAYSIZE(AppGraphChromeTheme()->Combo), true);
+        const ImGuiAppBlStyleScope sc = AppBlPushStyle(AppGraphChromeTheme()->Combo, IM_ARRAYSIZE(AppGraphChromeTheme()->Combo), true);
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8.0f);
         if (ImGui::BeginCombo("##stype", f->StructType[0] ? f->StructType : "<struct>", ImGuiComboFlags_NoArrowButton))
         {
@@ -8757,26 +8758,26 @@ static void AppGraphConsumerDeps(const ImGuiAppGraph* g, int consumer_node_id, I
     }
 }
 
-enum { AppExprType_Unknown = -2 };   // an unresolved/builtin operand: lives in compiled C++, compatible with everything
+enum { ImGuiAppExprType_Unknown = -2 };   // an unresolved/builtin operand: lives in compiled C++, compatible with everything
 static bool AppExprIsBool(int t);      // fwd (defined with AppEventExprCheck -- the one type authority)
 static bool AppExprIsNumeric(int t);   // fwd
 static bool AppExprIsInt(int t);       // fwd
 
-enum AppOpClass_ { AppOpClass_Bool = 0, AppOpClass_Num, AppOpClass_BoolOrInt, AppOpClass_Scalar };
+enum ImGuiAppOpClass_ { ImGuiAppOpClass_Bool = 0, ImGuiAppOpClass_Num, ImGuiAppOpClass_BoolOrInt, ImGuiAppOpClass_Scalar };
 
-struct AppOpDesc
+struct ImGuiAppOpDesc
 {
     const char* Token;
     int         Arity;
 };
-static const AppOpDesc s_app_ops[] =
+static const ImGuiAppOpDesc s_app_ops[] =
   {
     { "AND", 2 }, { "OR", 2 }, { "XOR", 2 }, { "NOT", 1 },
     { "==", 2 }, { "!=", 2 }, { "<", 2 }, { "<=", 2 }, { ">", 2 }, { ">=", 2 },
     { "select", 3 }, { "min", 2 }, { "max", 2 },
 };
 
-static const AppOpDesc* AppOpFind(const char* op)
+static const ImGuiAppOpDesc* AppOpFind(const char* op)
 {
     if (op != nullptr)
         for (int i = 0; i < IM_ARRAYSIZE(s_app_ops); i++)
@@ -8792,7 +8793,7 @@ static bool AppOpFoldExprRec(const ImGuiAppGraph* g, const ImGuiAppNode* op, cha
 {
     if (g == nullptr || op == nullptr || op->Kind != ImGuiAppNodeKind_Op || out_size <= 0 || depth > 64)
         return false;
-    const AppOpDesc* desc = AppOpFind(op->TypeName);
+    const ImGuiAppOpDesc* desc = AppOpFind(op->TypeName);
     if (desc == nullptr)
         return false;
     const int arity = desc->Arity;
@@ -9405,25 +9406,25 @@ static void AppGraphPushPort(ImGuiAppGraph* g, ImGuiAppNode* n, ImGuiAppPortKind
 // AppExprIsBool/IsNumeric/IsInt predicates below). F55 folds each operator into the consumer's expression.
 static const char* AppOpDefaultToken() { return s_app_ops[0].Token; }              // "AND"
 static const char* AppOpTokenName(int i) { return (i >= 0 && i < IM_ARRAYSIZE(s_app_ops)) ? s_app_ops[i].Token : "?"; }
-static int  AppOpIndexOf(const char* op) { const AppOpDesc* d = AppOpFind(op); return d != nullptr ? (int)(d - s_app_ops) : 0; }
-static int  AppOpArity(const char* op)   { const AppOpDesc* d = AppOpFind(op); return d != nullptr ? d->Arity : 2; }
+static int  AppOpIndexOf(const char* op) { const ImGuiAppOpDesc* d = AppOpFind(op); return d != nullptr ? (int)(d - s_app_ops) : 0; }
+static int  AppOpArity(const char* op)   { const ImGuiAppOpDesc* d = AppOpFind(op); return d != nullptr ? d->Arity : 2; }
 
 // The scalar class an operator requires at operand `idx` (0-based). '==' / '!=' pair two-of-a-kind (numbers OR
 // bools); per-pin they accept any scalar and the folded-expression pass (F55) enforces arm agreement.
 static int AppOpOperandClass(const char* op, int idx)
 {
     if (op == nullptr || op[0] == 0)
-        return AppOpClass_Scalar;
+        return ImGuiAppOpClass_Scalar;
     if (strcmp(op, "NOT") == 0 || strcmp(op, "AND") == 0 || strcmp(op, "OR") == 0)
-        return AppOpClass_Bool;
+        return ImGuiAppOpClass_Bool;
     if (strcmp(op, "XOR") == 0)
-        return AppOpClass_BoolOrInt;
+        return ImGuiAppOpClass_BoolOrInt;
     if (strcmp(op, "<") == 0 || strcmp(op, "<=") == 0 || strcmp(op, ">") == 0 || strcmp(op, ">=") == 0
      || strcmp(op, "min") == 0 || strcmp(op, "max") == 0)
-        return AppOpClass_Num;
+        return ImGuiAppOpClass_Num;
     if (strcmp(op, "select") == 0)
-        return idx == 0 ? AppOpClass_Bool : AppOpClass_Scalar;   // condition, then two arms
-    return AppOpClass_Scalar;                                   // == / !=
+        return idx == 0 ? ImGuiAppOpClass_Bool : ImGuiAppOpClass_Scalar;   // condition, then two arms
+    return ImGuiAppOpClass_Scalar;                                   // == / !=
 }
 
 // Result scalar type an operator yields (for a nested Op wired into another Op operand). XOR (bool|int) and
@@ -9431,14 +9432,14 @@ static int AppOpOperandClass(const char* op, int idx)
 static int AppOpResultType(const char* op)
 {
     if (op == nullptr)
-        return AppExprType_Unknown;
+        return ImGuiAppExprType_Unknown;
     if (strcmp(op, "AND") == 0 || strcmp(op, "OR") == 0 || strcmp(op, "NOT") == 0
      || strcmp(op, "==") == 0 || strcmp(op, "!=") == 0 || strcmp(op, "<") == 0 || strcmp(op, "<=") == 0
      || strcmp(op, ">") == 0 || strcmp(op, ">=") == 0)
         return ImGuiAppFieldType_Bool;
     if (strcmp(op, "min") == 0 || strcmp(op, "max") == 0)
         return ImGuiAppFieldType_Float;   // numeric
-    return AppExprType_Unknown;
+    return ImGuiAppExprType_Unknown;
 }
 
 // Scalar type an output port yields for Op operand type-checking. A Field value -> its field type; a nested Op
@@ -9448,12 +9449,12 @@ static int AppOpSourceType(const ImGuiAppNode* src_owner, const ImGuiAppNodePort
 {
     IM_UNUSED(src);
     if (src_owner == nullptr)
-        return AppExprType_Unknown;
+        return ImGuiAppExprType_Unknown;
     if (src_owner->Kind == ImGuiAppNodeKind_Field && src_owner->Draft.PersistFields.Size > 0)
         return (int)src_owner->Draft.PersistFields.Data[0].Type;
     if (src_owner->Kind == ImGuiAppNodeKind_Op)
         return AppOpResultType(src_owner->TypeName);
-    return AppExprType_Unknown;
+    return ImGuiAppExprType_Unknown;
 }
 
 // Does a source scalar type fit an operand class? Reuses the AppEventExprCheck predicates (Unknown fits all).
@@ -9461,9 +9462,9 @@ static bool AppOpIsTypeCompatible(int cls, int t)
 {
     switch (cls)
     {
-    case AppOpClass_Bool:      return AppExprIsBool(t);
-    case AppOpClass_Num:       return AppExprIsNumeric(t);
-    case AppOpClass_BoolOrInt: return AppExprIsBool(t) || AppExprIsInt(t);
+    case ImGuiAppOpClass_Bool:      return AppExprIsBool(t);
+    case ImGuiAppOpClass_Num:       return AppExprIsNumeric(t);
+    case ImGuiAppOpClass_BoolOrInt: return AppExprIsBool(t) || AppExprIsInt(t);
     default:                   return AppExprIsBool(t) || AppExprIsNumeric(t);   // Scalar: any bool/number, never a struct/vec/string
     }
 }
@@ -11942,7 +11943,7 @@ static void AppDrawWireArcPath(ImDrawList* dl, const ImVec2* pts, int count, con
 // same pass (trunk routing): the LAYER NODE rects ARE the obstacle set -- one producer per
 // value, never re-derived (docs/bug-classes.md rule 3). Screen space, this frame's camera.
 #endif // IMGUIX_DISABLE_TOOLS
-struct AppLayerColumnGeom
+struct ImGuiAppLayerColumnGeom
 {
     bool   Valid = false;
     float  NodeRight = 0.0f;    // right edge shared by the layer nodes
@@ -11960,7 +11961,7 @@ struct AppLayerColumnGeom
 // the nodes. Caller wraps this in the zoomed font (decorations size against em like node content).
 // Always publishes `out_geom`; `draw` false computes geometry only (overlay hidden).
 #ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
-static void AppDrawLayerGroupBox(const ImGuiAppGraph* g, bool show_live, bool draw, float em_base, float fh_base, AppLayerColumnGeom* out_geom)
+static void AppDrawLayerGroupBox(const ImGuiAppGraph* g, bool show_live, bool draw, float em_base, float fh_base, ImGuiAppLayerColumnGeom* out_geom)
 {
     // Per visible layer: screen y-span + accent for the flow rail and phase bands.
     ImGuiCanvasState* cv = AppEditorCanvas(g);
@@ -14808,7 +14809,7 @@ static void AppDrawScopeEmptyCTA(ImGuiAppGraph* g, bool show_live, ImVec2 editor
 // tidy). Reads each member's altitude-correct canvas rect and writes through the nudge idiom (drilled ->
 // this scope's placements, root -> GridPos). Live picks and collapse-hidden nodes are skipped.
 #endif // IMGUIX_DISABLE_TOOLS
-enum AppAlignMode_ { AppAlign_Left, AppAlign_Right, AppAlign_Top, AppAlign_Bottom, AppAlign_DistribH, AppAlign_DistribV };
+enum ImGuiAppAlignMode_ { ImGuiAppAlignMode_Left, ImGuiAppAlignMode_Right, ImGuiAppAlignMode_Top, ImGuiAppAlignMode_Bottom, ImGuiAppAlignMode_DistribH, ImGuiAppAlignMode_DistribV };
 
 static void AppGraphAlignSelection(ImGuiAppGraph* g, int mode, bool show_live)
 {
@@ -14826,7 +14827,7 @@ static void AppGraphAlignSelection(ImGuiAppGraph* g, int mode, bool show_live)
             r.size = AppLayoutNodeSize(g, sn);
         recs.push_back(r);
     }
-    const bool distribute = mode == AppAlign_DistribH || mode == AppAlign_DistribV;
+    const bool distribute = mode == ImGuiAppAlignMode_DistribH || mode == ImGuiAppAlignMode_DistribV;
     if (recs.Size < (distribute ? 3 : 2))
         return;
     const bool at_root = g->ViewScope.Size == 0;
@@ -14834,7 +14835,7 @@ static void AppGraphAlignSelection(ImGuiAppGraph* g, int mode, bool show_live)
     if (distribute)
     {
         // Space the members' centers evenly between the two extremes along the axis (endpoints fixed).
-        const bool horiz = mode == AppAlign_DistribH;
+        const bool horiz = mode == ImGuiAppAlignMode_DistribH;
         for (int i = 1; i < recs.Size; i++)   // insertion sort by center along the axis (small N)
         {
             const Rec key = recs.Data[i];
@@ -14879,10 +14880,10 @@ static void AppGraphAlignSelection(ImGuiAppGraph* g, int mode, bool show_live)
         ImVec2 np = recs.Data[i].pos;
         switch (mode)
         {
-        case AppAlign_Left:   np.x = minx; break;
-        case AppAlign_Right:  np.x = maxr - recs.Data[i].size.x; break;
-        case AppAlign_Top:    np.y = miny; break;
-        case AppAlign_Bottom: np.y = maxb - recs.Data[i].size.y; break;
+        case ImGuiAppAlignMode_Left:   np.x = minx; break;
+        case ImGuiAppAlignMode_Right:  np.x = maxr - recs.Data[i].size.x; break;
+        case ImGuiAppAlignMode_Top:    np.y = miny; break;
+        case ImGuiAppAlignMode_Bottom: np.y = maxb - recs.Data[i].size.y; break;
         default: break;
         }
         AppCanvasSetNodePos(g, recs.Data[i].id, np);
@@ -14898,13 +14899,13 @@ static void AppGraphAlignMenuItems(ImGuiAppGraph* g, bool show_live)
 {
     const bool has2 = g->Selection.Size >= 2;
     const bool has3 = g->Selection.Size >= 3;
-    if (ImGui::MenuItem("Left edges",   nullptr, false, has2)) AppGraphAlignSelection(g, AppAlign_Left,   show_live);
-    if (ImGui::MenuItem("Right edges",  nullptr, false, has2)) AppGraphAlignSelection(g, AppAlign_Right,  show_live);
-    if (ImGui::MenuItem("Top edges",    nullptr, false, has2)) AppGraphAlignSelection(g, AppAlign_Top,    show_live);
-    if (ImGui::MenuItem("Bottom edges", nullptr, false, has2)) AppGraphAlignSelection(g, AppAlign_Bottom, show_live);
+    if (ImGui::MenuItem("Left edges",   nullptr, false, has2)) AppGraphAlignSelection(g, ImGuiAppAlignMode_Left,   show_live);
+    if (ImGui::MenuItem("Right edges",  nullptr, false, has2)) AppGraphAlignSelection(g, ImGuiAppAlignMode_Right,  show_live);
+    if (ImGui::MenuItem("Top edges",    nullptr, false, has2)) AppGraphAlignSelection(g, ImGuiAppAlignMode_Top,    show_live);
+    if (ImGui::MenuItem("Bottom edges", nullptr, false, has2)) AppGraphAlignSelection(g, ImGuiAppAlignMode_Bottom, show_live);
     ImGui::Separator();
-    if (ImGui::MenuItem("Distribute horizontally", nullptr, false, has3)) AppGraphAlignSelection(g, AppAlign_DistribH, show_live);
-    if (ImGui::MenuItem("Distribute vertically",   nullptr, false, has3)) AppGraphAlignSelection(g, AppAlign_DistribV, show_live);
+    if (ImGui::MenuItem("Distribute horizontally", nullptr, false, has3)) AppGraphAlignSelection(g, ImGuiAppAlignMode_DistribH, show_live);
+    if (ImGui::MenuItem("Distribute vertically",   nullptr, false, has3)) AppGraphAlignSelection(g, ImGuiAppAlignMode_DistribV, show_live);
 }
 
 // Command registry (F34): one table is the single source for the editor's verbs -- id, icon, label,
@@ -15275,7 +15276,7 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
     // Pipeline box, drawn on the engine's background channel between the grid and the nodes. Model geometry
     // with this frame's camera -- valid from the very first frame (unmeasured nodes fall back to per-kind
     // estimates). Publishes the column's box + rows once per frame: the overlay AND the trunk router's obstacle set.
-    AppLayerColumnGeom col_geom;
+    ImGuiAppLayerColumnGeom col_geom;
     if (at_root)
         AppDrawLayerGroupBox(g, show_live, ov_bands, em_base, fh_base, &col_geom);
 
@@ -16729,12 +16730,12 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
             }
             break;
         case 13: snap_grid = !snap_grid; break;
-        case 40: AppGraphAlignSelection(g, AppAlign_Left,    show_live); break;
-        case 41: AppGraphAlignSelection(g, AppAlign_Right,   show_live); break;
-        case 42: AppGraphAlignSelection(g, AppAlign_Top,     show_live); break;
-        case 43: AppGraphAlignSelection(g, AppAlign_Bottom,  show_live); break;
-        case 44: AppGraphAlignSelection(g, AppAlign_DistribH, show_live); break;
-        case 45: AppGraphAlignSelection(g, AppAlign_DistribV, show_live); break;
+        case 40: AppGraphAlignSelection(g, ImGuiAppAlignMode_Left,    show_live); break;
+        case 41: AppGraphAlignSelection(g, ImGuiAppAlignMode_Right,   show_live); break;
+        case 42: AppGraphAlignSelection(g, ImGuiAppAlignMode_Top,     show_live); break;
+        case 43: AppGraphAlignSelection(g, ImGuiAppAlignMode_Bottom,  show_live); break;
+        case 44: AppGraphAlignSelection(g, ImGuiAppAlignMode_DistribH, show_live); break;
+        case 45: AppGraphAlignSelection(g, ImGuiAppAlignMode_DistribV, show_live); break;
         case 14: if (AppGraphCanUndo(g)) { AppGraphUndo(g); ImGui::CanvasClearSelection(cv); } break;
         case 15: if (AppGraphCanRedo(g)) { AppGraphRedo(g); ImGui::CanvasClearSelection(cv); } break;
         case 16:
@@ -18849,9 +18850,9 @@ int AppGraphDependencyCycle(const ImGuiAppGraph* g, ImVector<int>* out_nodes, ch
 //-----------------------------------------------------------------------------
 // Expr is emitted verbatim into the generated OnUpdate, so anything rejected here might still be legal
 // C++ -- but then the event is no longer analyzable data. The grammar is deliberately tiny; growing it is
-// fine while every construct stays type-checkable. (AppExprType_Unknown lives with the Op vocabulary above.)
+// fine while every construct stays type-checkable. (ImGuiAppExprType_Unknown lives with the Op vocabulary above.)
 
-struct AppExprCtx
+struct ImGuiAppExprCtx
 {
     const ImGuiAppGraph* Graph;
     const ImGuiAppNode*  Node;
@@ -18861,7 +18862,7 @@ struct AppExprCtx
     char                 StructType[IM_LABEL_SIZE]; // set when the last primary was a whole struct-field ref
 };
 
-static int AppExprFail(AppExprCtx* c, const char* fmt, ...)
+static int AppExprFail(ImGuiAppExprCtx* c, const char* fmt, ...)
 {
     if (!c->Failed)
     {
@@ -18871,7 +18872,7 @@ static int AppExprFail(AppExprCtx* c, const char* fmt, ...)
         va_end(args);
         c->Failed = true;
     }
-    return AppExprType_Unknown;
+    return ImGuiAppExprType_Unknown;
 }
 
 static const char* AppExprTypeName(int t)
@@ -18879,11 +18880,11 @@ static const char* AppExprTypeName(int t)
     return (t >= 0 && t < ImGuiAppFieldType_COUNT) ? AppFieldTypeName((ImGuiAppFieldType)t) : "?";
 }
 
-static void AppExprSkipBlanks(AppExprCtx* c) { while (*c->Cur == ' ' || *c->Cur == '\t') c->Cur++; }
+static void AppExprSkipBlanks(ImGuiAppExprCtx* c) { while (*c->Cur == ' ' || *c->Cur == '\t') c->Cur++; }
 
 // Consume `op` if it is next. Longer operators must be tried first at each level; '-' refuses '->' and
 // '!' refuses '!=' so unary parsing cannot eat half of a two-char token.
-static bool AppExprAccept(AppExprCtx* c, const char* op)
+static bool AppExprAccept(ImGuiAppExprCtx* c, const char* op)
 {
     AppExprSkipBlanks(c);
     const size_t len = strlen(op);
@@ -18895,7 +18896,7 @@ static bool AppExprAccept(AppExprCtx* c, const char* op)
     return true;
 }
 
-static bool AppExprIdent(AppExprCtx* c, char* out, int out_size)
+static bool AppExprIdent(ImGuiAppExprCtx* c, char* out, int out_size)
 {
     AppExprSkipBlanks(c);
     const char* s = c->Cur;
@@ -18911,13 +18912,13 @@ static bool AppExprIdent(AppExprCtx* c, char* out, int out_size)
     return true;
 }
 
-static bool AppExprIsNumeric(int t) { return t == ImGuiAppFieldType_Float || t == ImGuiAppFieldType_Int || t == ImGuiAppFieldType_Double || t == AppExprType_Unknown; }
-static bool AppExprIsBool(int t)    { return t == ImGuiAppFieldType_Bool || t == AppExprType_Unknown; }
-static bool AppExprIsInt(int t)     { return t == ImGuiAppFieldType_Int || t == AppExprType_Unknown; }
+static bool AppExprIsNumeric(int t) { return t == ImGuiAppFieldType_Float || t == ImGuiAppFieldType_Int || t == ImGuiAppFieldType_Double || t == ImGuiAppExprType_Unknown; }
+static bool AppExprIsBool(int t)    { return t == ImGuiAppFieldType_Bool || t == ImGuiAppExprType_Unknown; }
+static bool AppExprIsInt(int t)     { return t == ImGuiAppFieldType_Int || t == ImGuiAppExprType_Unknown; }
 
 static int AppExprPromote(int a, int b)
 {
-    if (a == AppExprType_Unknown || b == AppExprType_Unknown) return AppExprType_Unknown;
+    if (a == ImGuiAppExprType_Unknown || b == ImGuiAppExprType_Unknown) return ImGuiAppExprType_Unknown;
     if (a == ImGuiAppFieldType_Double || b == ImGuiAppFieldType_Double) return ImGuiAppFieldType_Double;
     if (a == ImGuiAppFieldType_Float || b == ImGuiAppFieldType_Float) return ImGuiAppFieldType_Float;
     return ImGuiAppFieldType_Int;
@@ -18958,9 +18959,9 @@ static const ImGuiAppNode* AppExprFindStructNode(const ImGuiAppGraph* g, const c
     return nullptr;
 }
 
-static int AppExprTernary(AppExprCtx* c);   // fwd (the grammar top; parens + call args recurse to it)
+static int AppExprTernary(ImGuiAppExprCtx* c);   // fwd (the grammar top; parens + call args recurse to it)
 
-static int AppExprPrimary(AppExprCtx* c)
+static int AppExprPrimary(ImGuiAppExprCtx* c)
 {
     AppExprSkipBlanks(c);
     c->StructType[0] = 0;
@@ -19040,7 +19041,7 @@ static int AppExprPrimary(AppExprCtx* c)
     {
         if (!unverifiable)
             return AppExprFail(c, "'%s' has no field '%s'", ident, field);
-        t = AppExprType_Unknown;
+        t = ImGuiAppExprType_Unknown;
     }
 
     // Struct member chain: one '.' hop per nested level, each checked against that struct's field list.
@@ -19048,16 +19049,16 @@ static int AppExprPrimary(AppExprCtx* c)
     for (;;)
     {
         AppExprSkipBlanks(c);
-        if (*c->Cur != '.' || (t != ImGuiAppFieldType_Struct && t != AppExprType_Unknown))
+        if (*c->Cur != '.' || (t != ImGuiAppFieldType_Struct && t != ImGuiAppExprType_Unknown))
             break;
         c->Cur++;
         char member[IM_LABEL_SIZE];
         if (!AppExprIdent(c, member, IM_ARRAYSIZE(member)))
             return AppExprFail(c, "expected a member after '.'");
-        if (t == AppExprType_Unknown)
+        if (t == ImGuiAppExprType_Unknown)
             continue;
         const ImGuiAppNode* sn = AppExprFindStructNode(c->Graph, stype);
-        if (sn == nullptr) { t = AppExprType_Unknown; continue; }   // missing struct type is its own validate issue
+        if (sn == nullptr) { t = ImGuiAppExprType_Unknown; continue; }   // missing struct type is its own validate issue
         char inner[IM_LABEL_SIZE];
         inner[0] = 0;
         t = AppExprFindField(c->Graph, sn, 0, member, inner, IM_ARRAYSIZE(inner));
@@ -19070,7 +19071,7 @@ static int AppExprPrimary(AppExprCtx* c)
     return t;
 }
 
-static int AppExprUnary(AppExprCtx* c)
+static int AppExprUnary(ImGuiAppExprCtx* c)
 {
     if (AppExprAccept(c, "!"))
     {
@@ -19091,7 +19092,7 @@ static int AppExprUnary(AppExprCtx* c)
     return AppExprPrimary(c);
 }
 
-static int AppExprMul(AppExprCtx* c)
+static int AppExprMul(ImGuiAppExprCtx* c)
 {
     int t = AppExprUnary(c);
     while (!c->Failed)
@@ -19108,7 +19109,7 @@ static int AppExprMul(AppExprCtx* c)
         {
             if (!AppExprIsInt(t) || !AppExprIsInt(r))
                 return AppExprFail(c, "'%%' needs two ints (got %s and %s)", AppExprTypeName(t), AppExprTypeName(r));
-            t = (t == AppExprType_Unknown && r == AppExprType_Unknown) ? AppExprType_Unknown : ImGuiAppFieldType_Int;
+            t = (t == ImGuiAppExprType_Unknown && r == ImGuiAppExprType_Unknown) ? ImGuiAppExprType_Unknown : ImGuiAppFieldType_Int;
         }
         else
         {
@@ -19120,7 +19121,7 @@ static int AppExprMul(AppExprCtx* c)
     return t;
 }
 
-static int AppExprAdd(AppExprCtx* c)
+static int AppExprAdd(ImGuiAppExprCtx* c)
 {
     int t = AppExprMul(c);
     while (!c->Failed)
@@ -19139,7 +19140,7 @@ static int AppExprAdd(AppExprCtx* c)
     return t;
 }
 
-static int AppExprRel(AppExprCtx* c)
+static int AppExprRel(ImGuiAppExprCtx* c)
 {
     int t = AppExprAdd(c);
     while (!c->Failed && (AppExprAccept(c, "<=") || AppExprAccept(c, ">=") || AppExprAccept(c, "<") || AppExprAccept(c, ">")))
@@ -19154,7 +19155,7 @@ static int AppExprRel(AppExprCtx* c)
     return t;
 }
 
-static int AppExprEq(AppExprCtx* c)
+static int AppExprEq(ImGuiAppExprCtx* c)
 {
     int t = AppExprRel(c);
     while (!c->Failed && (AppExprAccept(c, "==") || AppExprAccept(c, "!=")))
@@ -19170,7 +19171,7 @@ static int AppExprEq(AppExprCtx* c)
     return t;
 }
 
-static int AppExprXor(AppExprCtx* c)
+static int AppExprXor(ImGuiAppExprCtx* c)
 {
     int t = AppExprEq(c);
     while (!c->Failed && AppExprAccept(c, "^"))
@@ -19188,7 +19189,7 @@ static int AppExprXor(AppExprCtx* c)
     return t;
 }
 
-static int AppExprAnd(AppExprCtx* c)
+static int AppExprAnd(ImGuiAppExprCtx* c)
 {
     int t = AppExprXor(c);
     while (!c->Failed && AppExprAccept(c, "&&"))
@@ -19203,7 +19204,7 @@ static int AppExprAnd(AppExprCtx* c)
     return t;
 }
 
-static int AppExprOr(AppExprCtx* c)
+static int AppExprOr(ImGuiAppExprCtx* c)
 {
     int t = AppExprAnd(c);
     while (!c->Failed && AppExprAccept(c, "||"))
@@ -19220,7 +19221,7 @@ static int AppExprOr(AppExprCtx* c)
 
 // Ternary select `c ? a : b` (C precedence: below ||, right-associative). The condition is a bool; the two
 // arms pair like '==' -- numbers (promoted) or bools. The select/mux Op folds to this (F55).
-static int AppExprTernary(AppExprCtx* c)
+static int AppExprTernary(ImGuiAppExprCtx* c)
 {
     int t = AppExprOr(c);
     if (c->Failed || !AppExprAccept(c, "?"))
@@ -19415,7 +19416,7 @@ bool AppEventExprCheck(const ImGuiAppGraph* g, const ImGuiAppNode* n, const ImGu
     if (ev->Expr[0] == 0)
         return true;   // empty: codegen copies the watched temp field
 
-    AppExprCtx c;
+    ImGuiAppExprCtx c;
     c.Graph = g;
     c.Node = n;
     c.Cur = ev->Expr;
@@ -19432,7 +19433,7 @@ bool AppEventExprCheck(const ImGuiAppGraph* g, const ImGuiAppNode* n, const ImGu
     }
 
     // The expression lands in `data-><DstField> = <Expr>;` -- its type must fit the destination.
-    if (!c.Failed && ev->Action == ImGuiAppEventAction_SetField && ev->DstField[0] && t != AppExprType_Unknown)
+    if (!c.Failed && ev->Action == ImGuiAppEventAction_SetField && ev->DstField[0] && t != ImGuiAppExprType_Unknown)
     {
         char dst_id[IM_LABEL_SIZE];
         AppSanitizeIdentifier(dst_id, IM_ARRAYSIZE(dst_id), ev->DstField);
@@ -19524,7 +19525,7 @@ static void AppEmitStyleModLines(const ImGuiAppNode* n, const char* expr, const 
 
 // The RECORDED class name when the mirror stamped one (node named by the control's Label,
 // distinct from its data type); graphs recorded before the label existed carry the data type
-// as the node name -- derive "GraphDocData" -> "GraphDocControl" for those.
+// as the node name -- derive "ImGuiAppGraphDocData" -> "GraphDocControl" for those.
 static void AppLiveControlClassName(const ImGuiAppNode* n, char* out, size_t out_size)
 {
     char dtype[IM_LABEL_SIZE];
@@ -22212,7 +22213,7 @@ void AppGraphSeedStarterPrefabs(ImGuiAppGraph* g)
 // across another AppGraph* call that can reallocate g->Nodes.
 
 // One desired live entry, snapshotted from the running app BEFORE any graph mutation.
-struct AppLiveWant
+struct ImGuiAppLiveWant
 {
     ImGuiID                 Key;       // stable upsert key (so the node keeps its canvas position across frames)
     ImGuiAppNodeKind        Kind;
@@ -22232,7 +22233,7 @@ struct AppLiveWant
     float                   DockSize;  // Sidebar only
     const ImGuiAppItemBase* Item;      // live object (windows/sidebars/controls; null for layers) -- read within
                                       // BuildAppLiveGraph only, to mirror StyleMods (kept OFF this struct: a nested
-                                      // ImVector member inside ImVector<AppLiveWant> would break ImVector's memcpy grow)
+                                      // ImVector member inside ImVector<ImGuiAppLiveWant> would break ImVector's memcpy grow)
 };
 
 static const char* AppLayerTypeName(ImGuiAppLayerType t);   // fwd (defined above)
@@ -22247,7 +22248,7 @@ void BuildAppLiveGraph(const ImGuiApp* app, ImGuiAppGraph* g)
         return;
 
     // 1) Snapshot the WHOLE app composition (layers, windows, sidebars, controls). No graph access here.
-    ImVector<AppLiveWant> want;
+    ImVector<ImGuiAppLiveWant> want;
 
     // Snapshot one control (app-level or hosted). Keyed by its runtime PersistData id (app->Data is keyed by
     // type id, so the id is unique per app -> no collision between app-level and hosted controls). parent_key is
@@ -22259,7 +22260,7 @@ void BuildAppLiveGraph(const ImGuiApp* app, ImGuiAppGraph* g)
         ImGuiID id = ctrl->GetControlDataID();
         if (id == 0)
             return;
-        AppLiveWant w; w.Kind = ImGuiAppNodeKind_Control; w.Key = id; w.DataId = id; w.LayerType = ImGuiAppLayerType_Task;
+        ImGuiAppLiveWant w; w.Kind = ImGuiAppNodeKind_Control; w.Key = id; w.DataId = id; w.LayerType = ImGuiAppLayerType_Task;
         w.ParentKey = parent_key;
         w.Flags = 0; w.HasPlacement = false; w.InitialPos = ImVec2(0.0f, 0.0f); w.InitialSize = ImVec2(0.0f, 0.0f); w.DockDir = ImGuiDir_None; w.DockSize = 0.0f;
         w.Item = ctrl;
@@ -22294,7 +22295,7 @@ void BuildAppLiveGraph(const ImGuiApp* app, ImGuiAppGraph* g)
             if (has_design_twin)
                 continue;
         }
-        AppLiveWant w; w.Kind = ImGuiAppNodeKind_Layer; w.Key = 0x4C000000u + (ImGuiID)i;
+        ImGuiAppLiveWant w; w.Kind = ImGuiAppNodeKind_Layer; w.Key = 0x4C000000u + (ImGuiID)i;
         w.DataId = 0; w.DepCount = 0; w.ParentKey = 0;
         w.Flags = 0; w.HasPlacement = false; w.InitialPos = ImVec2(0.0f, 0.0f); w.InitialSize = ImVec2(0.0f, 0.0f); w.DockDir = ImGuiDir_None; w.DockSize = 0.0f;
         w.Item = nullptr;
@@ -22312,7 +22313,7 @@ void BuildAppLiveGraph(const ImGuiApp* app, ImGuiAppGraph* g)
         const ImGuiAppWindowBase* win = app->Windows.Data[i];
         const char* lbl = win->Label;
         ImGuiID key = AppConstantHash(lbl[0] ? lbl : "Window");
-        AppLiveWant w; w.Kind = ImGuiAppNodeKind_Window; w.Key = key;
+        ImGuiAppLiveWant w; w.Kind = ImGuiAppNodeKind_Window; w.Key = key;
         w.DataId = 0; w.DepCount = 0; w.LayerType = ImGuiAppLayerType_Task; w.ParentKey = 0;
         w.Flags = win->Flags; w.HasPlacement = win->HasInitialPlacement; w.InitialPos = win->InitialPos; w.InitialSize = win->InitialSize;
         w.DockDir = ImGuiDir_None; w.DockSize = 0.0f;
@@ -22327,7 +22328,7 @@ void BuildAppLiveGraph(const ImGuiApp* app, ImGuiAppGraph* g)
         const ImGuiAppSidebarBase* sb = app->Sidebars.Data[i];
         const char* lbl = sb->Label;
         ImGuiID key = AppConstantHash(lbl[0] ? lbl : "Sidebar") + 1u;
-        AppLiveWant w; w.Kind = ImGuiAppNodeKind_Sidebar; w.Key = key;
+        ImGuiAppLiveWant w; w.Kind = ImGuiAppNodeKind_Sidebar; w.Key = key;
         w.DataId = 0; w.DepCount = 0; w.LayerType = ImGuiAppLayerType_Task; w.ParentKey = 0;
         w.Flags = sb->Flags; w.HasPlacement = sb->HasInitialPlacement; w.InitialPos = sb->InitialPos; w.InitialSize = sb->InitialSize;
         w.DockDir = sb->DockDir; w.DockSize = sb->Size;
@@ -22592,7 +22593,7 @@ static bool AppGraphReparent(ImGuiAppGraph* g, int child_id, int parent_id)
     return true;
 }
 
-struct AppTreeCtx
+struct ImGuiAppTreeCtx
 {
     int*  Sel;
     bool  KindVisible[ImGuiAppNodeKind_COUNT];
@@ -22698,7 +22699,7 @@ static void AppSelSet(ImGuiAppGraph* g, int id)
 
 // Click a tree row: Ctrl toggles it in the multi-selection; plain click selects only it. Primary (*Sel) follows.
 #ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
-static void AppTreeClick(ImGuiAppGraph* g, ImGuiAppNode* n, AppTreeCtx* c)
+static void AppTreeClick(ImGuiAppGraph* g, ImGuiAppNode* n, ImGuiAppTreeCtx* c)
 {
     if (c->Sel == nullptr)
         return;
@@ -22732,10 +22733,10 @@ static bool AppTreeRowIcon(const char* icon, ImVec2 center, float r, ImU32 col, 
     return hov && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
 }
 
-static void AppTreeDrawNode(ImGuiAppGraph* g, int node_id, AppTreeCtx* c);   // fwd (recursive)
+static void AppTreeDrawNode(ImGuiAppGraph* g, int node_id, ImGuiAppTreeCtx* c);   // fwd (recursive)
 
 // The right-click menu for a tree row -- records a deferred action (mutating g while iterating it is unsafe).
-static void AppTreeContextMenu(ImGuiAppGraph* g, ImGuiAppNode* n, AppTreeCtx* c)
+static void AppTreeContextMenu(ImGuiAppGraph* g, ImGuiAppNode* n, ImGuiAppTreeCtx* c)
 {
     if (!ImGui::BeginPopupContextItem("##ctx"))
         return;
@@ -22822,7 +22823,7 @@ static void AppTreeContextMenu(ImGuiAppGraph* g, ImGuiAppNode* n, AppTreeCtx* c)
     ImGui::EndPopup();
 }
 
-static void AppTreeDrawNode(ImGuiAppGraph* g, int node_id, AppTreeCtx* c)
+static void AppTreeDrawNode(ImGuiAppGraph* g, int node_id, ImGuiAppTreeCtx* c)
 {
     const int ni = AppGraphFindNodeIndex(g, node_id);
     if (ni < 0)
@@ -23061,7 +23062,7 @@ void ShowAppGraphTree(const ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_
     IM_UNUSED(app);   // the graph already mirrors the live app, so it is the single outliner source
 
 
-    AppTreeCtx ctx;
+    ImGuiAppTreeCtx ctx;
     ctx.Sel = selected_node_id;
     ctx.RenameNode = &AppGraphEditorState(g)->OutlinerRename;
     ctx.RenameFocus = &AppGraphEditorState(g)->OutlinerRenameFocus;
@@ -23421,10 +23422,10 @@ void ImAppPulse::OnUpdate(float dt, ImAppPulseData* data, const ImAppPulseTempDa
 
 namespace
 {
-enum { AppPvUnknown = -2 };   // a builtin dep field: opaque to the checker, compatible with everything
+enum { ImGuiAppPvUnknown = -2 };   // a builtin dep field: opaque to the checker, compatible with everything
 
 // One slot in a control's Persist or Temp sub-buffer. Offsets are relative to the sub-buffer base.
-struct AppPvSlot
+struct ImGuiAppPvSlot
 {
     char              Name[IM_LABEL_SIZE];   // sanitized identifier (codegen spelling)
     ImGuiAppFieldType Type;
@@ -23435,22 +23436,22 @@ struct AppPvSlot
 
 // A Persist bool the interpreter allocates per (instance, command): set on the event edge in OnUpdate,
 // emitted by OnGetCommand -- the interpreter form of codegen's <Cmd>Pending latch.
-struct AppPvLatch
+struct ImGuiAppPvLatch
 {
     int Offset;         // within the Persist sub-buffer
     int CommandValue;   // ImGuiAppCommand assigned to this command name
 };
 
 // One resolved data binding: persist[Dst] = producer_persist[Src] every Task frame (design 4.1 step 1).
-struct AppPvBinding
+struct ImGuiAppPvBinding
 {
     ImGuiID   ProducerDataTypeId;
-    AppPvSlot Src;   // slot in the producer's Persist manifest
-    AppPvSlot Dst;   // slot in this control's Persist manifest
+    ImGuiAppPvSlot Src;   // slot in the producer's Persist manifest
+    ImGuiAppPvSlot Dst;   // slot in this control's Persist manifest
 };
 
 // A dependency producer, for expression dep-param roots (design 4.5).
-struct AppPvDep
+struct ImGuiAppPvDep
 {
     int     ProducerNodeId;
     ImGuiID ProducerDataTypeId;
@@ -23458,20 +23459,20 @@ struct AppPvDep
 
 // Scripted input: the headless equivalent of a widget recording into TempData during OnRender. F68
 // replaces this with real widget input on the composed window surface.
-struct AppPvScript
+struct ImGuiAppPvScript
 {
     int    NodeId;
     char   Field[IM_LABEL_SIZE];
     double Value;
 };
 
-struct AppPvDispatch
+struct ImGuiAppPvDispatch
 {
     int Tick;
     int Command;
 };
 
-struct AppPvCommandName
+struct ImGuiAppPvCommandName
 {
     char Name[IM_LABEL_SIZE];
     int  Value;
@@ -23480,7 +23481,7 @@ struct AppPvCommandName
 // The on-camera surface + selection-brushing channel (design 8), bundled off the session. All transient;
 // never snapshotted. Composer -> preview: Brush* name the node whose widget group haloes. Preview ->
 // composer: HoverNode/ClickNode report the node the mouse is over / clicked, latched until taken.
-struct AppPvSurface
+struct ImGuiAppPvSurface
 {
     bool Enabled;        // OnRender submits real widgets into the current window (else headless CORE)
     int  BrushSelected;  // composer -> preview halo target (primary selection node id, -1 none)
@@ -23488,23 +23489,23 @@ struct AppPvSurface
     int  HoverNode;      // preview -> composer: node under the mouse this frame (-1 none)
     int  ClickNode;      // preview -> composer: node whose panel was clicked (latched, -1 none)
 
-    AppPvSurface() { Enabled = false; BrushSelected = -1; BrushHover = -1; HoverNode = -1; ClickNode = -1; }
+    ImGuiAppPvSurface() { Enabled = false; BrushSelected = -1; BrushHover = -1; HoverNode = -1; ClickNode = -1; }
 };
 
 // Per interpreter control instance. The value store is a flat byte buffer laid out Persist|LastTemp|Temp
 // (InstanceData order) and registered through RegisterAppStorage, so snapshot/restore/replay/state-hash
 // apply verbatim. Records are heap-allocated and held by pointer so their addresses stay stable.
-struct AppPvInstance
+struct ImGuiAppPvInstance
 {
     int                      NodeId;
     ImGuiID                  DataTypeId;
-    ImVector<AppPvSlot>      Persist;       // effective persist fields
-    ImVector<AppPvSlot>      Temp;          // effective temp fields
+    ImVector<ImGuiAppPvSlot>      Persist;       // effective persist fields
+    ImVector<ImGuiAppPvSlot>      Temp;          // effective temp fields
     int                      PersistBytes;  // Persist sub-buffer size (fields + latches, 8-rounded)
     int                      TempBytes;     // Temp sub-buffer size
-    ImVector<AppPvLatch>     Latches;
-    ImVector<AppPvBinding>   Bindings;
-    ImVector<AppPvDep>       Deps;
+    ImVector<ImGuiAppPvLatch>     Latches;
+    ImVector<ImGuiAppPvBinding>   Bindings;
+    ImVector<ImGuiAppPvDep>       Deps;
     ImVector<ImGuiAppEventDesc> Events;     // copied off the node (a CORE run does not edit the graph)
     bool                     IsBuiltin;     // builtin control with no interpreter rule -> reflected only (design 9)
 };
@@ -23516,12 +23517,12 @@ struct ImGuiAppPreview
 {
     const ImGuiAppGraph*        Graph;        // borrowed, read-only; never mutated by running it
     ImGuiApp*                   App;          // a real framework app (ImGuiAppPreviewApp)
-    ImVector<AppPvInstance*>    Instances;
-    ImVector<AppPvScript>       Scripts;
-    ImVector<AppPvDispatch>     Dispatches;
-    ImVector<AppPvCommandName>  Commands;
+    ImVector<ImGuiAppPvInstance*>    Instances;
+    ImVector<ImGuiAppPvScript>       Scripts;
+    ImVector<ImGuiAppPvDispatch>     Dispatches;
+    ImVector<ImGuiAppPvCommandName>  Commands;
     int                         Tick;
-    AppPvSurface                Surface;      // F68 surface + brushing channel (design 8)
+    ImGuiAppPvSurface                Surface;      // F68 surface + brushing channel (design 8)
 
     ImGuiAppPreview() { Graph = nullptr; App = nullptr; Tick = 0; }
 };
@@ -23663,7 +23664,7 @@ const ImGuiAppNode* AppPvFindStructNode(const ImGuiAppGraph* g, const char* type
     return nullptr;
 }
 
-int AppPvBuildManifestList(const ImGuiAppGraph* g, const ImGuiAppNode* owner, int list, ImVector<AppPvSlot>* out, int depth);
+int AppPvBuildManifestList(const ImGuiAppGraph* g, const ImGuiAppNode* owner, int list, ImVector<ImGuiAppPvSlot>* out, int depth);
 
 // Byte size of one field at natural alignment. Struct fields recurse into the referenced Struct node.
 int AppPvFieldSize(const ImGuiAppGraph* g, const ImGuiAppFieldDesc* f, int depth)
@@ -23682,7 +23683,7 @@ int AppPvFieldSize(const ImGuiAppGraph* g, const ImGuiAppFieldDesc* f, int depth
         if (depth > 8) return 0;   // cycle guard (dangling/cyclic struct types are a validate issue)
         const ImGuiAppNode* sn = AppPvFindStructNode(g, f->StructType);
         if (sn == nullptr) return 0;
-        ImVector<AppPvSlot> nested;
+        ImVector<ImGuiAppPvSlot> nested;
         return AppPvBuildManifestList(g, sn, 0, &nested, depth + 1);
     }
     default: return 0;
@@ -23709,7 +23710,7 @@ int AppPvFieldAlign(const ImGuiAppGraph* g, const ImGuiAppFieldDesc* f, int dept
 int AppPvAlignUp(int off, int align) { return (off + align - 1) / align * align; }
 
 // Pack one field list into slots at natural alignment; returns the sub-buffer byte size (8-rounded).
-int AppPvBuildManifestList(const ImGuiAppGraph* g, const ImGuiAppNode* owner, int list, ImVector<AppPvSlot>* out, int depth)
+int AppPvBuildManifestList(const ImGuiAppGraph* g, const ImGuiAppNode* owner, int list, ImVector<ImGuiAppPvSlot>* out, int depth)
 {
     out->clear();
     ImVector<ImGuiAppFieldDesc> fields;
@@ -23718,7 +23719,7 @@ int AppPvBuildManifestList(const ImGuiAppGraph* g, const ImGuiAppNode* owner, in
     for (int i = 0; i < fields.Size; i++)
     {
         const ImGuiAppFieldDesc* f = &fields.Data[i];
-        AppPvSlot s;
+        ImGuiAppPvSlot s;
         AppPvSanitize(s.Name, IM_ARRAYSIZE(s.Name), f->Name);
         s.Type = f->Type;
         s.ArraySize = f->ArraySize;
@@ -23732,7 +23733,7 @@ int AppPvBuildManifestList(const ImGuiAppGraph* g, const ImGuiAppNode* owner, in
     return AppPvAlignUp(off, 8);
 }
 
-const AppPvSlot* AppPvFindSlot(const ImVector<AppPvSlot>& m, const char* sanitized_name)
+const ImGuiAppPvSlot* AppPvFindSlot(const ImVector<ImGuiAppPvSlot>& m, const char* sanitized_name)
 {
     for (int i = 0; i < m.Size; i++)
         if (strcmp(m.Data[i].Name, sanitized_name) == 0) return &m.Data[i];
@@ -23743,7 +23744,7 @@ const AppPvSlot* AppPvFindSlot(const ImVector<AppPvSlot>& m, const char* sanitiz
 // [SECTION] Slot read / write (memcpy: buffers are packed, sub-buffer aligned)
 //---------------------------------------------------------------------------
 
-double AppPvReadSlot(const char* base, const AppPvSlot* s)
+double AppPvReadSlot(const char* base, const ImGuiAppPvSlot* s)
 {
     const char* p = base + s->Offset;
     switch (s->Type)
@@ -23756,7 +23757,7 @@ double AppPvReadSlot(const char* base, const AppPvSlot* s)
     }
 }
 
-void AppPvWriteSlot(char* base, const AppPvSlot* s, double value)
+void AppPvWriteSlot(char* base, const ImGuiAppPvSlot* s, double value)
 {
     char* p = base + s->Offset;
     switch (s->Type)
@@ -23776,37 +23777,37 @@ void AppPvWriteSlot(char* base, const AppPvSlot* s, double value)
 // AppExprOr..AppExprPrimary). The checker already proved every construct re-parseable
 // and type-fitting, so this is the second visitor of one grammar (single-authority rule).
 
-struct AppPvValue
+struct ImGuiAppPvValue
 {
-    int    Type;   // ImGuiAppFieldType_* or AppPvUnknown
+    int    Type;   // ImGuiAppFieldType_* or ImGuiAppPvUnknown
     double Num;    // bool as 0/1, else numeric
 };
 
-struct AppPvEval
+struct ImGuiAppPvEval
 {
     ImGuiAppPreview*     Session;
-    const AppPvInstance* Inst;
+    const ImGuiAppPvInstance* Inst;
     char*                Buffer;   // this control's instance buffer
     const char*          Cur;
     bool                 Failed;
 };
 
 char* AppPvInstanceBuffer(ImGuiAppPreview* s, ImGuiID data_type_id);
-const AppPvInstance* AppPvFindInstance(const ImGuiAppPreview* s, int node_id);
+const ImGuiAppPvInstance* AppPvFindInstance(const ImGuiAppPreview* s, int node_id);
 
-bool AppPvIsBoolish(int t) { return t == ImGuiAppFieldType_Bool || t == AppPvUnknown; }
+bool AppPvIsBoolish(int t) { return t == ImGuiAppFieldType_Bool || t == ImGuiAppPvUnknown; }
 
 int AppPvPromote(int a, int b)
 {
-    if (a == AppPvUnknown || b == AppPvUnknown) return AppPvUnknown;
+    if (a == ImGuiAppPvUnknown || b == ImGuiAppPvUnknown) return ImGuiAppPvUnknown;
     if (a == ImGuiAppFieldType_Double || b == ImGuiAppFieldType_Double) return ImGuiAppFieldType_Double;
     if (a == ImGuiAppFieldType_Float || b == ImGuiAppFieldType_Float) return ImGuiAppFieldType_Float;
     return ImGuiAppFieldType_Int;
 }
 
-void AppPvSkip(AppPvEval* c) { while (*c->Cur == ' ' || *c->Cur == '\t') c->Cur++; }
+void AppPvSkip(ImGuiAppPvEval* c) { while (*c->Cur == ' ' || *c->Cur == '\t') c->Cur++; }
 
-bool AppPvAccept(AppPvEval* c, const char* op)
+bool AppPvAccept(ImGuiAppPvEval* c, const char* op)
 {
     AppPvSkip(c);
     const size_t len = strlen(op);
@@ -23818,7 +23819,7 @@ bool AppPvAccept(AppPvEval* c, const char* op)
     return true;
 }
 
-bool AppPvIdent(AppPvEval* c, char* out, int out_size)
+bool AppPvIdent(ImGuiAppPvEval* c, char* out, int out_size)
 {
     AppPvSkip(c);
     const char* s = c->Cur;
@@ -23831,18 +23832,18 @@ bool AppPvIdent(AppPvEval* c, char* out, int out_size)
     return true;
 }
 
-AppPvValue AppPvOr(AppPvEval* c);   // fwd (parens recurse to the top)
+ImGuiAppPvValue AppPvOr(ImGuiAppPvEval* c);   // fwd (parens recurse to the top)
 
 // Resolve a `root->field[.member...]` primary to a scalar value from live storage.
-AppPvValue AppPvResolveRef(AppPvEval* c, const char* root)
+ImGuiAppPvValue AppPvResolveRef(ImGuiAppPvEval* c, const char* root)
 {
-    AppPvValue v;
-    v.Type = AppPvUnknown;
+    ImGuiAppPvValue v;
+    v.Type = ImGuiAppPvUnknown;
     v.Num = 0.0;
 
-    const AppPvInstance* owner = c->Inst;
+    const ImGuiAppPvInstance* owner = c->Inst;
     char* base = nullptr;
-    const ImVector<AppPvSlot>* manifest = nullptr;
+    const ImVector<ImGuiAppPvSlot>* manifest = nullptr;
     bool builtin_dep = false;
 
     if (strcmp(root, "temp_data") == 0)      { base = c->Buffer + owner->PersistBytes + owner->TempBytes; manifest = &owner->Temp; }
@@ -23858,7 +23859,7 @@ AppPvValue AppPvResolveRef(AppPvEval* c, const char* root)
             char param[IM_LABEL_SIZE];
             AppPvSnake(param, IM_ARRAYSIZE(param), dn->Draft.Name);
             if (strcmp(param, root) != 0) continue;
-            const AppPvInstance* pi = AppPvFindInstance(c->Session, dn->Id);
+            const ImGuiAppPvInstance* pi = AppPvFindInstance(c->Session, dn->Id);
             if (pi == nullptr) continue;
             base = AppPvInstanceBuffer(c->Session, owner->Deps.Data[d].ProducerDataTypeId);
             manifest = &pi->Persist;
@@ -23870,7 +23871,7 @@ AppPvValue AppPvResolveRef(AppPvEval* c, const char* root)
     char field[IM_LABEL_SIZE];
     if (!AppPvIdent(c, field, IM_ARRAYSIZE(field))) { c->Failed = true; return v; }
 
-    const AppPvSlot* slot = (manifest != nullptr) ? AppPvFindSlot(*manifest, field) : nullptr;
+    const ImGuiAppPvSlot* slot = (manifest != nullptr) ? AppPvFindSlot(*manifest, field) : nullptr;
 
     // Struct member chains (design 4.5): consumed here but resolved as opaque. The manifest packs nested
     // structs, but the flat slot does not retain its StructType, so a scalar-leaf descent is a follow-on
@@ -23892,15 +23893,15 @@ AppPvValue AppPvResolveRef(AppPvEval* c, const char* root)
     }
     else if (builtin_dep)
     {
-        v.Type = AppPvUnknown;   // F56: value comes from the animator's interpreted store once F56 lands
+        v.Type = ImGuiAppPvUnknown;   // F56: value comes from the animator's interpreted store once F56 lands
     }
     return v;
 }
 
-AppPvValue AppPvPrimary(AppPvEval* c)
+ImGuiAppPvValue AppPvPrimary(ImGuiAppPvEval* c)
 {
-    AppPvValue v;
-    v.Type = AppPvUnknown;
+    ImGuiAppPvValue v;
+    v.Type = ImGuiAppPvUnknown;
     v.Num = 0.0;
     AppPvSkip(c);
 
@@ -23935,22 +23936,22 @@ AppPvValue AppPvPrimary(AppPvEval* c)
     return AppPvResolveRef(c, ident);
 }
 
-AppPvValue AppPvUnary(AppPvEval* c)
+ImGuiAppPvValue AppPvUnary(ImGuiAppPvEval* c)
 {
     if (AppPvAccept(c, "!"))
     {
-        AppPvValue t = AppPvUnary(c);
-        AppPvValue r; r.Type = ImGuiAppFieldType_Bool; r.Num = (t.Num != 0.0) ? 0.0 : 1.0;
+        ImGuiAppPvValue t = AppPvUnary(c);
+        ImGuiAppPvValue r; r.Type = ImGuiAppFieldType_Bool; r.Num = (t.Num != 0.0) ? 0.0 : 1.0;
         return r;
     }
-    if (AppPvAccept(c, "-")) { AppPvValue t = AppPvUnary(c); t.Num = -t.Num; return t; }
+    if (AppPvAccept(c, "-")) { ImGuiAppPvValue t = AppPvUnary(c); t.Num = -t.Num; return t; }
     if (AppPvAccept(c, "+")) { return AppPvUnary(c); }
     return AppPvPrimary(c);
 }
 
-AppPvValue AppPvMul(AppPvEval* c)
+ImGuiAppPvValue AppPvMul(ImGuiAppPvEval* c)
 {
-    AppPvValue t = AppPvUnary(c);
+    ImGuiAppPvValue t = AppPvUnary(c);
     while (!c->Failed)
     {
         char op;
@@ -23958,7 +23959,7 @@ AppPvValue AppPvMul(AppPvEval* c)
         else if (AppPvAccept(c, "/")) op = '/';
         else if (AppPvAccept(c, "%")) op = '%';
         else break;
-        AppPvValue r = AppPvUnary(c);
+        ImGuiAppPvValue r = AppPvUnary(c);
         if (op == '%')      { long long a = (long long)t.Num, b = (long long)r.Num; t.Num = (b != 0) ? (double)(a % b) : 0.0; t.Type = ImGuiAppFieldType_Int; }
         else if (op == '*') { t.Num = t.Num * r.Num; t.Type = AppPvPromote(t.Type, r.Type); }
         else                { t.Num = (r.Num != 0.0) ? (t.Num / r.Num) : 0.0; t.Type = AppPvPromote(t.Type, r.Type); }
@@ -23966,25 +23967,25 @@ AppPvValue AppPvMul(AppPvEval* c)
     return t;
 }
 
-AppPvValue AppPvAdd(AppPvEval* c)
+ImGuiAppPvValue AppPvAdd(ImGuiAppPvEval* c)
 {
-    AppPvValue t = AppPvMul(c);
+    ImGuiAppPvValue t = AppPvMul(c);
     while (!c->Failed)
     {
         char op;
         if      (AppPvAccept(c, "+")) op = '+';
         else if (AppPvAccept(c, "-")) op = '-';
         else break;
-        AppPvValue r = AppPvMul(c);
+        ImGuiAppPvValue r = AppPvMul(c);
         t.Num = (op == '+') ? (t.Num + r.Num) : (t.Num - r.Num);
         t.Type = AppPvPromote(t.Type, r.Type);
     }
     return t;
 }
 
-AppPvValue AppPvRel(AppPvEval* c)
+ImGuiAppPvValue AppPvRel(ImGuiAppPvEval* c)
 {
-    AppPvValue t = AppPvAdd(c);
+    ImGuiAppPvValue t = AppPvAdd(c);
     while (!c->Failed)
     {
         int op;
@@ -23993,7 +23994,7 @@ AppPvValue AppPvRel(AppPvEval* c)
         else if (AppPvAccept(c, "<"))  op = 2;
         else if (AppPvAccept(c, ">"))  op = 3;
         else break;
-        AppPvValue r = AppPvAdd(c);
+        ImGuiAppPvValue r = AppPvAdd(c);
         bool b = false;
         switch (op) { case 0: b = t.Num <= r.Num; break; case 1: b = t.Num >= r.Num; break; case 2: b = t.Num < r.Num; break; default: b = t.Num > r.Num; break; }
         t.Type = ImGuiAppFieldType_Bool; t.Num = b ? 1.0 : 0.0;
@@ -24001,51 +24002,51 @@ AppPvValue AppPvRel(AppPvEval* c)
     return t;
 }
 
-AppPvValue AppPvEq(AppPvEval* c)
+ImGuiAppPvValue AppPvEq(ImGuiAppPvEval* c)
 {
-    AppPvValue t = AppPvRel(c);
+    ImGuiAppPvValue t = AppPvRel(c);
     while (!c->Failed)
     {
         bool eq;
         if      (AppPvAccept(c, "==")) eq = true;
         else if (AppPvAccept(c, "!=")) eq = false;
         else break;
-        AppPvValue r = AppPvRel(c);
+        ImGuiAppPvValue r = AppPvRel(c);
         const bool same = (t.Num == r.Num);
         t.Type = ImGuiAppFieldType_Bool; t.Num = (same == eq) ? 1.0 : 0.0;
     }
     return t;
 }
 
-AppPvValue AppPvXor(AppPvEval* c)
+ImGuiAppPvValue AppPvXor(ImGuiAppPvEval* c)
 {
-    AppPvValue t = AppPvEq(c);
+    ImGuiAppPvValue t = AppPvEq(c);
     while (!c->Failed && AppPvAccept(c, "^"))
     {
-        AppPvValue r = AppPvEq(c);
+        ImGuiAppPvValue r = AppPvEq(c);
         if (AppPvIsBoolish(t.Type) && AppPvIsBoolish(r.Type)) { t.Num = ((t.Num != 0.0) != (r.Num != 0.0)) ? 1.0 : 0.0; t.Type = ImGuiAppFieldType_Bool; }
         else { long long a = (long long)t.Num, b = (long long)r.Num; t.Num = (double)(a ^ b); t.Type = ImGuiAppFieldType_Int; }
     }
     return t;
 }
 
-AppPvValue AppPvAnd(AppPvEval* c)
+ImGuiAppPvValue AppPvAnd(ImGuiAppPvEval* c)
 {
-    AppPvValue t = AppPvXor(c);
+    ImGuiAppPvValue t = AppPvXor(c);
     while (!c->Failed && AppPvAccept(c, "&&"))
     {
-        AppPvValue r = AppPvXor(c);
+        ImGuiAppPvValue r = AppPvXor(c);
         t.Num = ((t.Num != 0.0) && (r.Num != 0.0)) ? 1.0 : 0.0; t.Type = ImGuiAppFieldType_Bool;
     }
     return t;
 }
 
-AppPvValue AppPvOr(AppPvEval* c)
+ImGuiAppPvValue AppPvOr(ImGuiAppPvEval* c)
 {
-    AppPvValue t = AppPvAnd(c);
+    ImGuiAppPvValue t = AppPvAnd(c);
     while (!c->Failed && AppPvAccept(c, "||"))
     {
-        AppPvValue r = AppPvAnd(c);
+        ImGuiAppPvValue r = AppPvAnd(c);
         t.Num = ((t.Num != 0.0) || (r.Num != 0.0)) ? 1.0 : 0.0; t.Type = ImGuiAppFieldType_Bool;
     }
     return t;
@@ -24053,15 +24054,15 @@ AppPvValue AppPvOr(AppPvEval* c)
 
 // Evaluate an event Expr against live storage. On any parse failure returns 0 (the checker already blessed
 // it at build; a runtime failure is a defensive default, not a crash).
-double AppPvEvalExpr(ImGuiAppPreview* s, const AppPvInstance* inst, char* buffer, const char* expr)
+double AppPvEvalExpr(ImGuiAppPreview* s, const ImGuiAppPvInstance* inst, char* buffer, const char* expr)
 {
-    AppPvEval c;
+    ImGuiAppPvEval c;
     c.Session = s;
     c.Inst = inst;
     c.Buffer = buffer;
     c.Cur = expr;
     c.Failed = false;
-    AppPvValue v = AppPvOr(&c);
+    ImGuiAppPvValue v = AppPvOr(&c);
     return c.Failed ? 0.0 : v.Num;
 }
 }
@@ -24081,7 +24082,7 @@ struct ImGuiAppPreviewApp : ImGuiApp
     {
         if (Session != nullptr)
         {
-            AppPvDispatch d;
+            ImGuiAppPvDispatch d;
             d.Tick = Session->Tick;
             d.Command = (int)cmd;
             Session->Dispatches.push_back(d);
@@ -24095,7 +24096,7 @@ struct ImGuiAppPreviewApp : ImGuiApp
 struct ImGuiAppPreviewControl : ImGuiAppControlBase
 {
     ImGuiAppPreview* Session = nullptr;
-    AppPvInstance*   Inst = nullptr;
+    ImGuiAppPvInstance*   Inst = nullptr;
     bool             Hosted = false;   // window/sidebar-hosted -> render the field panel (design 4.6 / 8.1)
 
     virtual ImGuiID GetControlDataID() const override final { return Inst != nullptr ? Inst->DataTypeId : 0; }
@@ -24125,7 +24126,7 @@ struct ImGuiAppPreviewControl : ImGuiAppControlBase
         // 1. Dependency binding lines: persist[Dst] = producer_persist[Src] (design 4.1 step 1).
         for (int i = 0; i < Inst->Bindings.Size; i++)
         {
-            const AppPvBinding* b = &Inst->Bindings.Data[i];
+            const ImGuiAppPvBinding* b = &Inst->Bindings.Data[i];
             char* prod = (char*)app->Data.GetVoidPtr(b->ProducerDataTypeId);
             if (prod == nullptr) continue;
             const double v = AppPvReadSlot(prod, &b->Src);
@@ -24147,7 +24148,7 @@ struct ImGuiAppPreviewControl : ImGuiAppControlBase
             const ImGuiAppEventDesc* ev = &Inst->Events.Data[e];
             char wid[IM_LABEL_SIZE];
             AppPvSanitize(wid, IM_ARRAYSIZE(wid), ev->TempField);
-            const AppPvSlot* watched = AppPvFindSlot(Inst->Temp, wid);
+            const ImGuiAppPvSlot* watched = AppPvFindSlot(Inst->Temp, wid);
             if (watched == nullptr) continue;
 
             const double tv = AppPvReadSlot(temp, watched);
@@ -24167,7 +24168,7 @@ struct ImGuiAppPreviewControl : ImGuiAppControlBase
             {
                 char dst[IM_LABEL_SIZE];
                 AppPvSanitize(dst, IM_ARRAYSIZE(dst), ev->DstField);
-                const AppPvSlot* dslot = AppPvFindSlot(Inst->Persist, dst);
+                const ImGuiAppPvSlot* dslot = AppPvFindSlot(Inst->Persist, dst);
                 if (dslot != nullptr)
                 {
                     const double val = (ev->Expr[0] == 0) ? tv : AppPvEvalExpr(Session, Inst, buffer, ev->Expr);
@@ -24218,7 +24219,7 @@ private:
 
 namespace
 {
-const AppPvInstance* AppPvFindInstance(const ImGuiAppPreview* s, int node_id)
+const ImGuiAppPvInstance* AppPvFindInstance(const ImGuiAppPreview* s, int node_id)
 {
     for (int i = 0; i < s->Instances.Size; i++)
         if (s->Instances.Data[i]->NodeId == node_id) return s->Instances.Data[i];
@@ -24237,7 +24238,7 @@ int AppPvCommandValue(ImGuiAppPreview* s, const char* name)
     AppPvSanitize(base, IM_ARRAYSIZE(base), name);
     for (int i = 0; i < s->Commands.Size; i++)
         if (strcmp(s->Commands.Data[i].Name, base) == 0) return s->Commands.Data[i].Value;
-    AppPvCommandName cn;
+    ImGuiAppPvCommandName cn;
     ImStrncpy(cn.Name, base, IM_ARRAYSIZE(cn.Name));
     cn.Value = (int)ImGuiAppCommand_COUNT + s->Commands.Size;
     s->Commands.push_back(cn);
@@ -24247,7 +24248,7 @@ int AppPvCommandValue(ImGuiAppPreview* s, const char* name)
 void AppPvDestroyBuffer(void* p) { IM_FREE(p); }
 
 #ifndef IMGUIX_DISABLE_TOOLS   // TOOL: F68 preview-surface widgets + brushing (Phase A3)
-void AppPvFieldWidget(const AppPvSlot* sl, char* p)
+void AppPvFieldWidget(const ImGuiAppPvSlot* sl, char* p)
 {
     switch (sl->Type)
     {
@@ -24262,7 +24263,7 @@ void AppPvFieldWidget(const AppPvSlot* sl, char* p)
 // Manifest-bound widget panel (design 8.1) with selection brushing (8.2): AppMockDrawFields' field switch,
 // rewritten to read/write manifest offsets in live storage, wrapped in one titled group (a single
 // hit-target). Reports hover/click back to the composer, haloes on its selection; app-level headless controls issue no ImGui.
-void AppPvDrawFields(ImGuiAppPreview* s, const AppPvInstance* inst, char* buffer, const char* label)
+void AppPvDrawFields(ImGuiAppPreview* s, const ImGuiAppPvInstance* inst, char* buffer, const char* label)
 {
     ImGui::PushID(inst->NodeId);
     ImGui::BeginGroup();
@@ -24330,7 +24331,7 @@ void ImGuiAppPreviewControl::OnRender(const ImGuiApp* app) const
     for (int i = 0; i < Session->Scripts.Size; i++)
     {
         if (Session->Scripts.Data[i].NodeId != Inst->NodeId) continue;
-        const AppPvSlot* slot = AppPvFindSlot(Inst->Temp, Session->Scripts.Data[i].Field);
+        const ImGuiAppPvSlot* slot = AppPvFindSlot(Inst->Temp, Session->Scripts.Data[i].Field);
         if (slot != nullptr) AppPvWriteSlot(temp, slot, Session->Scripts.Data[i].Value);
     }
 
@@ -24352,7 +24353,7 @@ namespace
 void AppPvPushControl(ImGuiAppPreview* s, const ImGuiAppNode* n, ImGuiAppWindowBase* host)
 {
     ImGuiApp* app = s->App;
-    AppPvInstance* inst = IM_NEW(AppPvInstance)();
+    ImGuiAppPvInstance* inst = IM_NEW(ImGuiAppPvInstance)();
     inst->NodeId = n->Id;
     inst->DataTypeId = AppPvControlDataTypeId(n);
     inst->IsBuiltin = n->IsBuiltin;
@@ -24371,7 +24372,7 @@ void AppPvPushControl(ImGuiAppPreview* s, const ImGuiAppNode* n, ImGuiAppWindowB
         bool have = false;
         for (int li = 0; li < inst->Latches.Size; li++) if (inst->Latches.Data[li].CommandValue == cmd_value) { have = true; break; }
         if (have) continue;
-        AppPvLatch latch;
+        ImGuiAppPvLatch latch;
         latch.Offset = latch_off;
         latch.CommandValue = cmd_value;
         inst->Latches.push_back(latch);
@@ -24395,7 +24396,7 @@ void AppPvPushControl(ImGuiAppPreview* s, const ImGuiAppNode* n, ImGuiAppWindowB
     {
         const ImGuiAppNode* dn = AppPvFindNode(s->Graph, deps.Data[d]);
         if (dn == nullptr || dn->Kind != ImGuiAppNodeKind_Control) continue;   // Struct/Field deps: no store of their own here
-        AppPvDep dep;
+        ImGuiAppPvDep dep;
         dep.ProducerNodeId = dn->Id;
         dep.ProducerDataTypeId = AppPvControlDataTypeId(dn);
         inst->Deps.push_back(dep);
@@ -24410,17 +24411,17 @@ void AppPvPushControl(ImGuiAppPreview* s, const ImGuiAppNode* n, ImGuiAppWindowB
         const int prod_id = AppPvPortOwner(s->Graph, s->Graph->Links.Data[li].StartAttr);
         const ImGuiAppNode* prod = AppPvFindNode(s->Graph, prod_id);
         if (prod == nullptr || prod->Kind != ImGuiAppNodeKind_Control) continue;
-        const AppPvInstance* pi = AppPvFindInstance(s, prod_id);
+        const ImGuiAppPvInstance* pi = AppPvFindInstance(s, prod_id);
         if (pi == nullptr) continue;   // producer must be built first (topo order guarantees it)
         for (int bi = 0; bi < s->Graph->Bindings.Size; bi++)
         {
             if (s->Graph->Bindings.Data[bi].LinkId != link_id) continue;
             char dst[IM_LABEL_SIZE]; AppPvSanitize(dst, IM_ARRAYSIZE(dst), s->Graph->Bindings.Data[bi].DstField);
             char src[IM_LABEL_SIZE]; AppPvSanitize(src, IM_ARRAYSIZE(src), s->Graph->Bindings.Data[bi].SrcField);
-            const AppPvSlot* dslot = AppPvFindSlot(inst->Persist, dst);
-            const AppPvSlot* sslot = AppPvFindSlot(pi->Persist, src);
+            const ImGuiAppPvSlot* dslot = AppPvFindSlot(inst->Persist, dst);
+            const ImGuiAppPvSlot* sslot = AppPvFindSlot(pi->Persist, src);
             if (dslot == nullptr || sslot == nullptr) continue;
-            AppPvBinding b;
+            ImGuiAppPvBinding b;
             b.ProducerDataTypeId = AppPvControlDataTypeId(prod);
             b.Src = *sslot;
             b.Dst = *dslot;
@@ -24476,26 +24477,26 @@ void AppPvBuildPopulation(ImGuiAppPreview* s, const ImVector<int>& order)
 // A captured control's snapshottable bytes (design 7): the Persist + LastTemp regions with their manifests,
 // kept across a reconcile so surviving (sanitized name, type) slots carry their values into the rebuild.
 // Held by HEAP POINTER: nested ImVectors are not bitwise-copyable, so it must never be an ImVector value element.
-struct AppPvCapture
+struct ImGuiAppPvCapture
 {
     int                 NodeId;
-    ImVector<AppPvSlot> Persist;
-    ImVector<AppPvSlot> Temp;
+    ImVector<ImGuiAppPvSlot> Persist;
+    ImVector<ImGuiAppPvSlot> Temp;
     ImVector<char>      PersistData;    // copy of the Persist sub-buffer ([0, PersistBytes))
     ImVector<char>      LastTempData;   // copy of the LastTemp sub-buffer ([PersistBytes, +TempBytes))
 };
 
-void AppPvCaptureInstances(ImGuiAppPreview* s, ImVector<AppPvCapture*>* out)
+void AppPvCaptureInstances(ImGuiAppPreview* s, ImVector<ImGuiAppPvCapture*>* out)
 {
     out->clear();
     for (int i = 0; i < s->Instances.Size; i++)
     {
-        const AppPvInstance* inst = s->Instances.Data[i];
+        const ImGuiAppPvInstance* inst = s->Instances.Data[i];
         const char* buffer = (const char*)s->App->Data.GetVoidPtr(inst->DataTypeId);
         if (buffer == nullptr) continue;
-        AppPvCapture* cap = IM_NEW(AppPvCapture)();
+        ImGuiAppPvCapture* cap = IM_NEW(ImGuiAppPvCapture)();
         cap->NodeId = inst->NodeId;
-        cap->Persist = inst->Persist;   // POD element copy (ImVector operator= memcpy is correct for AppPvSlot)
+        cap->Persist = inst->Persist;   // POD element copy (ImVector operator= memcpy is correct for ImGuiAppPvSlot)
         cap->Temp = inst->Temp;
         cap->PersistData.resize(inst->PersistBytes);
         if (inst->PersistBytes > 0) memcpy(cap->PersistData.Data, buffer, (size_t)inst->PersistBytes);
@@ -24507,9 +24508,9 @@ void AppPvCaptureInstances(ImGuiAppPreview* s, ImVector<AppPvCapture*>* out)
 
 // Copy every surviving (sanitized name, type) slot from the capture into a freshly-built instance; new and
 // retyped slots keep their zero default (design 7). Preserves Persist + LastTemp -- Temp is re-recorded input.
-void AppPvRestoreInstance(ImGuiAppPreview* s, const AppPvInstance* inst, const ImVector<AppPvCapture*>& caps)
+void AppPvRestoreInstance(ImGuiAppPreview* s, const ImGuiAppPvInstance* inst, const ImVector<ImGuiAppPvCapture*>& caps)
 {
-    const AppPvCapture* cap = nullptr;
+    const ImGuiAppPvCapture* cap = nullptr;
     for (int i = 0; i < caps.Size; i++) if (caps.Data[i]->NodeId == inst->NodeId) { cap = caps.Data[i]; break; }
     if (cap == nullptr) return;   // a new node -> default-initialised
 
@@ -24518,10 +24519,10 @@ void AppPvRestoreInstance(ImGuiAppPreview* s, const AppPvInstance* inst, const I
 
     for (int i = 0; i < inst->Persist.Size; i++)
     {
-        const AppPvSlot* ns = &inst->Persist.Data[i];
+        const ImGuiAppPvSlot* ns = &inst->Persist.Data[i];
         for (int j = 0; j < cap->Persist.Size; j++)
         {
-            const AppPvSlot* os = &cap->Persist.Data[j];
+            const ImGuiAppPvSlot* os = &cap->Persist.Data[j];
             if (os->Type == ns->Type && os->Size == ns->Size && strcmp(os->Name, ns->Name) == 0)
             { memcpy(buffer + ns->Offset, cap->PersistData.Data + os->Offset, (size_t)ns->Size); break; }
         }
@@ -24529,10 +24530,10 @@ void AppPvRestoreInstance(ImGuiAppPreview* s, const AppPvInstance* inst, const I
     char* last_temp = buffer + inst->PersistBytes;
     for (int i = 0; i < inst->Temp.Size; i++)
     {
-        const AppPvSlot* ns = &inst->Temp.Data[i];
+        const ImGuiAppPvSlot* ns = &inst->Temp.Data[i];
         for (int j = 0; j < cap->Temp.Size; j++)
         {
-            const AppPvSlot* os = &cap->Temp.Data[j];
+            const ImGuiAppPvSlot* os = &cap->Temp.Data[j];
             if (os->Type == ns->Type && os->Size == ns->Size && strcmp(os->Name, ns->Name) == 0)
             { memcpy(last_temp + ns->Offset, cap->LastTempData.Data + os->Offset, (size_t)ns->Size); break; }
         }
@@ -24594,7 +24595,7 @@ void AppPreviewFrame(ImGuiAppPreview* session, float dt)
 bool AppPreviewSetInput(ImGuiAppPreview* session, int node_id, const char* temp_field, double value)
 {
     if (session == nullptr || temp_field == nullptr) return false;
-    const AppPvInstance* inst = AppPvFindInstance(session, node_id);
+    const ImGuiAppPvInstance* inst = AppPvFindInstance(session, node_id);
     if (inst == nullptr) return false;
     char fid[IM_LABEL_SIZE];
     AppPvSanitize(fid, IM_ARRAYSIZE(fid), temp_field);
@@ -24602,7 +24603,7 @@ bool AppPreviewSetInput(ImGuiAppPreview* session, int node_id, const char* temp_
     for (int i = 0; i < session->Scripts.Size; i++)
         if (session->Scripts.Data[i].NodeId == node_id && strcmp(session->Scripts.Data[i].Field, fid) == 0)
         { session->Scripts.Data[i].Value = value; return true; }
-    AppPvScript sc;
+    ImGuiAppPvScript sc;
     sc.NodeId = node_id;
     ImStrncpy(sc.Field, fid, IM_ARRAYSIZE(sc.Field));
     sc.Value = value;
@@ -24613,11 +24614,11 @@ bool AppPreviewSetInput(ImGuiAppPreview* session, int node_id, const char* temp_
 bool AppPreviewGetPersist(ImGuiAppPreview* session, int node_id, const char* persist_field, double* out_value)
 {
     if (session == nullptr || persist_field == nullptr) return false;
-    const AppPvInstance* inst = AppPvFindInstance(session, node_id);
+    const ImGuiAppPvInstance* inst = AppPvFindInstance(session, node_id);
     if (inst == nullptr) return false;
     char fid[IM_LABEL_SIZE];
     AppPvSanitize(fid, IM_ARRAYSIZE(fid), persist_field);
-    const AppPvSlot* slot = AppPvFindSlot(inst->Persist, fid);
+    const ImGuiAppPvSlot* slot = AppPvFindSlot(inst->Persist, fid);
     if (slot == nullptr) return false;
     char* buffer = (char*)session->App->Data.GetVoidPtr(inst->DataTypeId);
     if (buffer == nullptr) return false;
@@ -24661,7 +24662,7 @@ bool AppPreviewReconcile(ImGuiAppPreview* session, char* err, int err_size)
 
     // Capture surviving state, rebuild the population, restore by (name, type). Scripts / dispatch log /
     // command table are session-scoped and carry across unchanged.
-    ImVector<AppPvCapture*> caps;
+    ImVector<ImGuiAppPvCapture*> caps;
     AppPvCaptureInstances(session, &caps);
 
     if (session->App != nullptr)
@@ -26719,16 +26720,16 @@ IMGUI_API bool AppRunAttachWal(ImGuiAppRunIndex* run, const char* wal_path)
 // channels 3 or 4 and always outputs tightly packed RGBA.
 //
 // Index of this file (search for "[SECTION]"):
-// [SECTION] Pixel ops + encode (ImQoiPx, ImQoiEncode)
+// [SECTION] Pixel ops + encode (ImGuiAppQoiPx, ImQoiEncode)
 // [SECTION] Decode (ImQoiDecode)
 // [SECTION] AV image-codec entry points (AppAVImageEncode / AppAVImageDecode)
 
 
 //-----------------------------------------------------------------------------
-// [SECTION] Pixel ops + encode (ImQoiPx, ImQoiEncode)
+// [SECTION] Pixel ops + encode (ImGuiAppQoiPx, ImQoiEncode)
 //-----------------------------------------------------------------------------
 
-struct ImQoiPx
+struct ImGuiAppQoiPx
 {
     unsigned char r;
     unsigned char g;
@@ -26737,12 +26738,12 @@ struct ImQoiPx
 };
 
 // Spec hash: index_position = (r*3 + g*5 + b*7 + a*11) % 64.
-static inline int ImQoiHash(const ImQoiPx* p)
+static inline int ImQoiHash(const ImGuiAppQoiPx* p)
 {
     return (p->r * 3 + p->g * 5 + p->b * 7 + p->a * 11) % 64;
 }
 
-static inline bool ImQoiEq(const ImQoiPx* x, const ImQoiPx* y)
+static inline bool ImQoiEq(const ImGuiAppQoiPx* x, const ImGuiAppQoiPx* y)
 {
     return x->r == y->r && x->g == y->g && x->b == y->b && x->a == y->a;
 }
@@ -26779,8 +26780,8 @@ static bool ImQoiEncode(const void* rgba, int width, int height, int pitch_bytes
     dst[p++] = 4;                                        // channels (informative)
     dst[p++] = 0;                                        // colorspace: sRGB with linear alpha
 
-    ImQoiPx index[64] = {};                              // zero-initialized per spec
-    ImQoiPx prev = { 0, 0, 0, 255 };                     // spec-defined starting previous pixel
+    ImGuiAppQoiPx index[64] = {};                              // zero-initialized per spec
+    ImGuiAppQoiPx prev = { 0, 0, 0, 255 };                     // spec-defined starting previous pixel
     int run = 0;
     const long long total = (long long)width * height;
     long long seen = 0;
@@ -26790,7 +26791,7 @@ static bool ImQoiEncode(const void* rgba, int width, int height, int pitch_bytes
         const unsigned char* row = (const unsigned char*)rgba + (size_t)y * (size_t)pitch_bytes;
         for (int x = 0; x < width; x++)
         {
-            ImQoiPx px;
+            ImGuiAppQoiPx px;
             px.r = row[x * 4 + 0];
             px.g = row[x * 4 + 1];
             px.b = row[x * 4 + 2];
@@ -26901,8 +26902,8 @@ static bool ImQoiDecode(const void* qoi_bytes, int qoi_size, ImVector<char>* out
     out_rgba->resize((int)(total * 4));
     unsigned char* dst = (unsigned char*)out_rgba->Data;
 
-    ImQoiPx index[64] = {};
-    ImQoiPx px = { 0, 0, 0, 255 };
+    ImGuiAppQoiPx index[64] = {};
+    ImGuiAppQoiPx px = { 0, 0, 0, 255 };
     int run = 0;
     int p = 14;
     const int chunks_end = qoi_size - 8;   // the 8-byte end marker is not chunk data
