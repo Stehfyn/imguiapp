@@ -865,50 +865,50 @@ struct ImGuiAppInterfaceAdapterBase : ImGuiAppInterface
 
 struct ImGuiAppLayer : ImGuiAppLayerBase
 {
-    virtual void OnAttach(ImGuiApp*) const override {}
-    virtual void OnDetach(ImGuiApp*) const override {}
-    virtual void OnUpdate(ImGuiApp*, float) const override {}
-    virtual void OnRender(const ImGuiApp*) const override {}
+    virtual void OnAttach(ImGuiApp*)        const override { }
+    virtual void OnDetach(ImGuiApp*)        const override { }
+    virtual void OnUpdate(ImGuiApp*, float) const override { }
+    virtual void OnRender(const ImGuiApp*)  const override { }
 };
 
 struct ImGuiAppTaskLayer : ImGuiAppLayer
 {
-    virtual void OnAttach(ImGuiApp*) const override final;
-    virtual void OnDetach(ImGuiApp*) const override final;
+    virtual void OnAttach(ImGuiApp*)        const override final;
+    virtual void OnDetach(ImGuiApp*)        const override final;
     virtual void OnUpdate(ImGuiApp*, float) const override final;
-    virtual void OnRender(const ImGuiApp*) const override final;
+    virtual void OnRender(const ImGuiApp*)  const override final;
 };
 
 struct ImGuiAppCommandLayer : ImGuiAppLayer
 {
-    virtual void OnAttach(ImGuiApp*) const override final;
-    virtual void OnDetach(ImGuiApp*) const override final;
+    virtual void OnAttach(ImGuiApp*)        const override final;
+    virtual void OnDetach(ImGuiApp*)        const override final;
     virtual void OnUpdate(ImGuiApp*, float) const override final;
-    virtual void OnRender(const ImGuiApp*) const override final;
+    virtual void OnRender(const ImGuiApp*)  const override final;
 };
 
 struct ImGuiAppStatusLayer : ImGuiAppLayer
 {
-    virtual void OnAttach(ImGuiApp*) const override final;
-    virtual void OnDetach(ImGuiApp*) const override final;
+    virtual void OnAttach(ImGuiApp*)        const override final;
+    virtual void OnDetach(ImGuiApp*)        const override final;
     virtual void OnUpdate(ImGuiApp*, float) const override final;
-    virtual void OnRender(const ImGuiApp*) const override final;
+    virtual void OnRender(const ImGuiApp*)  const override final;
 };
 
 struct ImGuiAppLayoutLayer : ImGuiAppLayer
 {
-    virtual void OnAttach(ImGuiApp*) const override final;
-    virtual void OnDetach(ImGuiApp*) const override final;
+    virtual void OnAttach(ImGuiApp*)        const override final;
+    virtual void OnDetach(ImGuiApp*)        const override final;
     virtual void OnUpdate(ImGuiApp*, float) const override final;
-    virtual void OnRender(const ImGuiApp*) const override final;
+    virtual void OnRender(const ImGuiApp*)  const override final;
 };
 
 struct ImGuiAppDisplayLayer : ImGuiAppLayer
 {
-    virtual void OnAttach(ImGuiApp*) const override final;
-    virtual void OnDetach(ImGuiApp*) const override final;
+    virtual void OnAttach(ImGuiApp*)        const override final;
+    virtual void OnDetach(ImGuiApp*)        const override final;
     virtual void OnUpdate(ImGuiApp*, float) const override final;
-    virtual void OnRender(const ImGuiApp*) const override final;
+    virtual void OnRender(const ImGuiApp*)  const override final;
 };
 
 struct ImGuiAppBase : ImGuiAppInterface
