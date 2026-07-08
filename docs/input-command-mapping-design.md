@@ -21,8 +21,9 @@ The codebase already contains three partial implementations of this pattern; the
 rather than adding a fourth:
 
 - **F34 editor registry** — `ImGuiAppEditorCommand` (`imguiapp_internal.h:720`): one static table
-  `s_editor_commands[]` (`imguiapp.cpp:17827`), Id-keyed dispatch switch, `Surfaces` bitmask, an
-  availability predicate, and the four-roads completeness test iterating the registry.
+  `s_editor_commands[]` (`imguiapp.cpp:17827`; retired — rows move onto the app-object registry at
+  editor init), Id-keyed dispatch switch, `Surfaces` bitmask, an availability predicate, and the
+  four-roads completeness test iterating the registry.
 - **F74 keymap overrides** — `ImGuiAppKeyBinding` (`imguiapp_internal.h:585`): sparse serialized diff
   keyed by stable Id, `Key == ImGuiKey_None` = explicit unbind, carried per-document
   (`ImGuiAppGraph::Keymap`, `imguiapp_internal.h:978`).
@@ -44,7 +45,10 @@ NAME; recordings store `name_hash` per record plus a hash→name definition reco
 command (§1.5), so the stream stays self-describing without repeating strings at dispatch rate.
 Registration asserts duplicate names; `NameHash` (`ImHashStr`) is a lookup
 accelerator only — every hash hit confirms with `strcmp`, so a hash collision degrades to a slow
-path, never a wrong verb. The existing editor int `Id` + dispatch switch stay untouched;
+path, never a wrong verb. Declared rows carry only the `Name` string; hashes are minted at
+registration into the app-owned registry row and its `ImGuiStorage` map. Built-in editor rows
+register at editor init from function-local init data; the file-scope table is retired. No global
+state. The existing editor int `Id` + dispatch switch stay untouched;
 `AppCommandFindByName()` is the one bridge.
 
 - **Alternative rejected:** int ids with reserved ranges (library 0..N, app N+1..). A treaty, not a
@@ -55,10 +59,13 @@ path, never a wrong verb. The existing editor int `Id` + dispatch switch stay un
 ### 1.2 API shape: register-by-use is the on-ramp; declared tables remain the palette-rich path
 
 ```cpp
-if (ImGui::AppCommand("edit.paste"))            // registers on first call, then pull-queries
+if (ImGui::AppCommand("edit.paste"))            // Registers on first call, then pull-queries
     Paste();
-ImGui::AppCommandSetup("edit.paste", &desc);    // optional: chord/icon/label/surfaces (POD desc)
+ImGui::AppCommandSetup("edit.paste", &desc);    // Optional: chord/icon/label/surfaces (POD desc)
 ```
+
+Bool return = G1 fired-this-frame; `Setup` follows the `TableSetupColumn` declarative grammar
+(callable every frame, idempotent); the desc is POD.
 
 First call inserts a registry row (label derived from the dotted name, defaults
 `Surfaces = Palette|Shortcut`, no chord) and stamps `LastSeenFrame` for ImGui-style liveness; stale
@@ -90,7 +97,9 @@ chord pressed before a verb's first registration is dropped (one-frame warmup).
 Layer 0: registry defaults (each command's declared chord). Layer 1: app-shipped preset packs
 (one-handed, sticky-mods, vim-chords) as data assets. Layer 2: the user file, serialized as sorted
 one-binding-per-line text — `edit.paste=Ctrl+Shift+V`, empty right side = explicit unbind —
-merge-friendly by construction. Same-layer chord conflict inside one surface context = lint assert;
+merge-friendly by construction. The user file is a sidecar, not an `ImGuiSettingsHandler` section —
+register-by-use registers verbs after the host .ini loads; a late handler never sees its sections
+(I26). Same-layer chord conflict inside one surface context = lint assert;
 cross-layer = legal shadowing (shadowed binding kept inert for the keymap UI to grey out). A binding
 whose name no longer resolves is a tombstone: kept verbatim, WAL-logged once at load, revives if the
 verb returns. Never silently deleted, never a crash.
@@ -115,7 +124,9 @@ are commands, gestures are raw** — mouse drags, text typing, scroll stay `Inpu
 Operands are a tagged POD union `{none, i64, f64, name_hash, selection-ref}` — no raw pointers, no
 screen coordinates — enforced at record time, because one "convenient" `ImVec2` captured outside the
 recorded stream silently breaks replay-vs-live hash equality (the load-bearing risk of this design).
-WAL line becomes `"execute command %08X:%s via %s"`.
+WAL line becomes `"execute command 0x%08X:%s via %s"` (house hex register, I21/F24); the avtool WAL
+marker parser (`imguiapp.cpp:26803`, decimal `strtol` after `"execute command "`) updates in the
+same change or every recording loses its command markers.
 
 - **Alternative rejected:** record raw chords and re-arbitrate during replay. Any keymap change
   between record and replay then replays the wrong verbs — the exact class the WAL exists to catch.
@@ -126,9 +137,13 @@ WAL line becomes `"execute command %08X:%s via %s"`.
 
 `ImGuiAppCommandDesc`, `AppCommand()`, `AppCommandSetup()`, `ImGuiAppInputMapping` load/save entry
 points go in `imguiapp.h` (this is the out-of-the-box surface). The registry row, arbiter state,
-layer resolver, and lint live in `imguiapp_internal.h` beside the F34/F74 types they generalize. The
-editor registry migrates onto the new core additively: Name/NameHash fields first, dispatch switch
-untouched.
+layer resolver, and lint live in `imguiapp_internal.h` beside the F34/F74 types they generalize;
+definitions land in the matching `[SECTION]` regions of the unity `imguiapp.cpp` (Δ7). Registry
+rows and arbiter state are owned by the app object — no file-scope mutable statics (I17; globals
+banned, Δ3/Δ6). Debug surfaces ship in the house introspection register: `DebugNodeAppCommands` /
+`DebugNodeAppInputMapping` beside the existing `DebugNode*` block (`imguiapp_internal.h:1525`),
+guarded by `IMGUI_DISABLE_DEBUG_TOOLS` (I22). The editor registry migrates onto the new core
+additively: Name/NameHash fields first, dispatch switch untouched.
 
 ## 2. Known unknowns, defaults, pivot signals
 
@@ -157,23 +172,27 @@ untouched.
 
 ## 3. Mechanical work (compressed; trust assumed)
 
-1. **Identity (additive, zero behavior change):** `Name`/`NameHash` on `ImGuiAppEditorCommand`;
-   dotted names across `s_editor_commands`; four-roads legs — name non-empty, matches
+1. **Identity (additive, zero behavior change):** `Name` on `ImGuiAppEditorCommand` (string only,
+   no stored hash); dotted names across the rows; four-roads legs — name non-empty, matches
    `^[a-z0-9]+(\.[a-z0-9]+)+$`, Source-prefix correct (`host.*` etc.), duplicate-free by
-   NameHash+strcmp.
-2. **Registry + register-by-use:** per-app `ImVector<row>` + `ImGuiStorage` hash map; `AppCommand()`
-   register/stamp/query; liveness debug window; palette renders union of declared + auto rows.
+   on-the-fly hash + strcmp.
+2. **Registry + register-by-use:** app-object-owned `ImVector<row>` + `ImGuiStorage` hash map (I17);
+   `AppCommand()` register/stamp/query; built-in editor rows registered at init and the file-scope
+   `s_editor_commands` retired (§5 ruling); `DebugNodeAppCommands` liveness introspection; palette
+   renders union of declared + auto rows.
 3. **Arbiter:** merged-binding resolution, veto, longest-mods, once-per-id, TempData pending slot,
-   WAL `via %s` attribution.
-4. **InputMapping:** layer resolver, sorted-line file IO, tombstones, chord-conflict lint, preset
-   pack loader.
+   WAL `via %s` attribution (+ avtool marker-parser co-update, §1.5).
+4. **InputMapping:** layer resolver, sorted-line sidecar IO via `ImAppFormatChord`/`ImAppParseChord`
+   third-tier helpers (N11 imguiapp tier, `ImFormat*`/`ImParse*` family stems), tombstones,
+   chord-conflict lint, preset pack loader.
 5. **Determinism:** Command + CommandNameDef meta record types + framing round-trip in
    `tests/imguiapp_flow_tests.cpp` (framing proven before the mapper consumes it, including a
    truncated-stream case — defs precede first use); replay feed path; meta-stream version bump;
    replay conformance test (dispatch fires with the verb's call-site window toggled off — pins
    record-the-id-not-the-chord).
-6. **Diagnostics:** why-not ring buffer (fixed POD ring: chord, candidate, rejection enum) + Input
-   Doctor panel; never serialized.
+6. **Diagnostics:** why-not ring buffer (fixed POD ring: chord, candidate, rejection enum) +
+   `DebugNodeAppInputMapping` Input Doctor panel behind `IMGUI_DISABLE_DEBUG_TOOLS` (I22); never
+   serialized.
 7. **Later (designed-for, unbuilt):** rebind-capture popup, preset packs as shipped assets, verb-level
    recording diff in `imguix_avtool`, `.commands` macro text format, shadow-mapper conformance probe.
 
@@ -202,27 +221,28 @@ land in the same change as the code they pin unless marked otherwise.
 
 ### 6.1 Identity (additive, zero behavior change)
 
-- [ ] Add `Name`/`NameHash` fields to `ImGuiAppEditorCommand` (`imguiapp_internal.h:720`), defaults `""`/0.
-- [ ] Put dotted names on every `s_editor_commands[]` row (`imguiapp.cpp:17827`).
-- [ ] Mint `NameHash` via `ImHashStr` once where the editor table is first consulted.
+- [ ] Add `Name` field to `ImGuiAppEditorCommand` (`imguiapp_internal.h:720`), default `""` — no stored hash; hashes are minted at registration on the app side, declared data is never written.
+- [ ] Put dotted names on every editor command row (`imguiapp.cpp:17827`; table retires in 6.2).
 - [ ] Assign `host.*` fallback names to host rows inside `AppGraphSetHostCommands` registration.
 - [ ] Add `AppCommandFindByName()` (hash probe, `strcmp` confirm) beside the existing id lookup.
 - [ ] Extend `step72_command_registry_four_roads` (`imguiapp_nodes_tests.cpp:5557`): name non-empty leg.
 - [ ] Same test: name matches `^[a-z0-9]+(\.[a-z0-9]+)+$` leg.
 - [ ] Same test: Source-prefix leg (`host.*` rows have `Source == Host`, editor rows don't).
-- [ ] Same test: duplicate-free leg (NameHash bucket + strcmp over the whole registry).
+- [ ] Same test: duplicate-free leg (hash on the fly + strcmp over the whole registry).
 
 ### 6.2 Registry + register-by-use
 
 - [ ] Declare `ImGuiAppCommandDesc` POD in `imguiapp.h`, field-identical to `ImGuiAppEditorCommand`.
-- [ ] Add per-app registry storage: `ImVector<row>` + `ImGuiStorage` hash→index map (internal header).
-- [ ] Implement registration insert with duplicate-name assert.
+- [ ] Add registry storage on the app object: `ImVector<row>` + `ImGuiStorage` hash→index map (I17: no file-scope mutable statics; internal header).
+- [ ] Implement registration insert with duplicate-name assert (G18: `IM_ASSERT(expr && "Readable hint?")`).
 - [ ] Implement `AppCommand(name)`: register-on-first-call, stamp `LastSeenFrame`, clear-on-read pull.
 - [ ] Implement `AppCommandSetup(name, &desc)` upsert of chord/icon/label/surfaces.
 - [ ] Derive default label from the dotted name (`edit.paste` → "Edit: Paste").
 - [ ] Palette renders the union of declared + auto rows.
 - [ ] Palette greys rows whose `LastSeenFrame` is stale.
-- [ ] Registry liveness debug window (name, hash, last-seen, source).
+- [ ] Register built-in editor rows into the app registry at editor init, from function-local init data consumed once (no file-scope statics of any kind — §5 ruling).
+- [ ] Retire `s_editor_commands` (`imguiapp.cpp:17827`): re-point the editor lookup helpers (`:17880`, `:17885`, `:17917`) and the palette/keyboard walls at app registry rows; delete the table + the `imguiapp_internal.h:715` comment reference.
+- [ ] `DebugNodeAppCommands(...)` liveness introspection (name, hash, last-seen, source) beside the existing `DebugNode*` block (`imguiapp_internal.h:1525`), guarded `IMGUI_DISABLE_DEBUG_TOOLS`.
 - [ ] Test: `AppCommand` twice same frame = one row, one dispatch slot.
 
 ### 6.3 Arbiter
@@ -233,15 +253,16 @@ land in the same change as the code they pin unless marked otherwise.
 - [ ] Exact-mods chord matching (longest-mods-wins falls out; assert no same-tick double match).
 - [ ] Enforce at most one dispatch per id per tick.
 - [ ] Re-check availability at execute; log lying-palette diagnostic to WAL instead of dispatching.
-- [ ] Change WAL line to `"execute command %08X:%s via %s"` with surface attribution.
+- [ ] Change WAL line to `"execute command 0x%08X:%s via %s"` with surface attribution (I21 hex register).
+- [ ] Update the avtool WAL marker parser in the same change (`imguiapp.cpp:26803`: decimal `strtol` → hex hash + name).
 - [ ] Test: chord pressed before first registration drops silently (one-frame warmup).
 
 ### 6.4 ImGuiAppInputMapping
 
-- [ ] Add chord parse/format helpers (`"Ctrl+Shift+V"` ↔ key+mods), round-trip tested.
+- [ ] Add `ImAppFormatChord`/`ImAppParseChord` third-tier helpers (`"Ctrl+Shift+V"` ↔ key+mods; N11 imguiapp tier, context-free), round-trip tested.
 - [ ] Declare `ImGuiAppInputMapping` with layer 0/1/2 tables (`{Name, SourceKind, Code, Mods}` rows).
 - [ ] Implement the merged-view resolver (one function, last-writer-wins by name).
-- [ ] Save: sorted one-binding-per-line text, empty right side = explicit unbind.
+- [ ] Save: sorted one-binding-per-line sidecar text (not a settings-handler section, §1.4/I26), empty right side = explicit unbind.
 - [ ] Load: parse lines, unresolvable names become tombstones kept verbatim, WAL-logged once.
 - [ ] Tombstone revival when the verb registers later.
 - [ ] Same-layer same-surface chord conflict = lint assert.
@@ -269,4 +290,4 @@ land in the same change as the code they pin unless marked otherwise.
 
 - [ ] Why-not ring buffer: fixed POD ring `(chord, candidate id, rejection enum)`, never serialized.
 - [ ] Arbiter writes a ring entry on every rejected candidate (veto, availability, shadowed, warmup).
-- [ ] Input Doctor panel rendering the ring newest-first.
+- [ ] `DebugNodeAppInputMapping(...)` Input Doctor panel rendering the ring newest-first, guarded `IMGUI_DISABLE_DEBUG_TOOLS` (I22, empty stub in the `#else`).
