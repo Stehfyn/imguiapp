@@ -38,7 +38,7 @@ Index of this file:
 // [SECTION] Header mess
 //-----------------------------------------------------------------------------
 // Internal + tool-facing interfaces on top of the public imguiapp.h. Everything under IMGUIX_DISABLE_TOOLS
-// (the tail) compiles out in a lean build. Public runtime + AV recording types live in imguiapp.h / imguiapp_av.h.
+// (the tail) compiles out in a lean build. Public runtime + AV recording types live in imguiapp.h.
 
 #include "imguiapp.h"
 #include "imgui_internal.h"   // ImFormatString
@@ -141,12 +141,9 @@ typedef int ImGuiAppHoverSource;
 //-----------------------------------------------------------------------------
 // [SECTION] AV meta stream + recorder + run artifacts (was imguiapp_av.h)
 //-----------------------------------------------------------------------------
-// Frame encode-to-video + run artifacts for ImGuiApp (docs/designs.md (av-design)). SEAM only: encoder
-// implementations live in backends/imguiapp_impl_*.h, wired by the app like imgui_impl_* backends; this
-// header never references a provider. The recording BEHAVIOR types (ImGuiAppAVFrame, ImGuiAppAVEncodeConfig,
-// ImGuiAppAVEncoder, ImGuiAppAVMetaHeader, ImGuiAppAVTimingMode, ImGuiAppRecordQueuePolicy,
-// ImGuiAppRingConfig, ImGuiAppRecorder) are public -- see imguiapp_av.h. What stays here: the meta-record
-// stream format, the meta-only recorder, and the run/decode/transport read side.
+// Frame encode-to-video + run artifacts (docs/designs.md (av-design)). SEAM only: encoder implementations
+// live in backends/imguiapp_impl_*.h; this header never references a provider. The recording BEHAVIOR
+// types are public (imguiapp.h); here: the meta-record stream format, meta-only recorder, and the read side.
 
 //-----------------------------------------------------------------------------
 // [SECTION] Meta stream (embedded in the video)
@@ -160,29 +157,17 @@ enum ImGuiAppAVMetaRecordType_
   ImGuiAppAVMetaRecordType_InputHdr,       // ImGuiAppInputLog layout (composition id, slot table); once per take. OPT-IN (AppRecordAttachInputLog)
   ImGuiAppAVMetaRecordType_InputFrame,     // frame_index + one input-log frame (TempData + dt) + state hash. OPT-IN derived checkpoint
   ImGuiAppAVMetaRecordType_StateSnapshot,  // composition id + snapshottable-state bytes (ImGuiAppStateHistory layout)
-  // Raw input, recorded EVERY frame by default (the source events; O(1) per frame):
-  // u64 tick | f32 mouse_x | f32 mouse_y (main-viewport-relative) | u8 mouse_buttons |
-  // f32 wheel | f32 wheel_h | u32 state_hash (AppStateHash) |
-  // u32 chain (chain_k = ImHashData(&state_hash_k, 4, chain_{k-1}), seeded by the
-  // Identity schema hash: the hash SEQUENCE is reorder/splice-evident; ring dumps
-  // recompute it over the surviving entries) |
-  // u16 key_transition_count | {u16 imgui_key, u8 down}* | u16 char_count | {u16 utf16_unit}*
+  // Raw input, recorded EVERY frame by default (the source events; O(1) per frame). Payload frozen --
+  // docs/designs.md (av-design) record catalog: mouse/wheel/keys/chars + state_hash + splice-evident
+  // chain (chain_k = ImHashData(&state_hash_k, 4, chain_{k-1}), seeded by the Identity schema hash).
   ImGuiAppAVMetaRecordType_IoFrame,
-  // Take identity, emitted ONCE immediately after the stream header (before any
-  // Frame/IoFrame). Replay classifies hash mismatches against it: identity differs
-  // from the replaying build -> declared version/schema mismatch (refuse before
-  // replay); identity matches but the per-frame hash chain diverges at frame k ->
-  // nondeterminism or corruption at k. Payload:
-  // u32 applayer_version_num | u32 imgui_version_num | u32 composition_id |
-  // u32 schema_hash (ImHashData over the snapshottable slot table: id + size +
-  // temp_offset + temp_size per entry, StorageEntries order -- the layout state
-  // hashes and snapshots depend on) | u32 embed_rows | u16 block_size | u16 reserved
+  // Take identity, emitted ONCE after the stream header (before any Frame/IoFrame). Replay classifies
+  // mismatches against it: identity differs -> version/schema mismatch (refused before replay); identity
+  // matches but the hash chain diverges at k -> nondeterminism or corruption at k. Payload: av-design catalog.
   ImGuiAppAVMetaRecordType_Identity,
-  // Take completeness proof, the stream's FINAL record (AppRecordEnd / each ring dump):
-  // u64 stream_bytes (all logical-stream bytes preceding this record, header included) |
-  // u32 digest (ImHashData over exactly those bytes, seed 0). Presence = complete take;
-  // absence = truncation (crash) -- WAL-style honesty made checkable. Rides the final
-  // frame's chunk: a take whose last frame lacks chunk room truncates it like any tail.
+  // Take completeness proof, the stream's FINAL record: u64 stream_bytes | u32 digest over exactly those
+  // bytes. Presence = complete take; absence = truncation (crash) -- WAL-style honesty made checkable.
+  // Rides the final frame's chunk; a take whose last frame lacks chunk room truncates it like any tail.
   ImGuiAppAVMetaRecordType_Digest,
   ImGuiAppAVMetaRecordType_AudioPcm,       // RESERVED: frame_index + sample format header + PCM chunk (no producer yet)
 };
@@ -190,8 +175,8 @@ enum ImGuiAppAVMetaRecordType_
 //-----------------------------------------------------------------------------
 // [SECTION] Meta-only recorder + stream stats
 //-----------------------------------------------------------------------------
-// The video recorder itself (ImGuiAppRecorder) + its config are public -- see imguiapp_av.h. Here: the
-// F70 meta-only export (no video, same TLV records) and the verify-side reconstructed-stream stats.
+// The video recorder (ImGuiAppRecorder) + its config are public -- see imguiapp.h. Here: the F70
+// meta-only export (no video, same TLV records) and the verify-side reconstructed-stream stats.
 
 struct ImGuiAppMetaRecorder
 {
@@ -227,11 +212,9 @@ struct ImGuiAppAVStreamStats
 //-----------------------------------------------------------------------------
 // [SECTION] Run index (F62): tick-keyed landing over a reconstructed meta stream
 //-----------------------------------------------------------------------------
-// One walk of the reconstructed meta buffer (structurally the traversal AppAVMetaVerify
-// performs) records each record's tick and payload offset instead of only counting them.
-// The result is the playback debugger's index (docs/designs.md (playback-debugger-design) section 3):
-// no new byte format, same records, a richer landing. All offsets index the buffer the
-// index owns; the shipped single-record readers (AppAVMetaRead*) consume from there.
+// One walk of the reconstructed meta buffer (the traversal AppAVMetaVerify performs), recording each
+// record's tick + payload offset instead of only counting. The playback debugger's index (docs/designs.md
+// (playback-debugger-design) section 3): no new byte format; all offsets index the buffer the index owns.
 
 // Decoded Identity record: the trust gate for state reconstruction (F64). A reconstruction
 // app is legal only when its composition id and schema hash equal these.
@@ -293,11 +276,9 @@ struct ImGuiAppRunIndex
 //-----------------------------------------------------------------------------
 // [SECTION] State-at-tick (F64): restore nearest snapshot + replay inputs to tick N
 //-----------------------------------------------------------------------------
-// docs/designs.md (playback-debugger-design) section 5. Reconstructs the app's VALUES at a scrubbed tick
-// by the contract-7 machinery: restore the nearest StateSnapshot <= N, then AppInputReplay the
-// reconstructed input log's frames (S,N] into a reconstruction app. Reconstruction is legal only
-// when the recon app's composition + schema equal the take's Identity; on mismatch it is refused,
-// never faked. A raw-io-only take (no snapshots/input) reports values unavailable and degrades.
+// docs/designs.md (playback-debugger-design) section 5: restore the nearest StateSnapshot <= N, then
+// AppInputReplay the reconstructed input frames (S,N] into a reconstruction app. Legal only when the recon
+// app's composition + schema equal the take's Identity -- refused on mismatch, never faked; raw-io-only takes degrade.
 
 // Result of AppRunStateAtTick. Values live in the recon app's storage after a successful call;
 // this struct carries the reconstruction's provenance + the exactness check the debugger surfaces.
@@ -321,10 +302,9 @@ struct ImGuiAppRunState
 //-----------------------------------------------------------------------------
 // [SECTION] Transport source (F63): the App-time transport's two frame sources
 //-----------------------------------------------------------------------------
-// The F29 transport (a live state ring) gains a SOURCE switch behind the design's
-// Count()/Show(int) view (docs/designs.md (playback-debugger-design) section 4). LiveRing restores
-// snapshotted bytes into the running app; FileRun decodes the recorded frame image at a
-// tick and blits its pixels -- no app is driven.
+// The F29 transport (a live state ring) gains a SOURCE switch behind the design's Count()/Show(int) view
+// (docs/designs.md (playback-debugger-design) section 4). LiveRing restores snapshotted bytes into the
+// running app; FileRun decodes the recorded frame image at a tick and blits its pixels -- no app driven.
 enum ImGuiAppTransportSource_
 {
   ImGuiAppTransportSource_LiveRing = 0,   // the ComposerTransport state ring + the live mirror
@@ -336,10 +316,9 @@ enum ImGuiAppTransportSource_
 // provider is ImGuiApp_ImplQoi_DecodeFrame; the caller adapts it to this signature.
 typedef bool (*ImGuiAppRunFrameDecodeFn)(void* user, int frame_ordinal, ImVector<char>* out_rgba, int* out_w, int* out_h);
 
-// FILE-mode transport source (F63): a borrowed run index plus a frame decoder, behind
-// Count()/Show(int). Show(i) lands on tick index i -- it records ShownTick = Ticks[i].Tick
-// (so a scrub/step ALWAYS lands on an exact tick, no interpolation) and decodes that tick's
-// frame image into Pixels. State rides the caller's transport object; nothing here is a global.
+// FILE-mode transport source (F63): a borrowed run index + frame decoder behind Count()/Show(int). Show(i)
+// records ShownTick = Ticks[i].Tick (a scrub/step ALWAYS lands an exact tick, no interpolation) and decodes
+// that tick's frame image into Pixels. State rides the caller's transport object; nothing here is global.
 struct ImGuiAppRunTransport
 {
   ImGuiAppRunIndex*        Run;        // borrowed (AppRunOpen'd + AppRunClose'd by the owner), not owned here
@@ -358,12 +337,9 @@ struct ImGuiAppRunTransport
 //-----------------------------------------------------------------------------
 // [SECTION] Design-phase node drafts (ImGuiAppFieldType, ImGuiAppFieldDesc, ImGuiAppNodeDraft)
 //-----------------------------------------------------------------------------
-// Reflection-driven node tooling (the graph model + codegen + editor-UI decls; was imguiapp_nodes.h).
-// Uses the applayer's reflection port (imguiapp_reflect.h, via imguiapp.h) and some STL kept out of
-// imguiapp.h. Public entry points stay imgui-shaped: pointer params, char[] buffers, ImGuiID, ImVector.
-// Reflection subset: aggregates only (no user ctors); the port's patched member count handles raw array
-// members (e.g. char Label[128]) correctly (one each). The field-helper / node-rendering / codegen
-// function decls live in the consolidated ImGui API below.
+// Reflection-driven node tooling (graph model + codegen + editor-UI decls; was imguiapp_nodes.h). Uses the
+// applayer's reflection port + some STL kept out of imguiapp.h; public entry points stay imgui-shaped
+// (pointer params, char[] buffers, ImGuiID, ImVector). Reflection subset: aggregates only; raw arrays count as one member.
 
 // A draft describes a node whose backing C++ type does not exist yet; codegen emits a
 // reflection-capable aggregate from it. Fields use the plain-scalar vocabulary codegen can emit.
@@ -407,10 +383,9 @@ struct ImGuiAppNodeDraft
   char                        Name[IM_LABEL_SIZE] = "NewControl";
   ImVector<ImGuiAppFieldDesc> PersistFields;
   ImVector<ImGuiAppFieldDesc> TempFields;
-  // F78.5: optional custom C++ per method (indexed by ImGuiAppControlMethod_). Empty = modeled/stub codegen.
-  // A non-empty body is emitted verbatim as that method's body; the body sees the method's generated params
-  // (app / data / temp_data / last_temp_data / dt / cmd) and the emitted Data/TempData struct fields. Fixed
-  // buffers (not ImVector) keep the draft trivially copyable inside node vectors. Interpreter reflects, not runs.
+  // F78.5: optional custom C++ per method (indexed by ImGuiAppControlMethod_). Empty = modeled/stub codegen;
+  // non-empty is emitted verbatim as that method's body (sees the generated params + Data/TempData fields).
+  // Fixed buffers keep the draft trivially copyable inside node vectors. Interpreter reflects, not runs.
   char                        MethodBody[ImGuiAppControlMethod_COUNT][IMGUIAPP_CONTROL_BODY_MAX] = {};
 };
 
@@ -505,10 +480,9 @@ struct ImGuiAppCommandDesc
   char Name[IM_LABEL_SIZE] = "NewCommand";
 };
 
-// Op node inline operand (F55): the token an operand pin folds to when it is NOT wired to a producer --
-// an expression primary the AppEventExprCheck grammar accepts (a field ref "data->armed", a literal "0"
-// "true", a dep ref "random_time->max_timer_secs"). Parallel to the operator's DataIn pins by index; a
-// wired pin (a nested Op result) overrides its token. A missing entry is empty.
+// Op node inline operand (F55): the token an operand pin folds to when NOT wired to a producer -- an
+// expression primary the AppEventExprCheck grammar accepts (field ref, literal, dep ref). Parallel to the
+// operator's DataIn pins by index; a wired pin (a nested Op result) overrides its token, a missing entry is empty.
 struct ImGuiAppOpOperand
 {
   char Text[IM_LABEL_SIZE] = "";
@@ -596,9 +570,8 @@ struct ImGuiAppFieldBinding
   char SrcField[IM_LABEL_SIZE] = "";
 };
 
-// One user keymap override (F74, post-100 horizon): a chord (Key+Mods) rebound to an editor command Id.
-// The keymap is a SPARSE diff -- only verbs the user changed appear here; the factory chord stays the
-// registry Key/Mods. Key == ImGuiKey_None encodes an explicit unbind. Keyed by the stable command Id,
+// One user keymap override (F74): a chord (Key+Mods) rebound to an editor command Id. SPARSE diff -- only
+// changed verbs appear; Key == ImGuiKey_None encodes an explicit unbind. Keyed by the stable command Id,
 // never an array index, so reordering the registry never corrupts a saved keymap.
 struct ImGuiAppKeyBinding
 {
@@ -617,11 +590,9 @@ struct ImGuiAppScopeCamera
   float  Zoom    = 1.0f;
 };
 
-// Scope-local node placement: a member's position INSIDE a drilled scope, keyed by (scope node,
-// member node). Each drill-down interior owns its own arrangement -- moving a node inside a group
-// never moves it at the composition root (GridPos), and vice versa. First entry into a scope
-// falls back to GridPos, then the interior read-back writes here. Serialized (layout is model
-// state, like Pos=).
+// Scope-local node placement: a member's position INSIDE a drilled scope, keyed by (scope node, member
+// node). Each interior owns its own arrangement -- a move inside a group never moves the composition root
+// (GridPos) and vice versa; first entry falls back to GridPos. Serialized (layout is model state).
 struct ImGuiAppScopePlacement
 {
   int    ScopeId = -1;
@@ -629,13 +600,9 @@ struct ImGuiAppScopePlacement
   ImVec2 Pos     = ImVec2(0.0f, 0.0f);
 };
 
-// Scope-local member ORDER (F58): the authored left-to-right / push order of a scope's members,
-// keyed by scope node. One record holds the whole sequence -- an order IS a sequence, so it is stored
-// as one; the flat per-(scope,node) index alternative scatters a single order across N rows and needs
-// a sort to read it back. ScopeId == -1 is the composition root (the phase-layer order). Serialized
-// (model state, like Place=); AppScopeSequenceIds returns members in THIS order when a record exists,
-// else the derived sequence. The core phase layers may never be reordered here (AppGraphValidate
-// rejects a record that permutes them).
+// Scope-local member ORDER (F58): the authored push order of a scope's members, one record per scope (an
+// order IS a sequence). ScopeId == -1 is the composition root. Serialized; AppScopeSequenceIds returns this
+// order when a record exists. The core phase layers may never be reordered here (AppGraphValidate rejects).
 struct ImGuiAppScopeOrder
 {
   int           ScopeId = -1;
@@ -1210,9 +1177,8 @@ IMGUI_API void ImAppAssertFail(const char* expr, const char* file, int line);
 namespace ImGui
 {
   // Controls sorted by the resolved dependency wiring: every producer before its consumers, composition
-  // order among independents. Rebuilt when the composition changes. ONLY the Task layer's OnUpdate pass
-  // iterates this -- update is the pass where producers write what consumers read same-frame. Command
-  // collection and rendering stay composition order. (Internal: the runtime topo rebuild behind the app.)
+  // order among independents; rebuilt on composition change. ONLY the Task layer's OnUpdate pass iterates
+  // this -- command collection and rendering stay composition order.
   IMGUI_API const ImVector<ImGuiAppControlBase*>* AppRebuildUpdateOrder(ImGuiApp* app);
 
   // Shut down + free every control in `controls` (OnShutdown, unregister its storage, delete). Internal:
@@ -1234,10 +1200,9 @@ namespace ImGui
   // Identity seed, end-of-stream digest. True only when every criterion holds.
   IMGUI_API bool AppAVMetaVerify(const void* meta, int meta_size, ImGuiAppAVStreamStats* out_stats);
 
-  // Memory-stream parsers over a reconstructed meta stream (40-byte header + framed
-  // records). Extraction from a recording is per-backend:
-  // ImGuiApp_ImplLibav_ExtractEmbeddedMeta (mp4), ImGuiApp_ImplQoi_ExtractEmbeddedMeta
-  // (frame sequence). A truncated tail parses as end-of-stream.
+  // Memory-stream parsers over a reconstructed meta stream (40-byte header + framed records). Extraction is
+  // per-backend: ImGuiApp_ImplLibav_ExtractEmbeddedMeta (mp4), ImGuiApp_ImplQoi_ExtractEmbeddedMeta (frame
+  // sequence). A truncated tail parses as end-of-stream.
   IMGUI_API bool AppAVMetaDump(const void* meta, int meta_size);   // TSV to stdout (debug helper)
 
   // Reproduction: restore the snapshot, then AppInputReplay (imguiapp.h) -- its
@@ -1247,38 +1212,29 @@ namespace ImGui
 
 
   // Run artifacts (F62): file loader + tick index + state-at-tick
-  // F62 loader/index. Build the tick index (docs/designs.md (playback-debugger-design) section 3)
-  // from a reconstructed meta buffer -- ONE linear walk reusing the same TLV traversal
-  // AppAVMetaVerify performs, landing each record's tick + payload offset. The path->buffer
-  // step is the per-backend extractor (ImGuiApp_Impl{Libav,Qoi}_ExtractEmbeddedMeta), same
-  // as the harness's own VerifyRecording: this core seam never names a provider. Returns a
-  // heap index (AppRunClose frees) or null on a bad/absent header.
+  // Build the tick index (playback-debugger-design section 3) from a reconstructed meta buffer -- ONE linear
+  // walk reusing AppAVMetaVerify's TLV traversal; the path->buffer step is the per-backend extractor, this
+  // core seam never names a provider. Returns a heap index (AppRunClose frees) or null on a bad/absent header.
   IMGUI_API ImGuiAppRunIndex*      AppRunOpen(const void* meta, int meta_size);
   IMGUI_API void                   AppRunClose(ImGuiAppRunIndex* run);
   IMGUI_API int                    AppRunTickCount(const ImGuiAppRunIndex* run);          // == Ticks.Size; 0 on null
   IMGUI_API const ImGuiAppRunTick* AppRunTickAt(const ImGuiAppRunIndex* run, int i);      // null when out of range
 
-  // F64 state-at-tick (docs/designs.md (playback-debugger-design) section 5). Restore the nearest snapshot
-  // <= tick_index into recon_app, then AppInputReplay the reconstructed input log forward to
-  // tick_index -- the contract-7 restore-and-replay. recon_app's storage holds the app AT that tick
-  // on success (its Persist/Temp are the inspector's values). Returns false (out->Reconstructed
-  // false) when the identity gate fails or the take lacks a reachable snapshot/input for N -- the
-  // debugger states the capability rather than faking. out may be null.
+  // F64 state-at-tick (playback-debugger-design section 5): restore the nearest snapshot <= tick_index into
+  // recon_app, then AppInputReplay forward to it. On success recon_app's storage holds the app AT that tick;
+  // false (out->Reconstructed false) when the identity gate fails or no snapshot/input reaches N. out may be null.
   IMGUI_API bool                   AppRunStateAtTick(ImGuiApp* recon_app, const ImGuiAppRunIndex* run, int tick_index, ImGuiAppRunState* out);
 
-  // Correlate the sibling <name>.wal's command dispatches to ticks: parse each "[tick:N] ... execute
-  // command %d" line (imguiapp.cpp Command layer), fill run->Commands tick-sorted, and set each
-  // tick's WalFirst/WalCount slice. Optional -- the recording is authoritative, so a missing/again-
-  // parsed WAL just clears the annotation. Returns false on a null run or unreadable path.
+  // Correlate the sibling <name>.wal's command dispatches to ticks: parse "[tick:N] ... execute command %d"
+  // lines, fill run->Commands tick-sorted, set each tick's WalFirst/WalCount slice. Optional -- the recording
+  // is authoritative; a missing WAL just clears the annotation. False on a null run or unreadable path.
   IMGUI_API bool                   AppRunAttachWal(ImGuiAppRunIndex* run, const char* wal_path);
 
 
   // Transport source (F63)
-  // F63 FILE-mode transport view over a run index (docs/designs.md (playback-debugger-design) section 4).
-  // Count == AppRunTickCount(view->Run). Show(view, i) lands on tick index i: it sets
-  // ShownTick = Ticks[i].Tick and decodes Ticks[i].FrameImage into view->Pixels via view->Decode.
-  // Returns false only on an invalid index or a hard decode failure; a tick with no frame image
-  // (a ring-dump gap) or a null Decode still lands the tick (ShownImage stays -1).
+  // FILE-mode transport view over a run index (playback-debugger-design section 4). Count == AppRunTickCount;
+  // Show(view, i) sets ShownTick = Ticks[i].Tick and decodes its FrameImage into view->Pixels via view->Decode.
+  // False only on an invalid index or hard decode failure; a ring-dump gap or null Decode still lands the tick.
   IMGUI_API int               AppRunTransportCount(const ImGuiAppRunTransport* view);
   IMGUI_API bool              AppRunTransportShow(ImGuiAppRunTransport* view, int i);
 
@@ -1302,19 +1258,16 @@ namespace ImGui
   // frame's blob: video frame N <-> app state N; restoring the bytes IS time travel.
   IMGUI_API void              AppRecordSnapshotState(ImGuiAppRecorder* rec, ImGuiApp* app);
 
-  // OPT-IN derived checkpoint layer: raw io records by default (IoFrame); attaching a
-  // live input log ADDITIONALLY serializes its TempData frames (InputHdr/InputFrame)
-  // into the stream, enabling render-free replay + per-control divergence attribution.
-  // Cost is O(sum of TempData) per frame -- attach deliberately. Keep calling
-  // AppInputRecord once per frame as usual.
+  // OPT-IN derived checkpoint layer: raw io records by default (IoFrame); attaching a live input log
+  // ADDITIONALLY serializes its TempData frames (InputHdr/InputFrame), enabling render-free replay +
+  // per-control divergence attribution. Cost O(sum of TempData) per frame -- attach deliberately.
   IMGUI_API void              AppRecordAttachInputLog(ImGuiAppRecorder* rec, const ImGuiAppInputLog* log);
 
   IMGUI_API ImGuiAppRecorder* AppRecordBeginRing(ImGuiApp* app, ImGuiAppAVEncoder* encoder, const ImGuiAppAVEncodeConfig* config, const ImGuiAppRingConfig* ring);
 
-  // Encode the ring's contents to disk NOW (assert hook, test failure, hotkey, user
-  // code); reason lands in the WAL and a stream marker record. The ring keeps recording;
-  // repeated dumps get "-2", "-3" path suffixes. When a ring recorder exists, the
-  // IM_ASSERT sink (ImAppAssertFail) dumps it with the failed expression as reason.
+  // Encode the ring's contents to disk NOW (assert hook, test failure, hotkey); reason lands in the WAL and
+  // a stream marker record. The ring keeps recording; repeated dumps get "-2", "-3" suffixes. When a ring
+  // recorder exists, the IM_ASSERT sink (ImAppAssertFail) dumps it with the failed expression as reason.
   IMGUI_API bool              AppRecordDumpRing(ImGuiAppRecorder* rec, const char* reason);
 
   // Assert forensics (F15): dump every live ring recorder (each auto-registered by AppRecordBeginRing)
@@ -1323,16 +1276,9 @@ namespace ImGui
   IMGUI_API int               AppDumpAssertRings(const char* reason);
 
 
-  // Meta-only recorder (F70)
-  //---------------------------------------------------------------------------
-  // Meta-only run recorder (F70): a preview session records without video
-  //---------------------------------------------------------------------------
-  // The previewer (docs/designs.md (previewer-design) section 10) closes author -> play -> record ->
-  // debug with zero compiles: a preview session drives its own ImGuiApp under a fixed dt and
-  // exports an F61 run container. The bytes are exactly what the video recorder embeds -- the
-  // IMAVMETA header + Identity/Frame/IoFrame/InputHdr/InputFrame/StateSnapshot/Digest records
-  // (same AvBuild* writers) -- minus the pixel pipeline (no encoder, no frames). AppRunOpen +
-  // AppRunStateAtTick read the result unchanged. All state rides the caller's recorder object.
+  // Meta-only recorder (F70): a preview session records without video (previewer-design section 10). The
+  // bytes are exactly what the video recorder embeds (same AvBuild* writers) minus the pixel pipeline;
+  // AppRunOpen + AppRunStateAtTick read the result unchanged. All state rides the caller's recorder object.
   IMGUI_API ImGuiAppMetaRecorder* AppMetaRecordBegin(ImGuiApp* app, float fps, int embed_rows);
 
   // Attach a caller-owned input log (same opt-in semantics as AppRecordAttachInputLog): with it,
@@ -1349,9 +1295,8 @@ namespace ImGui
   // buffer to out_meta (opens directly via AppRunOpen), and free the recorder. Null-safe.
   IMGUI_API void                  AppMetaRecordEnd(ImGuiAppMetaRecorder* mr, ImVector<char>* out_meta);
 
-  // Reflection field UI: read-only render + type-dispatched editor for one reflected field. Dispatches
-  // on the ImGuiAppIsCharArray / ImGuiAppIsFormattable traits (imguiapp_reflect.h) and enumerates members through
-  // ImGui::VisitAppFields (imguiapp_reflect.h).
+  // Reflection field UI: read-only render + type-dispatched editor for one reflected field; dispatches on the
+  // ImGuiAppIsCharArray / ImGuiAppIsFormattable traits, enumerates members via ImGui::VisitAppFields (imguiapp_reflect.h).
   // Read-only render of one reflected field value.
   template <typename T>
   inline void DrawAppField(const char* label, const T* value)
@@ -1520,26 +1465,22 @@ namespace ImGui
   // -- read-only -- so this returns false for every kind; the authored twin admits its members.
   IMGUI_API bool              AppScopeIsKindComposable(const ImGuiAppGraph* g, int scope_id, ImGuiAppNodeKind kind);
 
-  // Origin vocabulary (F26): the one colour shared by the canvas title-bar dot, the outliner row tint and
-  // the demo legend. Live and Promoted (a design control whose emitted data type matches a live node) each
-  // get a distinct mark; plain design returns 0 (no push -> default row colour). Single source, so the
-  // three surfaces cannot drift.
+  // Origin vocabulary (F26): the one colour shared by the canvas title-bar dot, outliner row tint and demo
+  // legend. Live and Promoted each get a distinct mark; plain design returns 0 (no push -> default row
+  // colour). Single source, so the three surfaces cannot drift.
   IMGUI_API ImU32             AppGraphOriginColor(const ImGuiAppNode* n);
 
-  // Codegen freshness (F17). The signature is the single source of truth: AppGraphSyncRevision folds
-  // it once per frame and bumps Revision on any content change; AppGraphMarkGenerated stamps the
-  // signature at codegen time; the graph is STALE while the live signature differs from that stamp
-  // (FRESH == generated this session AND unchanged since). GenSignature/Revision are session-local
-  // (reset on load), so a freshly loaded graph reads as never-generated.
+  // Codegen freshness (F17), the signature as single source of truth: AppGraphSyncRevision folds it once per
+  // frame and bumps Revision on content change; AppGraphMarkGenerated stamps it at codegen; STALE while the
+  // live signature differs from the stamp. GenSignature/Revision are session-local: a loaded graph reads never-generated.
   IMGUI_API int               AppGraphSyncRevision(ImGuiAppGraph* g);
   IMGUI_API void              AppGraphMarkGenerated(ImGuiAppGraph* g);
   IMGUI_API bool              AppGraphIsCodeStale(const ImGuiAppGraph* g);
   IMGUI_API bool              AppGraphIsCodeFresh(const ImGuiAppGraph* g);
 
-  // Count the codegen self-diagnostics embedded in generated text (F19): the "// WARNING" comments the
-  // emitter drops for degenerate constructs and the "// codegen aborted" banner. Scans the emitted C++
-  // itself (single source: the emitter), never re-deriving the conditions. out_list (optional) receives
-  // each marker line trimmed of leading indent, one per line.
+  // Count the codegen self-diagnostics embedded in generated text (F19): the "// WARNING" comments and the
+  // "// codegen aborted" banner. Scans the emitted C++ itself (single source: the emitter), never re-deriving
+  // the conditions. out_list (optional) receives each marker line trimmed of leading indent, one per line.
   IMGUI_API int               AppScanCodegenWarnings(const char* code, ImGuiTextBuffer* out_list);
 
   // CanLink validates an attempted edge (kind pairing, no self/dup, no duplicate dep type, no cycle),
@@ -1553,10 +1494,9 @@ namespace ImGui
 
 
   // Graph editor UI: canvas, inspector, tree, keymap
-  // Render the whole typed graph inside the current window. app may be null (design-only); when
-  // non-null, builtin control bodies can reflect live data. *selected_node_id is caller-owned (-1 =
-  // none): the editor reconciles it both ways (canvas<->tree) and clears dangling ids. show_live hides
-  // (never deletes) live-mirror nodes when false.
+  // Render the whole typed graph inside the current window. app may be null (design-only); non-null lets
+  // builtin bodies reflect live data. *selected_node_id is caller-owned (-1 = none), reconciled both ways
+  // (canvas<->tree), dangling ids cleared. show_live hides (never deletes) live-mirror nodes when false.
   IMGUI_API void                                ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, bool show_live);
 
 
@@ -1570,11 +1510,9 @@ namespace ImGui
   IMGUI_API const ImGuiAppEditorCommand*        AppGraphEditorCommandAt(int index);
   IMGUI_API bool                                AppGraphIsEditorCommandAvailable(const ImGuiAppGraph* g, const ImGuiAppEditorCommand* c);
 
-  // Remappable input->command binding (F74, post-100 horizon). The registry Key/Mods are the factory DEFAULT
-  // chord; the graph's Keymap holds sparse user overrides. Dispatch resolves a pressed chord to a command Id
-  // through the effective (override-or-default) map and runs it through the same path the palette uses --
-  // replacing the hardcoded per-key checks. Delete (wire-aware), Tab/Esc (scope nav) keep dedicated handlers
-  // and are not rebindable this phase; Space / Ctrl+P (the palette openers) are reserved.
+  // Remappable input->command binding (F74). The registry Key/Mods are the factory DEFAULT chord; the graph's
+  // Keymap holds sparse user overrides. Dispatch resolves a pressed chord through the effective map and runs
+  // it on the palette's path. Delete/Tab/Esc keep dedicated handlers; Space / Ctrl+P (palette openers) reserved.
   IMGUI_API void                                AppKeymapDefaultChord(int cmd_id, ImGuiKey* out_key, int* out_mods);
   IMGUI_API void                                AppKeymapEffectiveChord(const ImGuiAppGraph* g, int cmd_id, ImGuiKey* out_key, int* out_mods);
   IMGUI_API bool                                AppKeymapIsCommandRebindable(int cmd_id);
@@ -1597,11 +1535,9 @@ namespace ImGui
   IMGUI_API void                                EditAppNodeInspectorEx(ImGuiAppGraph* g, int node_id, ImGuiApp* live_app);   // + live style write-back (see workbench §3.5)
   IMGUI_API void                                EditAppNodesInspectorMulti(ImGuiAppGraph* g);   // multi-selection: intersection editing (style across all selected)
 
-  // Inspector section header (workbench §5.1): collapse triangle + icon + label, optional enable
-  // checkbox, optional kebab whose click the caller answers with its own popup. Open state is
-  // session-lived per window.
-  // persist_seed != 0 keys the open/collapsed state by that seed (e.g. node kind) instead of the id
-  // stack -- so a collapse persists across every node of the same kind (F41), not per node instance.
+  // Inspector section header (workbench 5.1): collapse triangle + icon + label, optional enable checkbox,
+  // optional kebab answered by the caller's own popup; open state is session-lived per window. persist_seed != 0
+  // keys the open state by that seed (e.g. node kind) so a collapse persists across same-kind nodes (F41).
   IMGUI_API bool                                AppInspectorSection(const char* str_id, const char* icon, const char* label, bool* enabled, bool* kebab_clicked, ImGuiID persist_seed = 0);
 
   // Origin breadcrumb for a selected node: "sel: MainWindow > Mixer [design]" / "[live]" /
@@ -1618,12 +1554,9 @@ namespace ImGui
   // caller-owned (-1 = none). show_live false hides (never deletes) live-mirror rows.
   IMGUI_API void                                ShowAppGraphTree(const ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, bool show_live = true);
 
-  // Topologically order the Control nodes by data dependency (producers before consumers). Returns
-  // false and writes err on a cycle. out_control_ids receives node ids in push order. include_live
-  // false = authored domain only (validation/health); true = the full mirrored composition (codegen).
-  // priority (F59): optional push-order preference (the concatenated F58 authored orders) -- among ready
-  // zero-in-degree controls the earliest-ranked one drains first, so a topologically legal authored order
-  // emits verbatim; null reproduces the plain node-order sort.
+  // Topologically order the Control nodes by data dependency (producers before consumers); false + err on a
+  // cycle; out_control_ids receives node ids in push order. include_live false = authored domain only; true =
+  // the full mirrored composition (codegen). priority (F59): optional push-order preference among ready controls; null = plain sort.
   IMGUI_API bool                                AppGraphTopoOrder(const ImGuiAppGraph* g, ImVector<int>* out_control_ids, char* err, int err_size, bool include_live = false, ImVector<int>* out_cycle = nullptr, const ImVector<int>* priority = nullptr);
 
   // Data-dependency (topo) cycle surfacing (F21). Fills out_nodes with the controls the topo sort could
@@ -1703,12 +1636,9 @@ namespace ImGui
   IMGUI_API const ImVector<ImGuiAppGraphIssue>* AppGraphIssuesCached(const ImGuiAppGraph* g);
   IMGUI_API int                                 AppGraphNodeSeverity(const ImGuiAppGraph* g, int node_id);
 
-  // Type-check one authored event's Expr against the control's effective field lists. Grammar: field
-  // refs `temp_data->x` / `last_temp_data->x` / `data->x` / `<dep_param>-><field>`, nested struct
-  // members via '.', bool/int/float literals, parens, scalar operators at C precedence
-  // (! unary- * / % + - ^ comparisons && ||). `^` pairs bools or ints. The result type must fit
-  // DstField. Empty Expr is valid (codegen copies the watched temp field). Returns true when
-  // well-typed; else writes a diagnostic to err.
+  // Type-check one authored event's Expr against the control's effective field lists. Grammar: field refs,
+  // nested '.' members, bool/int/float literals, parens, scalar operators at C precedence; the result must
+  // fit DstField; empty Expr is valid (codegen copies the watched temp field). True when well-typed, else err.
   IMGUI_API bool                                AppEventExprCheck(const ImGuiAppGraph* g, const ImGuiAppNode* n, const ImGuiAppEventDesc* ev, char* err, int err_size);
 
 
@@ -1718,18 +1648,15 @@ namespace ImGui
   IMGUI_API void                                GenerateAppGraphCode(const ImGuiAppGraph* g, ImGuiTextBuffer* out);
   IMGUI_API void                                GenerateAppGraphCodeEx(const ImGuiAppGraph* g, ImGuiTextBuffer* out, ImVector<ImGuiAppCodeSpan>* out_spans);
 
-  // Generated-shell bootstrap: the composition body from GenerateAppGraphCode (the SINGLE emitter),
-  // wrapped in the host scaffold a standalone program needs -- a concrete ImGuiApp that composes via
-  // the emitted SetupApp on its first initialized frame, plus main() running it. A composition that
-  // hosts an ImGuiAppComposerControl thus emits a shell that runs the Composer against the library.
+  // Generated-shell bootstrap: the composition body from GenerateAppGraphCode (the SINGLE emitter) wrapped in
+  // the host scaffold a standalone program needs -- a concrete ImGuiApp composing via the emitted SetupApp on
+  // its first initialized frame, plus main(). A Composer-hosting composition emits a shell that runs the Composer.
   IMGUI_API void                                GenerateAppShellCode(const ImGuiAppGraph* g, ImGuiTextBuffer* out);
 
   // Interpreter (F66/F67): module codegen + session
-  // DLL preview module (F78): the shell composition body + host scaffold, but the entry point is a C-ABI
-  // (extern "C" __declspec(dllexport) ImGuiAppPreview_Create/_Destroy/_ABI) instead of main(). A runtime-
-  // compiled module hands the host a composed ImGuiApp built by the same SetupApp, crossing the boundary as
-  // a framework base pointer. IMGUIAPP_PREVIEW_ABI is baked into both host and module; a load-time mismatch
-  // (stale headers / wrong toolset) is refused rather than crashing on a layout skew.
+  // DLL preview module (F78): the shell composition body + host scaffold, but with a C-ABI entry point
+  // (extern "C" ImGuiAppPreview_Create/_Destroy/_ABI) instead of main(); the module hands the host a composed
+  // ImGuiApp as a framework base pointer. IMGUIAPP_PREVIEW_ABI is baked into both sides; a load-time mismatch is refused.
   IMGUI_API void             GenerateAppPreviewModuleCode(const ImGuiAppGraph* g, ImGuiTextBuffer* out);
 
   // Per-node codegen: emits only the code one node produces -- a Control's struct(s) with derived
@@ -1753,10 +1680,9 @@ namespace ImGui
   // per struct (fields, types mapped back). New nodes laid out at `origin`. Returns structs added.
   IMGUI_API int              AppGraphImportStructsFromCode(ImGuiAppGraph* g, const char* code, ImVec2 origin);
 
-  // Parse the F16 control emitter's output back into Control nodes (F22). Each `struct <Name> :
-  // ImGuiAppControl<<Data>, <TempData>[, deps...]>` becomes a Control node; its PersistFields/TempFields
-  // are read from the referenced Data/TempData struct blocks in the same source. New nodes laid out at
-  // `origin`. Returns controls added. (Deps, command selections and event blocks import in later passes.)
+  // Parse the F16 control emitter's output back into Control nodes (F22): each `struct <Name> : ImGuiAppControl<...>`
+  // becomes a Control node with Persist/TempFields read from the referenced Data/TempData struct blocks. New
+  // nodes laid out at `origin`; returns controls added. (Deps, command selections, event blocks import in later passes.)
   IMGUI_API int              AppGraphImportControlsFromCode(ImGuiAppGraph* g, const char* code, ImVec2 origin);
 
   // Whole-program import (F23): seed the foundation layers, then import controls (and, as they land,
@@ -1838,15 +1764,12 @@ namespace ImGui
   IMGUI_API int              AppPreviewDispatchCommandAt(const ImGuiAppPreview* session, int index);   // command value, -1 out of range
   IMGUI_API const char*      AppPreviewCommandName(const ImGuiAppPreview* session, int command_value); // "" if unknown
 
-  //---------------------------------------------------------------------------
-  // Edit-while-running reconcile (F67 interpreter CORE). The F68 preview SURFACE + brushing API is UI --
-  // it moved to imguiapp_internal.h (Phase A3), gated behind IMGUIX_DISABLE_TOOLS.
-  //---------------------------------------------------------------------------
+  // Edit-while-running reconcile (F67 interpreter CORE). The F68 preview SURFACE + brushing API is UI and
+  // lives below, gated behind IMGUIX_DISABLE_TOOLS (Phase A3).
 
-  // Edit-while-running reconciliation (design 7). Rebuild the population from the (edited) borrowed graph,
+  // Edit-while-running reconciliation (design 7): rebuild the population from the (edited) borrowed graph,
   // preserving every surviving (sanitized name, ImGuiAppFieldType) Persist/LastTemp slot byte-for-byte and
-  // default-initialising the rest -- a rewire changes behaviour next frame WITHOUT losing unrelated fields.
-  // Refuses (keeps the running population intact) on a dependency cycle, reason in err. False = refused.
+  // default-initialising the rest. Refuses (running population intact) on a dependency cycle, reason in err.
   IMGUI_API bool             AppPreviewReconcile(ImGuiAppPreview* session, char* err, int err_size);
 
 
@@ -2172,10 +2095,9 @@ namespace ImGui
   IMGUI_API void              CanvasStyleFromTheme(ImGuiCanvasStyle* style);
 
   // ---- frame ----------------------------------------------------------------------------------
-  // CanvasBegin opens the child (fills the available region unless size is given), draws the grid,
-  // and applies camera input per the IO policy. Submit nodes/pins/wires between Begin/End;
-  // CanvasEnd draws wires + pins from THIS frame's geometry, resolves hover, runs the interaction
-  // FSM, and latches events (valid until the next CanvasBegin).
+  // CanvasBegin opens the child (fills the available region unless size is given), draws the grid, applies
+  // camera input per the IO policy. Submit nodes/pins/wires between Begin/End; CanvasEnd draws wires + pins
+  // from THIS frame's geometry, resolves hover, runs the interaction FSM, latches events (valid until next CanvasBegin).
   IMGUI_API void              CanvasBegin(ImGuiCanvasState* c, const char* str_id, ImVec2 size /*= 0,0*/);
   IMGUI_API void              CanvasEnd(ImGuiCanvasState* c);
 
@@ -2213,10 +2135,9 @@ namespace ImGui
   // Between CanvasBeginNode/CanvasEndNode submit ordinary ImGui widgets; the engine renders them
   // under the zoomed font + scaled layout metrics and measures the node the SAME frame.
   IMGUI_API void              CanvasNextNodeTitle(ImGuiCanvasState* c, const char* title, ImU32 title_color /*= 0 -> style*/);
-  // Per-node presentation intent, all consumed by the next CanvasBeginNode: kind word (muted,
-  // right-aligned), origin dot (leading; ring form for promoted), framed badge after the name,
-  // corner rounding in model units (< 0 = style), rule under the title band (0 none / 1 solid /
-  // 2 dashed), and an edge stripe on one ImGuiCanvasPinSide_.
+  // Per-node presentation intent, all consumed by the next CanvasBeginNode: kind word (muted, right-aligned),
+  // origin dot (ring form = promoted), framed badge after the name, corner rounding in model units (< 0 =
+  // style), title-band rule (0 none / 1 solid / 2 dashed), and an edge stripe on one ImGuiCanvasPinSide_.
   IMGUI_API void              CanvasNextNodeTitleTag(ImGuiCanvasState* c, const char* tag);
   IMGUI_API void              CanvasNextNodeOriginDot(ImGuiCanvasState* c, ImU32 color, bool ring);
   IMGUI_API void              CanvasNextNodeTitleBadge(ImGuiCanvasState* c, const char* badge);
@@ -2289,9 +2210,8 @@ namespace ImGui
   IMGUI_API bool                AppPreviewDllIsToolsetAvailable();
 
   // Emit the module for `graph`, compile it into `scratch_dir` (created if absent) as a self-contained DLL,
-  // load it, verify its ImGuiAppPreview_ABI() matches the host, and create the running instance. Returns
-  // null on no-toolset OR any compile/load/ABI failure, with the reason (compiler diagnostics on a compile
-  // failure) in `err`. The graph is borrowed read-only. Free with AppPreviewDllDestroy.
+  // verify its ImGuiAppPreview_ABI() matches the host, and create the running instance. Null on no-toolset or
+  // any compile/load/ABI failure (reason in `err`). Graph borrowed read-only; free with AppPreviewDllDestroy.
   IMGUI_API ImGuiAppPreviewDll* AppPreviewDllCreate(const ImGuiAppGraph* graph, const char* scratch_dir, char* err, int err_size);
   IMGUI_API void                AppPreviewDllDestroy(ImGuiAppPreviewDll* session);
 
@@ -2315,10 +2235,8 @@ namespace ImGui
   IMGUI_API void                AppPreviewDllSetDisplaySize(ImGuiAppPreviewDll* session, int w, int h);
 
   // Copy the last-ticked frame's draw data + font atlas out of the DLL and rasterize it into `out_rgba` (a
-  // `w*h*4` RGBA32 buffer, resized as needed), cleared to `clear_col` (IM_COL32) then filled with the DLL's
-  // triangles (per-vertex color * atlas alpha, clipped per command). Returns true when any geometry landed
-  // (the frame is non-blank); false when the module lacks the frame ABI or produced nothing (interpreter
-  // fallback). Call after AppPreviewDllTick so the frame reflects the current tick.
+  // w*h*4 RGBA32 buffer, resized as needed), cleared to `clear_col` then filled with the DLL's triangles.
+  // True when any geometry landed; false when the module lacks the frame ABI or produced nothing. Call after AppPreviewDllTick.
   IMGUI_API bool                AppPreviewDllRasterizeFrame(ImGuiAppPreviewDll* session, int w, int h, unsigned int clear_col, ImVector<unsigned char>* out_rgba);
 
 
@@ -2350,10 +2268,8 @@ namespace ImGui
   // preset-switch test; a Compose/Review/Observe pick sets a fixed combination.
   IMGUI_API int              AppComposerLayoutFlags(ImGuiApp* host);
 
-  //---------------------------------------------------------------------------
-  // F68 preview SURFACE + brushing (relocated from imguiapp_preview.h, Phase A3). Definitions live in
-  // imguiapp_preview.cpp under the same IMGUIX_DISABLE_TOOLS guard.
-  //---------------------------------------------------------------------------
+  // F68 preview SURFACE + brushing (relocated from imguiapp_preview.h, Phase A3). Definitions live in the
+  // imguiapp.cpp preview region under the same IMGUIX_DISABLE_TOOLS guard.
 
 
   // F68 preview surface + brushing

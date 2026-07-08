@@ -156,6 +156,15 @@ file's indent unit is 4) or gate the `align` count per file with a much tighter 
 reformat lands.
 
 ### S4. Narrative comment layer — C2/F18 register (refactor-plan admission (b), quantified)
+> **RESOLVED 2026-07-08** (de-narrative pass, refactor-plan Phase C pass 2). 189 blocks → 62
+> (1076 → 397 full-line comment lines): `imguiapp.h` 16→6, `internal.h` 52→20, `imguiapp.cpp`
+> 121→36. Every essay condensed to ≤3 behavior/constraint lines in place (rationale already in
+> docs/commits); AV byte-format essays now cite the frozen av-design record catalog. Survivors are
+> the sanctioned forms: file/region `[SECTION]` indexes, section banners with ≤3 description
+> lines, group labels + ≤3 statements, two invariant tables (validate relation, drag neighbor
+> capture), Δ7 fold-region headers, and one 5-line contract (IoFrame capture-point, was 16). Two
+> stale `imguiapp_av.h` references fixed in passing (types live in `imguiapp.h` since the fold).
+> Gate: all three suites green, codegen corpus byte-locks intact, style ratchet OK (no gated growth).
 ~189 blocks of ≥4 consecutive full-line comment lines (~1076 lines): `imguiapp.h` 16 blocks,
 `internal.h` 52 (29.5% of file is full-line comments), `imguiapp.cpp` 121 (longest 26 lines).
 Inline/trailing comment register conforms; the *preamble essays* are the drift.

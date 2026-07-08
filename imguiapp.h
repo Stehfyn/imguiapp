@@ -116,10 +116,9 @@ namespace ImGui
     IMGUI_API inline void PushAppWindow(ImGuiApp* app);
     IMGUI_API void        PopAppWindow(ImGuiApp* app);
 
-    // instance: client-chosen discriminator; 0 = the type singleton (bare type-id key), any other
-    // value keys a distinct instance of the same control data type. binds routes individual
-    // dependencies to specific producer instances; an unrouted dependency resolves to the pushing
-    // control's own instance id, then to the singleton (producer must be pushed first either way).
+    // instance: client-chosen discriminator; 0 = the type singleton, any other value keys a distinct
+    // instance of the same control data type. binds routes dependencies to specific producer instances;
+    // unrouted ones resolve to the pusher's instance id, then the singleton. Producer pushed first either way.
     template <typename T>
     IMGUI_API inline T*   AppControlCreate(ImGuiApp* app, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count, const char* host_kind, const char* host_label);
     template <typename T>
@@ -133,7 +132,6 @@ namespace ImGui
     // Composition identity
     // Identity of the app's composition (layers, windows/sidebars, controls, in order). Changes exactly
     // when something is pushed or popped; mirrors poll it and reconcile only on change.
-    // (AppRebuildUpdateOrder -- the internal dependency-topo rebuild -- lives in imguiapp_internal.h.)
     IMGUI_API ImGuiID     GetAppCompositionID(const ImGuiApp* app);
 
     // Storage registration (size > 0 => snapshottable; a TempData byte range enables input record/replay)
@@ -147,9 +145,8 @@ namespace ImGui
     // (snapshot/replay); otherwise registers opaque (caller passes the type-derived sizes/offset/destroy).
     IMGUI_API void        RegisterAppControlStorage(ImGuiApp* app, ImGuiID id, void* instance_data, bool snapshottable, int inst_size, int temp_offset, int temp_size, void (*destroy)(void*));
     // Type-erased front of PushAppControl / PushWindowControl / PushSidebarControl: WAL-logs the push
-    // (host_kind/host_label describe the owning window/sidebar, or null for a top-level control), labels
-    // the control, and registers its instance storage. The (typed) template caller then wires
-    // _InstanceID/_InstanceData + ResolveDependencies (which need the concrete type) and calls AppControlPush.
+    // (host_kind/host_label = owning window/sidebar, or null), labels the control, registers its instance
+    // storage. The typed template caller then wires _InstanceID/_InstanceData and ResolveDependencies.
     IMGUI_API void        AppControlRegisterStorage(ImGuiApp* app, ImGuiAppControlBase* control, const char* name, ImGuiID data_type_id, ImGuiID instance, void* instance_data, bool snapshottable, int inst_size, int temp_offset, int temp_size, void (*destroy)(void*), const char* host_kind, const char* host_label);
     // Type-erased tail: append the wired control to its owning list and initialize it.
     IMGUI_API void        AppControlPush(ImGuiApp* app, ImVector<ImGuiAppControlBase*>* list, ImGuiAppControlBase* control);
@@ -178,17 +175,15 @@ namespace ImGui
     // per-frame fingerprint AppInputRecord stores. 0 when nothing snapshottable exists.
     IMGUI_API ImGuiID     AppStateHash(const ImGuiApp* app);
 
-    // Fingerprint of the snapshottable slot LAYOUT (id + size + temp range per entry, in
-    // StorageEntries order) -- what state hashes and snapshots depend on. The take's Identity
-    // record carries this; F64's reconstruction identity gate requires the reconstruction app's
-    // to equal the recorded one. 0 when nothing snapshottable exists.
+    // Fingerprint of the snapshottable slot LAYOUT (id + size + temp range per entry, in StorageEntries
+    // order) -- what state hashes and snapshots depend on. Carried in the take's Identity record; F64's
+    // reconstruction identity gate requires equality. 0 when nothing snapshottable exists.
     IMGUI_API ImU32       AppStateSchemaHash(const ImGuiApp* app);
 
     // Input record / replay
-    // AppInputRecord appends this frame's inputs (every control's TempData + dt) and resulting state hash;
-    // call once per frame AFTER RenderApp. AppInputReplay re-runs the recorded frames through UpdateApp (no
-    // rendering) -- restore the starting state first. out_first_divergence (if non-null) receives the first
-    // frame whose state hash differs from the recording; -1 = deterministic reproduction.
+    // AppInputRecord appends this frame's inputs (every control's TempData + dt) + resulting state hash; call
+    // once per frame AFTER RenderApp. AppInputReplay re-runs the frames through UpdateApp (no rendering) --
+    // restore the starting state first. out_first_divergence: first frame whose hash differs; -1 = deterministic.
     IMGUI_API bool        AppInputRecord(ImGuiApp* app, ImGuiAppInputLog* log, float dt);
     IMGUI_API bool        AppInputReplay(ImGuiApp* app, const ImGuiAppInputLog* log, int* out_first_divergence);
     IMGUI_API void        AppInputLogClear(ImGuiAppInputLog* log);
@@ -353,15 +348,9 @@ struct ImGuiAppAVEncodeConfig
     int                  Width;       // 0 = first frame's size (fixed thereafter; resize aborts recording)
     int                  Height;
     int                  BitrateKbps; // hint; lossless providers ignore
-                                      // Metadata lives IN the video: while recording, the meta record stream (40-byte
-                                      // header first, then framed records in emission order) is chunked across the frames'
-                                      // BOTTOM EmbedRows pixel rows as 4x4-pixel luma blocks (black 16 / white 235, read
-                                      // threshold 128 -- survives lossy encode). Per frame: u32 magic 'IMIL' |
-                                      // u32 chunk_size | chunk (the stream's next bytes, up to capacity) | u32 ImHashData
-                                      // checksum (CRC32c). Records self-describe, so reassembly is chunk concatenation in
-                                      // frame order; a large record (state snapshot) legitimately spans frames. The only
-                                      // loss mode is a corrupt frame, which truncates the stream at that point on read.
-                                      // Capacity per frame = floor(W/4) * floor(EmbedRows/4) / 8 - 12 bytes.
+                                      // Metadata lives IN the video: while recording, the meta record stream is
+                                      // chunked across the frames' bottom EmbedRows pixel rows as 4x4 luma blocks
+                                      // (survives lossy encode). Format frozen: see docs/designs.md (av-design).
     int EmbedRows;                    // reserved bottom rows; multiple of 4
 
     ImGuiAppAVEncodeConfig()
@@ -646,14 +635,9 @@ struct ImGuiAppPlatformBackend
     bool (*InitPlatform)(ImGuiApp* app, ImGuiAppConfig& config);
     void (*ShutdownPlatform)(ImGuiApp* app);
     int (*RunLoop)(ImGuiApp* app);
-    // Optional (null = backend cannot capture; recording fails with a clear error). Readback in the
-    // encode phase (after render, before present). Encode-every-frame contract: the FIRST call of a
-    // take returns the current frame (synchronously if the pipeline is unprimed); steady state may
-    // return frame N-1's pixels PROVIDED out_frame->FrameID carries the id recorded at copy time (a
-    // zeroed id gets the pumping frame's stamped by the recorder); a call with no new frame rendered
-    // since the last one returns the freshest unreturned copy if already GPU-complete (never block),
-    // else false -- callers drain the tail by re-calling after the GPU settles. Never return the
-    // same FrameIndex twice. Pixels stay valid until the next CaptureFrame call.
+    // Optional (null = backend cannot capture; recording fails with a clear error). Readback in the encode
+    // phase (after render, before present). Encode-every-frame contract: steady state may return frame N-1's
+    // pixels (FrameID stamped at copy time), drain the tail by re-calling, never block, never repeat a FrameIndex.
     bool (*CaptureFrame)(ImGuiApp* app, ImGuiAppAVFrame* out_frame);
 };
 
@@ -667,12 +651,9 @@ IMGUI_API const ImGuiAppPlatformBackend* ImGuiApp_GetPlatformBackend();
 // ImGuiAppStatic<> / ImGuiAppType<> / ImAppNulTerminate / ImAppFormatLabel / ImAppTypeDisplayName, and
 // the AppReflectFields walk) lives in imguiapp_reflect.h, included at the top of this file.
 
-// Polymorphic root of the app object model: the common base the app owns layers/items/adapters by, so
-// they delete virtually through a base pointer. Carries NO data -- identity (Label) lives on the
-// concrete branches (ImGuiAppLayerBase / ImGuiAppItemBase) that use it, NOT here, so a secondary
-// interface mixed into a branch (e.g. ImGuiAppControlMirrorBase into ImGuiAppControlBase) adds no
-// duplicate Label. Virtual dispatch is ratified for this hierarchy ONLY (docs/style-deltas.md Δ1);
-// everything outside the app object model keeps imgui's no-virtuals rule.
+// Polymorphic root of the app object model: the common base the app owns layers/items/adapters by, deleted
+// virtually through a base pointer. Carries NO data -- identity (Label) lives on the concrete branches, so
+// a mixed-in secondary interface adds no duplicate Label. Virtuals: this hierarchy ONLY (style-deltas.md Δ1).
 struct ImGuiAppInterface
 {
     ImGuiAppInterface()          = default;
@@ -707,9 +688,8 @@ inline static int ImAppRandomInt(ImU64* seed, int mn, int mx) // uniform in [mn,
 
 
 // One authorable style-var override: Value.x for float vars, both lanes for ImVec2 vars; Active is
-// runtime-toggleable.
-// Aggregate (default member initializers, no ctors) so the build-time reflection walk sees
-// its members. Float-valued vars brace-init as { var, ImVec2(v, 0.0f) }.
+// runtime-toggleable. Aggregate (default member initializers, no ctors) so the build-time reflection
+// walk sees its members. Float-valued vars brace-init as { var, ImVec2(v, 0.0f) }.
 struct ImGuiAppStyleModDesc
 {
     ImGuiStyleVar Var    = 0;
@@ -795,11 +775,8 @@ struct ImGuiAppSidebarBase : ImGuiAppWindowBase
 // virtuals below) live in imguiapp_reflect.h, included at the top of this file.
 
 // Live-mirror reflection surface: compile-time-erased data identity re-exposed on the type-erased
-// ImGuiAppControlBase*, so tools (Composer, state inspector) inspect a control without knowing its
-// concrete (PersistDataT, TempDataT, DataDependencies...) pack. A pure interface in the house style
-// (derives ImGuiAppInterface, like ImGuiAppItemBase / ImGuiAppInterfaceAdapterBase); carries no Label
-// of its own. Every hook defaults inert (0 / "" / false / no-op) so a control with nothing reflectable
-// needs no boilerplate; ImGuiAppControl<> overrides each from its pack. Default bodies in imguiapp.cpp.
+// ImGuiAppControlBase*, so tools inspect a control without knowing its concrete template pack. A pure
+// interface like ImGuiAppItemBase; every hook defaults inert, ImGuiAppControl<> overrides each from its pack.
 struct ImGuiAppControlMirrorBase : ImGuiAppInterface
 {
     virtual ImGuiID GetControlDataID() const;                                                     // instance-qualified storage key of PersistData
@@ -1270,9 +1247,7 @@ namespace ImGui
 
     // Shared body of PushAppControl / PushWindowControl / PushSidebarControl: generate the label, key the
     // instance data by (control data type, instance), construct control T + its instance data, register its
-    // storage (snapshottable when the instance data is trivially-copyable; opaque otherwise), wire
-    // _InstanceID/_InstanceData, and resolve bindings. host_kind/host_label describe the owning
-    // window/sidebar, or null for a top-level control. The caller appends the returned control to its list.
+    // storage (snapshottable when trivially copyable), wire _InstanceID/_InstanceData, resolve bindings.
     template <typename T>
     inline T* AppControlCreate(ImGuiApp* app, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count, const char* host_kind, const char* host_label)
     {
