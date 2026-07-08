@@ -13,8 +13,8 @@ codegen corpus byte-identical, style ratchet monotonically down.
 | Dimension | Conform | Partial | Violation | Top open item |
 |---|---|---|---|---|
 | §2 Naming (N1-N24) | 7 | 10 | 7 | k-tier (243 uses); ~55 unprefixed TU-local types; `ImGuiCanvas*` squat |
-| §3 Formatting (F1-F28) | 8 | 8 | 5 (+6 gate-covered) | S3: 44% of cpp lines off-grid; bare `default:` 50:1 |
-| §4 Architecture (A1-A32) | 6 | 7 | 8 (+2 n/a) | no `IMGUI_DISABLE` wrap anywhere; S2 index drift regressing |
+| §3 Formatting (F1-F28) | 10 | 8 | 3 (+6 gate-covered) | bare `default:` 50:1 (S9) |
+| §4 Architecture (A1-A32) | 7 | 7 | 7 (+2 n/a) | no `IMGUI_DISABLE` wrap anywhere |
 | §5 API grammar (G1-G24) | 4 | 5 | 2 | silent overpop in all four `PopApp*`; no V twins |
 | §6 Backends (B1-B18) | seam ✓ | B5/B7/B15 | B1/B2/B16/B17 | anatomy/CHANGELOG/guards/prefix wave |
 | §7 Idioms (I1-I41) | 8 | 5 | 3 | dialect breach (43 `auto`, 33 capturing lambdas) |
@@ -77,21 +77,6 @@ owning singleton or gets a process-wide justification comment. Two use `s_` Hung
 
 ## Systemic items
 
-### S2. Section-index drift + decorated banners — A2/F19 (SEVERE — REGRESSING; lint first)
-The class regrows because the promised `tests/style` index↔body check never landed. Current:
-demo sub-index missing `[SECTION] Playback debugger` (body `:4129`) + final-entry title mismatch
-(`:3466` vs `:6661`); nodes sub-index missing 3 sections (`:7566`, `:9354`, `:9615`) + 2 order
-swaps + 3 title drifts; AV sub-index missing 5; DLL-preview region (`:6807-7385`) has ZERO
-`[SECTION]`s; QOI (`:26647`) and testharness (`:26908`) regions have no index; 10 decorated
-`====`/`####` fold banners persist (`:1796,:1800,:1826,:3455,:6807,:7385,:23346,:24663,:26647,:26908`).
-**Order: (1) land the lint, (2) regenerate indexes from body markers, (3) dashed-`[SECTION]` the banners.**
-
-### S3. 2-space indent regions — F1 (bulk, quantified)
-`imguiapp.cpp` 4,141 exact-2-space lines (11,987 non-mult-4 = 44%; 231 regions ≥20 lines — every
-folded region from `:1826` on), `internal.h` 1,321 (largest run 600 lines), `impl_libav` 226,
-`impl_mediafoundation` 156, `impl_qoi` 113. Pipeline ready: clang-format APPLY + suites + corpus
-byte-compare + baseline re-pin + indent lexical check into `tests/style`.
-
 ### S5. Deprecation + breaking-change machinery — A14/A15 (absent; retrofit cost compounding)
 0 `OBSOLETED`, no Obsolete tail section, no `API BREAKING CHANGES` block — while a real ABI break
 is encoded ad hoc (`IMGUIAPP_PREVIEW_ABI 20260706u`, `internal.h:56-58`). Stand up: guarded empty
@@ -151,7 +136,7 @@ target N23 form, ID-key blocks get rationale comments.
 | M8 | A9 | config include 3rd (`imguiapp.h:24`); redundant `imgui_internal.h` re-include (cpp `:26`); cpp spine jumbled | config first; delete; reorder |
 | M9 | A10 | no CHECKVERSION analog | `IMGUIAPP_CHECKVERSION()` + sizeof asserts, called in `InitializeApp` |
 | M10 | A13 | version `"0.4.1"`/401: no ` WIP`, no scheme comment | ` WIP` suffix + monotonic NUM + scheme comment (with M3 rename) |
-| M11 | A17 | no cpp `[SECTION] Forward Declarations`; stray fwd decl `:13170` | add per Δ7 region during the S2 pass |
+| M11 | A17 | no cpp `[SECTION] Forward Declarations`; stray fwd decl `:13170` | add per Δ7 region |
 | M13 | G7 | `AppRegisterSidebar` flags no `= 0` (`imguiapp.h:163`) | add `= 0` |
 | M14 | G9/N10 | `AppWALWrite` (`imguiapp.h:212`) + `AppGraphNotify` (cpp `:13170`) variadic, no V twins, 0 `IM_FMTLIST` | add `*V(va_list)` twins, re-implement over them |
 | M15 | G4 | Push*Control "No Pop" decl comment absent (`imguiapp.h:128-130`) | add comment |
@@ -173,7 +158,7 @@ target N23 form, ID-key blocks get rationale comments.
 | M37 | A18 | `kAppDockDirNames[4]` (cpp `:12192`) unlocked; `OutlinerKindVis` hand-9 initializer (`internal.h:918`) zero-fills on enum growth | `IM_STATIC_ASSERT` locks |
 | M38 | A32 | no version-stamp grammar; `IMGUIAPP_PREVIEW_ABI 20260706u` ad-hoc date tag | adopt "Since 0.Y.Z (Month Year, NUM)" with S5 |
 | M39 | — | dead empty `#ifdef IMGUIX_HAS_LIBAV` pair (cpp `:3468-3469`); BOMs on 6 backend headers | delete; strip |
-| M40 | A24 | `internal.h` Macros section precedes Forward declarations (inverted vs canon) | swap in the S2 pass |
+| M40 | A24 | `internal.h` Macros section precedes Forward declarations (inverted vs canon) | swap sections |
 | M41 | A26 | `ShowAppGraphEditor` defined in Scope-interior section (`:15090`) not editor-render; 6 residual rank descents | move with the Phase C section restructure |
 | M42 | I40 | 2,835-line `ShowAppGraphEditor` without a `[Part N]` spine (local `// Pass 1/2/3` at `:15620` shows the form known); also `AppGraphValidate` 323 L, `CanvasEnd` 297 L | number the parts |
 | M43 | I33 | `clicked`/`changed` + `saved_`/`prev_`/`old_` (14 sites, 0 `backup_`) vs canon `pressed`/`value_changed`/`backup_` | rename locals |
@@ -183,8 +168,8 @@ target N23 form, ID-key blocks get rationale comments.
 ## Sequencing (each wave gated)
 
 1. **Wave R — decisions**: R1-R7. Everything below assumes the outcomes.
-2. **Wave L — lint first**: S2 index↔body sync + S3 indent check + S6 tag census + N22/N23 greps
-   into `tests/style`, so no fixed class regresses again. Then S2 regeneration + S3 format apply.
+2. **Wave L — lint first**: S6 tag census + N22/N23 greps into `tests/style`, so no fixed class
+   regresses again.
 3. **Wave M — sed batch**: M13, M15, M18, M21, M22, M26, M34, M36, M37, M39, M44, F26 explicit-type
    range-fors, F14 casts, F28 sizeof, F25 default merges, M8, M7.
 4. **Wave N — AST rename batch**: S9 k-tier → UPPER_SNAKE, S10 type prefixes, M3+M10, M16, M17,
