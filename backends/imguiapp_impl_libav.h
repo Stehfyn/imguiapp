@@ -1,9 +1,11 @@
-// ImGuiAppAV encoder backend: libav* (linked ffmpeg SDK, scripts/get-ffmpeg.ps1 ->
-// third_party/ffmpeg). True VFR with EXACT per-frame PTS: AVFrame->pts carries
-// FrameID.TimeSec directly (microsecond timebase) -- no wallclock residual, unlike the
-// process-pipe backend. GPL SDK variant links libx264; distributing binaries linked
-// against it is GPL.
-// SupportsRealtimePts: true (exact).
+// dear imgui app: AV Encoder Backend for libav* (linked ffmpeg SDK; scripts/get-ffmpeg.ps1 -> third_party/ffmpeg)
+// This needs to be used along with the recorder (ImGui::AppRecordBegin) and a capture-capable Renderer Host.
+
+// Implemented features:
+//  [X] AV: True VFR mp4 with EXACT per-frame PTS: AVFrame->pts carries FrameID.TimeSec directly (microsecond timebase) -- no wallclock residual, unlike the process-pipe backend. SupportsRealtimePts true (exact).
+//  [X] AV: Embedded-meta extraction, single-frame decode (the mp4 counterpart of ImGuiApp_ImplQoi_DecodeFrame), embedded input-log reader.
+
+// GPL SDK variant links libx264; distributing binaries linked against it is GPL.
 
 #pragma once
 

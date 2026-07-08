@@ -1,13 +1,16 @@
-// ImGuiAppAV encoder backend: libav* (imguiapp_impl_libav.h). Exact per-frame PTS:
-// AVFrame->pts carries FrameID.TimeSec in a 1/1000000 timebase, rebased to the first
-// frame -- no wallclock residual. Also hosts the embedded-input-log reader (the decode
-// half of the embedded meta stream; format spec lives on ImGuiAppAVEncodeConfig::EmbedRows).
-//
+// dear imgui app: AV Encoder Backend for libav* (imguiapp_impl_libav.h)
+// This needs to be used along with the recorder (ImGui::AppRecordBegin) and a capture-capable Renderer Host.
+
+// Implemented features:
+//  [X] AV: Exact per-frame PTS: AVFrame->pts carries FrameID.TimeSec in a 1/1000000 timebase, rebased to the first frame -- no wallclock residual.
+//  [X] AV: Embedded-input-log reader (the decode half of the embedded meta stream; format spec lives on ImGuiAppAVEncodeConfig::EmbedRows).
+
 // Index of this file (search for "[SECTION]"):
 // [SECTION] Encoder
 // [SECTION] Embedded input log reader
 
 // CHANGELOG
+//  2026-07-08: Header comment block conformed to the backend anatomy (kind grammar + feature checklist).
 //  2026-07-08: Backend-internal symbols prefixed ImGuiApp_ImplLibav_* (house backend grammar); IMGUI_DISABLE guards added.
 
 #include "imguiapp_impl_libav.h"

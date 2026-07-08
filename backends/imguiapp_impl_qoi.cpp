@@ -1,9 +1,13 @@
-// ImGuiAppAV encoder backend: QOI image sequence (imguiapp_impl_qoi.h).
-// OutputPath is a directory: frames land as <dir>/NNNNNN.qoi with index.tsv carrying
-// each frame's FrameID (file, frame_index, time_sec, tsc) -- realtime PTS are exact
-// by construction, so SupportsRealtimePts is true for every timing mode.
+// dear imgui app: AV Encoder Backend for QOI image sequence
+// This needs to be used along with the recorder (ImGui::AppRecordBegin) and a capture-capable Renderer Host.
+
+// Implemented features:
+//  [X] AV: OutputPath is a directory: lossless frames land as <dir>/NNNNNN.qoi with index.tsv carrying each frame's FrameID (file, frame_index, time_sec, tsc).
+//  [X] AV: Exact realtime PTS by construction (SupportsRealtimePts true for every timing mode).
+//  [X] AV: Embedded-meta strip reassembly + single-frame decode (the playback debugger's scrub side).
 
 // CHANGELOG
+//  2026-07-08: Header comment block conformed to the backend anatomy (kind grammar + feature checklist).
 //  2026-07-08: Backend-internal symbols prefixed ImGuiApp_ImplQoi_* (house backend grammar); IMGUI_DISABLE guards added.
 
 #include "imguiapp_impl_qoi.h"

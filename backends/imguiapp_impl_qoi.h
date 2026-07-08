@@ -1,7 +1,12 @@
-// ImGuiAppAV encoder backend: QOI image sequence.
-// Zero-dependency, lossless, byte-stable across machines -- the CI/golden-image
-// provider. Output: <OutputPath>/NNNNNN.qoi + index.tsv (frame_index, time_sec).
-// SupportsRealtimePts: true (index.tsv carries per-frame wall-clock time exactly).
+// dear imgui app: AV Encoder Backend for QOI image sequence
+// This needs to be used along with the recorder (ImGui::AppRecordBegin) and a capture-capable Renderer Host.
+
+// Implemented features:
+//  [X] AV: Zero-dependency, lossless, byte-stable across machines -- the CI/golden-image provider.
+//  [X] AV: Exact realtime PTS for every timing mode (index.tsv carries per-frame wall-clock time; SupportsRealtimePts true).
+//  [X] AV: Embedded-meta strip reassembly + single-frame decode (the playback debugger's scrub side).
+
+// Output: <OutputPath>/NNNNNN.qoi + index.tsv (frame_index, time_sec).
 // QOI encoding implemented from the specification (qoiformat.org), no third-party code.
 
 #pragma once

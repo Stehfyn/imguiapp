@@ -1,6 +1,10 @@
-// ImGuiAppAV encoder backend: Windows Media Foundation mp4 (H.264/HEVC).
-// No external exe; the only TU linking mfplat/mfreadwrite.
-// SupportsRealtimePts: true (per-sample timestamps are native to IMFSinkWriter).
+// dear imgui app: AV Encoder Backend for Windows Media Foundation mp4 (H.264/HEVC)
+// This needs to be used along with the recorder (ImGui::AppRecordBegin) and a capture-capable Renderer Host.
+
+// Implemented features:
+//  [X] AV: mp4 output with no external exe; the only TU linking mfplat/mfreadwrite.
+//  [X] AV: Realtime PTS (per-sample timestamps are native to IMFSinkWriter; SupportsRealtimePts true).
+
 // Explicit choice, never a silent default: lossy + driver-variant output is wrong
 // for test artifacts.
 

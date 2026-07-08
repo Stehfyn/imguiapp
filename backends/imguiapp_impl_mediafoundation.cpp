@@ -1,10 +1,13 @@
-// ImGuiAppAV encoder backend: Windows Media Foundation mp4 (imguiapp_impl_mediafoundation.h).
-// IMFSinkWriter with an H.264 output stream and an RGB32 input type; the writer loads
-// the color-converter/encoder MFTs itself. Realtime output is duration-honest resampled
-// CFR -- true VFR is unreachable through the sink writer (see ImGuiApp_ImplMediaFoundation_BeginWriting).
-// The only TU linking mfplat/mfreadwrite.
+// dear imgui app: AV Encoder Backend for Windows Media Foundation mp4 (imguiapp_impl_mediafoundation.h)
+// This needs to be used along with the recorder (ImGui::AppRecordBegin) and a capture-capable Renderer Host.
+
+// Implemented features:
+//  [X] AV: IMFSinkWriter with an H.264 output stream and an RGB32 input type; the writer loads the color-converter/encoder MFTs itself. The only TU linking mfplat/mfreadwrite.
+// Missing features:
+//  [ ] AV: True VFR (unreachable through the sink writer; realtime output is duration-honest resampled CFR, see ImGuiApp_ImplMediaFoundation_BeginWriting).
 
 // CHANGELOG
+//  2026-07-08: Header comment block conformed to the backend anatomy (kind grammar + feature checklist).
 //  2026-07-08: Backend-internal symbols prefixed ImGuiApp_ImplMediaFoundation_* (house backend grammar); IMGUI_DISABLE guards added.
 
 #include "imguiapp_impl_mediafoundation.h"
