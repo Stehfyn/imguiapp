@@ -106,12 +106,12 @@ struct ImAppTween;   struct ImAppTweenData;   struct ImAppTweenTempData;
 struct ImGuiAppTestHarnessConfig;
 
 // Canvas UI [TOOLS]
-struct ImGuiCanvasIO;           // per-frame canvas input
-struct ImGuiCanvasNodeRec;      // submitted node record
-struct ImGuiCanvasPinRec;       // submitted pin record
-struct ImGuiCanvasState;        // canvas engine state (opaque to callers)
-struct ImGuiCanvasStyle;        // canvas visual style
-struct ImGuiCanvasWireRec;      // per-frame wire submission
+struct ImGuiAppCanvasIO;           // per-frame canvas input
+struct ImGuiAppCanvasNodeRec;      // submitted node record
+struct ImGuiAppCanvasPinRec;       // submitted pin record
+struct ImGuiAppCanvasState;        // canvas engine state (opaque to callers)
+struct ImGuiAppCanvasStyle;        // canvas visual style
+struct ImGuiAppCanvasWireRec;      // per-frame wire submission
 
 struct ImGuiAppGraphHostCmd;   // fwd (declared with the palette API below)
 struct ImGuiAppGraphIssue;     // fwd (declared with the validation API below)
@@ -873,7 +873,7 @@ struct ImGuiAppCodeSpan
 // model object they describe, like Selection/ViewScope/ScopeCams. All transient, not serialized.
 struct ImGuiAppEditorState
 {
-    ImGuiCanvasState*              Canvas = nullptr;                   // this graph's canvas engine (created on first editor frame; freed with the process)
+    ImGuiAppCanvasState*              Canvas = nullptr;                   // this graph's canvas engine (created on first editor frame; freed with the process)
     bool                           DragWasDetach = false;
     int                            HoverNode = -1;                     // brushing bus: render-phase reports (TempData), read next frame
     int                            HoverLink = -1;
@@ -1182,9 +1182,9 @@ struct ImGuiAppTestHarnessConfig
 
 // Best-effort symbolized backtrace of the caller as "  #N name (file:line)" lines; returns characters
 // written. skip_frames drops innermost frames (0 = caller). Win32 only; other platforms write "".
-IMGUI_API int ImStackTrace(char* out, int out_size, int skip_frames = 0);
+IMGUI_API int ImAppStackTrace(char* out, int out_size, int skip_frames = 0);
 
-// IM_ASSERT sink (wired via IMGUI_USER_CONFIG): logs expr/file/line + ImStackTrace to the SetAppAssertWAL
+// IM_ASSERT sink (wired via IMGUI_USER_CONFIG): logs expr/file/line + ImAppStackTrace to the SetAppAssertWAL
 // sink and stderr, flushes, then __debugbreak()s under a debugger or exits with code 3 -- never the CRT popup.
 IMGUI_API void ImAppAssertFail(const char* expr, const char* file, int line);
 
@@ -1371,13 +1371,13 @@ inline bool EditAppField(const char* label, T* value)
 
 // Node rendering (canvas)
 // Canvas-engine node scaffold (see imguiapp_canvas.h): titled node between CanvasBegin/End.
-IMGUI_API void        AppNodeBegin(ImGuiCanvasState* c, int id, const char* title);
-IMGUI_API void        EndAppNode(ImGuiCanvasState* c);
+IMGUI_API void        AppNodeBegin(ImGuiAppCanvasState* c, int id, const char* title);
+IMGUI_API void        EndAppNode(ImGuiAppCanvasState* c);
 
 // Renamable node scaffold: the title bar shows *name, turns into an inline text box when clicked.
 // Commits on Enter or focus loss, cancels on Escape. *editing_node_id is caller-owned (-1 = none);
 // set on title click, cleared when the edit ends. Pair with EndAppNode().
-IMGUI_API void        AppNodeBeginRenamable(ImGuiCanvasState* c, int id, char* name, int name_size, int* editing_node_id);
+IMGUI_API void        AppNodeBeginRenamable(ImGuiAppCanvasState* c, int id, char* name, int name_size, int* editing_node_id);
 
 // Render every reflected field of an aggregate as read-only labelled rows in the current node.
 template <typename T>
@@ -1431,11 +1431,11 @@ IMGUI_API void AppNodeDraftFieldsEdit(ImGuiAppNodeDraft* draft);
 IMGUI_API void DrawAppNodeDraft(const ImGuiAppNodeDraft* draft);
 
 // Draw the model's links as wires on the canvas (between CanvasBegin/End).
-IMGUI_API void DrawAppNodeLinks(ImGuiCanvasState* c, const ImVector<ImGuiAppNodeLink>* links);
+IMGUI_API void DrawAppNodeLinks(ImGuiAppCanvasState* c, const ImVector<ImGuiAppNodeLink>* links);
 
 // After CanvasEnd: fold the canvas's wire events into the link model. New links take ids from
 // *next_link_id (incremented). Returns true if the model changed.
-IMGUI_API bool CaptureAppNodeLinks(ImGuiCanvasState* c, ImVector<ImGuiAppNodeLink>* links, int* next_link_id);
+IMGUI_API bool CaptureAppNodeLinks(ImGuiAppCanvasState* c, ImVector<ImGuiAppNodeLink>* links, int* next_link_id);
 
 // Persist / restore a draft and its links as imgui-style text. Return false on file error.
 IMGUI_API bool SaveAppNodeGraph(const char* path, const ImGuiAppNodeDraft* draft, const ImVector<ImGuiAppNodeLink>* links);
@@ -1524,7 +1524,7 @@ IMGUI_API void AppControlCodeGenerate(const ImGuiAppNodeDraft* draft, ImGuiTextB
 // Debug introspection (Metrics-style TreeNode dumps).
 IMGUI_API void                                DebugNodeAppGraph(const ImGuiAppGraph* g, const char* label);
 IMGUI_API void                                DebugNodeAppNode(const ImGuiAppNode* n);
-IMGUI_API void                                DebugNodeCanvas(const ImGuiCanvasState* c, const char* label);
+IMGUI_API void                                DebugNodeCanvas(const ImGuiAppCanvasState* c, const char* label);
 #endif // #ifndef IMGUI_DISABLE_DEBUG_TOOLS
 
 IMGUI_API int                                 AppGraphEditorCommandCount();
@@ -1643,7 +1643,7 @@ IMGUI_API ImGuiAppGraphViewState*             AppGraphViewState(ImGuiAppGraph* g
 
 // The graph's canvas-engine state (see imguiapp_canvas.h): hosts and tests can query geometry
 // or drive the camera. Created on the graph's first editor frame.
-IMGUI_API ::ImGuiCanvasState*                 AppGraphEditorCanvas(const ImGuiAppGraph* g);
+IMGUI_API ::ImGuiAppCanvasState*                 AppGraphEditorCanvas(const ImGuiAppGraph* g);
 
 IMGUI_API void                                AppScopeCollectPortals(const ImGuiAppGraph* g, ImVector<ImGuiAppScopePortal>* out);
 
@@ -1804,7 +1804,7 @@ IMGUI_API int AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessConfig* 
 //-----------------------------------------------------------------------------
 // [SECTION][TOOLS] Canvas UI (was imguiapp_canvas.h)
 //-----------------------------------------------------------------------------
-struct ImGuiCanvasStyle
+struct ImGuiAppCanvasStyle
 {
     // Colors: set directly, no push/pop stack. CanvasCreate derives them from the current
     // ImGuiStyle theme (CanvasStyleFromTheme); hosts may overwrite after.
@@ -1851,7 +1851,7 @@ struct ImGuiCanvasStyle
     bool GridSnap; // snap node origins to GridSpacing while dragging
 };
 
-struct ImGuiCanvasIO
+struct ImGuiAppCanvasIO
 {
     // Bindings policy.
     bool  LmbPansEmptyCanvas; // LMB-drag on empty canvas pans (no box select)
@@ -1860,7 +1860,7 @@ struct ImGuiCanvasIO
     float ZoomMin, ZoomMax;   // clamp (defaults 0.3 / 2.5)
 };
 
-struct ImGuiCanvasNodeRec
+struct ImGuiAppCanvasNodeRec
 {
     int    Id;
     ImVec2 Pos;        // model units
@@ -1876,7 +1876,7 @@ struct ImGuiCanvasNodeRec
     float  NeededW;      // content-derived width need (MODEL units), measured before FixedWidth applies
     int    HeaderRule;   // rule under the title band: 0 none, 1 solid, 2 dashed
     ImU32  HeaderRuleColor;
-    int    StripeSide;   // ImGuiCanvasPinSide_ of an edge stripe; -1 = none
+    int    StripeSide;   // ImGuiAppCanvasPinSide_ of an edge stripe; -1 = none
     ImU32  StripeColor;
     float  StripeThick;  // stripe thickness, MODEL units
     float  Alpha;        // plate + content opacity multiplier (disabled look); 1 = normal
@@ -1885,12 +1885,12 @@ struct ImGuiCanvasNodeRec
     int    LastFrame;  // ImGui frame count of the last submission (cull/hit bookkeeping)
 };
 
-struct ImGuiCanvasPinRec
+struct ImGuiAppCanvasPinRec
 {
     int    Id;
     int    NodeId;
-    int    Kind;       // ImGuiCanvasPinKind_In / _Out (interaction role)
-    int    Side;       // ImGuiCanvasPinSide_ (which node edge; Left/Right = data, Top/Bottom = containment)
+    int    Kind;       // ImGuiAppCanvasPinKind_In / _Out (interaction role)
+    int    Side;       // ImGuiAppCanvasPinSide_ (which node edge; Left/Right = data, Top/Bottom = containment)
     int    Shape;      // circle (data) / square (containment)
     ImU32  Color;      // 0 = style (by shape); set via CanvasNextPinColor
     ImVec2 Anchor;     // MODEL units: pin center at the node edge, row-centered
@@ -1898,7 +1898,7 @@ struct ImGuiCanvasPinRec
     int    WiredCount; // wires touching this pin THIS frame (filled pin glyph)
 };
 
-struct ImGuiCanvasWireRec  // per-frame submission, rebuilt every frame
+struct ImGuiAppCanvasWireRec  // per-frame submission, rebuilt every frame
 {
     int   Id;
     int   PinA;
@@ -1907,20 +1907,20 @@ struct ImGuiCanvasWireRec  // per-frame submission, rebuilt every frame
     bool  Dashed; // optional dependency: dashed body (form carrier; dimming is the color coat)
 };
 
-typedef int ImGuiCanvasInteraction;   // -> enum ImGuiCanvasInteraction_   // Enum: canvas interaction mode
-enum ImGuiCanvasInteraction_
+typedef int ImGuiAppCanvasInteraction;   // -> enum ImGuiAppCanvasInteraction_   // Enum: canvas interaction mode
+enum ImGuiAppCanvasInteraction_
 {
-    ImGuiCanvasInteraction_None = 0,
-    ImGuiCanvasInteraction_Pan,
-    ImGuiCanvasInteraction_DragNodes,
-    ImGuiCanvasInteraction_DragWire,      // from FromPin; release on a pin = created, on empty = dropped
-    ImGuiCanvasInteraction_MenuPending,   // RMB down, not yet travelled: release = menu, travel = pan
+    ImGuiAppCanvasInteraction_None = 0,
+    ImGuiAppCanvasInteraction_Pan,
+    ImGuiAppCanvasInteraction_DragNodes,
+    ImGuiAppCanvasInteraction_DragWire,      // from FromPin; release on a pin = created, on empty = dropped
+    ImGuiAppCanvasInteraction_MenuPending,   // RMB down, not yet travelled: release = menu, travel = pan
 };
 
-struct ImGuiCanvasState
+struct ImGuiAppCanvasState
 {
-    ImGuiCanvasStyle Style;
-    ImGuiCanvasIO    IO;
+    ImGuiAppCanvasStyle Style;
+    ImGuiAppCanvasIO    IO;
 
     // Camera
     ImVec2 Pan;
@@ -1928,16 +1928,16 @@ struct ImGuiCanvasState
     float  FontRatio; // host font scale (DPI * user scale) captured at CanvasBegin; geometry scale = Zoom * FontRatio
 
     // Nodes
-    ImVector<ImGuiCanvasNodeRec> Nodes;
+    ImVector<ImGuiAppCanvasNodeRec> Nodes;
     ImGuiStorage                 NodeIdx;        // id -> index + 1
     ImVector<int>                SubmitOrder;    // last frame's submission order (z-order; hit-test walks it backward)
     ImVector<int>                SubmitOrderNow; // rebuilt during the current frame
 
     // Pins + wires
-    ImVector<ImGuiCanvasPinRec>  Pins;
+    ImVector<ImGuiAppCanvasPinRec>  Pins;
     ImGuiStorage                 PinIdx;      // id -> index + 1
-    ImVector<ImGuiCanvasWireRec> Wires;       // rebuilt per frame between CanvasBegin/End
-    ImVector<ImGuiCanvasWireRec> WiresPrev;   // last frame's wires: press decisions run at CanvasBegin
+    ImVector<ImGuiAppCanvasWireRec> Wires;       // rebuilt per frame between CanvasBegin/End
+    ImVector<ImGuiAppCanvasWireRec> WiresPrev;   // last frame's wires: press decisions run at CanvasBegin
     ImVector<int>                CurNodePins; // pin indices submitted inside the current node (anchor.x resolves at EndNode)
 
     // Host-declared solid regions (model units, x0 y0 x1 y1): obstacles for solid-node drags.
@@ -1976,7 +1976,7 @@ struct ImGuiCanvasState
     float  NextFixedWidth;    // model units; <= 0 = content-sized
     int    NextHeaderRule;    // 0 none, 1 solid, 2 dashed
     ImU32  NextHeaderRuleColor;
-    int    NextStripeSide;    // ImGuiCanvasPinSide_; -1 none
+    int    NextStripeSide;    // ImGuiAppCanvasPinSide_; -1 none
     ImU32  NextStripeColor;
     float  NextStripeThick;   // model units
     float  NextAlpha;         // plate + content opacity multiplier; 1 = normal
@@ -2032,7 +2032,7 @@ struct ImGuiCanvasState
     int    DetachedWireId;
     int    DetachedGrabbedPin;
 
-    ImGuiCanvasState()
+    ImGuiAppCanvasState()
     {
         memset(&Style, 0, sizeof(Style));   // colors filled by CanvasStyleFromTheme in CanvasCreate
         Style.GridSpacing    = 24.0f;
@@ -2082,7 +2082,7 @@ struct ImGuiCanvasState
         NextEditBufSize     = 0;
         NextEditFlag        = nullptr;
         NextWireDashed      = false;
-        Interaction         = ImGuiCanvasInteraction_None;
+        Interaction         = ImGuiAppCanvasInteraction_None;
         GestureStartMouse = GestureStartPan = ImVec2(0.0f, 0.0f);
         DragWireFromPin     = -1;
         EditBuf = nullptr; EditBufSize = 0; EditFlag = nullptr; EditNodeIdx = -1; EditFocusPending = false;
@@ -2108,13 +2108,13 @@ struct ImGuiCanvasState
 namespace ImGui
 {
 // Canvas engine: lifecycle, nodes, pins, wires, interaction
-IMGUI_API ImGuiCanvasState* CanvasCreate();
-IMGUI_API void              CanvasDestroy(ImGuiCanvasState* c);
-IMGUI_API ImGuiCanvasStyle* CanvasGetStyle(ImGuiCanvasState* c);
-IMGUI_API ImGuiCanvasIO*    CanvasGetIO(ImGuiCanvasState* c);
+IMGUI_API ImGuiAppCanvasState* CanvasCreate();
+IMGUI_API void              CanvasDestroy(ImGuiAppCanvasState* c);
+IMGUI_API ImGuiAppCanvasStyle* CanvasGetStyle(ImGuiAppCanvasState* c);
+IMGUI_API ImGuiAppCanvasIO*    CanvasGetIO(ImGuiAppCanvasState* c);
 // Recompute all style colors from the current ImGuiStyle theme (requires a live context).
 // Called by CanvasCreate; call again after switching themes.
-IMGUI_API void              CanvasStyleFromTheme(ImGuiCanvasStyle* style);
+IMGUI_API void              CanvasStyleFromTheme(ImGuiAppCanvasStyle* style);
 
 // ---- frame ----------------------------------------------------------------------------------
 // CanvasBegin opens the child (fills the available region unless size is given), draws the grid, applies
@@ -2122,113 +2122,113 @@ IMGUI_API void              CanvasStyleFromTheme(ImGuiCanvasStyle* style);
 // from THIS frame's geometry, resolves hover, runs the interaction FSM, latches events (valid until next CanvasBegin).
 // CanvasBegin/CanvasEnd: ALWAYS paired, unconditionally -- Begin is void and End must run even for
 // a fully culled canvas (it resolves hover + retires per-frame wire/pin state).
-IMGUI_API void              CanvasBegin(ImGuiCanvasState* c, const char* str_id, ImVec2 size /*= 0,0*/);
-IMGUI_API void              CanvasEnd(ImGuiCanvasState* c);   // always call (pairs CanvasBegin)
+IMGUI_API void              CanvasBegin(ImGuiAppCanvasState* c, const char* str_id, ImVec2 size /*= 0,0*/);
+IMGUI_API void              CanvasEnd(ImGuiAppCanvasState* c);   // always call (pairs CanvasBegin)
 
 // Decoration hook: returns the canvas draw list switched to the BACKGROUND channel (above the grid,
 // below node plates; wires land in the same channel later, so they draw over these decorations).
 // Call between CanvasBegin and the first node; the next CanvasBeginNode restores the content channel.
-IMGUI_API ImDrawList*       CanvasBackgroundDrawList(ImGuiCanvasState* c);
+IMGUI_API ImDrawList*       CanvasBackgroundDrawList(ImGuiAppCanvasState* c);
 
 // Annotation hook: the canvas child's draw list AFTER CanvasEnd. Appended commands render above
 // every merged channel (grid, plates, content) but stay inside the child's z-order -- annotations
 // ride the canvas, they never paint over other windows (the viewport foreground list does).
-IMGUI_API ImDrawList*       CanvasAnnotationDrawList(ImGuiCanvasState* c);
+IMGUI_API ImDrawList*       CanvasAnnotationDrawList(ImGuiAppCanvasState* c);
 
 // ---- camera (pan in pixels, zoom unitless; screen = origin + pan + model * zoom) -------------
-IMGUI_API ImVec2            CanvasGetPan(const ImGuiCanvasState* c);
-IMGUI_API void              CanvasSetPan(ImGuiCanvasState* c, ImVec2 pan);
-IMGUI_API float             CanvasGetZoom(const ImGuiCanvasState* c);
+IMGUI_API ImVec2            CanvasGetPan(const ImGuiAppCanvasState* c);
+IMGUI_API void              CanvasSetPan(ImGuiAppCanvasState* c, ImVec2 pan);
+IMGUI_API float             CanvasGetZoom(const ImGuiAppCanvasState* c);
 // Model -> screen scale (Zoom x host font DPI/user factor). Use for ALL model<->pixel
 // conversions; CanvasGetZoom is the logical camera only (font pushes, persisted view state).
-IMGUI_API float             CanvasGetScale(const ImGuiCanvasState* c);
-IMGUI_API void              CanvasSetZoom(ImGuiCanvasState* c, float zoom, ImVec2 keep_screen_pos);   // keeps that screen point fixed
-IMGUI_API ImVec2            CanvasToScreen(const ImGuiCanvasState* c, ImVec2 model);
-IMGUI_API ImVec2            CanvasFromScreen(const ImGuiCanvasState* c, ImVec2 screen);
-IMGUI_API void              CanvasCenterOn(ImGuiCanvasState* c, ImVec2 model_pos);
-IMGUI_API void              CanvasFitRect(ImGuiCanvasState* c, ImVec2 model_min, ImVec2 model_max, float margin_px);
-IMGUI_API void              CanvasFitNodes(ImGuiCanvasState* c, const int* node_ids, int count, float margin_px);
-IMGUI_API void              CanvasFitAll(ImGuiCanvasState* c, float margin_px);                       // over nodes submitted last frame
+IMGUI_API float             CanvasGetScale(const ImGuiAppCanvasState* c);
+IMGUI_API void              CanvasSetZoom(ImGuiAppCanvasState* c, float zoom, ImVec2 keep_screen_pos);   // keeps that screen point fixed
+IMGUI_API ImVec2            CanvasToScreen(const ImGuiAppCanvasState* c, ImVec2 model);
+IMGUI_API ImVec2            CanvasFromScreen(const ImGuiAppCanvasState* c, ImVec2 screen);
+IMGUI_API void              CanvasCenterOn(ImGuiAppCanvasState* c, ImVec2 model_pos);
+IMGUI_API void              CanvasFitRect(ImGuiAppCanvasState* c, ImVec2 model_min, ImVec2 model_max, float margin_px);
+IMGUI_API void              CanvasFitNodes(ImGuiAppCanvasState* c, const int* node_ids, int count, float margin_px);
+IMGUI_API void              CanvasFitAll(ImGuiAppCanvasState* c, float margin_px);                       // over nodes submitted last frame
 
 // Minimap: call between CanvasBegin/CanvasEnd; drawn by CanvasEnd as a bottom-right inset fitted
 // to the node content's aspect within size_fraction of the canvas. Holding LMB over the map
 // continuously recenters the camera. Its rect is excluded from the FSM.
-IMGUI_API void              CanvasMiniMap(ImGuiCanvasState* c, float size_fraction);
+IMGUI_API void              CanvasMiniMap(ImGuiAppCanvasState* c, float size_fraction);
 
 // ---- nodes (geometry in MODEL units, always) --------------------------------------------------
 // Between CanvasBeginNode/CanvasEndNode submit ordinary ImGui widgets; the engine renders them
 // under the zoomed font + scaled layout metrics and measures the node the SAME frame.
-IMGUI_API void              CanvasNextNodeTitle(ImGuiCanvasState* c, const char* title, ImU32 title_color /*= 0 -> style*/);
+IMGUI_API void              CanvasNextNodeTitle(ImGuiAppCanvasState* c, const char* title, ImU32 title_color /*= 0 -> style*/);
 // Per-node presentation intent, all consumed by the next CanvasBeginNode: kind word (muted, right-aligned),
 // origin dot (ring form = promoted), framed badge after the name, corner rounding in model units (< 0 =
-// style), title-band rule (0 none / 1 solid / 2 dashed), and an edge stripe on one ImGuiCanvasPinSide_.
-IMGUI_API void              CanvasNextNodeTitleTag(ImGuiCanvasState* c, const char* tag);
-IMGUI_API void              CanvasNextNodeOriginDot(ImGuiCanvasState* c, ImU32 color, bool ring);
-IMGUI_API void              CanvasNextNodeTitleBadge(ImGuiCanvasState* c, const char* badge);
-IMGUI_API void              CanvasNextNodeRounding(ImGuiCanvasState* c, float model_rounding);
-IMGUI_API void              CanvasNextNodeWidth(ImGuiCanvasState* c, float model_width);          // normalized plate width; <= 0 = content-sized
-IMGUI_API float             CanvasNodeNeededWidth(const ImGuiCanvasState* c, int node_id);        // content-derived width need (0 until measured)
-IMGUI_API void              CanvasNextNodeHeaderRule(ImGuiCanvasState* c, int rule, ImU32 color);
-IMGUI_API void              CanvasNextNodeEdgeStripe(ImGuiCanvasState* c, int side, ImU32 color, float model_thickness);
-IMGUI_API void              CanvasNextNodeAlpha(ImGuiCanvasState* c, float alpha);   // < 1 dims plate + content (disabled look); consumed by the next CanvasBeginNode
+// style), title-band rule (0 none / 1 solid / 2 dashed), and an edge stripe on one ImGuiAppCanvasPinSide_.
+IMGUI_API void              CanvasNextNodeTitleTag(ImGuiAppCanvasState* c, const char* tag);
+IMGUI_API void              CanvasNextNodeOriginDot(ImGuiAppCanvasState* c, ImU32 color, bool ring);
+IMGUI_API void              CanvasNextNodeTitleBadge(ImGuiAppCanvasState* c, const char* badge);
+IMGUI_API void              CanvasNextNodeRounding(ImGuiAppCanvasState* c, float model_rounding);
+IMGUI_API void              CanvasNextNodeWidth(ImGuiAppCanvasState* c, float model_width);          // normalized plate width; <= 0 = content-sized
+IMGUI_API float             CanvasNodeNeededWidth(const ImGuiAppCanvasState* c, int node_id);        // content-derived width need (0 until measured)
+IMGUI_API void              CanvasNextNodeHeaderRule(ImGuiAppCanvasState* c, int rule, ImU32 color);
+IMGUI_API void              CanvasNextNodeEdgeStripe(ImGuiAppCanvasState* c, int side, ImU32 color, float model_thickness);
+IMGUI_API void              CanvasNextNodeAlpha(ImGuiAppCanvasState* c, float alpha);   // < 1 dims plate + content (disabled look); consumed by the next CanvasBeginNode
 // Editable variant (host-driven rename): while *editing, the engine renders an InputText in the
 // title bar bound to buf and clears *editing when it deactivates. Pair with CanvasNodeDoubleClicked
 // to enter the state (the host decides whether a double-click renames or drills).
-IMGUI_API void              CanvasNextNodeTitleEditable(ImGuiCanvasState* c, char* buf, int buf_size, bool* editing, ImU32 title_color);
-IMGUI_API bool              CanvasBeginNode(ImGuiCanvasState* c, int node_id);   // false if culled (off-screen): body may be skipped, geometry persists; ALWAYS call CanvasEndNode regardless
-IMGUI_API void              CanvasEndNode(ImGuiCanvasState* c);   // always call (pairs CanvasBeginNode, even when it returned false)
-IMGUI_API ImVec2            CanvasNodePos(const ImGuiCanvasState* c, int node_id);        // model
-IMGUI_API void              CanvasSetNodePos(ImGuiCanvasState* c, int node_id, ImVec2 model_pos);
-IMGUI_API ImVec2            CanvasNodeSize(const ImGuiCanvasState* c, int node_id);       // model; this frame if submitted, else last known
-IMGUI_API const char*       CanvasNodeTitleBadge(const ImGuiCanvasState* c, int node_id);   // title-bar badge text ("" if none / unknown node)
-IMGUI_API void              CanvasSetNodeDraggable(ImGuiCanvasState* c, int node_id, bool draggable);
-IMGUI_API void              CanvasSetNodeSolid(ImGuiCanvasState* c, int node_id, bool solid);   // solid nodes cannot be dragged into overlap with other solid nodes (slide to contact)
+IMGUI_API void              CanvasNextNodeTitleEditable(ImGuiAppCanvasState* c, char* buf, int buf_size, bool* editing, ImU32 title_color);
+IMGUI_API bool              CanvasBeginNode(ImGuiAppCanvasState* c, int node_id);   // false if culled (off-screen): body may be skipped, geometry persists; ALWAYS call CanvasEndNode regardless
+IMGUI_API void              CanvasEndNode(ImGuiAppCanvasState* c);   // always call (pairs CanvasBeginNode, even when it returned false)
+IMGUI_API ImVec2            CanvasNodePos(const ImGuiAppCanvasState* c, int node_id);        // model
+IMGUI_API void              CanvasSetNodePos(ImGuiAppCanvasState* c, int node_id, ImVec2 model_pos);
+IMGUI_API ImVec2            CanvasNodeSize(const ImGuiAppCanvasState* c, int node_id);       // model; this frame if submitted, else last known
+IMGUI_API const char*       CanvasNodeTitleBadge(const ImGuiAppCanvasState* c, int node_id);   // title-bar badge text ("" if none / unknown node)
+IMGUI_API void              CanvasSetNodeDraggable(ImGuiAppCanvasState* c, int node_id, bool draggable);
+IMGUI_API void              CanvasSetNodeSolid(ImGuiAppCanvasState* c, int node_id, bool solid);   // solid nodes cannot be dragged into overlap with other solid nodes (slide to contact)
 // Declare a solid region (model units) for THIS frame: solid-node drags cannot enter it (the
 // next frame's drag consumes it, like node geometry). Call between CanvasBegin/CanvasEnd.
-IMGUI_API void              CanvasAddSolidRect(ImGuiCanvasState* c, ImVec2 model_min, ImVec2 model_max);
+IMGUI_API void              CanvasAddSolidRect(ImGuiAppCanvasState* c, ImVec2 model_min, ImVec2 model_max);
 
 // ---- pins + wires -----------------------------------------------------------------------------
 // Kind is the interaction role (which end pairs with which when wiring). Side is the node edge the
 // pin sits on and the direction its wire leaves -- orthogonal to Kind. Left/Right give the classic
 // horizontal data read; Top/Bottom give a vertical owner-over-child containment read.
-typedef int ImGuiCanvasPinKind;   // -> enum ImGuiCanvasPinKind_
-enum ImGuiCanvasPinKind_ { ImGuiCanvasPinKind_In = 0, ImGuiCanvasPinKind_Out = 1 };
-typedef int ImGuiCanvasPinShape;  // -> enum ImGuiCanvasPinShape_
-enum ImGuiCanvasPinShape_ { ImGuiCanvasPinShape_Circle = 0, ImGuiCanvasPinShape_Square = 1 };
-typedef int ImGuiCanvasPinSide;   // -> enum ImGuiCanvasPinSide_
-enum ImGuiCanvasPinSide_ { ImGuiCanvasPinSide_Left = 0, ImGuiCanvasPinSide_Right = 1, ImGuiCanvasPinSide_Top = 2, ImGuiCanvasPinSide_Bottom = 3 };
-IMGUI_API void              CanvasNextPinColor(ImGuiCanvasState* c, ImU32 color);   // 0 -> style (by shape); consumed by the next CanvasBeginPin
-IMGUI_API void              CanvasNextPinSide(ImGuiCanvasState* c, int side);   // override the next pin's edge; default derives from Kind (In->Left, Out->Right)
-IMGUI_API void              CanvasBeginPin(ImGuiCanvasState* c, int pin_id, int kind /*In|Out*/, int shape);
-IMGUI_API void              CanvasEndPin(ImGuiCanvasState* c);
+typedef int ImGuiAppCanvasPinKind;   // -> enum ImGuiAppCanvasPinKind_
+enum ImGuiAppCanvasPinKind_ { ImGuiAppCanvasPinKind_In = 0, ImGuiAppCanvasPinKind_Out = 1 };
+typedef int ImGuiAppCanvasPinShape;  // -> enum ImGuiAppCanvasPinShape_
+enum ImGuiAppCanvasPinShape_ { ImGuiAppCanvasPinShape_Circle = 0, ImGuiAppCanvasPinShape_Square = 1 };
+typedef int ImGuiAppCanvasPinSide;   // -> enum ImGuiAppCanvasPinSide_
+enum ImGuiAppCanvasPinSide_ { ImGuiAppCanvasPinSide_Left = 0, ImGuiAppCanvasPinSide_Right = 1, ImGuiAppCanvasPinSide_Top = 2, ImGuiAppCanvasPinSide_Bottom = 3 };
+IMGUI_API void              CanvasNextPinColor(ImGuiAppCanvasState* c, ImU32 color);   // 0 -> style (by shape); consumed by the next CanvasBeginPin
+IMGUI_API void              CanvasNextPinSide(ImGuiAppCanvasState* c, int side);   // override the next pin's edge; default derives from Kind (In->Left, Out->Right)
+IMGUI_API void              CanvasBeginPin(ImGuiAppCanvasState* c, int pin_id, int kind /*In|Out*/, int shape);
+IMGUI_API void              CanvasEndPin(ImGuiAppCanvasState* c);
 // Row-less edge pin: an at-most-one-per-edge singleton (e.g. containment parent/children) placed at
 // the center of its Side edge. Submits no widget and consumes no cursor -- call between BeginNode/EndNode.
-IMGUI_API void              CanvasEdgePin(ImGuiCanvasState* c, int pin_id, int kind /*In|Out*/, int shape, int side);
-IMGUI_API void              CanvasNextWireDashed(ImGuiCanvasState* c);   // the next CanvasWire draws dashed (optional dependency)
-IMGUI_API void              CanvasWire(ImGuiCanvasState* c, int wire_id, int pin_a, int pin_b, ImU32 color /*= 0 -> style*/);
-IMGUI_API bool              CanvasHasWire(const ImGuiCanvasState* c, int wire_id);      // wire submitted this frame (query after CanvasEnd)
-IMGUI_API ImVec2            CanvasPinPos(const ImGuiCanvasState* c, int pin_id);           // model
+IMGUI_API void              CanvasEdgePin(ImGuiAppCanvasState* c, int pin_id, int kind /*In|Out*/, int shape, int side);
+IMGUI_API void              CanvasNextWireDashed(ImGuiAppCanvasState* c);   // the next CanvasWire draws dashed (optional dependency)
+IMGUI_API void              CanvasWire(ImGuiAppCanvasState* c, int wire_id, int pin_a, int pin_b, ImU32 color /*= 0 -> style*/);
+IMGUI_API bool              CanvasHasWire(const ImGuiAppCanvasState* c, int wire_id);      // wire submitted this frame (query after CanvasEnd)
+IMGUI_API ImVec2            CanvasPinPos(const ImGuiAppCanvasState* c, int pin_id);           // model
 
 // ---- selection + hover ------------------------------------------------------------------------
-IMGUI_API int               CanvasNumSelectedNodes(const ImGuiCanvasState* c);
-IMGUI_API void              CanvasGetSelectedNodes(const ImGuiCanvasState* c, int* out, int cap);
-IMGUI_API void              CanvasSelectNode(ImGuiCanvasState* c, int node_id, bool additive);
-IMGUI_API void              CanvasClearSelection(ImGuiCanvasState* c);
-IMGUI_API int               CanvasHoveredNode(const ImGuiCanvasState* c);                  // -1 = none (valid after CanvasEnd)
-IMGUI_API int               CanvasHoveredWire(const ImGuiCanvasState* c);
-IMGUI_API int               CanvasHoveredPin(const ImGuiCanvasState* c);
-IMGUI_API int               CanvasWireDragSource(const ImGuiCanvasState* c);               // pin an active wire-drag started from, else -1 (for drag-time can-link telegraph)
-IMGUI_API int               CanvasSelectedWire(const ImGuiCanvasState* c);                 // single click-selected wire; -1 = none
-IMGUI_API void              CanvasClearWireSelection(ImGuiCanvasState* c);
+IMGUI_API int               CanvasNumSelectedNodes(const ImGuiAppCanvasState* c);
+IMGUI_API void              CanvasGetSelectedNodes(const ImGuiAppCanvasState* c, int* out, int cap);
+IMGUI_API void              CanvasSelectNode(ImGuiAppCanvasState* c, int node_id, bool additive);
+IMGUI_API void              CanvasClearSelection(ImGuiAppCanvasState* c);
+IMGUI_API int               CanvasHoveredNode(const ImGuiAppCanvasState* c);                  // -1 = none (valid after CanvasEnd)
+IMGUI_API int               CanvasHoveredWire(const ImGuiAppCanvasState* c);
+IMGUI_API int               CanvasHoveredPin(const ImGuiAppCanvasState* c);
+IMGUI_API int               CanvasWireDragSource(const ImGuiAppCanvasState* c);               // pin an active wire-drag started from, else -1 (for drag-time can-link telegraph)
+IMGUI_API int               CanvasSelectedWire(const ImGuiAppCanvasState* c);                 // single click-selected wire; -1 = none
+IMGUI_API void              CanvasClearWireSelection(ImGuiAppCanvasState* c);
 
 // ---- events (latched by CanvasEnd; valid until the next CanvasBegin) ---------------------------
-IMGUI_API bool              CanvasWireCreated(const ImGuiCanvasState* c, int* out_pin_a, int* out_pin_b);   // drag completed pin->pin (snap or release)
-IMGUI_API bool              CanvasWireDropped(const ImGuiCanvasState* c, int* out_from_pin, ImVec2* out_model_pos);   // released on empty canvas
-IMGUI_API bool              CanvasWireDetached(const ImGuiCanvasState* c, int* out_wire_id, int* out_grabbed_end_pin); // endpoint dragged off a pin
-IMGUI_API bool              CanvasNodeDoubleClicked(const ImGuiCanvasState* c, int* out_node_id); // LMB double-click on a node
-IMGUI_API bool              CanvasMenuRequestNode(const ImGuiCanvasState* c, int* out_node_id);   // short RMB click resolution
-IMGUI_API bool              CanvasMenuRequestWire(const ImGuiCanvasState* c, int* out_wire_id);
-IMGUI_API bool              CanvasMenuRequestEmpty(const ImGuiCanvasState* c, ImVec2* out_model_pos);
+IMGUI_API bool              CanvasWireCreated(const ImGuiAppCanvasState* c, int* out_pin_a, int* out_pin_b);   // drag completed pin->pin (snap or release)
+IMGUI_API bool              CanvasWireDropped(const ImGuiAppCanvasState* c, int* out_from_pin, ImVec2* out_model_pos);   // released on empty canvas
+IMGUI_API bool              CanvasWireDetached(const ImGuiAppCanvasState* c, int* out_wire_id, int* out_grabbed_end_pin); // endpoint dragged off a pin
+IMGUI_API bool              CanvasNodeDoubleClicked(const ImGuiAppCanvasState* c, int* out_node_id); // LMB double-click on a node
+IMGUI_API bool              CanvasMenuRequestNode(const ImGuiAppCanvasState* c, int* out_node_id);   // short RMB click resolution
+IMGUI_API bool              CanvasMenuRequestWire(const ImGuiAppCanvasState* c, int* out_wire_id);
+IMGUI_API bool              CanvasMenuRequestEmpty(const ImGuiAppCanvasState* c, ImVec2* out_model_pos);
 
 
 // DLL preview surface (F78)
