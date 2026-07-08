@@ -4,7 +4,7 @@ Registry of imguiapp's deliberate departures from [imgui-house-style.md](imgui-h
 Each entry: the spec rule it departs from, the scope of the license, and the rationale. Anything
 NOT ratified here must conform; audits cite these as Δ-numbers. Matching a delta outside its
 stated scope is a violation, not consistency. (Origin: Tier 1 of
-[house-style-audit-2026-07-07.md](house-style-audit-2026-07-07.md).)
+[house-style-audit.md](house-style-audit.md).)
 
 ## Δ1 — Virtual interfaces in the app object model (departs A19/P1)
 
