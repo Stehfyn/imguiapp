@@ -2,7 +2,7 @@
 #include "imguiapp_impl_win32_vulkan.h"
 #include "imguiapp.h"
 #include "imguiapp_internal.h"          // ImGuiAppAVFrame (CaptureFrame payload)
-#include "imguiapp_impl_win32_state.h"
+#include "imguiapp_impl_win32.h"
 
 #include "imgui_impl_win32.h"
 
@@ -17,6 +17,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+
+// Private impl of the opaque app->PlatformData handle (defined per platform host TU; exactly one links per build).
+struct ImGuiAppPlatformData
+{
+    HWND        Hwnd;
+    WNDCLASSEXA WindowClass;
+};
 
 namespace
 {
@@ -1246,7 +1253,7 @@ static bool ImGuiApp_ImplWin32Vulkan_Init(const ImGuiApp_ImplWin32Vulkan_InitInf
 
 bool ImGuiApp_ImplWin32Vulkan_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
 {
-    ImGuiAppPlatformState* state = IM_NEW(ImGuiAppPlatformState)();
+    ImGuiAppPlatformData* state = IM_NEW(ImGuiAppPlatformData)();
     app->PlatformData = state;
 
     // Offscreen headless keeps a HIDDEN window: ImGui_ImplWin32 needs an HWND for input/DPI,
@@ -1308,7 +1315,7 @@ bool ImGuiApp_ImplWin32Vulkan_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config
 
 void ImGuiApp_ImplWin32Vulkan_ShutdownPlatform(ImGuiApp* app)
 {
-    ImGuiAppPlatformState* state = static_cast<ImGuiAppPlatformState*>(app->PlatformData);
+    ImGuiAppPlatformData* state = app->PlatformData;
     if (state == nullptr)
         return;
     if (state->Hwnd != nullptr)

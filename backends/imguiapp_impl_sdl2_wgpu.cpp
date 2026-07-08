@@ -1,6 +1,6 @@
 ﻿#include "imguiapp_impl_sdl2_wgpu.h"
 
-#include "imguiapp_impl_sdl2_state.h"
+#include "imguiapp_impl_sdl2.h"
 #include "imguiapp.h"
 
 #include "imgui_impl_sdl2.h"
@@ -17,6 +17,12 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdint>
+
+// Private impl of the opaque app->PlatformData handle (defined per platform host TU; exactly one links per build).
+struct ImGuiAppPlatformData
+{
+    SDL_Window* Window;
+};
 
 namespace
 {
@@ -408,7 +414,7 @@ static bool ImGuiApp_ImplSDL2WGPU_Init(const ImGuiApp_ImplSDL2WGPU_InitInfo* ini
 
 bool ImGuiApp_ImplSDL2WGPU_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
 {
-    ImGuiAppPlatformState* state = IM_NEW(ImGuiAppPlatformState)();
+    ImGuiAppPlatformData* state = IM_NEW(ImGuiAppPlatformData)();
     app->PlatformData = state;
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_GAMECONTROLLER) != 0)
@@ -421,7 +427,6 @@ bool ImGuiApp_ImplSDL2WGPU_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
         SDL_Quit();
         return false;
     }
-    state->Running = true;
 
     config.ConfigFlags = ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
 
@@ -448,10 +453,9 @@ bool ImGuiApp_ImplSDL2WGPU_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
 
 void ImGuiApp_ImplSDL2WGPU_ShutdownPlatform(ImGuiApp* app)
 {
-    ImGuiAppPlatformState* state = static_cast<ImGuiAppPlatformState*>(app->PlatformData);
+    ImGuiAppPlatformData* state = app->PlatformData;
     if (state == nullptr)
         return;
-    state->Running = false;
     if (state->Window != nullptr)
     {
         SDL_DestroyWindow(state->Window);

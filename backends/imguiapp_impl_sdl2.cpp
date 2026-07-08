@@ -1,8 +1,8 @@
-// Shared SDL2/emscripten platform layer: canvas sizing + emscripten main loop.
-// Renderer-agnostic; linked alongside whichever SDL2 renderer backend the build selects.
+// dear imgui app: Platform Host for SDL2/Emscripten (canvas sizing + browser main loop)
+// This needs to be used along with a sibling Renderer Host (imguiapp_impl_sdl2_opengl3, imguiapp_impl_sdl2_wgpu)
 
 #include "imguiapp.h"
-#include "imguiapp_impl_sdl2_state.h"
+#include "imguiapp_impl_sdl2.h"
 
 #include "imgui_impl_sdl2.h"
 #include <SDL.h>
@@ -40,10 +40,10 @@ int ImGuiApp_ImplSDL2_RunLoop(ImGuiApp* app)
     emscripten_set_main_loop_arg([](void* ud)
     {
         ImGuiApp* app = static_cast<ImGuiApp*>(ud);
-        ImGuiAppPlatformState* s = static_cast<ImGuiAppPlatformState*>(app->PlatformData);
-        if (s == nullptr || !s->Running)
+        if (app->PlatformData == nullptr) // not initialized, or already shut down
             return;
 
+        SDL_Window* window = (SDL_Window*)app->Platform.NativeWindowHandle;
         SDL_Event event;
         while (SDL_PollEvent(&event))
         {
@@ -55,14 +55,14 @@ int ImGuiApp_ImplSDL2_RunLoop(ImGuiApp* app)
             }
             if (event.type == SDL_WINDOWEVENT &&
                 event.window.event == SDL_WINDOWEVENT_CLOSE &&
-                event.window.windowID == SDL_GetWindowID(s->Window))
+                event.window.windowID == SDL_GetWindowID(window))
             {
                 app->Shutdown();
                 return;
             }
         }
 
-        ResizeCanvasToCssSize(s->Window);
+        ResizeCanvasToCssSize(window);
         app->Frame();
     }, app, 0, true);
 

@@ -1,7 +1,7 @@
 # House-Style Audit — imguiapp vs imgui-house-style.md (outstanding items)
 
 **Spec**: [imgui-house-style.md](imgui-house-style.md) (181 rules: N1-N24, F1-F28, A1-A32, G1-G24,
-B1-B18, I1-I41, D1-D9, C1-C3) + the Δ registry at the bottom of this doc (Δ5/Δ6 pending — R6/R7).
+B1-B18, I1-I41, D1-D9, C1-C3) + the Δ registry at the bottom of this doc (Δ6 pending — R7).
 **Corpus**: `imguiapp.h`, `imguiapp_internal.h`, `imguiapp.cpp`, `imappconfig.h`, `backends/*`
 (`imguiapp_reflect.h` body exempt). All counts grep-measured; method: parallel evidence-cited
 audits per dimension. This doc tracks OPEN items only — anything absent is conformant or resolved.
@@ -54,17 +54,6 @@ subclasses, not standalone value types).
 Both headers order fwd decls semantically (`ImGuiAppLayerBase` before `ImGuiAppLayer`,
 `imguiapp.h:46-51`; `internal.h:80-99`) vs A28's alphabetical-within-group. **Conform or ratify
 a stated dependency-order delta** — an ordered list with unstated direction is a spec bug by A28.
-
-### R5. Semantic-zero enums — N6 (LOW)
-17 mode/discriminator enums open with semantic zeros (`_Off/_Auto/_Task`) — canon-shaped in
-practice (`ImGuiCol_` precedent) but off-spec as N6 is written. Amend N6 (semantic zero allowed for
-pure-mode enums; `_None = 0` required for flags + nullable discriminators). Hard violations stay in
-M18.
-
-### R6. Δ5 ratification — `*_state.h` sidecars (carried)
-Sidecars now also carry public API (`ImGuiApp_ImplWin32_RunLoop` decl `imguiapp_impl_win32_state.h:18`;
-sdl2 twin `:14`) for the two headerless host TUs. Ratify with explicit scope, or give
-`imguiapp_impl_win32.cpp`/`imguiapp_impl_sdl2.cpp` real headers. Either way: B1-style header blocks.
 
 ### R7. Δ6 ratification — singleton accessors vs ad-hoc statics (carried)
 Accessor pattern (`AppAssert()`/`AppPacer()`/`AppTypeSchemas()`) is the framework idiom; ratify it.
@@ -167,7 +156,7 @@ target N23 form, ID-key blocks get rationale comments.
 
 ## Sequencing (each wave gated)
 
-1. **Wave R — decisions**: R1-R7. Everything below assumes the outcomes.
+1. **Wave R — decisions**: R1-R4, R7. Everything below assumes the outcomes.
 2. **Wave L — lint first**: S6 tag census + N22/N23 greps into `tests/style`, so no fixed class
    regresses again.
 3. **Wave M — sed batch**: M13, M15, M18, M21, M22, M26, M34, M36, M37, M39, M44, F26 explicit-type
@@ -175,7 +164,7 @@ target N23 form, ID-key blocks get rationale comments.
 4. **Wave N — AST rename batch**: S9 k-tier → UPPER_SNAKE, S10 type prefixes, M3+M10, M16, M17,
    M19, M31, M32, M33, S7 prefix half (backend statics + de-anon-namespace), R2 outcome.
 5. **Wave B — backend anatomy**: S7 remainder (B1 blocks, B2 CHANGELOGs, B16 guards, B15 banner,
-   B7 accessors, B8 assert note), R6 outcome.
+   B7 accessors, B8 assert note).
 6. **Wave F — functional adds**: S8 (USER_ERROR + overpop + WAL), M9, M14, S5+M38, S6 adoption,
    M28, M42, M45, M11/M40/M41 with the section restructure.
 
@@ -261,6 +250,5 @@ obligation, not the option.
 
 ### Pending (not yet ratified — audit T5/T6 recommendations)
 
-- Δ5 (proposed): `*_state.h` shared platform-state sidecars across sibling renderers.
 - Δ6 (proposed): Meyers-singleton accessors for process-wide services (`AppAssert()`,
   `AppPacer()`, `AppTypeSchemas()`); ad-hoc mutable function-local statics remain violations.

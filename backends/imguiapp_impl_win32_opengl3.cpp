@@ -8,12 +8,22 @@
 #include <windows.h>
 #include <GL/gl.h>
 
-#include "imguiapp_impl_win32_state.h"
+#include "imguiapp_impl_win32.h"
 #include "imguiapp.h"
 #include "imguiapp_internal.h"
 
 #include <cstdio>
 #include <cstring>
+
+// Private impl of the opaque app->PlatformData handle (defined per platform host TU; exactly one links per build).
+struct ImGuiAppPlatformData
+{
+    struct WGLWindowData { HDC hDC; };
+    HWND          Hwnd;
+    WNDCLASSEXA   WindowClass;
+    HGLRC         MainGLRC;
+    WGLWindowData MainWindow;
+};
 
 namespace
 {
@@ -47,7 +57,7 @@ namespace
         ImVector<char> CaptureRgba;         // top-down RGBA handed to callers; valid until the next capture
 
         // Platform window/loop state sidecar, owned by app->PlatformData (freed in ShutdownPlatform).
-        ImGuiAppPlatformState* State;
+        ImGuiAppPlatformData* State;
 
         ImGuiApp_ImplWin32OpenGL3_Data() { memset((void*)this, 0, sizeof(*this)); }
     };
@@ -65,7 +75,7 @@ namespace
                init_info->MainGLRC != nullptr;
     }
 
-    static bool CreateDeviceWGL(HWND hWnd, ImGuiAppPlatformState::WGLWindowData* data, HGLRC* main_glrc)
+    static bool CreateDeviceWGL(HWND hWnd, ImGuiAppPlatformData::WGLWindowData* data, HGLRC* main_glrc)
     {
         HDC hDc = ::GetDC(hWnd);
         PIXELFORMATDESCRIPTOR pfd = {};
@@ -86,7 +96,7 @@ namespace
         return data->hDC != nullptr && *main_glrc != nullptr;
     }
 
-    static void CleanupDeviceWGL(HWND hWnd, ImGuiAppPlatformState::WGLWindowData* data)
+    static void CleanupDeviceWGL(HWND hWnd, ImGuiAppPlatformData::WGLWindowData* data)
     {
         if (data == nullptr || data->hDC == nullptr)
             return;
@@ -103,7 +113,7 @@ namespace
         if (bd == nullptr || bd->State == nullptr)
             return;
 
-        ImGuiAppPlatformState::WGLWindowData* data = IM_NEW(ImGuiAppPlatformState::WGLWindowData)();
+        ImGuiAppPlatformData::WGLWindowData* data = IM_NEW(ImGuiAppPlatformData::WGLWindowData)();
         if (!CreateDeviceWGL((HWND)viewport->PlatformHandle, data, &bd->State->MainGLRC))
         {
             IM_DELETE(data);
@@ -116,7 +126,7 @@ namespace
     {
         if (viewport->RendererUserData != nullptr)
         {
-            ImGuiAppPlatformState::WGLWindowData* data = (ImGuiAppPlatformState::WGLWindowData*)viewport->RendererUserData;
+            ImGuiAppPlatformData::WGLWindowData* data = (ImGuiAppPlatformData::WGLWindowData*)viewport->RendererUserData;
             CleanupDeviceWGL((HWND)viewport->PlatformHandle, data);
             IM_DELETE(data);
             viewport->RendererUserData = nullptr;
@@ -135,7 +145,7 @@ namespace
         bd->VpSkip.SetBool(viewport->ID, !present);
         if (!present)
             return;
-        if (ImGuiAppPlatformState::WGLWindowData* data = (ImGuiAppPlatformState::WGLWindowData*)viewport->RendererUserData)
+        if (ImGuiAppPlatformData::WGLWindowData* data = (ImGuiAppPlatformData::WGLWindowData*)viewport->RendererUserData)
             wglMakeCurrent(data->hDC, bd->State->MainGLRC);
     }
 
@@ -153,7 +163,7 @@ namespace
         ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData();
         if (bd == nullptr || bd->VpSkip.GetBool(viewport->ID))
             return;
-        if (ImGuiAppPlatformState::WGLWindowData* data = (ImGuiAppPlatformState::WGLWindowData*)viewport->RendererUserData)
+        if (ImGuiAppPlatformData::WGLWindowData* data = (ImGuiAppPlatformData::WGLWindowData*)viewport->RendererUserData)
             ::SwapBuffers(data->hDC);
     }
 
@@ -344,7 +354,7 @@ bool ImGuiApp_ImplWin32OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& confi
         return false;
     }
 
-    ImGuiAppPlatformState* state = IM_NEW(ImGuiAppPlatformState)();
+    ImGuiAppPlatformData* state = IM_NEW(ImGuiAppPlatformData)();
     app->PlatformData = state;
 
     ImGui_ImplWin32_EnableDpiAwareness();
@@ -415,7 +425,7 @@ bool ImGuiApp_ImplWin32OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& confi
 
 void ImGuiApp_ImplWin32OpenGL3_ShutdownPlatform(ImGuiApp* app)
 {
-    ImGuiAppPlatformState* state = static_cast<ImGuiAppPlatformState*>(app->PlatformData);
+    ImGuiAppPlatformData* state = app->PlatformData;
     if (state == nullptr)
         return;
     if (state->Hwnd != nullptr)

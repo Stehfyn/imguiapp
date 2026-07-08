@@ -1,8 +1,8 @@
-// Shared win32 platform layer: window procedure + message-pump main loop.
-// Renderer-agnostic; linked alongside whichever win32 renderer backend the build selects.
+// dear imgui app: Platform Host for Win32 (shared window procedure + message-pump main loop)
+// This needs to be used along with a sibling Renderer Host (imguiapp_impl_win32_opengl3, imguiapp_impl_win32_vulkan)
 
 #include "imguiapp.h"
-#include "imguiapp_impl_win32_state.h"
+#include "imguiapp_impl_win32.h"
 
 #include "imgui_impl_win32.h"
 #ifndef WIN32_LEAN_AND_MEAN

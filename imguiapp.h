@@ -45,6 +45,7 @@ Index of this file:
 // Forward declarations: ImGuiApp layer
 struct ImGuiApp;
 struct ImGuiAppBase;
+struct ImGuiAppPlatformData;        // Opaque; defined privately by the linked platform backend TU (impl pattern)
 struct ImGuiAppLayerBase;
 struct ImGuiAppLayer;
 struct ImGuiAppTaskLayer;
@@ -923,7 +924,7 @@ struct ImGuiApp : ImGuiAppBase
     int                            UpdateOrderRevision; // revision UpdateOrder and the cached dependency bindings were built at
     ImGuiAppPlatform               Platform;
     ImVec4                         ClearColor;
-    void*                          PlatformData;
+    ImGuiAppPlatformData*         PlatformData; // opaque platform host state (allocated/freed by the backend's Init/ShutdownPlatform)
     ImGuiAppWAL*                   WAL;      // optional write-ahead logger (caller-owned); null = silent
     ImGuiAppRecorder*              Recorder; // active recording (AppRecordBegin registers, AppRecordEnd clears); null = none
     ImGuiAppFrameID                FrameID;  // updated at the top of OnDrawFrame; correlation key for WAL/video/sidecar

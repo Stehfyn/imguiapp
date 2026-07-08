@@ -1,6 +1,6 @@
 #include "imguiapp_impl_sdl2_opengl3.h"
 
-#include "imguiapp_impl_sdl2_state.h"
+#include "imguiapp_impl_sdl2.h"
 #include "imguiapp.h"
 
 #include "imgui_impl_opengl3.h"
@@ -12,6 +12,13 @@
 #else
 #include <SDL_opengl.h>
 #endif
+
+// Private impl of the opaque app->PlatformData handle (defined per platform host TU; exactly one links per build).
+struct ImGuiAppPlatformData
+{
+    SDL_Window*   Window;
+    SDL_GLContext GLContext;
+};
 
 namespace
 {
@@ -151,7 +158,7 @@ static bool ImGuiApp_ImplSDL2OpenGL3_Init(const ImGuiApp_ImplSDL2OpenGL3_InitInf
 
 bool ImGuiApp_ImplSDL2OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
 {
-    ImGuiAppPlatformState* state = IM_NEW(ImGuiAppPlatformState)();
+    ImGuiAppPlatformData* state = IM_NEW(ImGuiAppPlatformData)();
     app->PlatformData = state;
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_GAMECONTROLLER) != 0)
@@ -199,7 +206,6 @@ bool ImGuiApp_ImplSDL2OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config
     }
     SDL_GL_MakeCurrent(state->Window, state->GLContext);
     SDL_GL_SetSwapInterval(1);
-    state->Running = true;
 
     config.ConfigFlags = ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
 
@@ -224,10 +230,9 @@ bool ImGuiApp_ImplSDL2OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config
 
 void ImGuiApp_ImplSDL2OpenGL3_ShutdownPlatform(ImGuiApp* app)
 {
-    ImGuiAppPlatformState* state = static_cast<ImGuiAppPlatformState*>(app->PlatformData);
+    ImGuiAppPlatformData* state = app->PlatformData;
     if (state == nullptr)
         return;
-    state->Running = false;
     if (state->GLContext != nullptr)
     {
         SDL_GL_DeleteContext(state->GLContext);
