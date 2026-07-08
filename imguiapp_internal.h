@@ -1319,19 +1319,19 @@ inline void DrawAppField(const char* label, const T* value)
 
     if constexpr (ImGuiAppIsCharArray<T>)
     {
-        ImGui::Text("%s: %s", label, *value);
+        Text("%s: %s", label, *value);
     }
     else if constexpr (ImGuiAppIsFormattable<T>)
     {
         char buf[IM_LABEL_SIZE];
         std::string s = std::format("{}", *value);
         ImFormatString(buf, IM_ARRAYSIZE(buf), "%s", s.c_str());
-        ImGui::Text("%s: %s", label, buf);
+        Text("%s: %s", label, buf);
     }
     else
     {
-        std::string_view tn = ImGui::type_name(*value);
-        ImGui::Text("%s: <%.*s>", label, (int)tn.size(), tn.data());
+        std::string_view tn = type_name(*value);
+        Text("%s: <%.*s>", label, (int)tn.size(), tn.data());
     }
 }
 
@@ -1343,21 +1343,21 @@ inline bool EditAppField(const char* label, T* value)
     IM_ASSERT(value != nullptr);
 
     if constexpr (ImGuiAppIsCharArray<T>)
-        return ImGui::InputText(label, *value, std::extent_v<T>);
+        return InputText(label, *value, std::extent_v<T>);
     else if constexpr (std::is_same_v<T, bool>)
-        return ImGui::Checkbox(label, value);
+        return Checkbox(label, value);
     else if constexpr (std::is_same_v<T, float>)
-        return ImGui::DragFloat(label, value);
+        return DragFloat(label, value);
     else if constexpr (std::is_same_v<T, double>)
-        return ImGui::InputDouble(label, value);
+        return InputDouble(label, value);
     else if constexpr (std::is_same_v<T, ImVec2>)
-        return ImGui::DragFloat2(label, &value->x);
+        return DragFloat2(label, &value->x);
     else if constexpr (std::is_same_v<T, ImVec4>)
-        return ImGui::ColorEdit4(label, &value->x);
+        return ColorEdit4(label, &value->x);
     else if constexpr (std::is_integral_v<T>)
     {
         int v = (int)*value;
-        bool changed = ImGui::DragInt(label, &v);
+        bool changed = DragInt(label, &v);
         if (changed)
             *value = (T)v;
         return changed;
@@ -1406,8 +1406,8 @@ inline bool EditAppNodeFields(T* data)
       IM_UNUSED(idx);
       char label[IM_LABEL_SIZE];
       ImFormatString(label, IM_ARRAYSIZE(label), "%.*s", (int)name.size(), name.data());
-      ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.0f);
-      changed |= ImGui::EditAppField(label, &value);
+      SetNextItemWidth(GetFontSize() * 6.0f);
+      changed |= EditAppField(label, &value);
     });
     return changed;
 }

@@ -256,7 +256,7 @@ namespace ImGui
     // (strictly read-only there: time scrub is disabled for the host -- restoring its
     // state from inside its own render would mutate mid-frame).
     IMGUI_API void        ShowAppDemo(bool* p_open = nullptr, ImGuiApp* host = nullptr);
-}
+} // namespace ImGui
 
 //-----------------------------------------------------------------------------
 // [SECTION] Flags & Enumerations
@@ -1352,7 +1352,7 @@ namespace ImGui
             for (int i = 0; i < app->Windows.Data[w]->Controls.Size; i++)
                 visitor((const ImGuiAppControlBase*)app->Windows.Data[w]->Controls.Data[i], (const ImGuiAppWindowBase*)app->Windows.Data[w]);
     }
-}
+} // namespace ImGui
 
 #ifdef _MSC_VER
 #pragma warning(pop)
