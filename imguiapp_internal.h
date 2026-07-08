@@ -1188,6 +1188,9 @@ IMGUI_API int ImAppStackTrace(char* out, int out_size, int skip_frames = 0);
 // sink and stderr, flushes, then __debugbreak()s under a debugger or exits with code 3 -- never the CRT popup.
 IMGUI_API void ImAppAssertFail(const char* expr, const char* file, int line);
 
+// fprintf analog over the ImFile* seam (formats, then ImFileWrite); returns bytes written.
+IMGUI_API int ImFilePrintf(ImFileHandle file, const char* fmt, ...) IM_FMTARGS(2);
+
 namespace ImGui
 {
 // Controls sorted by the resolved dependency wiring: every producer before its consumers, composition

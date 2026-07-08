@@ -16,19 +16,13 @@ codegen corpus byte-identical, style ratchet monotonically down.
 | §3 Formatting (F1-F28) | 10 | 8 | 3 (+6 gate-covered) | — (gates green) |
 | §4 Architecture (A1-A32) | 8 | 6 | 7 (+2 n/a) | deprecation/breaking-change machinery absent (S5) |
 | §5 API grammar (G1-G24) | 4 | 5 | 2 | Canvas conditional-End contract nuances |
-| §6 Backends (B1-B18) | 10 | 2 | — (+6 n/a wrapped) | R2 link seam (Δ9); M42/M48 |
+| §6 Backends (B1-B18) | 12 | — | — (+6 n/a wrapped) | — |
 | §7 Idioms (I1-I41) | 8 | 5 | 3 | dialect breach (43 `auto`, 33 capturing lambdas) |
 | §8 Demo (D1-D9) | 3 | 2 | 3 slips | — (showcase re-registered as public-API user code) |
 
 ---
 
 ## Decisions needed (a Δ or a plan, then steps)
-
-### R2. One-host-per-link seam (unratified; decide Δ9 or conform)
-Each host TU defines its own `struct ImGuiAppPlatformData` and `ImGuiAppGetPlatformBackend()`
-("exactly one links per build"). Upstream backends all coexist in one binary; two hosts linked
-together = duplicate symbol + ODR on ImGuiAppPlatformData. **Decide Δ9** (ratify link-time host
-selection) **or conform** (per-host struct names + a dynamic host registration seam).
 
 ### R1. C++ dialect — I29 (SEVERE; largest unratified divergence)
 `imguiapp.cpp`: 43 `auto` bindings, **33 capturing lambdas** (`[&]`, `[c]`, `[&changed]` —
@@ -57,15 +51,12 @@ on the next rename, version-stamp grammar (M38).
 |---|---|---|---|
 | M29 | I20 | ListClipper ×1; 0 `IM_MSVC_RUNTIME_CHECKS_*` | low priority; after profiling |
 | M41b | A26 | 6 residual rank descents (region-scoped def order vs header decl order) | with the Phase C section restructure |
-| M42 | B8 | host `_Init` fns lack `IMGUI_CHECKVERSION()` (upstream: win32:185, gl3:1020, vulkan:1396); only run in InitPlatform's owns-context branch | add at top of each host Init |
-| M48 | B6 | w32vk `_Data` has no explicit ctor (value-init reliance); siblings memset-ctor; upstream precedent for member-init ctor exists (`ImGui_ImplVulkan_ViewportData`, vulkan:295) | explicit ctor |
 
 ## Sequencing (each wave gated)
 
-1. **Wave R — decisions**: R1 (Δ8 capturing-lambda license or rewrite); R2 (Δ9 link seam or
-   dynamic host registration).
-2. **Wave F — remainder**: S5 deprecation machinery; M42/M48; M41b/M29 with the Phase C
-   restructure / profiling pass.
+1. **Wave R — decisions**: R1 (Δ8 capturing-lambda license or rewrite).
+2. **Wave F — remainder**: S5 deprecation machinery; M41b/M29 with the Phase C restructure /
+   profiling pass.
 
 ---
 
@@ -141,6 +132,3 @@ obligation, not the option.
 
 - Δ6 (proposed): Meyers-singleton accessors for process-wide services (`AppAssert()`,
   `AppPacer()`, `AppTypeSchemas()`); ad-hoc mutable function-local statics remain violations.
-- Δ9 (proposed): one-host-per-link seam (see R2) — per-TU `ImGuiAppPlatformData` +
-  `ImGuiAppGetPlatformBackend()`, link-time host selection. Upstream backends all coexist in one
-  binary; ratify the seam or rename per-host and register hosts dynamically.

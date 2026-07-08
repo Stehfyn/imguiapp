@@ -204,6 +204,30 @@ IMGUI_API void ImAppAssertFail(const char* expr, const char* file, int line)
     exit(3);
 }
 
+// fprintf analog over the ImFile* seam: length-query + heap format, then ImFileWrite --
+// no truncation, and client-overridden file functions keep working.
+IMGUI_API int ImFilePrintf(ImFileHandle file, const char* fmt, ...)
+{
+    if (file == nullptr)
+        return 0;
+    va_list args;
+    va_start(args, fmt);
+    va_list args_copy;
+    va_copy(args_copy, args);
+    const int len = ImFormatStringV(nullptr, 0, fmt, args);
+    va_end(args);
+    if (len <= 0)
+    {
+        va_end(args_copy);
+        return len;
+    }
+    ImVector<char> buf;
+    buf.resize(len + 1);
+    ImFormatStringV(buf.Data, (size_t)buf.Size, fmt, args_copy);
+    va_end(args_copy);
+    return (int)ImFileWrite(buf.Data, 1, (ImU64)len, file);
+}
+
 // Instance-qualified type id (ImHash* family): hash-combines a data type id with an instance
 // number to key a control's instance data in ImGuiApp::Data. instance 0 keeps the bare type id
 // (the type singleton); any other instance qualifies it.
@@ -1718,12 +1742,12 @@ IMGUI_API void AppWALWriteV(ImGuiAppWAL* wal, ImGuiAppWALLevel level, const char
 
     // WAL must also work before/after the ImGui context's lifetime.
     const int frame = GetCurrentContext() != nullptr ? GetFrameCount() : -1;
-    FILE* f = (FILE*)wal->File;
+    ImFileHandle f = (ImFileHandle)wal->File;
     if (wal->FrameID != nullptr)
-        fprintf(f, "[%06d f%05d] [tick:%llu tsc:%llu] %s\n", wal->Seq++, frame,
-                (unsigned long long)wal->FrameID->FrameIndex, (unsigned long long)wal->FrameID->Tsc, msg);
+        ImFilePrintf(f, "[%06d f%05d] [tick:%llu tsc:%llu] %s\n", wal->Seq++, frame,
+                     (unsigned long long)wal->FrameID->FrameIndex, (unsigned long long)wal->FrameID->Tsc, msg);
     else
-        fprintf(f, "[%06d f%05d] %s\n", wal->Seq++, frame, msg);
+        ImFilePrintf(f, "[%06d f%05d] %s\n", wal->Seq++, frame, msg);
     fflush(f);   // write-ahead guarantee
 }
 
@@ -6980,10 +7004,10 @@ static bool AppPreviewDllCompile(ImGuiAppPreviewDll* s, const ImGuiAppGraph* gra
         ImFormatString(err, err_size, "cannot write %s", bat_path);
         return false;
     }
-    fprintf(b, "@echo off\r\n");
-    fprintf(b, "call \"%s\" >nul\r\n", vcvars);
-    fprintf(b, "cl /nologo /LD /std:c++20 %s /EHsc %s \"%s\" /Fe:\"%s\" /link /OPT:REF %s > \"%s\" 2>&1\r\n",
-            preview_crt, IMGUIX_PREVIEW_CL_ARGS, cpp_path, dll_path, IMGUIX_PREVIEW_LIBS, log_path);
+    ImFilePrintf(b, "@echo off\r\n");
+    ImFilePrintf(b, "call \"%s\" >nul\r\n", vcvars);
+    ImFilePrintf(b, "cl /nologo /LD /std:c++20 %s /EHsc %s \"%s\" /Fe:\"%s\" /link /OPT:REF %s > \"%s\" 2>&1\r\n",
+                 preview_crt, IMGUIX_PREVIEW_CL_ARGS, cpp_path, dll_path, IMGUIX_PREVIEW_LIBS, log_path);
     ImFileClose(b);
 
     // The batch redirects cl's output to the log itself, so system() just runs it (absolute paths inside).
@@ -27360,9 +27384,9 @@ IMGUI_API int ImGui::AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessC
     ImFormatString(csv_path, IM_ARRAYSIZE(csv_path), "%s/%s.frametimes.csv", artifact_dir, config->Name);
     if (ImFileHandle csv = ImFileOpen(csv_path, "w"))
     {
-        fprintf(csv, "frame_index\ttsc_delta\tms\n");
+        ImFilePrintf(csv, "frame_index\ttsc_delta\tms\n");
         for (int i = 0; i < ft_ms.Size; i++)
-            fprintf(csv, "%llu\t%llu\t%.4f\n", (unsigned long long)ft_frame[i], (unsigned long long)ft_tsc[i], ft_ms[i]);
+            ImFilePrintf(csv, "%llu\t%llu\t%.4f\n", (unsigned long long)ft_frame[i], (unsigned long long)ft_tsc[i], ft_ms[i]);
         ImFileClose(csv);
     }
     if (ft_ms.Size > 0)

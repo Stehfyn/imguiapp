@@ -37,4 +37,7 @@ IMGUI_API void ImGuiApp_ImplSDL2WGPU_RenderDrawData(ImGuiApp* app, ImDrawData* d
 IMGUI_API bool ImGuiApp_ImplSDL2WGPU_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config);
 IMGUI_API void ImGuiApp_ImplSDL2WGPU_ShutdownPlatform(ImGuiApp* app);
 
+// This host's seam vtable; the app's wiring hands it to the app layer as ImGuiAppGetPlatformBackend().
+IMGUI_API const ImGuiAppPlatformBackend* ImGuiApp_ImplSDL2WGPU_GetPlatformBackend();
+
 #endif // #ifndef IMGUI_DISABLE

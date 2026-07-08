@@ -19,6 +19,7 @@
 
 // CHANGELOG
 // (minor and older changes stripped away, please see git history for details)
+//  2026-07-08: Lifecycle: Per-host PlatformData type + exported ImGuiApp_ImplWin32OpenGL3_GetPlatformBackend(); hosts coexist in one binary (build-selected binding wires the active one).
 //  2026-07-08: Docs: Header block conformed to the backend anatomy (B1/B2 grammar).
 //  2026-07-08: Lifecycle: Threaded ImGuiApp* through the frame lifecycle; backend data moved to app->BackendData, file-scope backend global removed; viewport hooks recover the app via the main viewport's GWLP_USERDATA.
 //  2026-07-08: Misc: Exposed ImGuiApp_ImplWin32OpenGL3_* frame lifecycle (imgui impl pattern); host owns the ImGui context it creates; backend-internal symbols prefixed; IMGUI_DISABLE guards added.
@@ -43,8 +44,8 @@
 
 extern LRESULT WINAPI ImGuiApp_ImplWin32_WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam); // copied from imguiapp_impl_win32.h ('#if 0' there keeps <windows.h> out of the header)
 
-// Private impl of the opaque app->PlatformData handle (defined per platform host TU; exactly one links per build).
-struct ImGuiAppPlatformData
+// Private impl of the opaque app->PlatformData slot (per-host type; hosts coexist as ordinary TUs).
+struct ImGuiApp_ImplWin32OpenGL3_PlatformData
 {
     struct WGLWindowData { HDC hDC; };
     HWND          Hwnd;
@@ -76,7 +77,7 @@ struct ImGuiApp_ImplWin32OpenGL3_Data
     ImVector<char> CaptureRgba;         // top-down RGBA handed to callers; valid until the next capture
 
     // Platform window/loop state sidecar, owned by app->PlatformData (freed in ShutdownPlatform).
-    ImGuiAppPlatformData* State;
+    ImGuiApp_ImplWin32OpenGL3_PlatformData* State;
 
     ImGuiApp_ImplWin32OpenGL3_Data() { memset((void*)this, 0, sizeof(*this)); }
 };
@@ -105,7 +106,7 @@ static bool ImGuiApp_ImplWin32OpenGL3_IsInitInfoValid(const ImGuiApp_ImplWin32Op
            init_info->MainGLRC != nullptr;
 }
 
-static bool ImGuiApp_ImplWin32OpenGL3_CreateDeviceWGL(HWND hWnd, ImGuiAppPlatformData::WGLWindowData* data, HGLRC* main_glrc)
+static bool ImGuiApp_ImplWin32OpenGL3_CreateDeviceWGL(HWND hWnd, ImGuiApp_ImplWin32OpenGL3_PlatformData::WGLWindowData* data, HGLRC* main_glrc)
 {
     HDC hDc = ::GetDC(hWnd);
     PIXELFORMATDESCRIPTOR pfd = {};
@@ -126,7 +127,7 @@ static bool ImGuiApp_ImplWin32OpenGL3_CreateDeviceWGL(HWND hWnd, ImGuiAppPlatfor
     return data->hDC != nullptr && *main_glrc != nullptr;
 }
 
-static void ImGuiApp_ImplWin32OpenGL3_CleanupDeviceWGL(HWND hWnd, ImGuiAppPlatformData::WGLWindowData* data)
+static void ImGuiApp_ImplWin32OpenGL3_CleanupDeviceWGL(HWND hWnd, ImGuiApp_ImplWin32OpenGL3_PlatformData::WGLWindowData* data)
 {
     if (data == nullptr || data->hDC == nullptr)
         return;
@@ -151,7 +152,7 @@ static void ImGuiApp_ImplWin32OpenGL3_Renderer_CreateWindow(ImGuiViewport* viewp
     if (bd == nullptr || bd->State == nullptr)
         return;
 
-    ImGuiAppPlatformData::WGLWindowData* data = IM_NEW(ImGuiAppPlatformData::WGLWindowData)();
+    ImGuiApp_ImplWin32OpenGL3_PlatformData::WGLWindowData* data = IM_NEW(ImGuiApp_ImplWin32OpenGL3_PlatformData::WGLWindowData)();
     if (!ImGuiApp_ImplWin32OpenGL3_CreateDeviceWGL((HWND)viewport->PlatformHandle, data, &bd->State->MainGLRC))
     {
         IM_DELETE(data);
@@ -164,7 +165,7 @@ static void ImGuiApp_ImplWin32OpenGL3_Renderer_DestroyWindow(ImGuiViewport* view
 {
     if (viewport->RendererUserData != nullptr)
     {
-        ImGuiAppPlatformData::WGLWindowData* data = (ImGuiAppPlatformData::WGLWindowData*)viewport->RendererUserData;
+        ImGuiApp_ImplWin32OpenGL3_PlatformData::WGLWindowData* data = (ImGuiApp_ImplWin32OpenGL3_PlatformData::WGLWindowData*)viewport->RendererUserData;
         ImGuiApp_ImplWin32OpenGL3_CleanupDeviceWGL((HWND)viewport->PlatformHandle, data);
         IM_DELETE(data);
         viewport->RendererUserData = nullptr;
@@ -183,7 +184,7 @@ static void ImGuiApp_ImplWin32OpenGL3_Platform_RenderWindow(ImGuiViewport* viewp
     bd->VpSkip.SetBool(viewport->ID, !present);
     if (!present)
         return;
-    if (ImGuiAppPlatformData::WGLWindowData* data = (ImGuiAppPlatformData::WGLWindowData*)viewport->RendererUserData)
+    if (ImGuiApp_ImplWin32OpenGL3_PlatformData::WGLWindowData* data = (ImGuiApp_ImplWin32OpenGL3_PlatformData::WGLWindowData*)viewport->RendererUserData)
         wglMakeCurrent(data->hDC, bd->State->MainGLRC);
 }
 
@@ -201,7 +202,7 @@ static void ImGuiApp_ImplWin32OpenGL3_Renderer_SwapBuffers(ImGuiViewport* viewpo
     ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData(ImGuiApp_ImplWin32OpenGL3_GetApp());
     if (bd == nullptr || bd->VpSkip.GetBool(viewport->ID))
         return;
-    if (ImGuiAppPlatformData::WGLWindowData* data = (ImGuiAppPlatformData::WGLWindowData*)viewport->RendererUserData)
+    if (ImGuiApp_ImplWin32OpenGL3_PlatformData::WGLWindowData* data = (ImGuiApp_ImplWin32OpenGL3_PlatformData::WGLWindowData*)viewport->RendererUserData)
         ::SwapBuffers(data->hDC);
 }
 
@@ -289,6 +290,7 @@ static bool ImGuiApp_ImplWin32OpenGL3_CaptureFrame(ImGuiApp* app, ImGuiAppAVFram
 
 bool ImGuiApp_ImplWin32OpenGL3_Init(ImGuiApp* app, const ImGuiApp_ImplWin32OpenGL3_InitInfo* init_info)
 {
+    IMGUI_CHECKVERSION();
     IM_ASSERT(app != nullptr && app->BackendData == nullptr && "Already initialized a platform backend!");
     IM_ASSERT(ImGuiApp_ImplWin32OpenGL3_IsInitInfoValid(init_info) && "ImGuiApp_ImplWin32OpenGL3_Init: invalid init_info.");
     if (app == nullptr || app->BackendData != nullptr || !ImGuiApp_ImplWin32OpenGL3_IsInitInfoValid(init_info))
@@ -392,7 +394,7 @@ bool ImGuiApp_ImplWin32OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& confi
         return false;
     }
 
-    ImGuiAppPlatformData* state = IM_NEW(ImGuiAppPlatformData)();
+    ImGuiApp_ImplWin32OpenGL3_PlatformData* state = IM_NEW(ImGuiApp_ImplWin32OpenGL3_PlatformData)();
     app->PlatformData = state;
 
     ImGui_ImplWin32_EnableDpiAwareness();
@@ -454,7 +456,7 @@ void ImGuiApp_ImplWin32OpenGL3_ShutdownPlatform(ImGuiApp* app)
     if (ImGuiApp_ImplWin32OpenGL3_GetBackendData(app) != nullptr)
         ImGuiApp_ImplWin32OpenGL3_Shutdown(app);
 
-    ImGuiAppPlatformData* state = app->PlatformData;
+    ImGuiApp_ImplWin32OpenGL3_PlatformData* state = (ImGuiApp_ImplWin32OpenGL3_PlatformData*)app->PlatformData;
     if (state == nullptr)
         return;
     if (state->OwnsImGuiContext)
@@ -498,6 +500,6 @@ static const ImGuiAppPlatformBackend ImGuiApp_ImplWin32OpenGL3_PlatformBackend =
     ImGuiApp_ImplWin32OpenGL3_PresentFrame,
 };
 
-const ImGuiAppPlatformBackend* ImGuiAppGetPlatformBackend() { return &ImGuiApp_ImplWin32OpenGL3_PlatformBackend; }
+const ImGuiAppPlatformBackend* ImGuiApp_ImplWin32OpenGL3_GetPlatformBackend() { return &ImGuiApp_ImplWin32OpenGL3_PlatformBackend; }
 
 #endif // #ifndef IMGUI_DISABLE

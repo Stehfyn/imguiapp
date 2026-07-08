@@ -72,7 +72,6 @@ struct ImGuiAppBase;
 struct ImGuiAppCommandLayer;
 struct ImGuiAppLayer;
 struct ImGuiAppLayerBase;
-struct ImGuiAppPlatformData;        // Opaque; defined privately by the linked platform backend TU (impl pattern)
 struct ImGuiAppTaskLayer;
 
 // Forward declarations: ImGuiAppControl layer
@@ -674,8 +673,9 @@ struct ImGuiAppWAL
     ImGuiAppWAL() { memset((void*)this, 0, sizeof(*this)); }
 };
 
-// Platform backend interface. The core app layer depends only on this vtable. Exactly one backend
-// translation unit is linked per build; it defines ImGuiAppGetPlatformBackend().
+// Platform backend interface. The core app layer depends only on this vtable. Backends coexist as
+// ordinary TUs, each exporting ImGuiApp_ImplXXX_GetPlatformBackend(); the app's wiring (imguix.cpp's
+// build-selected binding, or the app itself) defines ImGuiAppGetPlatformBackend() once.
 struct ImGuiAppPlatformBackend
 {
     bool (*InitPlatformFn)(ImGuiApp* app, ImGuiAppConfig& config);
@@ -976,7 +976,7 @@ struct ImGuiApp : ImGuiAppBase
     int                            UpdateOrderRevision = -1;      // revision UpdateOrder + the cached dependency bindings were built at
     ImGuiAppPlatform               Platform            = {};      // zeroed so a not-yet-Initialize()'d app is safe to render (StatusLayer null-guards Platform.Name)
     ImVec4                         ClearColor;
-    ImGuiAppPlatformData*          PlatformData        = nullptr; // opaque platform host state (allocated/freed by the backend's Init/ShutdownPlatform)
+    void*                          PlatformData        = nullptr; // platform host window/loop state (io userdata-slot analog; owned by the backend's InitPlatform/ShutdownPlatform)
     void*                          BackendData         = nullptr; // host backend data (io.BackendXxxUserData analog; owned by ImGuiApp_ImplXXX_Init/Shutdown)
     ImGuiAppWAL*                   WAL                 = nullptr; // optional write-ahead logger (caller-owned); null = silent
     ImGuiAppRecorder*              Recorder            = nullptr; // active recording (AppRecordBegin registers, AppRecordEnd clears); null = none

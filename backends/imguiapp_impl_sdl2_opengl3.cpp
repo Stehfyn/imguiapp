@@ -17,6 +17,7 @@
 
 // CHANGELOG
 // (minor and older changes stripped away, please see git history for details)
+//  2026-07-08: Lifecycle: Per-host PlatformData type + exported ImGuiApp_ImplSDL2OpenGL3_GetPlatformBackend(); hosts coexist in one binary (build-selected binding wires the active one).
 //  2026-07-08: Docs: Header block conformed to the backend anatomy (B1/B2 grammar).
 //  2026-07-08: Lifecycle: Threaded ImGuiApp* through the frame lifecycle; backend data moved to app->BackendData, file-scope backend global removed.
 //  2026-07-08: Misc: Exposed ImGuiApp_ImplSDL2OpenGL3_* frame lifecycle (imgui impl pattern); host owns the ImGui context it creates; backend-internal symbols prefixed; IMGUI_DISABLE guards added.
@@ -36,8 +37,8 @@
 #include <SDL_opengl.h>
 #endif
 
-// Private impl of the opaque app->PlatformData handle (defined per platform host TU; exactly one links per build).
-struct ImGuiAppPlatformData
+// Private impl of the opaque app->PlatformData slot (per-host type; hosts coexist as ordinary TUs).
+struct ImGuiApp_ImplSDL2OpenGL3_PlatformData
 {
     SDL_Window*   Window;
     SDL_GLContext GLContext;
@@ -69,6 +70,7 @@ static bool ImGuiApp_ImplSDL2OpenGL3_IsInitInfoValid(const ImGuiApp_ImplSDL2Open
 
 bool ImGuiApp_ImplSDL2OpenGL3_Init(ImGuiApp* app, const ImGuiApp_ImplSDL2OpenGL3_InitInfo* init_info)
 {
+    IMGUI_CHECKVERSION();
     IM_ASSERT(app != nullptr && app->BackendData == nullptr && "Already initialized a platform backend!");
     IM_ASSERT(ImGuiApp_ImplSDL2OpenGL3_IsInitInfoValid(init_info) && "ImGuiApp_ImplSDL2OpenGL3_Init: invalid init_info.");
     if (app == nullptr || app->BackendData != nullptr || !ImGuiApp_ImplSDL2OpenGL3_IsInitInfoValid(init_info))
@@ -156,7 +158,7 @@ void ImGuiApp_ImplSDL2OpenGL3_PresentFrame(ImGuiApp* app, const ImGuiAppFrameCon
 
 bool ImGuiApp_ImplSDL2OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
 {
-    ImGuiAppPlatformData* state = IM_NEW(ImGuiAppPlatformData)();
+    ImGuiApp_ImplSDL2OpenGL3_PlatformData* state = IM_NEW(ImGuiApp_ImplSDL2OpenGL3_PlatformData)();
     app->PlatformData = state;
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_GAMECONTROLLER) != 0)
@@ -234,7 +236,7 @@ void ImGuiApp_ImplSDL2OpenGL3_ShutdownPlatform(ImGuiApp* app)
     if (ImGuiApp_ImplSDL2OpenGL3_GetBackendData(app) != nullptr)
         ImGuiApp_ImplSDL2OpenGL3_Shutdown(app);
 
-    ImGuiAppPlatformData* state = app->PlatformData;
+    ImGuiApp_ImplSDL2OpenGL3_PlatformData* state = (ImGuiApp_ImplSDL2OpenGL3_PlatformData*)app->PlatformData;
     if (state == nullptr)
         return;
     if (state->OwnsImGuiContext)
@@ -271,6 +273,6 @@ static const ImGuiAppPlatformBackend ImGuiApp_ImplSDL2OpenGL3_PlatformBackend =
     ImGuiApp_ImplSDL2OpenGL3_PresentFrame,
 };
 
-const ImGuiAppPlatformBackend* ImGuiAppGetPlatformBackend() { return &ImGuiApp_ImplSDL2OpenGL3_PlatformBackend; }
+const ImGuiAppPlatformBackend* ImGuiApp_ImplSDL2OpenGL3_GetPlatformBackend() { return &ImGuiApp_ImplSDL2OpenGL3_PlatformBackend; }
 
 #endif // #ifndef IMGUI_DISABLE

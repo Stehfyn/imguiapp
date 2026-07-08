@@ -18,6 +18,7 @@
 
 // CHANGELOG
 // (minor and older changes stripped away, please see git history for details)
+//  2026-07-08: Lifecycle: Per-host PlatformData type + exported ImGuiApp_ImplWin32Vulkan_GetPlatformBackend(); hosts coexist in one binary (build-selected binding wires the active one).
 //  2026-07-08: Docs: Header block conformed to the backend anatomy (B1/B2 grammar).
 //  2026-07-08: Lifecycle: Threaded ImGuiApp* through the frame lifecycle; backend data moved to app->BackendData, file-scope backend global removed; viewport hooks recover the app via the main viewport's GWLP_USERDATA.
 //  2026-07-08: Misc: Exposed ImGuiApp_ImplWin32Vulkan_* frame lifecycle (imgui impl pattern); host owns the ImGui context it creates; backend-internal symbols prefixed; IMGUI_DISABLE guards added.
@@ -43,8 +44,8 @@
 
 extern LRESULT WINAPI ImGuiApp_ImplWin32_WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam); // copied from imguiapp_impl_win32.h ('#if 0' there keeps <windows.h> out of the header)
 
-// Private impl of the opaque app->PlatformData handle (defined per platform host TU; exactly one links per build).
-struct ImGuiAppPlatformData
+// Private impl of the opaque app->PlatformData slot (per-host type; hosts coexist as ordinary TUs).
+struct ImGuiApp_ImplWin32Vulkan_PlatformData
 {
     HWND        Hwnd;
     WNDCLASSEXA WindowClass;
@@ -114,10 +115,17 @@ struct ImGuiApp_ImplWin32Vulkan_Data
     VkCommandBuffer CaptureSyncCmd;
     VkFence         CaptureSyncFence;
     ImVector<char>  CaptureRgba;            // RGBA8 conversion buffer handed to CaptureFrame callers
+
+    // memset ctor (B6); MainWindow's upstream ctor defaults re-seeded after the wipe.
+    ImGuiApp_ImplWin32Vulkan_Data()
+    {
+        memset((void*)this, 0, sizeof(*this));
+        MainWindow = ImGui_ImplVulkanH_Window();
+    }
 };
 
 // Backend data stored in app->BackendData (the io userdata slots belong to the wrapped imgui backends).
-// IM_NEW'd at Init (value-init: MainWindow keeps upstream ctor defaults), freed by Shutdown.
+// IM_NEW'd at Init, freed by Shutdown.
 static ImGuiApp_ImplWin32Vulkan_Data* ImGuiApp_ImplWin32Vulkan_GetBackendData(ImGuiApp* app)
 {
     return app != nullptr ? (ImGuiApp_ImplWin32Vulkan_Data*)app->BackendData : nullptr;
@@ -1171,6 +1179,7 @@ static void ImGuiApp_ImplWin32Vulkan_InitMultiViewportSupport(ImGuiApp_ImplWin32
 
 bool ImGuiApp_ImplWin32Vulkan_Init(ImGuiApp* app, const ImGuiApp_ImplWin32Vulkan_InitInfo* init_info)
 {
+    IMGUI_CHECKVERSION();
     IM_ASSERT(app != nullptr && app->BackendData == nullptr && "Already initialized a platform backend!");
     IM_ASSERT(ImGuiApp_ImplWin32Vulkan_IsInitInfoValid(init_info) && "ImGuiApp_ImplWin32Vulkan_Init: invalid init_info.");
     if (app == nullptr || app->BackendData != nullptr || !ImGuiApp_ImplWin32Vulkan_IsInitInfoValid(init_info))
@@ -1273,7 +1282,7 @@ bool ImGuiApp_ImplWin32Vulkan_Init(ImGuiApp* app, const ImGuiApp_ImplWin32Vulkan
 
 bool ImGuiApp_ImplWin32Vulkan_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config)
 {
-    ImGuiAppPlatformData* state = IM_NEW(ImGuiAppPlatformData)();
+    ImGuiApp_ImplWin32Vulkan_PlatformData* state = IM_NEW(ImGuiApp_ImplWin32Vulkan_PlatformData)();
     app->PlatformData = state;
 
     // Offscreen headless keeps a HIDDEN window: ImGui_ImplWin32 needs an HWND for input/DPI,
@@ -1340,7 +1349,7 @@ void ImGuiApp_ImplWin32Vulkan_ShutdownPlatform(ImGuiApp* app)
     if (ImGuiApp_ImplWin32Vulkan_GetBackendData(app) != nullptr)
         ImGuiApp_ImplWin32Vulkan_Shutdown(app);
 
-    ImGuiAppPlatformData* state = app->PlatformData;
+    ImGuiApp_ImplWin32Vulkan_PlatformData* state = (ImGuiApp_ImplWin32Vulkan_PlatformData*)app->PlatformData;
     if (state == nullptr)
         return;
     if (state->OwnsImGuiContext)
@@ -1574,7 +1583,7 @@ static const ImGuiAppPlatformBackend ImGuiApp_ImplWin32Vulkan_PlatformBackend =
     ImGuiApp_ImplWin32Vulkan_PresentFrame,
 };
 
-const ImGuiAppPlatformBackend* ImGuiAppGetPlatformBackend() { return &ImGuiApp_ImplWin32Vulkan_PlatformBackend; }
+const ImGuiAppPlatformBackend* ImGuiApp_ImplWin32Vulkan_GetPlatformBackend() { return &ImGuiApp_ImplWin32Vulkan_PlatformBackend; }
 
 
 

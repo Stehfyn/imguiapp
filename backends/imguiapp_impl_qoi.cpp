@@ -102,7 +102,7 @@ static bool ImGuiApp_ImplQoi_Open(ImGuiAppAVEncoder* self, const ImGuiAppAVEncod
     bd->Index = ImFileOpen(index_path, "w");
     if (bd->Index == nullptr)
         return false;
-    fprintf(bd->Index, "file\tframe_index\ttime_sec\ttsc\n");
+    ImFilePrintf(bd->Index, "file\tframe_index\ttime_sec\ttsc\n");
     return true;
 }
 
@@ -134,7 +134,7 @@ static bool ImGuiApp_ImplQoi_WriteFrame(ImGuiAppAVEncoder* self, const ImGuiAppA
     if (!wrote)
         return false;
 
-    fprintf(bd->Index, "%06d.qoi\t%llu\t%.9f\t%llu\n",
+    ImFilePrintf(bd->Index, "%06d.qoi\t%llu\t%.9f\t%llu\n",
             bd->FrameCounter,
             (unsigned long long)frame->FrameID.FrameIndex,
             frame->FrameID.TimeSec,

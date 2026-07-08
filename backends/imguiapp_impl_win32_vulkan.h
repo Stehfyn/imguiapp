@@ -42,4 +42,7 @@ IMGUI_API void ImGuiApp_ImplWin32Vulkan_PresentFrame(ImGuiApp* app, const ImGuiA
 IMGUI_API bool ImGuiApp_ImplWin32Vulkan_InitPlatform(ImGuiApp* app, ImGuiAppConfig& config);
 IMGUI_API void ImGuiApp_ImplWin32Vulkan_ShutdownPlatform(ImGuiApp* app);
 
+// This host's seam vtable; the app's wiring hands it to the app layer as ImGuiAppGetPlatformBackend().
+IMGUI_API const ImGuiAppPlatformBackend* ImGuiApp_ImplWin32Vulkan_GetPlatformBackend();
+
 #endif // #ifndef IMGUI_DISABLE
