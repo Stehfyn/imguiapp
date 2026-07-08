@@ -82,9 +82,10 @@ code MUST NOT introduce virtuals (imgui rule stands everywhere else).
 imgui's "no STL, ever" is held for engine, editor, canvas, and model code (ImVector/ImStr*/Im*
 throughout — audit confirms 0 raw allocation, 0 std::min/max). Three bounded layers are licensed:
 
-- **Template composition front** (`imguiapp.h` bottom sections): `<type_traits>` powers the
-  typed dependency injection (`PushAppControl<T>`); the fan-out runs over an opaque `void*`
-  slot array + a local index sequence (no `<tuple>`/`std::apply`, no STL members). The
+- **Template composition front** (`imguiapp.h` bottom sections): zero direct STL includes --
+  `<type_traits>` (`std::is_trivially_copyable_v`, the control storage contract) and the
+  `ImAppIndexSeq` machinery live in the reflection layer (`imguiapp_reflect.h`); the fan-out
+  runs over an opaque `void*` slot array (no `<tuple>`/`std::apply`, no STL members). The
   C-callable type-erased seam beneath it (`AppRegisterLayer/Window/Sidebar`,
   `AppControlRegisterStorage` + `AppControlPush`) is the binding surface; the template front
   is C++ convenience only.

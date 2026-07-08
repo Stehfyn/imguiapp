@@ -26,7 +26,7 @@ Index of this file:
 #include "imgui.h"          // IMGUI_API, ImGuiID, ImGuiStorage, ImBitArray, ImGuiTextIndex, ImChunkStream
 #include "imgui_internal.h" // ImStrncpy
 // windows.h's min/max macros (leaked by platform-backend TUs) break imguiapp_reflect.h's std::min.
-#include "imguiapp_reflect.h" // compile-time type-identity + reflection (qlibs/reflect port): ImGuiAppStatic/Type, ImApp{GenerateLabel,TypeDisplayName,NulTerminate}, field walk (AppReflectFields), ImGuiAppLiveFieldDesc/ImGuiAppTypeSchema
+#include "imguiapp_reflect.h" // compile-time type-identity + reflection (qlibs/reflect port): ImGuiAppStatic/Type, ImApp{GenerateLabel,TypeDisplayName,NulTerminate}, field walk (AppReflectFields), ImGuiAppLiveFieldDesc/ImGuiAppTypeSchema, ImAppIndexSeq + <type_traits> for the template front (Δ2)
 
 // Version scheme: "0.Y.Z WIP" while unreleased; NUM = Y*100 + Z, strictly monotonic (keep both in
 // sync). Version-stamp grammar for comments: "Since 0.Y.Z (Month Year, NUM)".
@@ -37,9 +37,6 @@ Index of this file:
 #define IMGUIAPP_CHECKVERSION() ImGui::AppDebugCheckVersionAndDataLayout(IMGUIAPP_VERSION, sizeof(ImGuiApp), sizeof(ImGuiAppConfig), sizeof(ImGuiAppFrameConfig))
 
 #ifndef IMGUI_DISABLE
-
-// Template composition front only (docs/house-style-audit.md Δ2); the C seam is AppRegister*/AppControl*.
-#include <type_traits> // std::is_trivially_copyable_v (control storage contract)
 
 
 #ifdef _MSC_VER
@@ -683,12 +680,6 @@ struct ImGuiAppInterface
     virtual ~ImGuiAppInterface() = default;
 };
 
-
-// Minimal compile-time index sequence (keeps <tuple>/<utility> out of the public header): the
-// adapter expands its opaque dependency slots and its type pack in lockstep with it.
-template <size_t... Is>           struct ImAppIndexSeq {};
-template <size_t N, size_t... Is> struct ImAppMakeIndexSeq : ImAppMakeIndexSeq<N - 1, N - 1, Is...> {};
-template <size_t... Is>           struct ImAppMakeIndexSeq<0, Is...> { using Type = ImAppIndexSeq<Is...>; };
 
 // State-delta event helpers over (this frame, last frame): rising = started, falling = ended, changed = either.
 inline static bool ImAppRising(bool now, bool last) { return now && !last; }

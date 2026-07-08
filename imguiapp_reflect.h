@@ -71,7 +71,7 @@ Index of this file:
 #include <array>
 #include <string_view>
 #include <source_location>
-#include <type_traits>
+#include <type_traits>       // also imguiapp.h's template front: std::is_trivially_copyable_v (control storage contract, Δ2)
 #include <tuple>
 #include <utility>
 #include <limits>
@@ -127,6 +127,12 @@ Index of this file:
 
 // Feature flag: this header provides compile-time reflection (probe with #ifdef).
 #define IMGUIAPP_HAS_REFLECT 1
+
+// Minimal compile-time index sequence for the composition front (imguiapp.h's adapter expands its
+// opaque dependency slots and its type pack in lockstep with it; keeps <tuple>/<utility> out of there).
+template <size_t... Is>           struct ImAppIndexSeq {};
+template <size_t N, size_t... Is> struct ImAppMakeIndexSeq : ImAppMakeIndexSeq<N - 1, N - 1, Is...> {};
+template <size_t... Is>           struct ImAppMakeIndexSeq<0, Is...> { using Type = ImAppIndexSeq<Is...>; };
 
 //-----------------------------------------------------------------------------
 // [SECTION] Forward declarations
