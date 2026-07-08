@@ -7,6 +7,10 @@
 spec dimension, every verdict evidence-cited. Mechanical layout was pre-screened by the style gate
 (`tests/style/`, baseline `imguiapp-baseline.json`: 132 pinned, 28 real).
 
+> **Maintenance 2026-07-08**: resolved items pruned to one-line records; live status moves to
+> [house-style-audit-2026-07-08.md](house-style-audit-2026-07-08.md) (re-audit against the
+> expanded 181-rule spec). This file remains the 2026-07-07 baseline record.
+
 **Verdict in one line**: imguiapp reproduces imgui's *structural grammar* faithfully — type-prefix
 layering, enum shapes, Push/Pop symmetry, pointer-param prefixes, allocator/math discipline, header
 alignment tables — and diverges in three tiers: (1) a small set of **deliberate architectural
@@ -41,97 +45,41 @@ These are not cleanups. Each needs an explicit decision recorded in a new
 `docs/style-deltas.md` (create it as Fix step 0 — every ratified deviation gets an entry with
 rationale; everything NOT ratified must conform). Recommendation given per item.
 
-### T1. Virtual class hierarchy in the app object model — A19/P1 (imgui: zero virtuals)
-94 `virtual` in `imguiapp.h` (`ImGuiAppInterface` `:660`, `ImGuiAppLayerBase`/`ItemBase`/
-`ControlMirrorBase` `:728-797`). Polymorphic ownership is the framework's composition mechanism.
-**Recommend: RATIFY.** Reversal = full redesign for no user benefit.
-**Steps**: (1) entry in `style-deltas.md`: "Δ1: app object model uses virtual interfaces; imgui's
-no-virtual rule applies to everything else — new value/POD types MUST NOT add virtuals." (2) Add a
-one-line pointer at the `ImGuiAppInterface` decl citing Δ1.
+### T1. Virtual class hierarchy — A19/P1
+**RATIFIED Δ1** (style-deltas.md); decl-site pointer citing Δ1 in place at `ImGuiAppInterface`. Closed.
 
-### T2. STL in public surface — A8/G20/I6 (imgui: "no STL, ever")
-Three distinct exposures, different treatments:
-- `imguiapp.h:32-38` includes `<mutex> <tuple> <type_traits> <string_view> <thread>
-  <condition_variable>`; `std::thread/mutex/condition_variable` are **public members** of
-  `ImGuiAppRecorder` (`:501-504`). **Recommend: FIX.** Steps: (1) move the recorder's thread state
-  behind an opaque `ImGuiAppRecorderThread* _Thread;` pimpl allocated with `IM_NEW` in
-  `imguiapp.cpp`; (2) `<tuple>/<type_traits>` serve the template composition front — move those
-  includes + the template bodies to the bottom "inline composition" section behind a
-  `// [SECTION] Template composition front (C++ convenience; C seam is AppRegister*)` banner, or
-  into a new `imguiapp_cpp.h` convenience header; (3) after both, `imguiapp.h` includes shrink to
-  imgui-class deps; gate with a lexical include-allowlist check in `tests/style`.
-- `imguiapp_internal.h:45-48` `<format> <string> <string_view>` for the reflection field-render
-  layer. **Recommend: RATIFY narrowly** (Δ2: reflection/formatting layer may use C++20 facilities;
-  scoped to the `[SECTION]` that hosts it), since the reflect port is constexpr-metaprogramming by
-  nature.
-- Glue uses (`std::filesystem` scan `imguiapp.cpp:5739`, `std::sort` `:27286`, `snprintf`
-  `:27051-27079`). **Recommend: FIX cheap ones** — `std::sort`→`ImQsort`, `snprintf`→
-  `ImFormatString` (3 sites); ratify `std::filesystem` under Δ2 (OS glue) or replace with the
-  Win32/posix wrappers already used elsewhere.
+### T2. STL in public surface — A8/G20/I6
+**Δ2 ratified** (template front / reflection layer / OS glue, scoped — style-deltas.md); recorder
+thread state now behind the `ImGuiAppRecorderThread*` pimpl over `ImGuiAppThreadFuncs`; `imguiapp.h`
+includes no threading headers. **Residual**: unlicensed glue slips (`std::sort`, `snprintf` sites)
+— carried to the 2026-07-08 re-audit.
 
-### T3. Context idiom: `ImGuiAppGraph* g` substitutes `ImGuiContext& g = *GImGui` — I1-I3/N17
-283 `ImGuiAppGraph* g` params; 241 `AppGraphEditorState(g)` calls; 0 `GImGui`. Explicit threading
-is *better* than a hidden global for a multi-document editor — but it overloads imgui's most
-load-bearing conventional local.
-**Recommend: RATIFY** (Δ3), with one rule added: functions that also touch the ImGui context MUST
-NOT name anything `g` other than the graph, and use `ImGui::GetCurrentWindow()` accessors (current
-practice — 3 sites, all clean). No rename (283 sites, churn ≫ benefit).
+### T3. `g` names the graph — I1-I3/N17
+**RATIFIED Δ3** with the no-other-`g` rule (style-deltas.md). Closed.
 
-### T4. Backend seam: state in `GBackend` file-globals + ImGuiX vtable, not `io.BackendXxxUserData` — B6/B7
-`win32_opengl3.cpp:50`, `win32_vulkan.cpp:98`, `sdl2_opengl3.cpp:33`, `sdl2_wgpu.cpp:44` each hold
-a file-scope `GBackend` value (plus `GState` in win32_opengl3); accessor absent; spec calls this
-the retired-2021 pattern. The hosts wrap real imgui backends behind the `ImGuiX` seam, so io slots
-are already occupied by the wrapped backends.
-**Recommend: PARTIAL FIX** — keep the seam (Δ4), fix the pattern: (1) replace each `GBackend`
-value with `IM_NEW`'d struct stored in the seam's `Backend.UserData` (already plumbed —
-`win32_opengl3.cpp:308`) and reached via a
-`static ImGuiApp_ImplXXX_Data* ImGuiApp_ImplXXX_GetBackendData()` accessor; (2) `IM_DELETE` in
-`ShutdownPlatform`; (3) fold `GState` into the Data struct; (4) add
-`IM_ASSERT(<slot> == nullptr && "Already initialized a platform backend!")` at each `InitPlatform`
-entry (B8). Mechanical; 4 files.
+### T4. Backend seam state — B6/B7
+**Δ4 ratified**; pre-Δ4 `GBackend`/`GState` file-values fixed to the `IM_NEW`-allocated
+`Backend.UserData` + accessor form per style-deltas.md. Closed (re-audit verifies B8 asserts).
 
-### T5. `*_state.h` shared platform-state sidecars — B6 single-struct rule
-`ImGuiAppPlatformState` shared across sibling renderers (win32: GL3+Vulkan; sdl2: GL3+WGPU) is a
-coherent invention with no imgui analogue; it is *more* B6-compliant (IM_NEW + userdata slot) than
-the GBackend structs beside it. **Recommend: RATIFY** (Δ5) + give each `_state.h` a B1-style header
-comment block (2 files, 6 lines each).
+### T5. `*_state.h` shared platform-state sidecars — B6
+**Δ5 proposed, NOT yet ratified** (style-deltas.md Pending). Open steps: ratify or conform; give
+each `_state.h` a B1-style header block (2 files, 6 lines each).
 
-### T6. Singleton accessors instead of `GIm*` globals — N13(part)/I17
-`AppAssert()` (`imguiapp.cpp:57`), `AppPacer()` (`:243`), `AppTypeSchemas()` (`:477`) etc. —
-documented pattern (`:47-50`), zero `g_`/TU globals. **Recommend: RATIFY** (Δ6) — it is the
-framework's own derived-cache idiom. But FIX the ~9 ad-hoc mutable statics that are NOT the
-documented pattern (`:78 sym_ready`, `:120 in_assert`, `:290 s_monitor_hz`, `:375 s_freq`,
-`:402 epoch`, `:6696 s_fallback_ready`, `:6899 s_vcvars`, `:7673 version`, `:7761 seeded_version`):
-each either (a) moves into the owning singleton's struct, or (b) gets a one-line justification
-comment naming why it is process-wide (the `MfStartupRefs` precedent, `mediafoundation.cpp:24-27`).
+### T6. Singleton accessors vs `GIm*` globals — N13/I17
+**Δ6 proposed, NOT yet ratified** (style-deltas.md Pending). Open: the ~9 ad-hoc mutable statics
+(`sym_ready`, `in_assert`, `s_monitor_hz`, `s_freq`, `epoch`, `s_fallback_ready`, `s_vcvars`,
+`version`, `seeded_version`) each move into the owning singleton or get a process-wide
+justification comment (`MfStartupRefs` precedent).
 
 ---
 
 ## Tier 2 — Systemic drift (real work, mostly already planned as Phase C)
 
-### S1. `imguiapp.cpp` definition order ⊥ header order; five files folded into one — A16 (SEVERE)
-> **RESOLVED 2026-07-07** (unity file kept — Δ7 ratified in style-deltas.md; ordering fixed).
-> Public API rank sequence is now `1..37,39,40` in core (+`41` demo, `38` av — region-local per Δ7).
-> Core tail rebuilt in header order under new banners (App bring-up → snapshots → Frame pacing →
-> WAL → Authored style/color mods; top index updated, 10 sections 1:1). Folded regions: defs
-> permuted into internal.h decl order within each `[SECTION]` (gate-scope aware); statics relocated
-> above their earliest caller where the permutation demanded (~60 moves). Residual (6 descents):
-> 2 fold-boundary artifacts (Δ7-fine), 4 in nodes `Scope interior` where `ShowAppGraphEditor`-class
-> gated editor fns sit across `IMGUIX_DISABLE_TOOLS` boundaries — deferred to Phase C proper
-> (section restructure + S4). Gate: suites green, codegen corpus byte-identical.
-Quantified: header decl ranks map to cpp definition order as
-`34,29,28,…,1,2,3,4,37` — grossly non-monotonic; lifecycle (`InitializeApp` etc., header ranks
-1-4) is defined at `:1693-1777` *after* mid-header subsystems defined at `:65-1106`. File is
-27343 lines (> imgui.cpp itself) with 5 embedded sub-indexes.
-**Fix (= refactor-plan Phase C pass 4, now with the drift map done)**:
-1. Decide file split first: either re-split into `imguiapp.cpp` + `imguiapp_canvas.cpp` +
-   `imguiapp_nodes.cpp` + `imguiapp_preview.cpp` + `imguiapp_av.cpp` (imgui's satellite model,
-   A16), or keep unity file and fix ordering only. Spec-conformant = split. (The fold was
-   deliberate; if ratified, record Δ7 and still fix ordering within sub-files.)
-2. Within each (sub-)file: reorder definitions to match header declaration order under matching
-   `[SECTION]` banners. Mechanical move-only edits; use the AST identifier dump (decl-order table)
-   to generate the move plan.
-3. Gate after every file: suites green + codegen corpus byte-identical (refactor-plan §4).
+### S1. `imguiapp.cpp` definition order ⊥ header order — A16 (was SEVERE)
+> **RESOLVED 2026-07-07** — Δ7 ratified (unity file kept), ordering fixed to header decl order,
+> indexes rebuilt 1:1. Residual 6 rank descents (2 fold-boundary Δ7-fine, 4 across
+> `IMGUIX_DISABLE_TOOLS` boundaries in nodes `Scope interior`) deferred to Phase C proper.
+> Gate: suites green, codegen corpus byte-identical.
 
 ### S2. Section-index drift + decorated fold banners in imguiapp.cpp — A2/F19
 Demo sub-index missing `[SECTION] Playback debugger` (`:4141`) + renamed final entry (`:6682`);
@@ -155,24 +103,12 @@ churn; add a lexical check to `tests/style` (fail any line of code indented `^( 
 file's indent unit is 4) or gate the `align` count per file with a much tighter ratchet after the
 reformat lands.
 
-### S4. Narrative comment layer — C2/F18 register (refactor-plan admission (b), quantified)
-> **RESOLVED 2026-07-08** (de-narrative pass, refactor-plan Phase C pass 2). 189 blocks → 62
-> (1076 → 397 full-line comment lines): `imguiapp.h` 16→6, `internal.h` 52→20, `imguiapp.cpp`
-> 121→36. Every essay condensed to ≤3 behavior/constraint lines in place (rationale already in
-> docs/commits); AV byte-format essays now cite the frozen av-design record catalog. Survivors are
-> the sanctioned forms: file/region `[SECTION]` indexes, section banners with ≤3 description
-> lines, group labels + ≤3 statements, two invariant tables (validate relation, drag neighbor
-> capture), Δ7 fold-region headers, and one 5-line contract (IoFrame capture-point, was 16). Two
-> stale `imguiapp_av.h` references fixed in passing (types live in `imguiapp.h` since the fold).
-> Gate: all three suites green, codegen corpus byte-locks intact, style ratchet OK (no gated growth).
-~189 blocks of ≥4 consecutive full-line comment lines (~1076 lines): `imguiapp.h` 16 blocks,
-`internal.h` 52 (29.5% of file is full-line comments), `imguiapp.cpp` 121 (longest 26 lines).
-Inline/trailing comment register conforms; the *preamble essays* are the drift.
-**Fix (= Phase C pass 2, de-AI-comment)**: per block: keep max 1-3 lines of behavior/constraint
-statement; move WHY-essays worth keeping into the relevant design doc under `docs/` (or the
-`[SECTION] Commentary` idiom, A16, for subsystems with subtle contracts — the tables.cpp
-precedent); delete the rest. Rationale → commits/docs, per the plan's own rule. Work through
-files in Phase C order; suites + corpus gate each commit.
+### S4. Narrative comment layer — C2/F18 register
+> **RESOLVED 2026-07-08** (de-narrative pass, Phase C pass 2): 189 blocks → 62 (1076 → 397 lines);
+> `imguiapp.h` 16→6, `internal.h` 52→20, `imguiapp.cpp` 121→36. Survivors are sanctioned forms
+> (indexes, banners ≤3 desc lines, labels+≤3, two invariant tables, Δ7 fold headers, one 5-line
+> IoFrame contract). Stale `imguiapp_av.h` refs fixed. Gate: suites green, corpus byte-identical,
+> style ratchet OK.
 
 ### S5. No deprecation machinery, no breaking-changes log — A14/A15
 0 `OBSOLETED`, 0 obsolete section, 0 breaking-changes log. At v0.4.x with one consumer this is
@@ -201,7 +137,7 @@ near a known doc-tracked debt, drop the tag at the site; (3) add F20 tag-census 
 | M1 | F (gate) | 28 pinned gate findings: ~26 missing `} // namespace X` closers (`imguiapp.h:240,1337`, `imguiapp.cpp` ×18, 1/backend ×5), 2 brace hits | Add closers; fix 2 braces; re-pin `imguiapp-baseline.json` (drops 132→104, vendored-only) |
 | M2 | N13 | 212 `k`-prefix constants (`kAppHue*` `:7633`, `kAppGraph*` `:8874`, `kAvMetaMagic` `:24880`, …) — foreign Google convention, 0 house-form | Decide target: SCREAMING_SNAKE for tunables (house form, `DRAGDROP_HOLD_TO_OPEN_TIMER` precedent). AST-dump rename plan → clang-rename batch; block-local `const float kX` → plain snake_case locals |
 | M3 | N18 | Macro namespace split: `IM_LABEL_SIZE` / `IMGUI_APPLAYER_VERSION` / `IMGUIAPP_HAS_REFLECT` / `IMGUIX_DISABLE_TOOLS` | Rule: `IM_` = value macros; `IMGUIAPP_` = everything this library defines (config/feature/version); `IMGUIX_` = umbrella build switches only. Rename `IMGUI_APPLAYER_VERSION*` → `IMGUIAPP_VERSION*`. Keep `IMGUIX_DISABLE_TOOLS` (it IS an umbrella build switch) but document the rule in imappconfig.h |
-| M4 | N20 | ~~`imapp_config.h` prefix matches nothing~~ **RESOLVED 2026-07-08 — finding was wrong.** imgui's own config is `imconfig.h`: the config header is exactly where imgui uses the contracted prefix (`im` : `imgui` :: `imapp` : `imguiapp`; the `ImApp*` symbol family already sanctions the contraction). Original fix (rename to `imguiapp_config.h`) would have departed from canon. | Exact-form asserted: `git mv imapp_config.h imappconfig.h` (imconfig.h carries no underscore); include + CMake + style-gate scope updated. Spec correction 4 records the N20 fix |
+| M4 | N20 | **RESOLVED 2026-07-08 — finding was wrong** (imgui's own config is `imconfig.h`: contracted prefix is canon for the config header) | Exact-form `git mv imapp_config.h imappconfig.h` applied; include/CMake/style-gate updated; spec correction 4 fixed N20 |
 | M5 | A1 | No file banners/links on headers; no `IMGUI_DISABLE` wrap | Add `// imguiapp, v0.4.1 WIP` + role line + short links block to all files; wrap bodies in `#ifndef IMGUI_DISABLE` (imguiapp cannot function without imgui — honor upstream's master switch) with `#endif // #ifndef IMGUI_DISABLE` |
 | M6 | A3 | Warning pragmas MSVC-only in imguiapp.h; absent in internal.h/cpp | Copy imgui's 3-compiler push block (MSVC→clang w/ `__has_warning`→GCC, reason per line) into all three; matching pops at EOF |
 | M7 | A8 | Missing trailing symbol comments on includes (`imguiapp.h:24,33-35`, `internal.h:43,45-48`) | Add `// symbol, symbol` comments to every include |
@@ -229,81 +165,19 @@ near a known doc-tracked debt, drop the tag at the site; (3) add F20 tag-census 
 | M29 | I20 | 0 `IM_MSVC_RUNTIME_CHECKS_OFF`; ListClipper ×1 | Low priority: bracket the canvas hot loops after profiling shows need; use ListClipper in the outliner/long lists where row counts grow |
 | M30 | F23 | Double blanks between sibling functions (`imguiapp.cpp:9335`) | Fold into S3's clang-format apply (MaxEmptyLinesToKeep handles it) |
 
-## Spec corrections (audit found the spec wrong/stale — fix imgui-house-style.md + bug-classes cross-refs)
+## Spec corrections (all APPLIED to imgui-house-style.md; kept as one-line records)
 
-1. **I17 parenthetical stale**: says "single remaining process global is `g_app_assert_wal`" — the
-   WAL global is now the `AppAssert()` singleton + `SetAppAssertWAL()` (`imguiapp.cpp:57-67`).
-   Also stale in `docs/archive/phase-coherence-audit-2026-07-03.md` finding D (archived; leave).
-2. **I1 framing**: spec should note the sanctioned substitution (Δ3) once ratified, so future
-   audits don't re-flag 283 sites.
-3. **B-section applicability**: add a note that composed/host backends (wrapping real imgui
-   backends behind a seam) satisfy B9-B14 through the wrapped backend — audit them at the seam.
-4. **N20 incomplete** (found 2026-07-08, via M4): the rule's glob `imgui*.{h,cpp}` misses imgui's
-   own `imconfig.h` — the config header uses the CONTRACTED library prefix, no underscore;
-   everything else uses the full prefix. Fixed in the spec; imguiapp analog: `imappconfig.h`.
-5. **N1/N11 third tier asserted; N11/N12 disambiguated** (2026-07-08): "low-level helpers" was
-   too vague — N11 rewritten as a five-point membership test (placement in Generic helpers under
-   `// Helpers: <Family>` labels; `Im<Family><Op>` grammar; context-free signature; no
-   `GImGui`/`ImGui::`/mutable statics in the body; `IMGUI_API`-in-.cpp or header-inline linkage),
-   derived from a mechanical scan of every bare-`Im*` definition in imgui core. Scan findings
-   recorded in the spec: prefix alone ≠ membership (`ImFontAtlas*`/`ImFontCalc*` touch the
-   context, live outside the section); canon's own wart `ImFormatStringToTempBuffer[V]` (reads
-   `GImGui->TempBuffer`) quarantined, not license. N12 sharpened: file-local statics take `Im`
-   only if promotable to the section verbatim. `ImApp*` asserted as the tier one level up
-   (full member list in N11; `ImAppAssertFail` = sole sanctioned exception, IM_ASSERT sink).
-   Enforcement: `ImAppItemStyle` (file-local pop-count struct riding context-touching
-   `PushItemStyle`/`PopItemStyle`) renamed — first to `ItemStyleScope`, then corrected to
-   `ImGuiAppItemStyleScope` once canon showed TU-local TYPES always keep tier prefixes
-   (`ImGuiResizeGripDef`/`ImGuiDockRequest`/`ImGuiPlotArrayGetterData`); the N12 plain-name
-   license is functions-only. 9 sites, one TU.
-6. **A22/A23 placement matrix added** (2026-07-08): "where is each symbol kind declared and
-   defined" was previously scattered/implicit. New §4.9: a full declaration/definition matrix
-   (public/internal API fns, foundation helpers, value vs context types, enums, typedefs, macro
-   tiers, globals, backends, vendored) with per-subsystem definition ownership across ALL
-   implementation files (imgui.cpp / widgets / draw / tables / demo / backends), TU-local rules
-   (types always prefixed; G-tables + static-assert locks; demo = sanctioned user-register
-   exception, imgui.h + libc only), and a three-step closing rule so unlisted kinds resolve
-   unilaterally. imguiapp analog inline per row (Δ7 unity-file regions).
-7. **A24-A28 ordering rules added** (2026-07-08, §4.10): cardinal section order for
-   `imgui_internal.h` (A24) and the implementation files incl. imgui.cpp's DOCUMENTATION-first
-   block (A25); the ordinal definitions-follow-declarations law with the mechanical
-   rank-monotonicity audit (A26 — the check behind S1); where additions join (A27: functional
-   group + pair-member adjacency, tail-append reserved for the Obsolete section); and explicit
-   DIRECTIONS for every ordered sequence (A28: chronological lists descending/newest-first,
-   enum values + flag bits ascending, forward decls alphabetical-ascending within layer group
-   with deprecated entries sinking to the tail, includes dependency-first, primary-first monitor
-   lists; unstated direction = spec bug). Closes the ordering gaps found by interrogating the
-   spec per the updated house-style-survey skill.
-8. **Implementation-file content gaps closed** (2026-07-08, after a per-TU coverage audit —
-   citation density was imgui.cpp 43 / widgets 19 / draw 8 / tables 7): N21 (subsystem-object
-   function tier: `<TypeName><Op>` global-scope IMGUI_API functions in the type's own internal.h
-   section, e.g. `ImFontAtlasBuild*` — the positive rule for what N11 had only defined
-   negatively); I16 extended (ShadeVerts* = namespace-ImGui internal API, ImTriangulator* = A23
-   TU-local types); I26 (ImGuiSettingsHandler anatomy + .ini format + registration-order caveat
-   and the Composer sidecar precedent); I27 (PLATFORM DEPENDENT HELPERS section: two-level
-   opt-out guards + pragma-comment auto-linking); I28 (tables as big-subsystem reference:
-   splitter channels, ImSpan arenas, Commentary). Every core TU now has both structural and
-   content-level coverage.
-9. **Four-agent .cpp deep survey integrated** (2026-07-08; parallel evidence-cited sweeps of
-   imgui.cpp / widgets / draw+tables / demo+cross-TU): 24 new rules + 5 wart entries.
-   N22-N24 (IMGUI_CDECL comparator grammar + ImQsort-only; UPPER_SNAKE tunable registers;
-   subsystem noun-first naming + Queue infix); F24-F28 micro-lexicon (uppercase hex + mandatory
-   float suffixes, never-fall-through switches with no bare default, `for (;;)` + `n` index +
-   explicit-type range-for, purpose-keyed stack buffer sizes, sizeof(expr) self-sizing);
-   A29-A32 (three debug-switch registers, three self-documenting analysis-suppression forms,
-   embedded-binary provenance, in-body version-stamp format); G23-G24 (deferred-mutation
-   *Request/Queue* grammar + typed sentinels, NULL-format protocol + Adjust-flags sanitizer
-   stanza); I29-I41 (per-feature C++11 dialect pin — range-for yes / auto+capturing-lambdas+
-   constexpr no / IM_UNUSED canon; ImGuiIO Ctx-backpointer rule; ContextHook deferred removal;
-   test-engine ITEM_INFO on every exit path; hovered/held/pressed + return-local naming +
-   MarkItemEdited obligation + backup_ prefix; nav contract; Mask_-group flag defaulting +
-   3-state color pick; multi-select as optional-subsystem hook template; g.LogEnabled mirror;
-   ownership-CAPS boundary comments; tessellation sentinel + hot-path macro hazard contracts +
-   IM_COL32 texel/theme boundary; [Part N] + allocation ledgers; ImFontLoader C-vtable seam);
-   D7-D9 (DemoMarker plumbing + sneaky-extern idiom, helper-struct register + vintage split,
-   demo austerity: local shims, raw qsort, no raw UTF-8, copy-pasteability warts-off). Warts
-   6-10 added (InputText anti-precedent, minority color form, bare N.f cluster, (void)
-   stragglers + cross-enum zero-init, the one goto). Spec now 181 rules.
+1. I17 stale parenthetical (WAL global → `AppAssert()` singleton) — fixed.
+2. I1 framing notes the Δ3 substitution — fixed.
+3. B-section applicability note for composed/host backends (audit at the seam) — fixed.
+4. N20: config header uses the contracted prefix (`imconfig.h`; analog `imappconfig.h`) — fixed.
+5. N11/N12 rewritten as five-point membership test; `ImApp*` third tier asserted;
+   `ImAppItemStyle` → `ImGuiAppItemStyleScope` enforced (9 sites) — fixed.
+6. A22/A23 placement matrix + TU-local rules added — fixed.
+7. A24-A28 ordering rules (cardinal, ordinal, directions) added — fixed.
+8. N21 + I16-ext + I26-I28 implementation-file content coverage — fixed.
+9. Four-agent .cpp survey integrated: N22-N24, F24-F28, A29-A32, G23-G24, I29-I41, D7-D9,
+   warts 6-10; spec now 181 rules — fixed.
 
 ## Sequencing (each wave gated: imguix-tests + imguix-core-tests + imguix-headless-verify green, codegen corpus byte-identical, style ratchet re-pinned monotonically down)
 
