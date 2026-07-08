@@ -21,7 +21,6 @@ form `designs.md (av-design)` resolve here. Originals preserved in [archive/](ar
 - [DLL preview design (F76)](#dll-preview-design) — `dll-preview-design.md`
 - [Source Embed — real code, not fake skeletons + the write-back fold  (Phase B design)](#source-embed-design) — `source-embed-design.md`
 - [Lean/Mean Split — `imguiapp_internal.h` + `IMGUIX_DISABLE_TOOLS`  (Phase A design)](#lean-tools-split-design) — `lean-tools-split-design.md`
-- [Unity Split — `imguiapp.cpp` back into canonical satellite TUs (Phase D design)](#unity-split-design) — `unity-split-design.md`
 - [Design References & Inspiration Library](#references) — was `references.md`
 
 

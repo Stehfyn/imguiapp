@@ -25,6 +25,7 @@ Index of this file:
 // [SECTION] Embeddable Composer control (generated-shell bootstrap)
 // [SECTION] Animation builtins (was imguiapp_anim.h)
 // [SECTION] Headless test harness (was imguiapp_testharness.h)
+// [SECTION] Process state root (GImGuiAppState)
 // [SECTION] ImGui applayer internal API (core)
 // -- #ifndef IMGUIX_DISABLE_TOOLS (a lean build cuts everything below) --
 // [SECTION][TOOLS] Canvas UI (was imguiapp_canvas.h)
@@ -1166,6 +1167,81 @@ struct ImGuiAppTestHarnessConfig
         Encoder = nullptr; WALLevel = ImGuiAppWALLevel_Frame; TestFilter = nullptr; RegisterTests = nullptr;
         VerifyRecording = true; EffectiveHeadless = nullptr;
     }
+};
+
+//-----------------------------------------------------------------------------
+// [SECTION] Process state root (GImGuiAppState)
+//-----------------------------------------------------------------------------
+
+// Assert-time forensics state, read from the assert handler (ImAppAssertFail) -- a context-free
+// callback with no `this`, so it lives on the process-state root below.
+struct ImGuiAppAssertState
+{
+    ImGuiAppWAL*                WAL = nullptr;         // sink for the assert line; null = stderr only
+    ImVector<ImGuiAppRecorder*> RingRecorders;        // armed flight-recorder rings to dump on assert (F15)
+};
+
+// Per-viewport present deadlines (secondary platform windows; main viewport never skips).
+struct ImGuiAppViewportPace
+{
+    ImGuiID ViewportId;
+    double  NextDeadline;
+    ImU64   LastSeenFrame; // FrameID.FrameIndex; feeds lazy pruning of vanished viewports
+};
+
+// Pacer bookkeeping the ImGuiAppPacer struct doesn't carry. Single slot: one paced app
+// per process; the deadline chain re-anchors when a different app starts pacing.
+struct ImGuiAppPacerState
+{
+    const ImGuiApp* App          = nullptr;
+    double          NextDeadline = -1.0; // on the funcs' monotonic clock; < 0 = chain not started
+    double          LastEnter    = -1.0; // previous AppPacerWait entry (feeds LastFrameMs)
+    ImVector<ImGuiAppViewportPace> ViewportPace; // secondary-window present deadlines
+};
+
+// THE process-wide state root (the applayer's GImGui analog): every formerly ad-hoc mutable
+// static lives here as a member. Anchored by one constant-initialized pointer + lazy IM_NEW,
+// so cross-TU static initializers (control ctors registering type schemas) stay ordered-safe.
+struct ImGuiAppProcessState
+{
+    ImGuiAppAssertState                 Assert;
+    ImGuiAppPacerState                  Pacer;
+    ImVector<const ImGuiAppTypeSchema*> TypeSchemas;
+    const ImGuiAppThreadFuncs*          ThreadFuncs         = nullptr; // null = resolve the default at use
+    const ImGuiAppFileSystemFuncs*      FileSystemFuncs     = nullptr; // null = resolve the default at use
+    double                              RunEpoch            = 0.0;     // 0 = unset (first stamped frame sets it)
+    ImU64                               QpcHz               = 0;       // 0 = unset (win32 QPC frequency)
+    bool                                AssertSymReady      = false;   // win32 sym handler initialized
+    int                                 MediaFoundationRefs = 0;       // MFStartup/COM process refcount (mf backend)
+    ImGuiApp*                           DemoHost            = nullptr; // ShowAppDemo's current host
+    ImGuiApp*                           DemoFallbackApp     = nullptr; // demo-owned app for host-less callers
+    ImGuiApp*                           DemoComposed        = nullptr; // the one composed app per process
+    ImGuiAppComposerStyle               ComposerStyle;                  // derived theme cache, gated by ComposerStyleVersion
+    int                                 ComposerStyleVersion = 0;       // 0 = not yet derived; bumped by each global re-derive
+    ImGuiAppComposerMotion              ComposerMotion;                 // F38 motion table (struct defaults)
+    ImGuiAppChromeTheme                 ChromeTheme;                    // inspector-editable; reseeded when ComposerStyleVersion moves
+    int                                 ChromeThemeSeededVersion = -1;
+    char                                PreviewVcvars[1024] = { 1 };    // vcvars64.bat path; [0]==1 => not yet searched, empty = no toolset
+};
+
+extern IMGUI_API ImGuiAppProcessState* GImGuiAppState;   // defined in imguiapp.cpp; constant-initialized: safe before main
+
+inline ImGuiAppProcessState& AppState()
+{
+    if (GImGuiAppState == nullptr)
+        GImGuiAppState = IM_NEW(ImGuiAppProcessState)();
+    return *GImGuiAppState;
+}
+
+inline ImGuiAppAssertState& AppAssert() { return AppState().Assert; }
+
+// Push-count receipt for a paired style pop (the item render loop and the Blender-field widgets):
+// the returned counts pop exactly what was pushed, so stacks stay balanced even if an entry's
+// Active toggles mid-frame.
+struct ImGuiAppStyleScope
+{
+    int Vars   = 0;
+    int Colors = 0;
 };
 
 //-----------------------------------------------------------------------------

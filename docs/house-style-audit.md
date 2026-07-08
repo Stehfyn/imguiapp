@@ -103,15 +103,3 @@ touches the ImGui context reaches it through accessors (`ImGui::GetCurrentWindow
 never names anything else `g`. Code operating on the ImGui context itself (no graph in scope)
 keeps imgui's meaning of `g`.
 
-### Δ7 — Unity `imguiapp.cpp` instead of topical satellite files (departs A16)
-
-imgui's satellite model (`imgui.cpp` + `imgui_widgets.cpp` + `imgui_draw.cpp` + `imgui_tables.cpp`)
-is not reproduced; the canvas, nodes, preview/interpreter, and AV subsystems are folded into one
-`imguiapp.cpp` as embedded sub-files, each with its own top-of-region index. The fold was
-deliberate (single TU, one include spine, no cross-file internal headers for subsystems that share
-statics).
-**Scope**: file count only. Everything *inside* each embedded sub-file region must still conform:
-region-local `[SECTION]` index kept 1:1 with body banners (A2), definitions ordered to match
-header declaration order within the region (A16/refactor-plan Phase C pass 4), forward decls
-collected per region (A17). A future re-split to satellites stays open; this delta removes the
-obligation, not the option.

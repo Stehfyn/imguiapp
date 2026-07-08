@@ -138,7 +138,7 @@ same change or every recording loses its command markers.
 `ImGuiAppCommandDesc`, `AppCommand()`, `AppCommandSetup()`, `ImGuiAppInputMapping` load/save entry
 points go in `imguiapp.h` (this is the out-of-the-box surface). The registry row, arbiter state,
 layer resolver, and lint live in `imguiapp_internal.h` beside the F34/F74 types they generalize;
-definitions land in the matching `[SECTION]` regions of the unity `imguiapp.cpp` (Δ7). Registry
+definitions land in the matching `[SECTION]` regions of the core/nodes satellite TUs (A22). Registry
 rows and arbiter state are owned by the app object — no file-scope mutable statics (I17; globals
 banned, Δ3/Δ6). Debug surfaces ship in the house introspection register: `DebugNodeAppCommands` /
 `DebugNodeAppInputMapping` beside the existing `DebugNode*` block (`imguiapp_internal.h:1525`),
