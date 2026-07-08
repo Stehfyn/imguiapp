@@ -1015,37 +1015,37 @@ struct ImGuiAppInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistData
     //
     //
     virtual void OnInitialize(ImGuiApp*, PersistDataT*, const DataDependencies*...) const override {}
-    virtual void OnInitialize(ImGuiApp* app) const override final { IM_ASSERT(_InstanceData != nullptr); FanOutInitialize(app, DepSeq()); }
+    virtual void OnInitialize(ImGuiApp* app) const override final { IM_ASSERT(_InstanceData != nullptr); ApplyInitialize(app, DepSeq()); }
 
     //
     //
     //
     //
     virtual void OnShutdown(ImGuiApp*, PersistDataT*, const DataDependencies*...) const override {}
-    virtual void OnShutdown(ImGuiApp* app) const override final { FanOutShutdown(app, DepSeq()); }
+    virtual void OnShutdown(ImGuiApp* app) const override final { ApplyShutdown(app, DepSeq()); }
 
     //
     //
     //
     //
     virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*, const PersistDataT*, const TempDataT*, const DataDependencies*...) const override {}
-    virtual void OnGetCommand(const ImGuiApp* app, ImGuiAppCommand* cmd) const override final { FanOutGetCommand(app, cmd, DepSeq()); }
+    virtual void OnGetCommand(const ImGuiApp* app, ImGuiAppCommand* cmd) const override final { ApplyGetCommand(app, cmd, DepSeq()); }
 
     //
     //
     //
     //
     virtual void OnUpdate(float, PersistDataT*, const TempDataT*, const TempDataT*, const DataDependencies*...) const override {}
-    virtual void OnUpdate(const ImGuiApp* app, float dt) const override final { IM_UNUSED(app); FanOutUpdate(dt, DepSeq()); _InstanceData->LastTempData = _InstanceData->TempData; }
+    virtual void OnUpdate(const ImGuiApp* app, float dt) const override final { IM_UNUSED(app); ApplyUpdate(dt, DepSeq()); _InstanceData->LastTempData = _InstanceData->TempData; }
 
     //
     //
     //
     //
     virtual void OnRender(const PersistDataT*, TempDataT*, const DataDependencies*...) const override {}
-    virtual void OnRender(const ImGuiApp* app) const override final { IM_UNUSED(app); _InstanceData->TempData = {}; FanOutRender(DepSeq()); }
+    virtual void OnRender(const ImGuiApp* app) const override final { IM_UNUSED(app); _InstanceData->TempData = {}; ApplyRender(DepSeq()); }
 
-    // Slot binding + typed fan-out: the index pack and the type pack expand in lockstep, re-attaching
+    // Slot binding + typed apply: the index pack and the type pack expand in lockstep, re-attaching
     // each opaque slot's static type at the call boundary (no tuple/apply; see ImAppIndexSeq).
     using DepSeq = typename ImAppMakeIndexSeq<sizeof...(DataDependencies)>::Type;
 
@@ -1062,11 +1062,11 @@ struct ImGuiAppInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistData
         int expand[] = { 0, (_Dependencies[Is] = (void*)LookupDependency<DataDependencies>(app, Is), 0)... };
         IM_UNUSED(expand);
     }
-    template <size_t... Is> inline void FanOutInitialize(ImGuiApp* app, ImAppIndexSeq<Is...>) const                             { OnInitialize(app, &_InstanceData->PersistData, GetData<DataDependencies>(Is)...); }
-    template <size_t... Is> inline void FanOutShutdown(ImGuiApp* app, ImAppIndexSeq<Is...>) const                               { OnShutdown(app, &_InstanceData->PersistData, GetData<DataDependencies>(Is)...); }
-    template <size_t... Is> inline void FanOutGetCommand(const ImGuiApp* app, ImGuiAppCommand* cmd, ImAppIndexSeq<Is...>) const { OnGetCommand(app, cmd, &_InstanceData->PersistData, &_InstanceData->TempData, GetData<DataDependencies>(Is)...); }
-    template <size_t... Is> inline void FanOutUpdate(float dt, ImAppIndexSeq<Is...>) const                                      { OnUpdate(dt, &_InstanceData->PersistData, &_InstanceData->TempData, &_InstanceData->LastTempData, GetData<DataDependencies>(Is)...); }
-    template <size_t... Is> inline void FanOutRender(ImAppIndexSeq<Is...>) const                                                { OnRender(&_InstanceData->PersistData, &_InstanceData->TempData, GetData<DataDependencies>(Is)...); }
+    template <size_t... Is> inline void ApplyInitialize(ImGuiApp* app, ImAppIndexSeq<Is...>) const                             { OnInitialize(app, &_InstanceData->PersistData, GetData<DataDependencies>(Is)...); }
+    template <size_t... Is> inline void ApplyShutdown(ImGuiApp* app, ImAppIndexSeq<Is...>) const                               { OnShutdown(app, &_InstanceData->PersistData, GetData<DataDependencies>(Is)...); }
+    template <size_t... Is> inline void ApplyGetCommand(const ImGuiApp* app, ImGuiAppCommand* cmd, ImAppIndexSeq<Is...>) const { OnGetCommand(app, cmd, &_InstanceData->PersistData, &_InstanceData->TempData, GetData<DataDependencies>(Is)...); }
+    template <size_t... Is> inline void ApplyUpdate(float dt, ImAppIndexSeq<Is...>) const                                      { OnUpdate(dt, &_InstanceData->PersistData, &_InstanceData->TempData, &_InstanceData->LastTempData, GetData<DataDependencies>(Is)...); }
+    template <size_t... Is> inline void ApplyRender(ImAppIndexSeq<Is...>) const                                                { OnRender(&_InstanceData->PersistData, &_InstanceData->TempData, GetData<DataDependencies>(Is)...); }
 };
 
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
