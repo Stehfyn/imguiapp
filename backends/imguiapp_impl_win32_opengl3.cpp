@@ -9,12 +9,26 @@
 // Missing features:
 //  [ ] Headless modes (use win32-vulkan).
 
-// CHANGELOG
-//  2026-07-08: Threaded ImGuiApp* through the frame lifecycle; backend data moved to app->BackendData, file-scope backend global removed; viewport hooks recover the app via the main viewport's GWLP_USERDATA.
-//  2026-07-08: Exposed ImGuiApp_ImplWin32OpenGL3_* frame lifecycle (imgui impl pattern); host owns the ImGui context it creates; backend-internal symbols prefixed; IMGUI_DISABLE guards added.
+// You can use unmodified imguiapp_impl_* files in your project. See demos/ folder for examples of using this.
+// Prefer including the entire imguiapp/ folder into your project (either as a copy or as a submodule), and only build the backends you need.
+// Learn about Dear ImGui:
+// - FAQ                  https://dearimgui.com/faq
+// - Getting Started      https://dearimgui.com/getting-started
+// - Documentation        https://dearimgui.com/docs (same as your local docs/ folder).
+// - Introduction, links and more at the top of imgui.cpp
 
-#include "imguiapp_impl_win32_opengl3.h"
+// CHANGELOG
+// (minor and older changes stripped away, please see git history for details)
+//  2026-07-08: Docs: Header block conformed to the backend anatomy (B1/B2 grammar).
+//  2026-07-08: Lifecycle: Threaded ImGuiApp* through the frame lifecycle; backend data moved to app->BackendData, file-scope backend global removed; viewport hooks recover the app via the main viewport's GWLP_USERDATA.
+//  2026-07-08: Misc: Exposed ImGuiApp_ImplWin32OpenGL3_* frame lifecycle (imgui impl pattern); host owns the ImGui context it creates; backend-internal symbols prefixed; IMGUI_DISABLE guards added.
+
+#include "imguiapp.h"
 #ifndef IMGUI_DISABLE
+#include "imguiapp_impl_win32_opengl3.h"
+#include "imguiapp_impl_win32.h"
+#include "imguiapp_internal.h"
+
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_win32.h"
 
@@ -23,10 +37,6 @@
 #endif
 #include <windows.h>
 #include <GL/gl.h>
-
-#include "imguiapp_impl_win32.h"
-#include "imguiapp.h"
-#include "imguiapp_internal.h"
 
 #include <cstdio>
 #include <cstring>
@@ -127,6 +137,8 @@ static void ImGuiApp_ImplWin32OpenGL3_CleanupDeviceWGL(HWND hWnd, ImGuiAppPlatfo
 
 //--------------------------------------------------------------------------------------------------------
 // MULTI-VIEWPORT / PLATFORM INTERFACE SUPPORT
+// This is an _advanced_ and _optional_ feature, allowing the backend to create and handle multiple viewports simultaneously.
+// If you are new to dear imgui or creating a new binding for dear imgui, it is recommended that you completely ignore this section first..
 // Per-viewport hooks installed into ImGuiPlatformIO; they run as context-free callbacks and reach
 // backend state through the GetBackendData accessor.
 //--------------------------------------------------------------------------------------------------------
@@ -191,6 +203,25 @@ static void ImGuiApp_ImplWin32OpenGL3_Renderer_SwapBuffers(ImGuiViewport* viewpo
         return;
     if (ImGuiAppPlatformData::WGLWindowData* data = (ImGuiAppPlatformData::WGLWindowData*)viewport->RendererUserData)
         ::SwapBuffers(data->hDC);
+}
+
+// Registration only: teardown rides the wrapped backends' Shutdown (they call
+// platform_io.ClearPlatformHandlers/ClearRendererHandlers). The RenderWindow wrapper
+// covers the upstream GL renderer's per-viewport draw (registered by ImGui_ImplOpenGL3_Init)
+// so a pacing-skipped viewport draws nothing.
+static void ImGuiApp_ImplWin32OpenGL3_InitMultiViewportSupport(ImGuiApp_ImplWin32OpenGL3_Data* bd)
+{
+    ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
+    IM_ASSERT(platform_io.Renderer_CreateWindow  == nullptr);
+    IM_ASSERT(platform_io.Renderer_DestroyWindow == nullptr);
+    IM_ASSERT(platform_io.Renderer_SwapBuffers   == nullptr);
+    IM_ASSERT(platform_io.Platform_RenderWindow  == nullptr);
+    platform_io.Renderer_CreateWindow  = ImGuiApp_ImplWin32OpenGL3_Renderer_CreateWindow;
+    platform_io.Renderer_DestroyWindow = ImGuiApp_ImplWin32OpenGL3_Renderer_DestroyWindow;
+    platform_io.Renderer_SwapBuffers   = ImGuiApp_ImplWin32OpenGL3_Renderer_SwapBuffers;
+    platform_io.Platform_RenderWindow  = ImGuiApp_ImplWin32OpenGL3_Platform_RenderWindow;
+    bd->UnderlyingRendererRenderWindow = platform_io.Renderer_RenderWindow;
+    platform_io.Renderer_RenderWindow  = ImGuiApp_ImplWin32OpenGL3_Renderer_RenderWindow;
 }
 
 static void ImGuiApp_ImplWin32OpenGL3_GetClientSize(void* hwnd, int* width, int* height)
@@ -305,7 +336,7 @@ void ImGuiApp_ImplWin32OpenGL3_Shutdown(ImGuiApp* app)
 void ImGuiApp_ImplWin32OpenGL3_NewFrame(ImGuiApp* app)
 {
     ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData(app);
-    IM_ASSERT(bd != nullptr && "Backend not initialized! Did you call ImGuiApp_ImplWin32OpenGL3_Init()?");
+    IM_ASSERT(bd != nullptr && "App or backend not initialized! Did you call ImGuiApp_ImplWin32OpenGL3_Init()?");
     IM_UNUSED(bd);
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplWin32_NewFrame();
@@ -314,7 +345,7 @@ void ImGuiApp_ImplWin32OpenGL3_NewFrame(ImGuiApp* app)
 void ImGuiApp_ImplWin32OpenGL3_RenderDrawData(ImGuiApp* app, ImDrawData* draw_data, const ImGuiAppFrameConfig* config)
 {
     ImGuiApp_ImplWin32OpenGL3_Data* bd = ImGuiApp_ImplWin32OpenGL3_GetBackendData(app);
-    IM_ASSERT(bd != nullptr && "Backend not initialized! Did you call ImGuiApp_ImplWin32OpenGL3_Init()?");
+    IM_ASSERT(bd != nullptr && "App or backend not initialized! Did you call ImGuiApp_ImplWin32OpenGL3_Init()?");
     if (bd == nullptr)
         return;
 
@@ -409,22 +440,7 @@ bool ImGuiApp_ImplWin32OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& confi
     ImGui::GetIO().ConfigFlags |= config.ConfigFlags;
 
     if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
-    {
-        ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
-        IM_ASSERT(platform_io.Renderer_CreateWindow  == nullptr);
-        IM_ASSERT(platform_io.Renderer_DestroyWindow == nullptr);
-        IM_ASSERT(platform_io.Renderer_SwapBuffers   == nullptr);
-        IM_ASSERT(platform_io.Platform_RenderWindow  == nullptr);
-        platform_io.Renderer_CreateWindow  = ImGuiApp_ImplWin32OpenGL3_Renderer_CreateWindow;
-        platform_io.Renderer_DestroyWindow = ImGuiApp_ImplWin32OpenGL3_Renderer_DestroyWindow;
-        platform_io.Renderer_SwapBuffers   = ImGuiApp_ImplWin32OpenGL3_Renderer_SwapBuffers;
-        platform_io.Platform_RenderWindow  = ImGuiApp_ImplWin32OpenGL3_Platform_RenderWindow;
-
-        // Wrap the upstream GL renderer's per-viewport draw (registered by
-        // ImGui_ImplOpenGL3_Init above) so a pacing-skipped viewport draws nothing.
-        bd->UnderlyingRendererRenderWindow = platform_io.Renderer_RenderWindow;
-        platform_io.Renderer_RenderWindow = ImGuiApp_ImplWin32OpenGL3_Renderer_RenderWindow;
-    }
+        ImGuiApp_ImplWin32OpenGL3_InitMultiViewportSupport(bd);
 
     app->Platform.Name               = config.Platform.Name;
     app->Platform.NativeWindowHandle = state->Hwnd;

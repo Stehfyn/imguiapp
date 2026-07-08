@@ -6,12 +6,22 @@
 // Missing features:
 //  [ ] AV: True VFR (unreachable through the sink writer; realtime output is duration-honest resampled CFR, see ImGuiApp_ImplMediaFoundation_BeginWriting).
 
-// CHANGELOG
-//  2026-07-08: Header comment block conformed to the backend anatomy (kind grammar + feature checklist).
-//  2026-07-08: Backend-internal symbols prefixed ImGuiApp_ImplMediaFoundation_* (house backend grammar); IMGUI_DISABLE guards added.
+// You can use unmodified imguiapp_impl_* files in your project. See demos/ folder for examples of using this.
+// Prefer including the entire imguiapp/ folder into your project (either as a copy or as a submodule), and only build the backends you need.
+// Learn about Dear ImGui:
+// - FAQ                  https://dearimgui.com/faq
+// - Getting Started      https://dearimgui.com/getting-started
+// - Documentation        https://dearimgui.com/docs (same as your local docs/ folder).
+// - Introduction, links and more at the top of imgui.cpp
 
-#include "imguiapp_impl_mediafoundation.h"
+// CHANGELOG
+// (minor and older changes stripped away, please see git history for details)
+//  2026-07-08: Docs: Header block conformed to the backend anatomy (B1/B2 grammar).
+//  2026-07-08: Misc: Backend-internal symbols prefixed ImGuiApp_ImplMediaFoundation_* (house backend grammar); IMGUI_DISABLE guards added.
+
+#include "imguiapp.h"
 #ifndef IMGUI_DISABLE
+#include "imguiapp_impl_mediafoundation.h"
 
 #ifdef _WIN32
 

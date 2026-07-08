@@ -8,15 +8,25 @@
 //  [X] AV: pipelined staging-buffer CaptureFrame (no pipeline stall; FrameID travels with the pixels).
 //  [X] Headless: Offscreen render target behind a hidden input window (ImGuiAppHeadlessMode_Offscreen).
 
-// CHANGELOG
-//  2026-07-08: Threaded ImGuiApp* through the frame lifecycle; backend data moved to app->BackendData, file-scope backend global removed; viewport hooks recover the app via the main viewport's GWLP_USERDATA.
-//  2026-07-08: Exposed ImGuiApp_ImplWin32Vulkan_* frame lifecycle (imgui impl pattern); host owns the ImGui context it creates; backend-internal symbols prefixed; IMGUI_DISABLE guards added.
+// You can use unmodified imguiapp_impl_* files in your project. See demos/ folder for examples of using this.
+// Prefer including the entire imguiapp/ folder into your project (either as a copy or as a submodule), and only build the backends you need.
+// Learn about Dear ImGui:
+// - FAQ                  https://dearimgui.com/faq
+// - Getting Started      https://dearimgui.com/getting-started
+// - Documentation        https://dearimgui.com/docs (same as your local docs/ folder).
+// - Introduction, links and more at the top of imgui.cpp
 
-#include "imguiapp_impl_win32_vulkan.h"
-#ifndef IMGUI_DISABLE
+// CHANGELOG
+// (minor and older changes stripped away, please see git history for details)
+//  2026-07-08: Docs: Header block conformed to the backend anatomy (B1/B2 grammar).
+//  2026-07-08: Lifecycle: Threaded ImGuiApp* through the frame lifecycle; backend data moved to app->BackendData, file-scope backend global removed; viewport hooks recover the app via the main viewport's GWLP_USERDATA.
+//  2026-07-08: Misc: Exposed ImGuiApp_ImplWin32Vulkan_* frame lifecycle (imgui impl pattern); host owns the ImGui context it creates; backend-internal symbols prefixed; IMGUI_DISABLE guards added.
+
 #include "imguiapp.h"
-#include "imguiapp_internal.h"          // ImGuiAppAVFrame (CaptureFrame payload)
+#ifndef IMGUI_DISABLE
+#include "imguiapp_impl_win32_vulkan.h"
 #include "imguiapp_impl_win32.h"
+#include "imguiapp_internal.h"          // ImGuiAppAVFrame (CaptureFrame payload)
 
 #include "imgui_impl_win32.h"
 
@@ -26,7 +36,6 @@
 #include "imgui_impl_vulkan.h"
 
 #include <windows.h>
-
 
 #include <cstdio>
 #include <cstdlib>
@@ -1052,7 +1061,7 @@ void ImGuiApp_ImplWin32Vulkan_Shutdown(ImGuiApp* app)
 void ImGuiApp_ImplWin32Vulkan_NewFrame(ImGuiApp* app)
 {
     ImGuiApp_ImplWin32Vulkan_Data* bd = ImGuiApp_ImplWin32Vulkan_GetBackendData(app);
-    IM_ASSERT(bd != nullptr && "Backend not initialized! Did you call ImGuiApp_ImplWin32Vulkan_Init()?");
+    IM_ASSERT(bd != nullptr && "App or backend not initialized! Did you call ImGuiApp_ImplWin32Vulkan_Init()?");
     if (bd == nullptr)
         return;
 
@@ -1064,7 +1073,7 @@ void ImGuiApp_ImplWin32Vulkan_NewFrame(ImGuiApp* app)
 void ImGuiApp_ImplWin32Vulkan_RenderDrawData(ImGuiApp* app, ImDrawData* draw_data, const ImGuiAppFrameConfig* config)
 {
     ImGuiApp_ImplWin32Vulkan_Data* bd = ImGuiApp_ImplWin32Vulkan_GetBackendData(app);
-    IM_ASSERT(bd != nullptr && "Backend not initialized! Did you call ImGuiApp_ImplWin32Vulkan_Init()?");
+    IM_ASSERT(bd != nullptr && "App or backend not initialized! Did you call ImGuiApp_ImplWin32Vulkan_Init()?");
     if (bd == nullptr || draw_data == nullptr || config == nullptr)
         return;
 
@@ -1111,6 +1120,8 @@ void ImGuiApp_ImplWin32Vulkan_PresentFrame(ImGuiApp* app, const ImGuiAppFrameCon
 
 //--------------------------------------------------------------------------------------------------------
 // MULTI-VIEWPORT / PLATFORM INTERFACE SUPPORT
+// This is an _advanced_ and _optional_ feature, allowing the backend to create and handle multiple viewports simultaneously.
+// If you are new to dear imgui or creating a new binding for dear imgui, it is recommended that you completely ignore this section first..
 // Per-viewport hooks installed into ImGuiPlatformIO; they run as context-free callbacks and reach
 // backend state through the GetBackendData accessor.
 //--------------------------------------------------------------------------------------------------------
@@ -1137,6 +1148,25 @@ static void ImGuiApp_ImplWin32Vulkan_Viewport_SwapBuffers(ImGuiViewport* viewpor
         return;
     if (bd->UnderlyingViewportSwapBuffers != nullptr)
         bd->UnderlyingViewportSwapBuffers(viewport, render_arg);
+}
+
+// Registration only: teardown rides the wrapped backends' Shutdown (they call
+// platform_io.ClearPlatformHandlers/ClearRendererHandlers). Wraps the upstream vulkan
+// viewport hooks so a paced-out viewport skips BOTH RenderWindow (acquire + submit) and
+// SwapBuffers (present) -- the same both-skipped shape upstream takes on
+// VK_ERROR_OUT_OF_DATE_KHR, so SemaphoreIndex and per-frame state stay consistent.
+// Presenting without its paired acquire/submit would not be safe; the pair is decided
+// once in the RenderWindow wrapper.
+static void ImGuiApp_ImplWin32Vulkan_InitMultiViewportSupport(ImGuiApp_ImplWin32Vulkan_Data* bd)
+{
+    ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
+    bd->UnderlyingViewportRenderWindow = platform_io.Renderer_RenderWindow;
+    bd->UnderlyingViewportSwapBuffers  = platform_io.Renderer_SwapBuffers;
+    if (bd->UnderlyingViewportRenderWindow != nullptr && bd->UnderlyingViewportSwapBuffers != nullptr)
+    {
+        platform_io.Renderer_RenderWindow = ImGuiApp_ImplWin32Vulkan_Viewport_RenderWindow;
+        platform_io.Renderer_SwapBuffers  = ImGuiApp_ImplWin32Vulkan_Viewport_SwapBuffers;
+    }
 }
 
 bool ImGuiApp_ImplWin32Vulkan_Init(ImGuiApp* app, const ImGuiApp_ImplWin32Vulkan_InitInfo* init_info)
@@ -1237,22 +1267,7 @@ bool ImGuiApp_ImplWin32Vulkan_Init(ImGuiApp* app, const ImGuiApp_ImplWin32Vulkan
     }
     bd->RendererBackendInitialized = true;
 
-    // Per-viewport pacing: wrap the upstream vulkan viewport hooks. A skipped viewport
-    // skips BOTH RenderWindow (acquire + submit) and SwapBuffers (present) -- the same
-    // both-skipped shape upstream takes on VK_ERROR_OUT_OF_DATE_KHR, so SemaphoreIndex
-    // and per-frame state stay consistent. Presenting without its paired acquire/submit
-    // would not be safe; the pair is decided once in the RenderWindow wrapper.
-    {
-        ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
-        bd->UnderlyingViewportRenderWindow = platform_io.Renderer_RenderWindow;
-        bd->UnderlyingViewportSwapBuffers  = platform_io.Renderer_SwapBuffers;
-        if (bd->UnderlyingViewportRenderWindow != nullptr && bd->UnderlyingViewportSwapBuffers != nullptr)
-        {
-            platform_io.Renderer_RenderWindow = ImGuiApp_ImplWin32Vulkan_Viewport_RenderWindow;
-            platform_io.Renderer_SwapBuffers  = ImGuiApp_ImplWin32Vulkan_Viewport_SwapBuffers;
-        }
-    }
-
+    ImGuiApp_ImplWin32Vulkan_InitMultiViewportSupport(bd);
     return true;
 }
 
@@ -1487,7 +1502,7 @@ static bool ImGuiApp_ImplWin32Vulkan_CaptureSyncNow(ImGuiApp_ImplWin32Vulkan_Dat
 //   the freshest unreturned copy IF its fence already signaled (never blocks mid-take), else
 //   false. Callers drain the final frame by re-calling after the GPU settles.
 // - Never returns the same FrameIndex twice (CaptureLastReturned gate).
-bool ImGuiApp_ImplWin32Vulkan_CaptureFrame(ImGuiApp* app, ImGuiAppAVFrame* out_frame)
+static bool ImGuiApp_ImplWin32Vulkan_CaptureFrame(ImGuiApp* app, ImGuiAppAVFrame* out_frame)
 {
     ImGuiApp_ImplWin32Vulkan_Data* bd = ImGuiApp_ImplWin32Vulkan_GetBackendData(app);
     if (bd == nullptr)

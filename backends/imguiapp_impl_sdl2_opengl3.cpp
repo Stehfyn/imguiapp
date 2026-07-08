@@ -7,15 +7,24 @@
 // Missing features:
 //  [ ] AV: CaptureFrame readback (recording unavailable on this host; use win32-vulkan).
 
+// You can use unmodified imguiapp_impl_* files in your project. See demos/ folder for examples of using this.
+// Prefer including the entire imguiapp/ folder into your project (either as a copy or as a submodule), and only build the backends you need.
+// Learn about Dear ImGui:
+// - FAQ                  https://dearimgui.com/faq
+// - Getting Started      https://dearimgui.com/getting-started
+// - Documentation        https://dearimgui.com/docs (same as your local docs/ folder).
+// - Introduction, links and more at the top of imgui.cpp
+
 // CHANGELOG
-//  2026-07-08: Threaded ImGuiApp* through the frame lifecycle; backend data moved to app->BackendData, file-scope backend global removed.
-//  2026-07-08: Exposed ImGuiApp_ImplSDL2OpenGL3_* frame lifecycle (imgui impl pattern); host owns the ImGui context it creates; backend-internal symbols prefixed; IMGUI_DISABLE guards added.
+// (minor and older changes stripped away, please see git history for details)
+//  2026-07-08: Docs: Header block conformed to the backend anatomy (B1/B2 grammar).
+//  2026-07-08: Lifecycle: Threaded ImGuiApp* through the frame lifecycle; backend data moved to app->BackendData, file-scope backend global removed.
+//  2026-07-08: Misc: Exposed ImGuiApp_ImplSDL2OpenGL3_* frame lifecycle (imgui impl pattern); host owns the ImGui context it creates; backend-internal symbols prefixed; IMGUI_DISABLE guards added.
 
-#include "imguiapp_impl_sdl2_opengl3.h"
-#ifndef IMGUI_DISABLE
-
-#include "imguiapp_impl_sdl2.h"
 #include "imguiapp.h"
+#ifndef IMGUI_DISABLE
+#include "imguiapp_impl_sdl2_opengl3.h"
+#include "imguiapp_impl_sdl2.h"
 
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_sdl2.h"
@@ -105,7 +114,7 @@ void ImGuiApp_ImplSDL2OpenGL3_Shutdown(ImGuiApp* app)
 void ImGuiApp_ImplSDL2OpenGL3_NewFrame(ImGuiApp* app)
 {
     ImGuiApp_ImplSDL2OpenGL3_Data* bd = ImGuiApp_ImplSDL2OpenGL3_GetBackendData(app);
-    IM_ASSERT(bd != nullptr && "Backend not initialized! Did you call ImGuiApp_ImplSDL2OpenGL3_Init()?");
+    IM_ASSERT(bd != nullptr && "App or backend not initialized! Did you call ImGuiApp_ImplSDL2OpenGL3_Init()?");
     IM_UNUSED(bd);
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplSDL2_NewFrame();
@@ -114,7 +123,7 @@ void ImGuiApp_ImplSDL2OpenGL3_NewFrame(ImGuiApp* app)
 void ImGuiApp_ImplSDL2OpenGL3_RenderDrawData(ImGuiApp* app, ImDrawData* draw_data, const ImGuiAppFrameConfig* config)
 {
     ImGuiApp_ImplSDL2OpenGL3_Data* bd = ImGuiApp_ImplSDL2OpenGL3_GetBackendData(app);
-    IM_ASSERT(bd != nullptr && "Backend not initialized! Did you call ImGuiApp_ImplSDL2OpenGL3_Init()?");
+    IM_ASSERT(bd != nullptr && "App or backend not initialized! Did you call ImGuiApp_ImplSDL2OpenGL3_Init()?");
     if (bd == nullptr)
         return;
 

@@ -9,6 +9,14 @@
 // Output: <OutputPath>/NNNNNN.qoi + index.tsv (frame_index, time_sec).
 // QOI encoding implemented from the specification (qoiformat.org), no third-party code.
 
+// You can use unmodified imguiapp_impl_* files in your project. See demos/ folder for examples of using this.
+// Prefer including the entire imguiapp/ folder into your project (either as a copy or as a submodule), and only build the backends you need.
+// Learn about Dear ImGui:
+// - FAQ                  https://dearimgui.com/faq
+// - Getting Started      https://dearimgui.com/getting-started
+// - Documentation        https://dearimgui.com/docs (same as your local docs/ folder).
+// - Introduction, links and more at the top of imgui.cpp
+
 #pragma once
 
 #include "imguiapp_internal.h"
