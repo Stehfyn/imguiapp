@@ -1193,6 +1193,13 @@ IMGUI_API int ImFilePrintf(ImFileHandle file, const char* fmt, ...) IM_FMTARGS(2
 
 namespace ImGui
 {
+// Active filesystem backend: the SetAppFileSystemFuncs table, else the libc + std::filesystem
+// default (asserts if IMGUIAPP_DISABLE_DEFAULT_FILESYSTEM_FUNCS stripped it and none was set).
+IMGUI_API const ImGuiAppFileSystemFuncs* AppFileSystemFuncs();
+} // namespace ImGui
+
+namespace ImGui
+{
 // Controls sorted by the resolved dependency wiring: every producer before its consumers, composition
 // order among independents; rebuilt on composition change. ONLY the Task layer's OnUpdate pass iterates
 // this -- command collection and rendering stay composition order.

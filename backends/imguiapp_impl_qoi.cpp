@@ -16,6 +16,7 @@
 
 // CHANGELOG
 // (minor and older changes stripped away, please see git history for details)
+//  2026-07-08: Misc: Directory creation routed through the ImGuiAppFileSystemFuncs seam (local mkdir helpers removed).
 //  2026-07-08: Docs: Header block conformed to the backend anatomy (B1/B2 grammar).
 //  2026-07-08: Misc: Backend-internal symbols prefixed ImGuiApp_ImplQoi_* (house backend grammar); IMGUI_DISABLE guards added.
 
@@ -27,14 +28,6 @@
 
 #include <cstdio>
 #include <cstring>
-#include <cerrno>
-
-#ifdef _WIN32
-#include <direct.h>
-#else
-#include <sys/stat.h>
-#include <sys/types.h>
-#endif
 
 struct ImGuiApp_ImplQoi_Data
 {
@@ -55,41 +48,13 @@ struct ImGuiApp_ImplQoi_Data
     }
 };
 
-static bool ImGuiApp_ImplQoi_MkdirOne(const char* path)
-{
-#ifdef _WIN32
-    const int rc = _mkdir(path);
-#else
-    const int rc = mkdir(path, 0755);
-#endif
-    return rc == 0 || errno == EEXIST;
-}
-
-// Create every missing directory on the path (separators '/' or '\').
-static bool ImGuiApp_ImplQoi_MkdirRecursive(const char* path)
-{
-    char buf[512];
-    ImFormatString(buf, sizeof(buf), "%s", path);
-    for (char* c = buf + 1; *c; c++)
-    {
-        if (*c != '/' && *c != '\\')
-            continue;
-        const char sep = *c;
-        *c = 0;
-        if (buf[0] != 0 && buf[strlen(buf) - 1] != ':' && !ImGuiApp_ImplQoi_MkdirOne(buf))
-            return false;
-        *c = sep;
-    }
-    return ImGuiApp_ImplQoi_MkdirOne(buf);
-}
-
 static bool ImGuiApp_ImplQoi_Open(ImGuiAppAVEncoder* self, const ImGuiAppAVEncodeConfig* config)
 {
     ImGuiApp_ImplQoi_Data* bd = (ImGuiApp_ImplQoi_Data*)self->UserData;
     if (bd == nullptr || config == nullptr || config->OutputPath == nullptr || bd->Index != nullptr)
         return false;
 
-    if (!ImGuiApp_ImplQoi_MkdirRecursive(config->OutputPath))
+    if (!ImGui::AppFileSystemFuncs()->CreateDirRecursiveFn(config->OutputPath))
         return false;
 
     ImFormatString(bd->Dir, sizeof(bd->Dir), "%s", config->OutputPath);

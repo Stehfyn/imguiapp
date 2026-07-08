@@ -555,6 +555,15 @@ Fast audit questions derived from the rules above:
 - [ ] RenderDrawData skeleton incl. texture catch-up loop and full state backup/restore (B12)
 - [ ] `#ifndef IMGUI_DISABLE` guard; SDK version gates; no extra deps (B16)
 
+**OS/harness glue (imguiapp)**
+
+OS/harness glue is NOT a licensed layer: libc/STL with an Im* equivalent must use it (`ImQsort`,
+`ImFormatString`, `ImFile*` incl. `ImFilePrintf`); the rest sits behind client-overridable seams
+(`IMGUIAPP_ERROR_PRINTF`/`IMGUIAPP_ABORT` macros; `ImGuiAppFileSystemFuncs` via
+`SetAppFileSystemFuncs`, default = libc + std::filesystem confined to the default block,
+strippable via `IMGUIAPP_DISABLE_DEFAULT_FILESYSTEM_FUNCS`). No direct std::filesystem callsites
+may appear outside that default block.
+
 ---
 
 ## 11. Notable Version-Specific Facts

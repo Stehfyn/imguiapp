@@ -47,6 +47,10 @@
 #include <mutex>
 #include <condition_variable>
 #endif
+#ifndef IMGUIAPP_DISABLE_DEFAULT_FILESYSTEM_FUNCS
+#include <filesystem>            // default ImGuiAppFileSystemFuncs impl only
+#include <string>
+#endif
 #include <chrono>                // std::chrono (recorder thread timing)
 
 #include <ctime>
@@ -106,6 +110,7 @@ struct ImGuiAppProcessState
     ImGuiAppPacerState                  Pacer;
     ImVector<const ImGuiAppTypeSchema*> TypeSchemas;
     const ImGuiAppThreadFuncs*          ThreadFuncs         = nullptr; // null = resolve the default at use
+    const ImGuiAppFileSystemFuncs*      FileSystemFuncs     = nullptr; // null = resolve the default at use
     double                              RunEpoch            = 0.0;     // 0 = unset (first stamped frame sets it)
     ImU64                               QpcHz               = 0;       // 0 = unset (win32 QPC frequency)
     bool                                AssertSymReady      = false;   // win32 sym handler initialized
@@ -1835,8 +1840,6 @@ int PushAppColorMods(const ImGuiAppColorModDesc* mods, int count)
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <filesystem>
-#include <string>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -5736,22 +5739,29 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
         {
             data->ProjRescan = 2.0f;
             data->ProjFiles.resize(0);
-            std::error_code fs_ec;
-            for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(".", fs_ec))
+            struct ProjScan
             {
-                if (data->ProjFiles.Size >= 64 || !entry.is_regular_file(fs_ec))
-                    continue;
-                const std::filesystem::path& p = entry.path();
-                const std::string ext = p.extension().string();
-                if (ext != ".txt" && ext != ".h" && ext != ".wal" && ext != ".ini")
-                    continue;
-                ImGuiAppEditorBodyData::ImGuiAppProjFile f;
-                ImFormatString(f.Name, IM_ARRAYSIZE(f.Name), "%s", p.filename().string().c_str());
-                f.Size = (unsigned long long)entry.file_size(fs_ec);
-                f.IsGraph  = strcmp(f.Name, doc->GraphPath) == 0;
-                f.IsHeader = strcmp(f.Name, doc->HeaderPath) == 0;
-                data->ProjFiles.push_back(f);
-            }
+                ImGuiAppEditorBodyData* Data;
+                const char*             GraphPath;
+                const char*             HeaderPath;
+                static void Visit(const char* name, ImU64 size_bytes, void* user_data)
+                {
+                    ProjScan* scan = (ProjScan*)user_data;
+                    if (scan->Data->ProjFiles.Size >= 64)
+                        return;
+                    const char* ext = strrchr(name, '.');
+                    if (ext == nullptr || (strcmp(ext, ".txt") != 0 && strcmp(ext, ".h") != 0 && strcmp(ext, ".wal") != 0 && strcmp(ext, ".ini") != 0))
+                        return;
+                    ImGuiAppEditorBodyData::ImGuiAppProjFile f;
+                    ImFormatString(f.Name, IM_ARRAYSIZE(f.Name), "%s", name);
+                    f.Size = (unsigned long long)size_bytes;
+                    f.IsGraph  = strcmp(f.Name, scan->GraphPath) == 0;
+                    f.IsHeader = strcmp(f.Name, scan->HeaderPath) == 0;
+                    scan->Data->ProjFiles.push_back(f);
+                }
+            };
+            ProjScan scan = { data, doc->GraphPath, doc->HeaderPath };
+            ImGui::AppFileSystemFuncs()->ScanDirFn(".", ProjScan::Visit, &scan);
         }
 
         if (temp_data->SelectionChanged)
@@ -27138,9 +27148,10 @@ bool AppAVImageDecode(const void* bytes, int size, ImVector<char>* out_rgba, int
 // [SECTION] Filesystem helpers (mkdir, artifact cleanup)
 //-----------------------------------------------------------------------------
 
-namespace
-{
-bool HarnessMkdirOne(const char* path)
+// Default ImGuiAppFileSystemFuncs: platform libc mkdir/remove + std::filesystem scan --
+// the only place std::filesystem may appear (docs/house-style-audit.md Δ2).
+#ifndef IMGUIAPP_DISABLE_DEFAULT_FILESYSTEM_FUNCS
+static bool AppFsMkdirOneDefault(const char* path)
 {
 #ifdef _WIN32
     const int rc = _mkdir(path);
@@ -27150,7 +27161,8 @@ bool HarnessMkdirOne(const char* path)
     return rc == 0 || errno == EEXIST;
 }
 
-bool HarnessMkdirRecursive(const char* path)
+// Create every missing directory on the path (separators '/' or '\').
+static bool AppFsCreateDirRecursiveDefault(const char* path)
 {
     char buf[512];
     ImFormatString(buf, IM_ARRAYSIZE(buf), "%s", path);
@@ -27160,38 +27172,84 @@ bool HarnessMkdirRecursive(const char* path)
             continue;
         const char sep = *c;
         *c = 0;
-        if (buf[0] != 0 && buf[strlen(buf) - 1] != ':' && !HarnessMkdirOne(buf))
+        if (buf[0] != 0 && buf[strlen(buf) - 1] != ':' && !AppFsMkdirOneDefault(buf))
             return false;
         *c = sep;
     }
-    return HarnessMkdirOne(buf);
+    return AppFsMkdirOneDefault(buf);
 }
 
+static bool AppFsRemoveFileDefault(const char* path) { return remove(path) == 0; }
+
+static bool AppFsRemoveDirDefault(const char* path)
+{
+#ifdef _WIN32
+    return _rmdir(path) == 0;
+#else
+    return rmdir(path) == 0;
+#endif
+}
+
+static void AppFsScanDirDefault(const char* dir, void (*visit)(const char* name, ImU64 size_bytes, void* user_data), void* user_data)
+{
+    std::error_code fs_ec;
+    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(dir, fs_ec))
+    {
+        if (!entry.is_regular_file(fs_ec))
+            continue;
+        visit(entry.path().filename().string().c_str(), (ImU64)entry.file_size(fs_ec), user_data);
+    }
+}
+
+static const ImGuiAppFileSystemFuncs GAppFileSystemFuncsDefault =
+{
+    AppFsCreateDirRecursiveDefault,
+    AppFsRemoveFileDefault,
+    AppFsRemoveDirDefault,
+    AppFsScanDirDefault,
+};
+#endif // #ifndef IMGUIAPP_DISABLE_DEFAULT_FILESYSTEM_FUNCS
+
+// Reads the process-state slot; null resolves to the libc + std::filesystem default (unless stripped).
+IMGUI_API const ImGuiAppFileSystemFuncs* ImGui::AppFileSystemFuncs()
+{
+#ifndef IMGUIAPP_DISABLE_DEFAULT_FILESYSTEM_FUNCS
+    return AppState().FileSystemFuncs != nullptr ? AppState().FileSystemFuncs : &GAppFileSystemFuncsDefault;
+#else
+    IM_ASSERT(AppState().FileSystemFuncs != nullptr && "IMGUIAPP_DISABLE_DEFAULT_FILESYSTEM_FUNCS stripped the default; call ImGui::SetAppFileSystemFuncs() first.");
+    return AppState().FileSystemFuncs;
+#endif
+}
+
+IMGUI_API void ImGui::SetAppFileSystemFuncs(const ImGuiAppFileSystemFuncs* funcs)
+{
+    AppState().FileSystemFuncs = funcs;
+}
+
+namespace
+{
 // Best-effort removal of one recording's artifacts. A QOI take is a directory
 // (NNNNNN.qoi + index.tsv); everything else is "<video>" plus recorder/provider
 // side files.
 void HarnessRemoveRecordingArtifacts(const char* video_path, bool is_qoi_dir)
 {
+    const ImGuiAppFileSystemFuncs* fs = ImGui::AppFileSystemFuncs();
     char path[600];
     if (is_qoi_dir)
     {
         for (int i = 0; ; i++)
         {
             ImFormatString(path, IM_ARRAYSIZE(path), "%s/%06d.qoi", video_path, i);
-            if (remove(path) != 0)
+            if (!fs->RemoveFileFn(path))
                 break;
         }
         ImFormatString(path, IM_ARRAYSIZE(path), "%s/index.tsv", video_path);
-        remove(path);
-#ifdef _WIN32
-        _rmdir(video_path);
-#else
-        rmdir(video_path);
-#endif
+        fs->RemoveFileFn(path);
+        fs->RemoveDirFn(video_path);
     }
     else
     {
-        remove(video_path);
+        fs->RemoveFileFn(video_path);
     }
 }
 } // namespace
@@ -27210,7 +27268,7 @@ IMGUI_API int ImGui::AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessC
         return 2;
 
     const char* artifact_dir = config->ArtifactDir != nullptr ? config->ArtifactDir : ".";
-    if (!HarnessMkdirRecursive(artifact_dir))
+    if (!ImGui::AppFileSystemFuncs()->CreateDirRecursiveFn(artifact_dir))
     {
         IMGUIAPP_ERROR_PRINTF("[harness] cannot create artifact dir '%s'\n", artifact_dir);
         return 2;

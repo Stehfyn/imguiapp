@@ -103,6 +103,7 @@ struct ImGuiAppConfig;
 struct ImGuiAppDataBinding;
 struct ImGuiAppStyleModDesc;
 struct ImGuiAppThreadFuncs;
+struct ImGuiAppFileSystemFuncs;
 struct ImGuiAppWAL;
 
 // Enumerations (bodies in [SECTION] Flags & Enumerations below).
@@ -253,6 +254,10 @@ namespace ImGui
     // Thread backend (like SetAllocatorFunctions). Null = restore the std::thread default;
     // asserts if IMGUIAPP_DISABLE_DEFAULT_THREAD_FUNCS stripped it. Set before recording starts.
     IMGUI_API void        SetAppThreadFuncs(const ImGuiAppThreadFuncs* funcs);
+
+    // Filesystem backend (same seam grammar). Null = restore the libc + std::filesystem default;
+    // asserts at use if IMGUIAPP_DISABLE_DEFAULT_FILESYSTEM_FUNCS stripped it.
+    IMGUI_API void        SetAppFileSystemFuncs(const ImGuiAppFileSystemFuncs* funcs);
 
     // Authored style/color overrides
     // Push every Active (in-range) entry; returns the number pushed -- pop with PopStyleVar/PopStyleColor(count).
@@ -481,6 +486,18 @@ struct ImGuiAppThreadFuncs
     void  (*CondWaitFn)(void* cond, void* mutex);           // atomically unlock, wait, relock
     void  (*CondSignalFn)(void* cond);
     void  (*CondBroadcastFn)(void* cond);
+};
+
+// Filesystem backend for the OS/harness glue (artifact dirs, take cleanup, the editor's
+// project-file scan). Default = platform libc + std::filesystem (imguiapp.cpp); override via
+// SetAppFileSystemFuncs(). All hooks required.
+struct ImGuiAppFileSystemFuncs
+{
+    bool (*CreateDirRecursiveFn)(const char* path);  // create every missing directory on the path; true when it exists after
+    bool (*RemoveFileFn)(const char* path);          // one file; false when absent
+    bool (*RemoveDirFn)(const char* path);           // one EMPTY directory
+    // Visit every regular file directly inside dir (no recursion): visit(file name, size in bytes, user_data).
+    void (*ScanDirFn)(const char* dir, void (*visit)(const char* name, ImU64 size_bytes, void* user_data), void* user_data);
 };
 
 struct ImGuiAppRecorderThread; // Opaque encoder-thread state (handles from ImGuiAppThreadFuncs), defined in imguiapp.cpp

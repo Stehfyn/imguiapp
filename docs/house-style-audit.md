@@ -80,7 +80,7 @@ code MUST NOT introduce virtuals (imgui rule stands everywhere else).
 ### Δ2 — C++ standard library in bounded layers (departs A8/P1/G20/I6)
 
 imgui's "no STL, ever" is held for engine, editor, canvas, and model code (ImVector/ImStr*/Im*
-throughout — audit confirms 0 raw allocation, 0 std::min/max). Three bounded layers are licensed:
+throughout — audit confirms 0 raw allocation, 0 std::min/max). Two bounded layers are licensed:
 
 - **Template composition front** (`imguiapp.h` bottom sections): zero direct STL includes --
   `<type_traits>` (`std::is_trivially_copyable_v`, the control storage contract) and the
@@ -92,9 +92,9 @@ throughout — audit confirms 0 raw allocation, 0 std::min/max). Three bounded l
 - **Reflection layer** (`imguiapp_reflect.h` port + the field-render templates in
   `imguiapp_internal.h`): `<format>/<string_view>/<type_traits>` — constexpr metaprogramming is
   the point of the layer.
-- **OS/harness glue** (`imguiapp.cpp` harness + file scan): `std::filesystem` where no Im*
-  equivalent exists. Plain-libc/algorithm slips (`std::sort`, `snprintf`) are NOT licensed — use
-  `ImQsort`/`ImFormatString`.
+
+OS/harness glue is NOT a licensed layer; the Im*-equivalent + client-overridable-seam rule lives
+in [imgui-house-style.md](imgui-house-style.md) §10.
 
 Naming note (the seam-vs-front grammar): PascalCase verb-first names the template FRONT
 (`PushAppControl`), noun-first names the C seam TAIL beneath it (`AppControlPush`); the
@@ -103,7 +103,7 @@ linked-backend accessor `ImGuiAppGetPlatformBackend()` follows the front grammar
 **Not licensed anywhere**: STL types as public struct members visible to every consumer. The
 recorder's encoder-thread state lives behind the opaque `ImGuiAppRecorderThread*` pimpl over the
 `ImGuiAppThreadFuncs` seam (`SetAppThreadFuncs`, default = std::thread, strippable via
-`IMGUIAPP_DISABLE_DEFAULT_THREAD_FUNCS`); `imguiapp.h` includes no threading headers.
+`IMGUIAPP_DISABLE_DEFAULT_THREAD_FUNCS`); `imguiapp.h` includes no threading or filesystem headers.
 
 ### Δ3 — `g` names the graph, not the ImGui context (departs I1-I3/N17)
 

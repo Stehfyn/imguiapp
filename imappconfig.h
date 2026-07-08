@@ -18,6 +18,10 @@
 // the app must call ImGui::SetAppThreadFuncs() before any recording starts.
 // #define IMGUIAPP_DISABLE_DEFAULT_THREAD_FUNCS
 
+// Defined -> strip the libc + std::filesystem default filesystem backend (<filesystem> leaves the
+// build); the app must call ImGui::SetAppFileSystemFuncs() before the harness/recorder/editor scan.
+// #define IMGUIAPP_DISABLE_DEFAULT_FILESYSTEM_FUNCS
+
 // Override the diagnostic-output / fatal-exit seams (harness + backends; defaults in imguiapp.h).
 // #define IMGUIAPP_ERROR_PRINTF(_FMT,...) MyErrorLog(_FMT, ##__VA_ARGS__)
 // #define IMGUIAPP_ABORT()                MyFatalHandler()
