@@ -1311,9 +1311,9 @@ namespace ImGui
     template <typename T>
     inline T* AppControlCreate(ImGuiApp* app, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count, const char* host_kind, const char* host_label)
     {
+        IM_ASSERT(app);
         char label[IM_LABEL_SIZE];
         ImAppFormatLabel<T>(label, sizeof(label));
-
         T* control = IM_NEW(T)();
         using Inst = typename T::ControlInstanceDataType;
         Inst* instance_data = IM_NEW(Inst)();
