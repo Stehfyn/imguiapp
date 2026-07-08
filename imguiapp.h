@@ -139,7 +139,7 @@ namespace ImGui
     IMGUI_API void        PopAppLayer(ImGuiApp* app);
 
     template <typename T>
-    inline void           PushAppSidebar(ImGuiApp* app, ImGuiViewport* vp, ImGuiDir dir, float size = 0.0f, ImGuiWindowFlags flags = 0);
+    IMGUI_API inline void PushAppSidebar(ImGuiApp* app, ImGuiViewport* vp, ImGuiDir dir, float size = 0.0f, ImGuiWindowFlags flags = 0);
     IMGUI_API void        PopAppSidebar(ImGuiApp* app);
 
     template <typename T>
@@ -1238,21 +1238,21 @@ struct ImGuiAppControl : ImGuiAppControlMirrorAdapter<PersistDataT, TempDataT, D
 template <typename T>
 struct ImGuiAppWindow : ImGuiAppWindowBase
 {
-    virtual void OnInitialize(ImGuiApp*) const override {};
-    virtual void OnShutdown(ImGuiApp*) const override {};
-    virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*) const override {};
-    virtual void OnUpdate(const ImGuiApp* app, float dt) const override {};
-    virtual void OnRender(const ImGuiApp*) const override {};
+    virtual void OnInitialize(ImGuiApp*)                         const override { };
+    virtual void OnShutdown(ImGuiApp*)                           const override { };
+    virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*) const override { };
+    virtual void OnUpdate(const ImGuiApp* app, float dt)         const override { };
+    virtual void OnRender(const ImGuiApp*)                       const override { };
 };
 
 template <typename T>
 struct ImGuiAppSidebar : ImGuiAppSidebarBase
 {
-    virtual void OnInitialize(ImGuiApp*) const override {};
-    virtual void OnShutdown(ImGuiApp*) const override {};
-    virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*) const override {};
-    virtual void OnUpdate(const ImGuiApp* app, float dt) const override {};
-    virtual void OnRender(const ImGuiApp*) const override {};
+    virtual void OnInitialize(ImGuiApp*)                         const override { };
+    virtual void OnShutdown(ImGuiApp*)                           const override { };
+    virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*) const override { };
+    virtual void OnUpdate(const ImGuiApp* app, float dt)         const override { };
+    virtual void OnRender(const ImGuiApp*)                       const override { };
 };
 
 //-----------------------------------------------------------------------------
@@ -1262,13 +1262,13 @@ struct ImGuiAppSidebar : ImGuiAppSidebarBase
 namespace ImGui
 {
     template <typename T>
-    inline void DestroyAppStorageValue(void* ptr)
+    IMGUI_API inline void DestroyAppStorageValue(void* ptr)
     {
         IM_DELETE((T*)ptr);
     }
 
     template <typename T>
-    inline void PushAppLayer(ImGuiApp* app)
+    IMGUI_API inline void PushAppLayer(ImGuiApp* app)
     {
         IM_ASSERT(app);
         char label[IM_LABEL_SIZE];
@@ -1280,7 +1280,7 @@ namespace ImGui
     // The sole instance of a window type keeps its bare class name; a second live instance of the
     // same type gets "##N" so imgui window ids stay distinct.
     template <typename T>
-    inline void PushAppWindow(ImGuiApp* app)
+    IMGUI_API inline void PushAppWindow(ImGuiApp* app)
     {
         IM_ASSERT(app);
         char label[IM_LABEL_SIZE];
@@ -1290,7 +1290,7 @@ namespace ImGui
     }
 
     template <typename T>
-    inline void PushAppSidebar(ImGuiApp* app, ImGuiViewport* vp, ImGuiDir dir, float size, ImGuiWindowFlags flags)
+    IMGUI_API inline void PushAppSidebar(ImGuiApp* app, ImGuiViewport* vp, ImGuiDir dir, float size, ImGuiWindowFlags flags)
     {
         IM_ASSERT(app);
         char label[IM_LABEL_SIZE];
@@ -1303,7 +1303,7 @@ namespace ImGui
     // instance data by (control data type, instance), construct control T + its instance data, register its
     // storage (snapshottable when trivially copyable), wire _InstanceID/_InstanceData, resolve bindings.
     template <typename T>
-    inline T* AppControlCreate(ImGuiApp* app, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count, const char* host_kind, const char* host_label)
+    IMGUI_API inline T* AppControlCreate(ImGuiApp* app, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count, const char* host_kind, const char* host_label)
     {
         IM_ASSERT(app);
         char label[IM_LABEL_SIZE];
@@ -1329,7 +1329,7 @@ namespace ImGui
     }
 
     template <typename T>
-    inline void PushAppControl(ImGuiApp* app, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count)
+    IMGUI_API inline void PushAppControl(ImGuiApp* app, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count)
     {
         IM_ASSERT(app);
         AppControlPush(app, &app->Controls, AppControlCreate<T>(app, instance, binds, binds_count, nullptr, nullptr));
@@ -1356,7 +1356,7 @@ namespace ImGui
     // Visit every pushed control in update order: app-level, then sidebar-hosted, then window-hosted.
     // visitor(control, host) with host == nullptr for app-level. The single shared enumeration of "all controls".
     template <typename Visitor>
-    inline void ForEachAppControl(ImGuiApp* app, Visitor visitor)
+    IMGUI_API inline void ForEachAppControl(ImGuiApp* app, Visitor visitor)
     {
         IM_ASSERT(app);
         for (int i = 0; i < app->Controls.Size; i++)
@@ -1370,7 +1370,7 @@ namespace ImGui
     }
 
     template <typename Visitor>
-    inline void ForEachAppControl(const ImGuiApp* app, Visitor visitor)
+    IMGUI_API inline void ForEachAppControl(const ImGuiApp* app, Visitor visitor)
     {
         IM_ASSERT(app);
         for (int i = 0; i < app->Controls.Size; i++)
