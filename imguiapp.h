@@ -72,6 +72,8 @@ struct ImGuiAppControlBase;
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
 struct ImGuiAppControlMirrorAdapter;
 struct ImGuiAppControlMirrorBase;
+template <typename... DataDependencies>
+struct ImGuiAppDependencySlots;
 template <typename Base, typename PersistDataT, typename TempDataT, typename... DataDependencies>
 struct ImGuiAppInterfaceAdapter;
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
@@ -977,23 +979,21 @@ struct ImGuiApp : ImGuiAppBase
     virtual void OnShutdownPlatform();
 };
 
-template <typename Base, typename PersistDataT, typename TempDataT, typename... DataDependencies>
-struct ImGuiAppInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistDataT, TempDataT, DataDependencies...>
+// Dependency-slot wiring, factored per pack: instance identity + the routed producer keys and
+// cached pointers every consumer carries. PushAppControl<>() seats _InstanceID then resolves the
+// slots; AppRebuildUpdateOrder rebinds them after any push/pop.
+template <typename... DataDependencies>
+struct ImGuiAppDependencySlots
 {
-    // Instance data for this control, created in ImGuiApp::Data and bound here by PushAppControl<>() before OnInitialize.
-    struct InstanceData
-    {
-        PersistDataT PersistData;
-        TempDataT    LastTempData;
-        TempDataT    TempData;
-    }* _InstanceData = nullptr;
-
-    // Instance identity + routed dependency slots (opaque: the pack's types re-attach at dispatch below),
-    // resolved once by PushAppControl<>() before OnInitialize.
     ImGuiID _InstanceID                                                                            = 0;
     void*   _Dependencies[sizeof...(DataDependencies) > 0 ? sizeof...(DataDependencies) : 1]       = {};
     ImGuiID _DependencyKeys[sizeof...(DataDependencies) > 0 ? sizeof...(DataDependencies) : 1]     = {};
     bool    _DependencyOptional[sizeof...(DataDependencies) > 0 ? sizeof...(DataDependencies) : 1] = {};
+
+    using DepSeq = typename ImAppMakeIndexSeq<sizeof...(DataDependencies)>::Type;
+
+    inline void ResolveDependencies(const ImGuiApp* app, const ImGuiAppDataBinding* binds, int binds_count) { ResolveSlots(app, binds, binds_count, DepSeq()); }
+    inline void RebindDependencies(const ImGuiApp* app)                                                     { RebindSlots(app, DepSeq()); }
 
     // If you assert here, a dependency's producer was not pushed before this control (PushAppControl<>()
     // seats producers first), or a popped producer left a non-Optional consumer alive.
@@ -1011,6 +1011,34 @@ struct ImGuiAppInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistData
         IM_ASSERT(data != nullptr || _DependencyOptional[slot]);
         return data;
     }
+    template <size_t... Is> inline void ResolveSlots(const ImGuiApp* app, const ImGuiAppDataBinding* binds, int binds_count, ImAppIndexSeq<Is...>)
+    {
+        int expand[] = { 0, (_Dependencies[Is] = (void*)ResolveDependency<DataDependencies>(app, binds, binds_count, (int)Is), 0)... }; // braced init: left-to-right slots
+        IM_UNUSED(expand);
+    }
+    template <size_t... Is> inline void RebindSlots(const ImGuiApp* app, ImAppIndexSeq<Is...>)
+    {
+        int expand[] = { 0, (_Dependencies[Is] = (void*)LookupDependency<DataDependencies>(app, Is), 0)... };
+        IM_UNUSED(expand);
+    }
+};
+
+template <typename Base, typename PersistDataT, typename TempDataT, typename... DataDependencies>
+struct ImGuiAppInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistDataT, TempDataT, DataDependencies...>, ImGuiAppDependencySlots<DataDependencies...>
+{
+    // Instance data for this control, created in ImGuiApp::Data and bound here by PushAppControl<>() before OnInitialize.
+    struct InstanceData
+    {
+        PersistDataT PersistData;
+        TempDataT    LastTempData;
+        TempDataT    TempData;
+    }* _InstanceData = nullptr;
+
+    // Slot wiring lives on the ImGuiAppDependencySlots base; re-open the names this side of the
+    // dependent-base boundary for the typed apply tail below.
+    using Slots  = ImGuiAppDependencySlots<DataDependencies...>;
+    using DepSeq = typename Slots::DepSeq;
+    template <typename Dep> inline Dep* GetData(size_t slot) const { return Slots::template GetData<Dep>(slot); }
 
     //
     //
@@ -1047,23 +1075,8 @@ struct ImGuiAppInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistData
     virtual void OnRender(const PersistDataT*, TempDataT*, const DataDependencies*...) const override {}
     virtual void OnRender(const ImGuiApp* app) const override final { IM_UNUSED(app); _InstanceData->TempData = {}; ApplyRender(DepSeq()); }
 
-    // Slot binding + typed apply: the index pack and the type pack expand in lockstep, re-attaching
-    // each opaque slot's static type at the call boundary (no tuple/apply; see ImAppIndexSeq).
-    using DepSeq = typename ImAppMakeIndexSeq<sizeof...(DataDependencies)>::Type;
-
-    inline void ResolveDependencies(const ImGuiApp* app, const ImGuiAppDataBinding* binds, int binds_count) { ResolveSlots(app, binds, binds_count, DepSeq()); }
-    inline void RebindDependencies(const ImGuiApp* app)                                                     { RebindSlots(app, DepSeq()); }
-
-    template <size_t... Is> inline void ResolveSlots(const ImGuiApp* app, const ImGuiAppDataBinding* binds, int binds_count, ImAppIndexSeq<Is...>)
-    {
-        int expand[] = { 0, (_Dependencies[Is] = (void*)ResolveDependency<DataDependencies>(app, binds, binds_count, (int)Is), 0)... }; // braced init: left-to-right slots
-        IM_UNUSED(expand);
-    }
-    template <size_t... Is> inline void RebindSlots(const ImGuiApp* app, ImAppIndexSeq<Is...>)
-    {
-        int expand[] = { 0, (_Dependencies[Is] = (void*)LookupDependency<DataDependencies>(app, Is), 0)... };
-        IM_UNUSED(expand);
-    }
+    // Typed apply: the index pack and the type pack expand in lockstep, re-attaching each opaque
+    // slot's static type at the call boundary (no tuple/apply; see ImAppIndexSeq).
     template <size_t... Is> inline void ApplyInitialize(ImGuiApp* app, ImAppIndexSeq<Is...>) const                             { OnInitialize(app, &_InstanceData->PersistData, GetData<DataDependencies>(Is)...); }
     template <size_t... Is> inline void ApplyShutdown(ImGuiApp* app, ImAppIndexSeq<Is...>) const                               { OnShutdown(app, &_InstanceData->PersistData, GetData<DataDependencies>(Is)...); }
     template <size_t... Is> inline void ApplyGetCommand(const ImGuiApp* app, ImGuiAppCommand* cmd, ImAppIndexSeq<Is...>) const { OnGetCommand(app, cmd, &_InstanceData->PersistData, &_InstanceData->TempData, GetData<DataDependencies>(Is)...); }
