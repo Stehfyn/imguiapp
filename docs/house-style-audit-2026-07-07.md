@@ -241,6 +241,18 @@ near a known doc-tracked debt, drop the tag at the site; (3) add F20 tag-census 
 4. **N20 incomplete** (found 2026-07-08, via M4): the rule's glob `imgui*.{h,cpp}` misses imgui's
    own `imconfig.h` — the config header uses the CONTRACTED library prefix, no underscore;
    everything else uses the full prefix. Fixed in the spec; imguiapp analog: `imappconfig.h`.
+5. **N1/N11 third tier asserted; N11/N12 disambiguated** (2026-07-08): "low-level helpers" was
+   too vague — N11 rewritten as a five-point membership test (placement in Generic helpers under
+   `// Helpers: <Family>` labels; `Im<Family><Op>` grammar; context-free signature; no
+   `GImGui`/`ImGui::`/mutable statics in the body; `IMGUI_API`-in-.cpp or header-inline linkage),
+   derived from a mechanical scan of every bare-`Im*` definition in imgui core. Scan findings
+   recorded in the spec: prefix alone ≠ membership (`ImFontAtlas*`/`ImFontCalc*` touch the
+   context, live outside the section); canon's own wart `ImFormatStringToTempBuffer[V]` (reads
+   `GImGui->TempBuffer`) quarantined, not license. N12 sharpened: file-local statics take `Im`
+   only if promotable to the section verbatim. `ImApp*` asserted as the tier one level up
+   (full member list in N11; `ImAppAssertFail` = sole sanctioned exception, IM_ASSERT sink).
+   Enforcement: `ImAppItemStyle` (file-local pop-count struct riding context-touching
+   `PushItemStyle`/`PopItemStyle`) renamed `ItemStyleScope` per sharpened N12, 9 sites, one TU.
 
 ## Sequencing (each wave gated: imguix-tests + imguix-core-tests + imguix-headless-verify green, codegen corpus byte-identical, style ratchet re-pinned monotonically down)
 
