@@ -184,7 +184,7 @@ IMGUI_API void ImAppAssertFail(const char* expr, const char* file, int line)
     ImAppStackTrace(stack, IM_ARRAYSIZE(stack), 1);
 
     ImGui::AppWALWrite(AppAssert().WAL, ImGuiAppWALLevel_Lifecycle, "ASSERT FAILED: (%s) at %s:%d\n%s", expr, file, line, stack);
-    fprintf(stderr, "ASSERT FAILED: (%s) at %s:%d\n%s", expr, file, line, stack);
+    IMGUIAPP_ERROR_PRINTF("ASSERT FAILED: (%s) at %s:%d\n%s", expr, file, line, stack);
     fflush(stderr);
 
     // Flight recorder (F15): dump every armed ring beside the assert WAL before we exit, so the last
@@ -1687,7 +1687,7 @@ IMGUI_API bool AppWALOpen(ImGuiAppWAL* wal, const char* path, ImGuiAppWALLevel l
         return false;
 
     AppWALClose(wal);
-    FILE* f = fopen(path, "wt");
+    ImFileHandle f = ImFileOpen(path, "wt");
     if (f == nullptr)
         return false;
     wal->File = f;
@@ -6957,14 +6957,14 @@ static bool AppPreviewDllCompile(ImGuiAppPreviewDll* s, const ImGuiAppGraph* gra
 
     ImGuiTextBuffer module;
     AppPreviewModuleCodeGenerate(graph, &module);
-    FILE* f = fopen(cpp_path, "wb");
+    ImFileHandle f = ImFileOpen(cpp_path, "wb");
     if (f == nullptr)
     {
         ImFormatString(err, err_size, "cannot write %s", cpp_path);
         return false;
     }
-    fwrite(module.c_str(), 1, (size_t)module.size(), f);
-    fclose(f);
+    ImFileWrite(module.c_str(), 1, (ImU64)module.size(), f);
+    ImFileClose(f);
 
     // Enter the toolset env, then a self-contained /LD compile. The module has its OWN imgui context, so nothing
     // crosses the boundary except copied bytes -- but it links the same imguix/imgui_te libs, so its dynamic CRT
@@ -6974,7 +6974,7 @@ static bool AppPreviewDllCompile(ImGuiAppPreviewDll* s, const ImGuiAppGraph* gra
 #else
     const char* preview_crt = "/MD /O2";
 #endif
-    FILE* b = fopen(bat_path, "wb");
+    ImFileHandle b = ImFileOpen(bat_path, "wb");
     if (b == nullptr)
     {
         ImFormatString(err, err_size, "cannot write %s", bat_path);
@@ -6984,7 +6984,7 @@ static bool AppPreviewDllCompile(ImGuiAppPreviewDll* s, const ImGuiAppGraph* gra
     fprintf(b, "call \"%s\" >nul\r\n", vcvars);
     fprintf(b, "cl /nologo /LD /std:c++20 %s /EHsc %s \"%s\" /Fe:\"%s\" /link /OPT:REF %s > \"%s\" 2>&1\r\n",
             preview_crt, IMGUIX_PREVIEW_CL_ARGS, cpp_path, dll_path, IMGUIX_PREVIEW_LIBS, log_path);
-    fclose(b);
+    ImFileClose(b);
 
     // The batch redirects cl's output to the log itself, so system() just runs it (absolute paths inside).
     char run[1400];
@@ -6994,16 +6994,16 @@ static bool AppPreviewDllCompile(ImGuiAppPreviewDll* s, const ImGuiAppGraph* gra
     if (rc != 0 || GetFileAttributesA(dll_path) == INVALID_FILE_ATTRIBUTES)
     {
         err[0] = 0;
-        FILE* lg = fopen(log_path, "rb");
+        ImFileHandle lg = ImFileOpen(log_path, "rb");
         if (lg != nullptr)
         {
             fseek(lg, 0, SEEK_END);
             long sz = ftell(lg);
             long from = sz > (long)err_size - 1 ? sz - (err_size - 1) : 0;
             fseek(lg, from, SEEK_SET);
-            size_t rd = fread(err, 1, (size_t)(err_size - 1), lg);
+            size_t rd = (size_t)ImFileRead(err, 1, (ImU64)(err_size - 1), lg);
             err[rd] = 0;
-            fclose(lg);
+            ImFileClose(lg);
         }
         if (err[0] == 0)
             ImFormatString(err, err_size, "compile failed (rc=%d), no diagnostics", rc);
@@ -27188,7 +27188,7 @@ IMGUI_API int ImGui::AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessC
     const char* artifact_dir = config->ArtifactDir != nullptr ? config->ArtifactDir : ".";
     if (!HarnessMkdirRecursive(artifact_dir))
     {
-        fprintf(stderr, "[harness] cannot create artifact dir '%s'\n", artifact_dir);
+        IMGUIAPP_ERROR_PRINTF("[harness] cannot create artifact dir '%s'\n", artifact_dir);
         return 2;
     }
 
@@ -27226,7 +27226,7 @@ IMGUI_API int ImGui::AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessC
         *config->EffectiveHeadless = initialized ? app_config.Headless : ImGuiAppHeadlessMode_None;
     if (!initialized)
     {
-        fprintf(stderr, "[harness] app initialization failed\n");
+        IMGUIAPP_ERROR_PRINTF("[harness] app initialization failed\n");
         SetAppAssertWAL(nullptr);
         app->WAL = backup_wal;
         AppWALClose(&wal);
@@ -27358,12 +27358,12 @@ IMGUI_API int ImGui::AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessC
     // Frame-time artifact + console percentiles (real per-frame cost in every posture).
     char csv_path[560];
     ImFormatString(csv_path, IM_ARRAYSIZE(csv_path), "%s/%s.frametimes.csv", artifact_dir, config->Name);
-    if (FILE* csv = fopen(csv_path, "w"))
+    if (ImFileHandle csv = ImFileOpen(csv_path, "w"))
     {
         fprintf(csv, "frame_index\ttsc_delta\tms\n");
         for (int i = 0; i < ft_ms.Size; i++)
             fprintf(csv, "%llu\t%llu\t%.4f\n", (unsigned long long)ft_frame[i], (unsigned long long)ft_tsc[i], ft_ms[i]);
-        fclose(csv);
+        ImFileClose(csv);
     }
     if (ft_ms.Size > 0)
     {

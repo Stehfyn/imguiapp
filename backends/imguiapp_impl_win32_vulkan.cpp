@@ -115,9 +115,9 @@ static void ImGuiApp_ImplWin32Vulkan_CheckVkResult(VkResult err)
 {
     if (err == VK_SUCCESS)
         return;
-    std::fprintf(stderr, "[vulkan] VkResult = %d\n", err);
+    IMGUIAPP_ERROR_PRINTF("[vulkan] VkResult = %d\n", err);
     if (err < 0)
-        std::abort();
+        IMGUIAPP_ABORT();
 }
 
 static bool ImGuiApp_ImplWin32Vulkan_IsInitInfoValid(const ImGuiApp_ImplWin32Vulkan_InitInfo* init_info)
@@ -597,7 +597,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL DebugReportCallback(
     IM_UNUSED(message_code);
     IM_UNUSED(user_data);
     IM_UNUSED(layer_prefix);
-    std::fprintf(stderr, "[vulkan] Debug report from object type %d: %s\n", object_type, message);
+    IMGUIAPP_ERROR_PRINTF("[vulkan] Debug report from object type %d: %s\n", object_type, message);
     return VK_FALSE;
 }
 
@@ -771,7 +771,7 @@ static bool ImGuiApp_ImplWin32Vulkan_SetupVulkanWindow(ImGuiApp_ImplWin32Vulkan_
     ImGuiApp_ImplWin32Vulkan_CheckVkResult(err);
     if (supported != VK_TRUE)
     {
-        std::fprintf(stderr, "[vulkan] selected physical device has no WSI support.\n");
+        IMGUIAPP_ERROR_PRINTF("[vulkan] selected physical device has no WSI support.\n");
         return false;
     }
 

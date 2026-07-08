@@ -36,6 +36,16 @@ Index of this file:
 // ImGui::InitializeApp calls it; apps embedding the applayer as a DLL should call it too.
 #define IMGUIAPP_CHECKVERSION() ImGui::AppDebugCheckVersionAndDataLayout(IMGUIAPP_VERSION, sizeof(ImGuiApp), sizeof(ImGuiAppConfig), sizeof(ImGuiAppFrameConfig))
 
+// Platform seams for diagnostics (harness + backends); no Im* equivalent exists upstream.
+#ifndef IMGUIAPP_ERROR_PRINTF
+#include <stdio.h>
+#define IMGUIAPP_ERROR_PRINTF(_FMT,...) fprintf(stderr, _FMT, ##__VA_ARGS__)    // You can override the default error output by editing imappconfig.h
+#endif
+#ifndef IMGUIAPP_ABORT
+#include <stdlib.h>
+#define IMGUIAPP_ABORT()                abort()                                 // You can override the default fatal-exit handler by editing imappconfig.h
+#endif
+
 #ifndef IMGUI_DISABLE
 
 

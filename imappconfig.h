@@ -17,3 +17,7 @@
 // Defined -> strip the std::thread default thread backend (<thread>/<mutex> leave the build);
 // the app must call ImGui::SetAppThreadFuncs() before any recording starts.
 // #define IMGUIAPP_DISABLE_DEFAULT_THREAD_FUNCS
+
+// Override the diagnostic-output / fatal-exit seams (harness + backends; defaults in imguiapp.h).
+// #define IMGUIAPP_ERROR_PRINTF(_FMT,...) MyErrorLog(_FMT, ##__VA_ARGS__)
+// #define IMGUIAPP_ABORT()                MyFatalHandler()

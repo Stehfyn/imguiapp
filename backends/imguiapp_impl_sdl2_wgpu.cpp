@@ -113,13 +113,13 @@ static WGPUAdapter ImGuiApp_ImplSDL2WGPU_RequestAdapter(wgpu::Instance& instance
     {
         if (status != wgpu::RequestAdapterStatus::Success)
         {
-            std::fprintf(stderr, "WebGPU adapter request failed: %.*s\n", (int)message.length, message.data);
+            IMGUIAPP_ERROR_PRINTF("WebGPU adapter request failed: %.*s\n", (int)message.length, message.data);
             return;
         }
         acquired_adapter = std::move(adapter);
     };
 
-    wgpu::Future wait_adapter { instance.ImGuiApp_ImplSDL2WGPU_RequestAdapter(&adapter_options, wgpu::CallbackMode::WaitAnyOnly, on_request_adapter) };
+    wgpu::Future wait_adapter { instance.RequestAdapter(&adapter_options, wgpu::CallbackMode::WaitAnyOnly, on_request_adapter) };
     wgpu::WaitStatus wait_status = instance.WaitAny(wait_adapter, UINT64_MAX);
     if (acquired_adapter == nullptr || wait_status != wgpu::WaitStatus::Success)
         return nullptr;
@@ -132,12 +132,12 @@ static WGPUDevice ImGuiApp_ImplSDL2WGPU_RequestDevice(wgpu::Instance& instance, 
     device_desc.SetDeviceLostCallback(wgpu::CallbackMode::AllowSpontaneous,
         [](const wgpu::Device&, wgpu::DeviceLostReason reason, wgpu::StringView message)
         {
-            std::fprintf(stderr, "WebGPU device lost (%s): %.*s\n", ImGui_ImplWGPU_GetDeviceLostReasonName((WGPUDeviceLostReason)reason), (int)message.length, message.data);
+            IMGUIAPP_ERROR_PRINTF("WebGPU device lost (%s): %.*s\n", ImGui_ImplWGPU_GetDeviceLostReasonName((WGPUDeviceLostReason)reason), (int)message.length, message.data);
         });
     device_desc.SetUncapturedErrorCallback(
         [](const wgpu::Device&, wgpu::ErrorType type, wgpu::StringView message)
         {
-            std::fprintf(stderr, "WebGPU %s error: %.*s\n", ImGui_ImplWGPU_GetErrorTypeName((WGPUErrorType)type), (int)message.length, message.data);
+            IMGUIAPP_ERROR_PRINTF("WebGPU %s error: %.*s\n", ImGui_ImplWGPU_GetErrorTypeName((WGPUErrorType)type), (int)message.length, message.data);
         });
 
     wgpu::Device acquired_device;
@@ -145,13 +145,13 @@ static WGPUDevice ImGuiApp_ImplSDL2WGPU_RequestDevice(wgpu::Instance& instance, 
     {
         if (status != wgpu::RequestDeviceStatus::Success)
         {
-            std::fprintf(stderr, "WebGPU device request failed: %.*s\n", (int)message.length, message.data);
+            IMGUIAPP_ERROR_PRINTF("WebGPU device request failed: %.*s\n", (int)message.length, message.data);
             return;
         }
         acquired_device = std::move(device);
     };
 
-    wgpu::Future wait_device { adapter.ImGuiApp_ImplSDL2WGPU_RequestDevice(&device_desc, wgpu::CallbackMode::WaitAnyOnly, on_request_device) };
+    wgpu::Future wait_device { adapter.RequestDevice(&device_desc, wgpu::CallbackMode::WaitAnyOnly, on_request_device) };
     wgpu::WaitStatus wait_status = instance.WaitAny(wait_device, UINT64_MAX);
     if (acquired_device == nullptr || wait_status != wgpu::WaitStatus::Success)
         return nullptr;
@@ -310,7 +310,7 @@ void ImGuiApp_ImplSDL2WGPU_RenderDrawData(ImDrawData* draw_data, const ImGuiAppF
     wgpuSurfaceGetCurrentTexture(bd->Surface, &surface_texture);
     if (ImGui_ImplWGPU_IsSurfaceStatusError(surface_texture.status))
     {
-        std::fprintf(stderr, "WebGPU unrecoverable surface status: %#.8x\n", surface_texture.status);
+        IMGUIAPP_ERROR_PRINTF("WebGPU unrecoverable surface status: %#.8x\n", surface_texture.status);
         if (surface_texture.texture != nullptr)
             wgpuTextureRelease(surface_texture.texture);
         return;

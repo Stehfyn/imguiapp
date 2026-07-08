@@ -55,7 +55,7 @@ static bool ImGuiApp_ImplQoi_MkdirOne(const char* path)
 static bool ImGuiApp_ImplQoi_MkdirRecursive(const char* path)
 {
     char buf[512];
-    snprintf(buf, sizeof(buf), "%s", path);
+    ImFormatString(buf, sizeof(buf), "%s", path);
     for (char* c = buf + 1; *c; c++)
     {
         if (*c != '/' && *c != '\\')
@@ -78,14 +78,14 @@ static bool ImGuiApp_ImplQoi_Open(ImGuiAppAVEncoder* self, const ImGuiAppAVEncod
     if (!ImGuiApp_ImplQoi_MkdirRecursive(config->OutputPath))
         return false;
 
-    snprintf(bd->Dir, sizeof(bd->Dir), "%s", config->OutputPath);
+    ImFormatString(bd->Dir, sizeof(bd->Dir), "%s", config->OutputPath);
     bd->Width = config->Width;
     bd->Height = config->Height;
     bd->FrameCounter = 0;
 
     char index_path[560];
-    snprintf(index_path, sizeof(index_path), "%s/index.tsv", bd->Dir);
-    bd->Index = fopen(index_path, "w");
+    ImFormatString(index_path, sizeof(index_path), "%s/index.tsv", bd->Dir);
+    bd->Index = ImFileOpen(index_path, "w");
     if (bd->Index == nullptr)
         return false;
     fprintf(bd->Index, "file\tframe_index\ttime_sec\ttsc\n");
@@ -111,12 +111,12 @@ static bool ImGuiApp_ImplQoi_WriteFrame(ImGuiAppAVEncoder* self, const ImGuiAppA
         return false;
 
     char frame_path[560];
-    snprintf(frame_path, sizeof(frame_path), "%s/%06d.qoi", bd->Dir, bd->FrameCounter);
-    FILE* f = fopen(frame_path, "wb");
+    ImFormatString(frame_path, sizeof(frame_path), "%s/%06d.qoi", bd->Dir, bd->FrameCounter);
+    ImFileHandle f = ImFileOpen(frame_path, "wb");
     if (f == nullptr)
         return false;
-    const bool wrote = fwrite(bd->Encoded.Data, 1, (size_t)bd->Encoded.Size, f) == (size_t)bd->Encoded.Size;
-    fclose(f);
+    const bool wrote = ImFileWrite(bd->Encoded.Data, 1, (ImU64)bd->Encoded.Size, f) == (ImU64)bd->Encoded.Size;
+    ImFileClose(f);
     if (!wrote)
         return false;
 

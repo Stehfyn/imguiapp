@@ -157,7 +157,7 @@ static bool ImGuiApp_ImplMediaFoundation_Open(ImGuiAppAVEncoder* self, const ImG
         ImGui::AppMediaFoundationStartupRefs()++;
     }
 
-    snprintf(bd->OutputPath, sizeof(bd->OutputPath), "%s", config->OutputPath);
+    ImFormatString(bd->OutputPath, sizeof(bd->OutputPath), "%s", config->OutputPath);
     bd->Fps = config->Fps > 0.0f ? config->Fps : 60.0f;
     // Auto is resolved by the recorder before Open; unresolved means no pacer context and
     // the synthetic CFR timeline is the only honest claim left.

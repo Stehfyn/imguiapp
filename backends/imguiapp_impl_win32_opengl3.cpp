@@ -343,7 +343,7 @@ bool ImGuiApp_ImplWin32OpenGL3_InitPlatform(ImGuiApp* app, ImGuiAppConfig& confi
 {
     if (config.Headless != ImGuiAppHeadlessMode_None)
     {
-        std::fprintf(stderr, "imguiapp_impl_win32_opengl3: headless modes are not implemented for this backend (use win32-vulkan).\n");
+        IMGUIAPP_ERROR_PRINTF("imguiapp_impl_win32_opengl3: headless modes are not implemented for this backend (use win32-vulkan).\n");
         return false;
     }
 

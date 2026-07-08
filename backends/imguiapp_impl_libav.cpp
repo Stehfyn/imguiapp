@@ -209,7 +209,7 @@ static bool ImGuiApp_ImplLibav_Open(ImGuiAppAVEncoder* self, const ImGuiAppAVEnc
     if (bd == nullptr || config == nullptr || config->OutputPath == nullptr || bd->OpenCalled)
         return false;
 
-    snprintf(bd->OutputPath, sizeof(bd->OutputPath), "%s", config->OutputPath);
+    ImFormatString(bd->OutputPath, sizeof(bd->OutputPath), "%s", config->OutputPath);
     bd->Fps = config->Fps > 0.0f ? config->Fps : 60.0f;
     bd->Timing = config->Timing == ImGuiAppAVTimingMode_Realtime ? ImGuiAppAVTimingMode_Realtime : ImGuiAppAVTimingMode_Constant;
     bd->Width = config->Width;

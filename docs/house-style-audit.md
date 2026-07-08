@@ -16,13 +16,33 @@ codegen corpus byte-identical, style ratchet monotonically down.
 | §3 Formatting (F1-F28) | 10 | 8 | 3 (+6 gate-covered) | — (gates green) |
 | §4 Architecture (A1-A32) | 8 | 6 | 7 (+2 n/a) | deprecation/breaking-change machinery absent (S5) |
 | §5 API grammar (G1-G24) | 4 | 5 | 2 | Canvas conditional-End contract nuances |
-| §6 Backends (B1-B18) | hosts ✓ | B5 | — | — |
+| §6 Backends (B1-B18) | 4 | 6 | 2 (+6 n/a wrapped) | R2 host-layer charter unratified (Δ9) |
 | §7 Idioms (I1-I41) | 8 | 5 | 3 | dialect breach (43 `auto`, 33 capturing lambdas) |
 | §8 Demo (D1-D9) | 3 | 2 | 3 slips | — (showcase re-registered as public-API user code) |
 
 ---
 
 ## Decisions needed (a Δ or a plan, then steps)
+
+### R2. Host-layer structural charter — B6/B7 + link seam (unratified; decide Δ9 or conform)
+Three host-layer patterns diverge from backend canon with no Δ covering them:
+- **G-globals**: all 4 hosts keep `static ImGuiApp_ImplXXX_Data* GImGuiAppBackend` +
+  `static const ImGuiAppPlatformBackend GPlatformBackend` at file scope; accessors return the raw
+  global with no context guard. Canon stores backend data in the io userdata slots and derives it
+  from the context (B6/B7; pattern retired upstream 2021-06-29, `imgui_impl_dx11.cpp:105-108`) --
+  but both io slots are taken by the wrapped imgui backends, and hosts are one-per-process by
+  design. Also breaches B17 static naming (`GImGuiAppBackend` vs full `ImGuiApp_ImplXXX_` prefix;
+  the `G` grammar belongs to core's `GImGui`, not backends).
+- **One-host-per-link seam**: each host TU defines its own `struct ImGuiAppPlatformData` and
+  `ImGuiAppGetPlatformBackend()` ("exactly one links per build"). Upstream backends all coexist in
+  one binary; two hosts linked together = duplicate symbol + ODR on ImGuiAppPlatformData.
+- **AV-encoder kind grammar**: `imguiapp_impl_{qoi,libav,mediafoundation}` open with
+  `// ImGuiAppAV encoder backend:` -- a third backend kind outside B1's
+  `<Platform|Renderer>` line-1 grammar, with no feature checklist.
+**Decide Δ9** (ratify the host-layer charter: singleton host data behind prefixed accessor,
+link-time host selection, `Platform|Renderer Host` + `AV encoder` kind grammar) **or conform**
+(context-guarded accessor + per-host struct names + B1 anatomy). Until ratified these audit as
+violations.
 
 ### R1. C++ dialect — I29 (SEVERE; largest unratified divergence)
 `imguiapp.cpp`: 43 `auto` bindings, **33 capturing lambdas** (`[&]`, `[c]`, `[&changed]` —
@@ -51,12 +71,20 @@ on the next rename, version-stamp grammar (M38).
 |---|---|---|---|
 | M29 | I20 | ListClipper ×1; 0 `IM_MSVC_RUNTIME_CHECKS_*` | low priority; after profiling |
 | M41b | A26 | 6 residual rank descents (region-scoped def order vs header decl order) | with the Phase C section restructure |
+| M42 | B8 | host `_Init` fns lack `IMGUI_CHECKVERSION()` (upstream: win32:185, gl3:1020, vulkan:1396); only run in InitPlatform's owns-context branch | add at top of each host Init |
+| M43 | B8 | borrowed-context Shutdown leaves host-installed platform_io hooks dangling (w32gl3: 4 viewport hooks; w32vk: `Platform_CreateVkSurface` + 2 pacing wrappers) | scrub/restore in Shutdown |
+| M44 | B1/B2 | hosts drop the verbatim 4-link footer (`imgui_impl_dx11.h:11-17`); win32/sdl2 host .cpps lack the feature checklist (B1: both files); CHANGELOG missing "(minor and older changes stripped away...)" (18/18 upstream cpps carry it) + entries lack `Category:` grammar | mechanical header-block pass |
+| M45 | B16 | own header included before the `IMGUI_DISABLE` guard in all backend .cpps (canon: imgui.h → guard → own header, gl3:131-133) | reorder includes |
+| M46 | B15 | MV banner missing the "_advanced_ and _optional_" caveat lines; MV registration inlined and host-inconsistent (w32vk in Init, w32gl3 in InitPlatform); canon names `Init/ShutdownMultiViewportSupport` | factor + rename |
+| M47 | B4/B17/A16 | `RunLoop` decls lack `IMGUI_API` (win32.h:12, sdl2.h:11; imappconfig.h ratifies IMGUI_API export); w32vk `CaptureFrame` external but header-undeclared (w32gl3 twin is static); wgpu defines Init after Shutdown/NewFrame/RenderDrawData (header order); NewFrame asserts drop upstream's "Context or backend" wording | mechanical |
+| M48 | B6 | w32vk `_Data` has no explicit ctor (value-init reliance, comment :109); siblings memset-ctor; upstream precedent for member-init ctor exists (`ImGui_ImplVulkan_ViewportData`, vulkan:295) | explicit ctor |
 
 ## Sequencing (each wave gated)
 
-1. **Wave R — decisions**: R1 (Δ8 capturing-lambda license or rewrite).
-2. **Wave F — remainder**: S5 deprecation machinery; M41b/M29 with the Phase C restructure /
-   profiling pass.
+1. **Wave R — decisions**: R1 (Δ8 capturing-lambda license or rewrite); R2 (Δ9 host-layer
+   charter or conform).
+2. **Wave F — remainder**: S5 deprecation machinery; M42-M48 backend anatomy pass; M41b/M29
+   with the Phase C restructure / profiling pass.
 
 ---
 
@@ -132,3 +160,8 @@ obligation, not the option.
 
 - Δ6 (proposed): Meyers-singleton accessors for process-wide services (`AppAssert()`,
   `AppPacer()`, `AppTypeSchemas()`); ad-hoc mutable function-local statics remain violations.
+- Δ9 (proposed): Canon stores backend data in the io userdata slots and derives it from the
+  context (B6/B7; pattern retired upstream 2021-06-29, `imgui_impl_dx11.cpp:105-108`) -- but both
+  io slots are taken by the wrapped imgui backends, and hosts are one-per-process by design. Also
+  breaches B17 static naming (`GImGuiAppBackend` vs full `ImGuiApp_ImplXXX_` prefix; the `G`
+  grammar belongs to core's `GImGui`, not backends).
