@@ -1,10 +1,14 @@
 // ImGuiAppAV encoder backend: Windows Media Foundation mp4 (imguiapp_impl_mediafoundation.h).
 // IMFSinkWriter with an H.264 output stream and an RGB32 input type; the writer loads
 // the color-converter/encoder MFTs itself. Realtime output is duration-honest resampled
-// CFR -- true VFR is unreachable through the sink writer (see MfBeginWriting).
+// CFR -- true VFR is unreachable through the sink writer (see ImGuiApp_ImplMediaFoundation_BeginWriting).
 // The only TU linking mfplat/mfreadwrite.
 
+// CHANGELOG
+//  2026-07-08: Backend-internal symbols prefixed ImGuiApp_ImplMediaFoundation_* (house backend grammar); IMGUI_DISABLE guards added.
+
 #include "imguiapp_impl_mediafoundation.h"
+#ifndef IMGUI_DISABLE
 
 #ifdef _WIN32
 
@@ -22,16 +26,16 @@
 #include <mferror.h>
 
 // MFStartup/MFShutdown pair once per process across all live MF encoders: one shared
-// refcount, NOT per-encoder state (folding it into ImGuiAppMfEncoderData would give each
+// refcount, NOT per-encoder state (folding it into ImGuiApp_ImplMediaFoundation_Data would give each
 // instance its own counter and unbalance the pairing). Function-local static keeps the
 // single process-wide slot off file scope.
-static int& MfStartupRefs()
+static int& ImGuiApp_ImplMediaFoundation_StartupRefs()
 {
     static int refs = 0;
     return refs;
 }
 
-struct ImGuiAppMfEncoderData
+struct ImGuiApp_ImplMediaFoundation_Data
 {
     char                 OutputPath[512];
     float                Fps;
@@ -51,7 +55,7 @@ struct ImGuiAppMfEncoderData
     double               FirstTimeSec; // Realtime PTS rebase
     LONGLONG             PrevSampleTicks;
 
-    ImGuiAppMfEncoderData()
+    ImGuiApp_ImplMediaFoundation_Data()
     {
         OutputPath[0]   = 0;
         Fps             = 60.0f;
@@ -75,7 +79,7 @@ struct ImGuiAppMfEncoderData
 
 // Sink writer creation waits until the frame size is known (config, else first frame):
 // both media types bake the size.
-static bool MfBeginWriting(ImGuiAppMfEncoderData* bd)
+static bool ImGuiApp_ImplMediaFoundation_BeginWriting(ImGuiApp_ImplMediaFoundation_Data* bd)
 {
     wchar_t wpath[512];
     if (::MultiByteToWideChar(CP_UTF8, 0, bd->OutputPath, -1, wpath, IM_ARRAYSIZE(wpath)) == 0)
@@ -135,9 +139,9 @@ static bool MfBeginWriting(ImGuiAppMfEncoderData* bd)
     return true;
 }
 
-static bool ImGuiAppMf_Open(ImGuiAppAVEncoder* self, const ImGuiAppAVEncodeConfig* config)
+static bool ImGuiApp_ImplMediaFoundation_Open(ImGuiAppAVEncoder* self, const ImGuiAppAVEncodeConfig* config)
 {
-    ImGuiAppMfEncoderData* bd = (ImGuiAppMfEncoderData*)self->UserData;
+    ImGuiApp_ImplMediaFoundation_Data* bd = (ImGuiApp_ImplMediaFoundation_Data*)self->UserData;
     if (bd == nullptr || config == nullptr || config->OutputPath == nullptr || bd->OpenCalled)
         return false;
 
@@ -156,7 +160,7 @@ static bool ImGuiAppMf_Open(ImGuiAppAVEncoder* self, const ImGuiAppAVEncodeConfi
             return false;
         }
         bd->MfStarted = true;
-        MfStartupRefs()++;
+        ImGuiApp_ImplMediaFoundation_StartupRefs()++;
     }
 
     snprintf(bd->OutputPath, sizeof(bd->OutputPath), "%s", config->OutputPath);
@@ -176,7 +180,7 @@ static bool ImGuiAppMf_Open(ImGuiAppAVEncoder* self, const ImGuiAppAVEncodeConfi
     bd->PrevSampleTicks = 0;
 
     // Size 0 = first frame's size: sink writer creation waits for WriteFrame.
-    if (bd->Width > 0 && bd->Height > 0 && !MfBeginWriting(bd))
+    if (bd->Width > 0 && bd->Height > 0 && !ImGuiApp_ImplMediaFoundation_BeginWriting(bd))
     {
         bd->Dead = true;
         return false;
@@ -184,9 +188,9 @@ static bool ImGuiAppMf_Open(ImGuiAppAVEncoder* self, const ImGuiAppAVEncodeConfi
     return true;
 }
 
-static bool ImGuiAppMf_WriteFrame(ImGuiAppAVEncoder* self, const ImGuiAppAVFrame* frame)
+static bool ImGuiApp_ImplMediaFoundation_WriteFrame(ImGuiAppAVEncoder* self, const ImGuiAppAVFrame* frame)
 {
-    ImGuiAppMfEncoderData* bd = (ImGuiAppMfEncoderData*)self->UserData;
+    ImGuiApp_ImplMediaFoundation_Data* bd = (ImGuiApp_ImplMediaFoundation_Data*)self->UserData;
     if (bd == nullptr || frame == nullptr || frame->Pixels == nullptr || !bd->OpenCalled || bd->Dead)
         return false;
 
@@ -194,7 +198,7 @@ static bool ImGuiAppMf_WriteFrame(ImGuiAppAVEncoder* self, const ImGuiAppAVFrame
     {
         bd->Width = frame->Width;
         bd->Height = frame->Height;
-        if (bd->Width <= 0 || bd->Height <= 0 || !MfBeginWriting(bd))
+        if (bd->Width <= 0 || bd->Height <= 0 || !ImGuiApp_ImplMediaFoundation_BeginWriting(bd))
         {
             bd->Dead = true;
             return false;
@@ -276,9 +280,9 @@ static bool ImGuiAppMf_WriteFrame(ImGuiAppAVEncoder* self, const ImGuiAppAVFrame
     return true;
 }
 
-static void ImGuiAppMf_Close(ImGuiAppAVEncoder* self)
+static void ImGuiApp_ImplMediaFoundation_Close(ImGuiAppAVEncoder* self)
 {
-    ImGuiAppMfEncoderData* bd = (ImGuiAppMfEncoderData*)self->UserData;
+    ImGuiApp_ImplMediaFoundation_Data* bd = (ImGuiApp_ImplMediaFoundation_Data*)self->UserData;
     if (bd == nullptr)
         return;
 
@@ -294,16 +298,16 @@ static void ImGuiAppMf_Close(ImGuiAppAVEncoder* self)
     bd->HaveFirstTime = false;
 }
 
-static void ImGuiAppMf_Destroy(ImGuiAppAVEncoder* self)
+static void ImGuiApp_ImplMediaFoundation_Destroy(ImGuiAppAVEncoder* self)
 {
     if (self == nullptr)
         return;
-    ImGuiAppMf_Close(self);
-    ImGuiAppMfEncoderData* bd = (ImGuiAppMfEncoderData*)self->UserData;
+    ImGuiApp_ImplMediaFoundation_Close(self);
+    ImGuiApp_ImplMediaFoundation_Data* bd = (ImGuiApp_ImplMediaFoundation_Data*)self->UserData;
     if (bd != nullptr && bd->MfStarted)
     {
-        MfStartupRefs()--;
-        if (MfStartupRefs() == 0)
+        ImGuiApp_ImplMediaFoundation_StartupRefs()--;
+        if (ImGuiApp_ImplMediaFoundation_StartupRefs() == 0)
             MFShutdown();
         if (bd->CoInited)
             ::CoUninitialize();
@@ -312,24 +316,26 @@ static void ImGuiAppMf_Destroy(ImGuiAppAVEncoder* self)
     IM_DELETE(self);
 }
 
-IMGUI_API ImGuiAppAVEncoder* ImGuiApp_ImplMediaFoundation_CreateEncoder()
+ImGuiAppAVEncoder* ImGuiApp_ImplMediaFoundation_CreateEncoder()
 {
     ImGuiAppAVEncoder* enc = IM_NEW(ImGuiAppAVEncoder)();
     enc->Name = "mediafoundation";
-    enc->SupportsRealtimePts = false;   // sink writer resamples to CFR (see MfBeginWriting); duration honest, PTS quantized
-    enc->Open = ImGuiAppMf_Open;
-    enc->WriteFrame = ImGuiAppMf_WriteFrame;
-    enc->Close = ImGuiAppMf_Close;
-    enc->Destroy = ImGuiAppMf_Destroy;
-    enc->UserData = IM_NEW(ImGuiAppMfEncoderData)();
+    enc->SupportsRealtimePts = false;   // sink writer resamples to CFR (see ImGuiApp_ImplMediaFoundation_BeginWriting); duration honest, PTS quantized
+    enc->Open = ImGuiApp_ImplMediaFoundation_Open;
+    enc->WriteFrame = ImGuiApp_ImplMediaFoundation_WriteFrame;
+    enc->Close = ImGuiApp_ImplMediaFoundation_Close;
+    enc->Destroy = ImGuiApp_ImplMediaFoundation_Destroy;
+    enc->UserData = IM_NEW(ImGuiApp_ImplMediaFoundation_Data)();
     return enc;
 }
 
 #else // !_WIN32
 
-IMGUI_API ImGuiAppAVEncoder* ImGuiApp_ImplMediaFoundation_CreateEncoder()
+ImGuiAppAVEncoder* ImGuiApp_ImplMediaFoundation_CreateEncoder()
 {
     return nullptr;
 }
 
 #endif // _WIN32
+
+#endif // #ifndef IMGUI_DISABLE

@@ -1,8 +1,12 @@
 // dear imgui app: Platform Host for Win32 (shared window procedure + message-pump main loop)
 // This needs to be used along with a sibling Renderer Host (imguiapp_impl_win32_opengl3, imguiapp_impl_win32_vulkan)
 
+// CHANGELOG
+//  2026-07-08: Backend-internal symbols prefixed; IMGUI_DISABLE guards added.
+
 #include "imguiapp.h"
 #include "imguiapp_impl_win32.h"
+#ifndef IMGUI_DISABLE
 
 #include "imgui_impl_win32.h"
 #ifndef WIN32_LEAN_AND_MEAN
@@ -74,3 +78,5 @@ int ImGuiApp_ImplWin32_RunLoop(ImGuiApp* app)
     app->Shutdown();
     return 0;
 }
+
+#endif // #ifndef IMGUI_DISABLE

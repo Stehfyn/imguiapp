@@ -7,7 +7,11 @@
 // [SECTION] Encoder
 // [SECTION] Embedded input log reader
 
+// CHANGELOG
+//  2026-07-08: Backend-internal symbols prefixed ImGuiApp_ImplLibav_* (house backend grammar); IMGUI_DISABLE guards added.
+
 #include "imguiapp_impl_libav.h"
+#ifndef IMGUI_DISABLE
 #include "imgui_internal.h"   // ImHashData (embed checksum)
 
 #include <cstdio>
@@ -26,7 +30,7 @@ extern "C" {
 // [SECTION] Encoder
 //-----------------------------------------------------------------------------
 
-struct ImGuiAppLibavEncoderData
+struct ImGuiApp_ImplLibav_Data
 {
     char                 OutputPath[512];
     float                Fps;
@@ -49,7 +53,7 @@ struct ImGuiAppLibavEncoderData
     AVPacket*            Packet;
     SwsContext*          Sws;
 
-    ImGuiAppLibavEncoderData()
+    ImGuiApp_ImplLibav_Data()
     {
         OutputPath[0]  = 0;
         Fps            = 60.0f;
@@ -74,7 +78,7 @@ struct ImGuiAppLibavEncoderData
     }
 };
 
-static void LibavFreePipeline(ImGuiAppLibavEncoderData* bd)
+static void ImGuiApp_ImplLibav_FreePipeline(ImGuiApp_ImplLibav_Data* bd)
 {
     if (bd->Sws != nullptr)
     {
@@ -100,7 +104,7 @@ static void LibavFreePipeline(ImGuiAppLibavEncoderData* bd)
 
 // Drain accepted packets to the muxer; a NULL frame was already sent by the caller
 // when flushing. False on mux/encode error.
-static bool LibavPumpPackets(ImGuiAppLibavEncoderData* bd)
+static bool ImGuiApp_ImplLibav_PumpPackets(ImGuiApp_ImplLibav_Data* bd)
 {
     for (;;)
     {
@@ -129,7 +133,7 @@ static bool LibavPumpPackets(ImGuiAppLibavEncoderData* bd)
     }
 }
 
-static bool LibavOpenPipeline(ImGuiAppLibavEncoderData* bd)
+static bool ImGuiApp_ImplLibav_OpenPipeline(ImGuiApp_ImplLibav_Data* bd)
 {
     const AVCodec* codec = avcodec_find_encoder_by_name("libx264");
     if (codec == nullptr)
@@ -199,9 +203,9 @@ static bool LibavOpenPipeline(ImGuiAppLibavEncoderData* bd)
     return true;
 }
 
-static bool ImGuiAppLibav_Open(ImGuiAppAVEncoder* self, const ImGuiAppAVEncodeConfig* config)
+static bool ImGuiApp_ImplLibav_Open(ImGuiAppAVEncoder* self, const ImGuiAppAVEncodeConfig* config)
 {
-    ImGuiAppLibavEncoderData* bd = (ImGuiAppLibavEncoderData*)self->UserData;
+    ImGuiApp_ImplLibav_Data* bd = (ImGuiApp_ImplLibav_Data*)self->UserData;
     if (bd == nullptr || config == nullptr || config->OutputPath == nullptr || bd->OpenCalled)
         return false;
 
@@ -224,9 +228,9 @@ static bool ImGuiAppLibav_Open(ImGuiAppAVEncoder* self, const ImGuiAppAVEncodeCo
     // Size 0 = first frame's size: the pipeline (which bakes WxH) waits for WriteFrame.
     if (bd->Width > 0 && bd->Height > 0)
     {
-        if (!LibavOpenPipeline(bd))
+        if (!ImGuiApp_ImplLibav_OpenPipeline(bd))
         {
-            LibavFreePipeline(bd);
+            ImGuiApp_ImplLibav_FreePipeline(bd);
             bd->Dead = true;
             return false;
         }
@@ -234,9 +238,9 @@ static bool ImGuiAppLibav_Open(ImGuiAppAVEncoder* self, const ImGuiAppAVEncodeCo
     return true;
 }
 
-static bool ImGuiAppLibav_WriteFrame(ImGuiAppAVEncoder* self, const ImGuiAppAVFrame* frame)
+static bool ImGuiApp_ImplLibav_WriteFrame(ImGuiAppAVEncoder* self, const ImGuiAppAVFrame* frame)
 {
-    ImGuiAppLibavEncoderData* bd = (ImGuiAppLibavEncoderData*)self->UserData;
+    ImGuiApp_ImplLibav_Data* bd = (ImGuiApp_ImplLibav_Data*)self->UserData;
     if (bd == nullptr || frame == nullptr || frame->Pixels == nullptr || !bd->OpenCalled || bd->Dead)
         return false;
 
@@ -244,9 +248,9 @@ static bool ImGuiAppLibav_WriteFrame(ImGuiAppAVEncoder* self, const ImGuiAppAVFr
     {
         bd->Width = frame->Width;
         bd->Height = frame->Height;
-        if (bd->Width <= 0 || bd->Height <= 0 || !LibavOpenPipeline(bd))
+        if (bd->Width <= 0 || bd->Height <= 0 || !ImGuiApp_ImplLibav_OpenPipeline(bd))
         {
-            LibavFreePipeline(bd);
+            ImGuiApp_ImplLibav_FreePipeline(bd);
             bd->Dead = true;
             return false;
         }
@@ -290,7 +294,7 @@ static bool ImGuiAppLibav_WriteFrame(ImGuiAppAVEncoder* self, const ImGuiAppAVFr
     // (the last frame of every take silently failed to decode).
     bd->Frame->duration = (ImS64)llround(1e6 / (double)bd->Fps);
 
-    if (avcodec_send_frame(bd->Codec, bd->Frame) < 0 || !LibavPumpPackets(bd))
+    if (avcodec_send_frame(bd->Codec, bd->Frame) < 0 || !ImGuiApp_ImplLibav_PumpPackets(bd))
     {
         bd->Dead = true;
         return false;
@@ -298,44 +302,44 @@ static bool ImGuiAppLibav_WriteFrame(ImGuiAppAVEncoder* self, const ImGuiAppAVFr
     return true;
 }
 
-static void ImGuiAppLibav_Close(ImGuiAppAVEncoder* self)
+static void ImGuiApp_ImplLibav_Close(ImGuiAppAVEncoder* self)
 {
-    ImGuiAppLibavEncoderData* bd = (ImGuiAppLibavEncoderData*)self->UserData;
+    ImGuiApp_ImplLibav_Data* bd = (ImGuiApp_ImplLibav_Data*)self->UserData;
     if (bd == nullptr)
         return;
     if (bd->PipelineOpen && !bd->TrailerWritten)
     {
         avcodec_send_frame(bd->Codec, nullptr);   // flush
-        LibavPumpPackets(bd);
+        ImGuiApp_ImplLibav_PumpPackets(bd);
         av_write_trailer(bd->Format);
         bd->TrailerWritten = true;
     }
-    LibavFreePipeline(bd);
+    ImGuiApp_ImplLibav_FreePipeline(bd);
     bd->OpenCalled = false;   // reopenable for the next ring dump
 }
 
-static void ImGuiAppLibav_Destroy(ImGuiAppAVEncoder* self)
+static void ImGuiApp_ImplLibav_Destroy(ImGuiAppAVEncoder* self)
 {
-    ImGuiAppLibavEncoderData* bd = (ImGuiAppLibavEncoderData*)self->UserData;
+    ImGuiApp_ImplLibav_Data* bd = (ImGuiApp_ImplLibav_Data*)self->UserData;
     if (bd != nullptr)
     {
-        LibavFreePipeline(bd);
+        ImGuiApp_ImplLibav_FreePipeline(bd);
         IM_DELETE(bd);
     }
     self->UserData = nullptr;
     IM_DELETE(self);
 }
 
-IMGUI_API ImGuiAppAVEncoder* ImGuiApp_ImplLibav_CreateEncoder()
+ImGuiAppAVEncoder* ImGuiApp_ImplLibav_CreateEncoder()
 {
     ImGuiAppAVEncoder* enc = IM_NEW(ImGuiAppAVEncoder)();
     enc->Name = "libav";
     enc->SupportsRealtimePts = true;
-    enc->Open = ImGuiAppLibav_Open;
-    enc->WriteFrame = ImGuiAppLibav_WriteFrame;
-    enc->Close = ImGuiAppLibav_Close;
-    enc->Destroy = ImGuiAppLibav_Destroy;
-    enc->UserData = IM_NEW(ImGuiAppLibavEncoderData)();
+    enc->Open = ImGuiApp_ImplLibav_Open;
+    enc->WriteFrame = ImGuiApp_ImplLibav_WriteFrame;
+    enc->Close = ImGuiApp_ImplLibav_Close;
+    enc->Destroy = ImGuiApp_ImplLibav_Destroy;
+    enc->UserData = IM_NEW(ImGuiApp_ImplLibav_Data)();
     return enc;
 }
 
@@ -346,7 +350,7 @@ IMGUI_API ImGuiAppAVEncoder* ImGuiApp_ImplLibav_CreateEncoder()
 // Extract the embedded byte stream from one decoded frame's GRAY8 luma. Block value =
 // mean of the 16 pixels; bit = mean >= 128; blocks row-major topmost-first within the
 // bottom embed_rows; bits fill bytes MSB-first (spec: ImGuiAppAVEncodeConfig::EmbedRows).
-static void LibavExtractStripBytes(const unsigned char* luma, int stride, int width, int height, int embed_rows, ImVector<char>* out)
+static void ImGuiApp_ImplLibav_ExtractStripBytes(const unsigned char* luma, int stride, int width, int height, int embed_rows, ImVector<char>* out)
 {
     const int base_row = height - embed_rows;
     const int blocks_x = width / 4;
@@ -371,7 +375,7 @@ static void LibavExtractStripBytes(const unsigned char* luma, int stride, int wi
 
 // Parse one frame's stream: "IMIL" | u32 size | payload | u32 checksum. Returns the
 // payload span inside bytes, or false (bad magic / bounds / checksum).
-static bool LibavParseStrip(const ImVector<char>* bytes, const char** out_payload, ImU32* out_size)
+static bool ImGuiApp_ImplLibav_ParseStrip(const ImVector<char>* bytes, const char** out_payload, ImU32* out_size)
 {
     if (bytes->Size < 12)
         return false;
@@ -394,7 +398,7 @@ static bool LibavParseStrip(const ImVector<char>* bytes, const char** out_payloa
 // Decode every frame, parse its strip chunk, concatenate: the reconstructed meta
 // stream. A corrupt frame truncates the stream at that point (chunks are positional);
 // frame 1 without the magic = the file carries no embedded stream.
-static bool LibavExtractMetaInternal(const char* video_path, int embed_rows, ImVector<char>* out_meta, int* out_corrupt_frames)
+static bool ImGuiApp_ImplLibav_ExtractMetaInternal(const char* video_path, int embed_rows, ImVector<char>* out_meta, int* out_corrupt_frames)
 {
     IM_ASSERT(video_path != nullptr && out_meta != nullptr && embed_rows >= 4);
     if (out_corrupt_frames != nullptr)
@@ -495,10 +499,10 @@ static bool LibavExtractMetaInternal(const char* video_path, int embed_rows, ImV
                     failed = true;
                     break;
                 }
-                LibavExtractStripBytes(gray->data[0], gray->linesize[0], frame->width, frame->height, embed_rows, &strip);
+                ImGuiApp_ImplLibav_ExtractStripBytes(gray->data[0], gray->linesize[0], frame->width, frame->height, embed_rows, &strip);
                 const char* payload = nullptr;
                 ImU32 size = 0;
-                if (LibavParseStrip(&strip, &payload, &size))
+                if (ImGuiApp_ImplLibav_ParseStrip(&strip, &payload, &size))
                 {
                     if (size > 0)
                     {
@@ -539,12 +543,12 @@ static bool LibavExtractMetaInternal(const char* video_path, int embed_rows, ImV
     return ok;
 }
 
-IMGUI_API bool ImGuiApp_ImplLibav_ExtractEmbeddedMeta(const char* video_path, int embed_rows, ImVector<char>* out_meta)
+bool ImGuiApp_ImplLibav_ExtractEmbeddedMeta(const char* video_path, int embed_rows, ImVector<char>* out_meta)
 {
-    return LibavExtractMetaInternal(video_path, embed_rows, out_meta, nullptr);
+    return ImGuiApp_ImplLibav_ExtractMetaInternal(video_path, embed_rows, out_meta, nullptr);
 }
 
-IMGUI_API bool ImGuiApp_ImplLibav_DecodeFrame(const char* video_path, int frame_ordinal, ImVector<char>* out_rgba, int* out_w, int* out_h)
+bool ImGuiApp_ImplLibav_DecodeFrame(const char* video_path, int frame_ordinal, ImVector<char>* out_rgba, int* out_w, int* out_h)
 {
     if (video_path == nullptr || out_rgba == nullptr || frame_ordinal < 0)
         return false;
@@ -651,13 +655,15 @@ IMGUI_API bool ImGuiApp_ImplLibav_DecodeFrame(const char* video_path, int frame_
     return ok;
 }
 
-IMGUI_API bool ImGuiApp_ImplLibav_ReadEmbeddedInputLog(const char* video_path, int embed_rows, ImGuiAppInputLog* out_log, int* out_corrupt_frames)
+bool ImGuiApp_ImplLibav_ReadEmbeddedInputLog(const char* video_path, int embed_rows, ImGuiAppInputLog* out_log, int* out_corrupt_frames)
 {
     IM_ASSERT(out_log != nullptr);
     if (out_log == nullptr)
         return false;
     ImVector<char> meta;
-    if (!LibavExtractMetaInternal(video_path, embed_rows, &meta, out_corrupt_frames))
+    if (!ImGuiApp_ImplLibav_ExtractMetaInternal(video_path, embed_rows, &meta, out_corrupt_frames))
         return false;
     return ImGui::AppAVMetaReadInputLog(meta.Data, meta.Size, out_log);
 }
+
+#endif // #ifndef IMGUI_DISABLE

@@ -1,4 +1,17 @@
-﻿#include "imguiapp_impl_sdl2_wgpu.h"
+// dear imgui app: Renderer Host for SDL2 + WebGPU/Dawn (composes imgui_impl_sdl2 + imgui_impl_wgpu)
+// This needs to be used along with the SDL2 Platform Host (imguiapp_impl_sdl2: shared browser run loop).
+
+// Implemented features:
+//  [X] Renderer: exposed ImGuiApp_ImplSDL2WGPU_* frame lifecycle (imgui impl pattern; RenderDrawData submits AND presents -- no PresentFrame hook).
+//  [X] Platform: window/surface/device creation + ImGui context ownership in InitPlatform/ShutdownPlatform.
+// Missing features:
+//  [ ] AV: CaptureFrame readback (recording unavailable on this host; use win32-vulkan).
+
+// CHANGELOG
+//  2026-07-08: Exposed ImGuiApp_ImplSDL2WGPU_* frame lifecycle (imgui impl pattern); host owns the ImGui context it creates; backend-internal symbols prefixed; IMGUI_DISABLE guards added.
+
+#include "imguiapp_impl_sdl2_wgpu.h"
+#ifndef IMGUI_DISABLE
 
 #include "imguiapp_impl_sdl2.h"
 #include "imguiapp.h"
@@ -14,7 +27,6 @@
 #include <webgpu/webgpu_cpp.h>
 #endif
 
-#include <algorithm>
 #include <cstdio>
 #include <cstdint>
 
@@ -25,220 +37,217 @@ struct ImGuiAppPlatformData
     bool        OwnsImGuiContext; // this host created the ImGui context (none existed)
 };
 
-namespace
+struct ImGuiApp_ImplSDL2WGPU_Data
 {
-    struct ImGuiApp_ImplSDL2WGPU_Data
-    {
-        SDL_Window*              Window;
-        const char*              CanvasSelector;
-        WGPUInstance             Instance;
-        WGPUDevice               Device;
-        WGPUSurface              Surface;
-        WGPUQueue                Queue;
-        WGPUSurfaceConfiguration SurfaceConfiguration;
-        int                      SurfaceWidth;
-        int                      SurfaceHeight;
-        bool                     PlatformBackendInitialized;
-        bool                     RendererBackendInitialized;
+    SDL_Window*              Window;
+    const char*              CanvasSelector;
+    WGPUInstance             Instance;
+    WGPUDevice               Device;
+    WGPUSurface              Surface;
+    WGPUQueue                Queue;
+    WGPUSurfaceConfiguration SurfaceConfiguration;
+    int                      SurfaceWidth;
+    int                      SurfaceHeight;
+    bool                     PlatformBackendInitialized;
+    bool                     RendererBackendInitialized;
 
-        ImGuiApp_ImplSDL2WGPU_Data() { memset((void*)this, 0, sizeof(*this)); }
+    ImGuiApp_ImplSDL2WGPU_Data() { memset((void*)this, 0, sizeof(*this)); }
+};
+
+// IM_NEW'd at Init, freed by Shutdown; reached through the accessor (one backend per process).
+static ImGuiApp_ImplSDL2WGPU_Data* GImGuiAppBackend = nullptr;
+
+static ImGuiApp_ImplSDL2WGPU_Data* ImGuiApp_ImplSDL2WGPU_GetBackendData() { return GImGuiAppBackend; }
+
+static bool ImGuiApp_ImplSDL2WGPU_IsInitInfoValid(const ImGuiApp_ImplSDL2WGPU_InitInfo* init_info)
+{
+    return init_info != nullptr && init_info->Window != nullptr;
+}
+
+static void ImGuiApp_ImplSDL2WGPU_ReadCanvasSize(ImGuiApp_ImplSDL2WGPU_Data* bd, int* width, int* height)
+{
+    IM_ASSERT(bd != nullptr);
+    IM_ASSERT(width != nullptr);
+    IM_ASSERT(height != nullptr);
+
+    int canvas_width = 0;
+    int canvas_height = 0;
+    if (bd != nullptr &&
+        bd->CanvasSelector != nullptr &&
+        emscripten_get_canvas_element_size(bd->CanvasSelector, &canvas_width, &canvas_height) == EMSCRIPTEN_RESULT_SUCCESS)
+    {
+        *width = ImMax(1, canvas_width);
+        *height = ImMax(1, canvas_height);
+        return;
+    }
+
+    if (bd != nullptr && bd->Window != nullptr)
+        SDL_GetWindowSize(bd->Window, width, height);
+    *width = ImMax(1, *width);
+    *height = ImMax(1, *height);
+}
+
+static WGPUPresentMode ImGuiApp_ImplSDL2WGPU_SelectPresentMode(const WGPUSurfaceCapabilities& capabilities)
+{
+    const WGPUPresentMode requested_modes[] =
+    {
+        WGPUPresentMode_Mailbox,
+        WGPUPresentMode_Immediate,
+        WGPUPresentMode_Fifo,
     };
 
-    // IM_NEW'd at Init, freed by Shutdown; reached through the accessor (docs/house-style-audit.md Δ4).
-    ImGuiApp_ImplSDL2WGPU_Data* GBackend = nullptr;
+    for (WGPUPresentMode requested_mode : requested_modes)
+        for (size_t i = 0; i < capabilities.presentModeCount; ++i)
+            if (capabilities.presentModes[i] == requested_mode)
+                return requested_mode;
 
-    ImGuiApp_ImplSDL2WGPU_Data* ImGuiApp_ImplSDL2WGPU_GetBackendData() { return GBackend; }
+    return WGPUPresentMode_Fifo;
+}
 
-    bool IsInitInfoValid(const ImGuiApp_ImplSDL2WGPU_InitInfo* init_info)
+#if defined(IMGUI_IMPL_WEBGPU_BACKEND_DAWN)
+static WGPUAdapter ImGuiApp_ImplSDL2WGPU_RequestAdapter(wgpu::Instance& instance)
+{
+    wgpu::Adapter acquired_adapter;
+    wgpu::RequestAdapterOptions adapter_options = {};
+    auto on_request_adapter = [&](wgpu::RequestAdapterStatus status, wgpu::Adapter adapter, wgpu::StringView message)
     {
-        return init_info != nullptr && init_info->Window != nullptr;
-    }
-
-    void ReadCanvasSize(ImGuiApp_ImplSDL2WGPU_Data* bd, int* width, int* height)
-    {
-        IM_ASSERT(bd != nullptr);
-        IM_ASSERT(width != nullptr);
-        IM_ASSERT(height != nullptr);
-
-        int canvas_width = 0;
-        int canvas_height = 0;
-        if (bd != nullptr &&
-            bd->CanvasSelector != nullptr &&
-            emscripten_get_canvas_element_size(bd->CanvasSelector, &canvas_width, &canvas_height) == EMSCRIPTEN_RESULT_SUCCESS)
+        if (status != wgpu::RequestAdapterStatus::Success)
         {
-            *width = std::max(1, canvas_width);
-            *height = std::max(1, canvas_height);
+            std::fprintf(stderr, "WebGPU adapter request failed: %.*s\n", (int)message.length, message.data);
             return;
         }
+        acquired_adapter = std::move(adapter);
+    };
 
-        if (bd != nullptr && bd->Window != nullptr)
-            SDL_GetWindowSize(bd->Window, width, height);
-        *width = std::max(1, *width);
-        *height = std::max(1, *height);
-    }
+    wgpu::Future wait_adapter { instance.ImGuiApp_ImplSDL2WGPU_RequestAdapter(&adapter_options, wgpu::CallbackMode::WaitAnyOnly, on_request_adapter) };
+    wgpu::WaitStatus wait_status = instance.WaitAny(wait_adapter, UINT64_MAX);
+    if (acquired_adapter == nullptr || wait_status != wgpu::WaitStatus::Success)
+        return nullptr;
+    return acquired_adapter.MoveToCHandle();
+}
 
-    WGPUPresentMode SelectPresentMode(const WGPUSurfaceCapabilities& capabilities)
-    {
-        const WGPUPresentMode requested_modes[] =
+static WGPUDevice ImGuiApp_ImplSDL2WGPU_RequestDevice(wgpu::Instance& instance, wgpu::Adapter& adapter)
+{
+    wgpu::DeviceDescriptor device_desc = {};
+    device_desc.SetDeviceLostCallback(wgpu::CallbackMode::AllowSpontaneous,
+        [](const wgpu::Device&, wgpu::DeviceLostReason reason, wgpu::StringView message)
         {
-            WGPUPresentMode_Mailbox,
-            WGPUPresentMode_Immediate,
-            WGPUPresentMode_Fifo,
-        };
-
-        for (WGPUPresentMode requested_mode : requested_modes)
-            for (size_t i = 0; i < capabilities.presentModeCount; ++i)
-                if (capabilities.presentModes[i] == requested_mode)
-                    return requested_mode;
-
-        return WGPUPresentMode_Fifo;
-    }
-
-#if defined(IMGUI_IMPL_WEBGPU_BACKEND_DAWN)
-    WGPUAdapter RequestAdapter(wgpu::Instance& instance)
-    {
-        wgpu::Adapter acquired_adapter;
-        wgpu::RequestAdapterOptions adapter_options = {};
-        auto on_request_adapter = [&](wgpu::RequestAdapterStatus status, wgpu::Adapter adapter, wgpu::StringView message)
+            std::fprintf(stderr, "WebGPU device lost (%s): %.*s\n", ImGui_ImplWGPU_GetDeviceLostReasonName((WGPUDeviceLostReason)reason), (int)message.length, message.data);
+        });
+    device_desc.SetUncapturedErrorCallback(
+        [](const wgpu::Device&, wgpu::ErrorType type, wgpu::StringView message)
         {
-            if (status != wgpu::RequestAdapterStatus::Success)
-            {
-                std::fprintf(stderr, "WebGPU adapter request failed: %.*s\n", (int)message.length, message.data);
-                return;
-            }
-            acquired_adapter = std::move(adapter);
-        };
+            std::fprintf(stderr, "WebGPU %s error: %.*s\n", ImGui_ImplWGPU_GetErrorTypeName((WGPUErrorType)type), (int)message.length, message.data);
+        });
 
-        wgpu::Future wait_adapter { instance.RequestAdapter(&adapter_options, wgpu::CallbackMode::WaitAnyOnly, on_request_adapter) };
-        wgpu::WaitStatus wait_status = instance.WaitAny(wait_adapter, UINT64_MAX);
-        if (acquired_adapter == nullptr || wait_status != wgpu::WaitStatus::Success)
-            return nullptr;
-        return acquired_adapter.MoveToCHandle();
-    }
-
-    WGPUDevice RequestDevice(wgpu::Instance& instance, wgpu::Adapter& adapter)
+    wgpu::Device acquired_device;
+    auto on_request_device = [&](wgpu::RequestDeviceStatus status, wgpu::Device device, wgpu::StringView message)
     {
-        wgpu::DeviceDescriptor device_desc = {};
-        device_desc.SetDeviceLostCallback(wgpu::CallbackMode::AllowSpontaneous,
-            [](const wgpu::Device&, wgpu::DeviceLostReason reason, wgpu::StringView message)
-            {
-                std::fprintf(stderr, "WebGPU device lost (%s): %.*s\n", ImGui_ImplWGPU_GetDeviceLostReasonName((WGPUDeviceLostReason)reason), (int)message.length, message.data);
-            });
-        device_desc.SetUncapturedErrorCallback(
-            [](const wgpu::Device&, wgpu::ErrorType type, wgpu::StringView message)
-            {
-                std::fprintf(stderr, "WebGPU %s error: %.*s\n", ImGui_ImplWGPU_GetErrorTypeName((WGPUErrorType)type), (int)message.length, message.data);
-            });
-
-        wgpu::Device acquired_device;
-        auto on_request_device = [&](wgpu::RequestDeviceStatus status, wgpu::Device device, wgpu::StringView message)
+        if (status != wgpu::RequestDeviceStatus::Success)
         {
-            if (status != wgpu::RequestDeviceStatus::Success)
-            {
-                std::fprintf(stderr, "WebGPU device request failed: %.*s\n", (int)message.length, message.data);
-                return;
-            }
-            acquired_device = std::move(device);
-        };
+            std::fprintf(stderr, "WebGPU device request failed: %.*s\n", (int)message.length, message.data);
+            return;
+        }
+        acquired_device = std::move(device);
+    };
 
-        wgpu::Future wait_device { adapter.RequestDevice(&device_desc, wgpu::CallbackMode::WaitAnyOnly, on_request_device) };
-        wgpu::WaitStatus wait_status = instance.WaitAny(wait_device, UINT64_MAX);
-        if (acquired_device == nullptr || wait_status != wgpu::WaitStatus::Success)
-            return nullptr;
-        return acquired_device.MoveToCHandle();
-    }
+    wgpu::Future wait_device { adapter.ImGuiApp_ImplSDL2WGPU_RequestDevice(&device_desc, wgpu::CallbackMode::WaitAnyOnly, on_request_device) };
+    wgpu::WaitStatus wait_status = instance.WaitAny(wait_device, UINT64_MAX);
+    if (acquired_device == nullptr || wait_status != wgpu::WaitStatus::Success)
+        return nullptr;
+    return acquired_device.MoveToCHandle();
+}
 #endif
 
-    bool ResizeSurface(ImGuiApp_ImplSDL2WGPU_Data* bd, int width, int height)
-    {
-        if (bd == nullptr || bd->Surface == nullptr || bd->Device == nullptr)
-            return false;
+static bool ImGuiApp_ImplSDL2WGPU_ResizeSurface(ImGuiApp_ImplSDL2WGPU_Data* bd, int width, int height)
+{
+    if (bd == nullptr || bd->Surface == nullptr || bd->Device == nullptr)
+        return false;
 
-        width = std::max(1, width);
-        height = std::max(1, height);
-        if (bd->SurfaceConfiguration.width == (uint32_t)width &&
-            bd->SurfaceConfiguration.height == (uint32_t)height)
-            return true;
-
-        bd->SurfaceConfiguration.width = bd->SurfaceWidth = width;
-        bd->SurfaceConfiguration.height = bd->SurfaceHeight = height;
-        wgpuSurfaceConfigure(bd->Surface, &bd->SurfaceConfiguration);
+    width = ImMax(1, width);
+    height = ImMax(1, height);
+    if (bd->SurfaceConfiguration.width == (uint32_t)width &&
+        bd->SurfaceConfiguration.height == (uint32_t)height)
         return true;
-    }
 
-    bool InitWGPU(ImGuiApp_ImplSDL2WGPU_Data* bd)
-    {
-        IM_ASSERT(bd != nullptr);
-        if (bd == nullptr)
-            return false;
+    bd->SurfaceConfiguration.width = bd->SurfaceWidth = width;
+    bd->SurfaceConfiguration.height = bd->SurfaceHeight = height;
+    wgpuSurfaceConfigure(bd->Surface, &bd->SurfaceConfiguration);
+    return true;
+}
 
-        WGPUTextureFormat preferred_format = WGPUTextureFormat_Undefined;
-        WGPUPresentMode preferred_present_mode = WGPUPresentMode_Fifo;
+static bool ImGuiApp_ImplSDL2WGPU_InitWGPU(ImGuiApp_ImplSDL2WGPU_Data* bd)
+{
+    IM_ASSERT(bd != nullptr);
+    if (bd == nullptr)
+        return false;
+
+    WGPUTextureFormat preferred_format = WGPUTextureFormat_Undefined;
+    WGPUPresentMode preferred_present_mode = WGPUPresentMode_Fifo;
 
 #if defined(IMGUI_IMPL_WEBGPU_BACKEND_DAWN)
-        wgpu::InstanceDescriptor instance_desc = {};
-        static constexpr wgpu::InstanceFeatureName timed_wait_any = wgpu::InstanceFeatureName::TimedWaitAny;
-        instance_desc.requiredFeatureCount = 1;
-        instance_desc.requiredFeatures = &timed_wait_any;
-        wgpu::Instance instance = wgpu::CreateInstance(&instance_desc);
-        if (!instance)
-            return false;
+    wgpu::InstanceDescriptor instance_desc = {};
+    static constexpr wgpu::InstanceFeatureName timed_wait_any = wgpu::InstanceFeatureName::TimedWaitAny;
+    instance_desc.requiredFeatureCount = 1;
+    instance_desc.requiredFeatures = &timed_wait_any;
+    wgpu::Instance instance = wgpu::CreateInstance(&instance_desc);
+    if (!instance)
+        return false;
 
-        wgpu::Adapter adapter = RequestAdapter(instance);
-        if (!adapter)
-            return false;
-        ImGui_ImplWGPU_DebugPrintAdapterInfo(adapter.Get());
+    wgpu::Adapter adapter = ImGuiApp_ImplSDL2WGPU_RequestAdapter(instance);
+    if (!adapter)
+        return false;
+    ImGui_ImplWGPU_DebugPrintAdapterInfo(adapter.Get());
 
-        bd->Device = RequestDevice(instance, adapter);
-        if (bd->Device == nullptr)
-            return false;
+    bd->Device = ImGuiApp_ImplSDL2WGPU_RequestDevice(instance, adapter);
+    if (bd->Device == nullptr)
+        return false;
 
-        wgpu::EmscriptenSurfaceSourceCanvasHTMLSelector canvas_desc = {};
-        canvas_desc.selector = bd->CanvasSelector != nullptr ? bd->CanvasSelector : "#canvas";
+    wgpu::EmscriptenSurfaceSourceCanvasHTMLSelector canvas_desc = {};
+    canvas_desc.selector = bd->CanvasSelector != nullptr ? bd->CanvasSelector : "#canvas";
 
-        wgpu::SurfaceDescriptor surface_desc = {};
-        surface_desc.nextInChain = &canvas_desc;
-        wgpu::Surface surface = instance.CreateSurface(&surface_desc);
-        if (!surface)
-            return false;
+    wgpu::SurfaceDescriptor surface_desc = {};
+    surface_desc.nextInChain = &canvas_desc;
+    wgpu::Surface surface = instance.CreateSurface(&surface_desc);
+    if (!surface)
+        return false;
 
-        bd->Instance = instance.MoveToCHandle();
-        bd->Surface = surface.MoveToCHandle();
+    bd->Instance = instance.MoveToCHandle();
+    bd->Surface = surface.MoveToCHandle();
 
-        WGPUSurfaceCapabilities surface_capabilities = {};
-        if (wgpuSurfaceGetCapabilities(bd->Surface, adapter.Get(), &surface_capabilities) == WGPUStatus_Success)
-        {
-            if (surface_capabilities.formatCount > 0)
-                preferred_format = surface_capabilities.formats[0];
-            if (surface_capabilities.presentModeCount > 0)
-                preferred_present_mode = SelectPresentMode(surface_capabilities);
-            wgpuSurfaceCapabilitiesFreeMembers(surface_capabilities);
-        }
+    WGPUSurfaceCapabilities surface_capabilities = {};
+    if (wgpuSurfaceGetCapabilities(bd->Surface, adapter.Get(), &surface_capabilities) == WGPUStatus_Success)
+    {
+        if (surface_capabilities.formatCount > 0)
+            preferred_format = surface_capabilities.formats[0];
+        if (surface_capabilities.presentModeCount > 0)
+            preferred_present_mode = ImGuiApp_ImplSDL2WGPU_SelectPresentMode(surface_capabilities);
+        wgpuSurfaceCapabilitiesFreeMembers(surface_capabilities);
+    }
 #else
 #error "ImGuiX SDL2 WebGPU backend currently expects IMGUI_IMPL_WEBGPU_BACKEND_DAWN."
 #endif
 
-        if (preferred_format == WGPUTextureFormat_Undefined)
-            preferred_format = WGPUTextureFormat_BGRA8Unorm;
+    if (preferred_format == WGPUTextureFormat_Undefined)
+        preferred_format = WGPUTextureFormat_BGRA8Unorm;
 
-        int width = 1;
-        int height = 1;
-        ReadCanvasSize(bd, &width, &height);
+    int width = 1;
+    int height = 1;
+    ImGuiApp_ImplSDL2WGPU_ReadCanvasSize(bd, &width, &height);
 
-        bd->SurfaceConfiguration.presentMode = preferred_present_mode;
-        bd->SurfaceConfiguration.alphaMode = WGPUCompositeAlphaMode_Auto;
-        bd->SurfaceConfiguration.usage = WGPUTextureUsage_RenderAttachment;
-        bd->SurfaceConfiguration.width = bd->SurfaceWidth = width;
-        bd->SurfaceConfiguration.height = bd->SurfaceHeight = height;
-        bd->SurfaceConfiguration.device = bd->Device;
-        bd->SurfaceConfiguration.format = preferred_format;
-        wgpuSurfaceConfigure(bd->Surface, &bd->SurfaceConfiguration);
+    bd->SurfaceConfiguration.presentMode = preferred_present_mode;
+    bd->SurfaceConfiguration.alphaMode = WGPUCompositeAlphaMode_Auto;
+    bd->SurfaceConfiguration.usage = WGPUTextureUsage_RenderAttachment;
+    bd->SurfaceConfiguration.width = bd->SurfaceWidth = width;
+    bd->SurfaceConfiguration.height = bd->SurfaceHeight = height;
+    bd->SurfaceConfiguration.device = bd->Device;
+    bd->SurfaceConfiguration.format = preferred_format;
+    wgpuSurfaceConfigure(bd->Surface, &bd->SurfaceConfiguration);
 
-        bd->Queue = wgpuDeviceGetQueue(bd->Device);
-        return bd->Queue != nullptr;
-    }
-
+    bd->Queue = wgpuDeviceGetQueue(bd->Device);
+    return bd->Queue != nullptr;
 }
+
 
 void ImGuiApp_ImplSDL2WGPU_Shutdown()
 {
@@ -264,7 +273,7 @@ void ImGuiApp_ImplSDL2WGPU_Shutdown()
     if (bd->Instance != nullptr)
         wgpuInstanceRelease(bd->Instance);
 
-    GBackend = nullptr;
+    GImGuiAppBackend = nullptr;
     IM_DELETE(bd);
 }
 
@@ -277,8 +286,8 @@ void ImGuiApp_ImplSDL2WGPU_NewFrame()
 
     int width = 1;
     int height = 1;
-    ReadCanvasSize(bd, &width, &height);
-    ResizeSurface(bd, width, height);
+    ImGuiApp_ImplSDL2WGPU_ReadCanvasSize(bd, &width, &height);
+    ImGuiApp_ImplSDL2WGPU_ResizeSurface(bd, width, height);
 
     ImGui_ImplWGPU_NewFrame();
     ImGui_ImplSDL2_NewFrame();
@@ -294,8 +303,8 @@ void ImGuiApp_ImplSDL2WGPU_RenderDrawData(ImDrawData* draw_data, const ImGuiAppF
 
     int width = 1;
     int height = 1;
-    ReadCanvasSize(bd, &width, &height);
-    ResizeSurface(bd, width, height);
+    ImGuiApp_ImplSDL2WGPU_ReadCanvasSize(bd, &width, &height);
+    ImGuiApp_ImplSDL2WGPU_ResizeSurface(bd, width, height);
 
     WGPUSurfaceTexture surface_texture = {};
     wgpuSurfaceGetCurrentTexture(bd->Surface, &surface_texture);
@@ -310,7 +319,7 @@ void ImGuiApp_ImplSDL2WGPU_RenderDrawData(ImDrawData* draw_data, const ImGuiAppF
     {
         if (surface_texture.texture != nullptr)
             wgpuTextureRelease(surface_texture.texture);
-        ResizeSurface(bd, width, height);
+        ImGuiApp_ImplSDL2WGPU_ResizeSurface(bd, width, height);
         return;
     }
 
@@ -355,39 +364,39 @@ void ImGuiApp_ImplSDL2WGPU_RenderDrawData(ImDrawData* draw_data, const ImGuiAppF
 
 bool ImGuiApp_ImplSDL2WGPU_Init(const ImGuiApp_ImplSDL2WGPU_InitInfo* init_info)
 {
-    IM_ASSERT(GBackend == nullptr && "Already initialized a platform backend!");
-    IM_ASSERT(IsInitInfoValid(init_info) && "ImGuiApp_ImplSDL2WGPU_Init: invalid init_info.");
-    if (GBackend != nullptr || !IsInitInfoValid(init_info))
+    IM_ASSERT(GImGuiAppBackend == nullptr && "Already initialized a platform backend!");
+    IM_ASSERT(ImGuiApp_ImplSDL2WGPU_IsInitInfoValid(init_info) && "ImGuiApp_ImplSDL2WGPU_Init: invalid init_info.");
+    if (GImGuiAppBackend != nullptr || !ImGuiApp_ImplSDL2WGPU_IsInitInfoValid(init_info))
         return false;
 
-    GBackend = IM_NEW(ImGuiApp_ImplSDL2WGPU_Data)();
-    GBackend->Window = (SDL_Window*)init_info->Window;
-    GBackend->CanvasSelector = init_info->CanvasSelector != nullptr ? init_info->CanvasSelector : "#canvas";
+    GImGuiAppBackend = IM_NEW(ImGuiApp_ImplSDL2WGPU_Data)();
+    GImGuiAppBackend->Window = (SDL_Window*)init_info->Window;
+    GImGuiAppBackend->CanvasSelector = init_info->CanvasSelector != nullptr ? init_info->CanvasSelector : "#canvas";
 
-    if (!InitWGPU(GBackend))
+    if (!ImGuiApp_ImplSDL2WGPU_InitWGPU(GImGuiAppBackend))
     {
         ImGuiApp_ImplSDL2WGPU_Shutdown();
         return false;
     }
 
-    if (!ImGui_ImplSDL2_InitForOther(GBackend->Window))
+    if (!ImGui_ImplSDL2_InitForOther(GImGuiAppBackend->Window))
     {
         ImGuiApp_ImplSDL2WGPU_Shutdown();
         return false;
     }
-    GBackend->PlatformBackendInitialized = true;
+    GImGuiAppBackend->PlatformBackendInitialized = true;
 
     ImGui_ImplWGPU_InitInfo wgpu_init_info;
-    wgpu_init_info.Device = GBackend->Device;
+    wgpu_init_info.Device = GImGuiAppBackend->Device;
     wgpu_init_info.NumFramesInFlight = 3;
-    wgpu_init_info.RenderTargetFormat = GBackend->SurfaceConfiguration.format;
+    wgpu_init_info.RenderTargetFormat = GImGuiAppBackend->SurfaceConfiguration.format;
     wgpu_init_info.DepthStencilFormat = WGPUTextureFormat_Undefined;
     if (!ImGui_ImplWGPU_Init(&wgpu_init_info))
     {
         ImGuiApp_ImplSDL2WGPU_Shutdown();
         return false;
     }
-    GBackend->RendererBackendInitialized = true;
+    GImGuiAppBackend->RendererBackendInitialized = true;
     return true;
 }
 
@@ -474,3 +483,5 @@ static const ImGuiAppPlatformBackend GPlatformBackend =
 
 const ImGuiAppPlatformBackend* ImGuiApp_GetPlatformBackend() { return &GPlatformBackend; }
 
+
+#endif // #ifndef IMGUI_DISABLE

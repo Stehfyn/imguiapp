@@ -8,6 +8,7 @@
 #pragma once
 
 #include "imguiapp_internal.h"
+#ifndef IMGUI_DISABLE
 
 IMGUI_API ImGuiAppAVEncoder* ImGuiApp_ImplLibav_CreateEncoder();
 
@@ -24,3 +25,5 @@ IMGUI_API bool ImGuiApp_ImplLibav_DecodeFrame(const char* video_path, int frame_
 // Extract + parse the input log in one call; out_corrupt_frames (null ok) counts
 // checksum-failed frames. False when the file carries no embedded stream or no log.
 IMGUI_API bool ImGuiApp_ImplLibav_ReadEmbeddedInputLog(const char* video_path, int embed_rows, ImGuiAppInputLog* out_log, int* out_corrupt_frames);
+
+#endif // #ifndef IMGUI_DISABLE

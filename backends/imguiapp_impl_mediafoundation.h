@@ -7,5 +7,8 @@
 #pragma once
 
 #include "imguiapp_internal.h"
+#ifndef IMGUI_DISABLE
 
 IMGUI_API ImGuiAppAVEncoder* ImGuiApp_ImplMediaFoundation_CreateEncoder();
+
+#endif // #ifndef IMGUI_DISABLE

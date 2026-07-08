@@ -16,7 +16,7 @@ codegen corpus byte-identical, style ratchet monotonically down.
 | §3 Formatting (F1-F28) | 10 | 8 | 3 (+6 gate-covered) | bare `default:` 50:1 (S9) |
 | §4 Architecture (A1-A32) | 7 | 7 | 7 (+2 n/a) | no `IMGUI_DISABLE` wrap anywhere |
 | §5 API grammar (G1-G24) | 4 | 5 | 2 | silent overpop in all four `PopApp*`; no V twins |
-| §6 Backends (B1-B18) | seam ✓ | B5/B15 | B1/B2/B16/B17 | anatomy/CHANGELOG/guards/prefix wave |
+| §6 Backends (B1-B18) | hosts ✓ | B5 | — | — |
 | §7 Idioms (I1-I41) | 8 | 5 | 3 | dialect breach (43 `auto`, 33 capturing lambdas) |
 | §8 Demo (D1-D9) | 3 | 2 | 3 slips | sample controls not in user register |
 
@@ -76,14 +76,6 @@ on the next rename, version-stamp grammar (M38).
 Zero FIXME/TODO/HACK/XXX corpus-wide; deferred work lives only in docs. Adopt `FIXME-<AREA>`
 (`FIXME-CANVAS/-GRAPH/-CODEGEN/-AV/-PREVIEW/-OPT`), drop tags when touching doc-tracked debt, add
 the tag-census check to `tests/style` (fail TODO/HACK/XXX outside string literals).
-
-### S7. Backend anatomy wave — B1/B2/B16/B17 (HIGH)
-0 header anatomy blocks, 0 CHANGELOGs, 0 `#ifndef IMGUI_DISABLE` guards (18 files); ~45 unprefixed
-backend-internal functions (22 static + ~23 in anon namespaces — canon never uses anon namespaces);
-`GBackend` identifier unprefixed; AV vtable callbacks contracted (`ImGuiAppLibav_*` vs
-`ImGuiApp_ImplLibav_*`); `std::max` ×8 + `<algorithm>` in SDL backends (Δ2 doesn't license
-backends); `IMGUIX_API`/`IMGUI_API` export split unstated (B4); B15 viewport hooks unbannered,
-named bare `Hook_*`; UTF-8 BOMs on 6 headers.
 
 ### S8. Recoverable-error machinery — G4/G19 (HIGH)
 **Silent overpop**: all four `PopApp*` `if (empty) return;` — no assert, no WAL record
@@ -161,10 +153,8 @@ target N23 form, ID-key blocks get rationale comments.
 3. **Wave M — sed batch**: M13, M15, M18, M21, M22, M26, M34, M36, M37, M39, M44, F26 explicit-type
    range-fors, F14 casts, F28 sizeof, F25 default merges, M8, M7.
 4. **Wave N — AST rename batch**: S9 k-tier → UPPER_SNAKE, S10 type prefixes, M3+M10, M16, M17,
-   M19, M31, M32, M33, S7 prefix half (backend statics + de-anon-namespace), R2 outcome.
-5. **Wave B — backend anatomy**: S7 remainder (B1 blocks, B2 CHANGELOGs, B16 guards, B15 banner,
-   B7 accessors, B8 assert note).
-6. **Wave F — functional adds**: S8 (USER_ERROR + overpop + WAL), M9, M14, S5+M38, S6 adoption,
+   M19, M31, M32, M33, R2 outcome.
+5. **Wave F — functional adds**: S8 (USER_ERROR + overpop + WAL), M9, M14, S5+M38, S6 adoption,
    M28, M42, M45, M11/M40/M41 with the section restructure.
 
 ---
@@ -216,27 +206,6 @@ document — explicit threading is load-bearing for a multi-document editor (and
 touches the ImGui context reaches it through accessors (`ImGui::GetCurrentWindow()` etc.) and
 never names anything else `g`. Code operating on the ImGui context itself (no graph in scope)
 keeps imgui's meaning of `g`.
-
-### Δ4 — Host backends compose upstream imgui backends behind the ImGuiX seam (adapts B6/B9-B14)
-
-`imguiapp_impl_{win32,sdl2}_{opengl3,vulkan,wgpu}` do not re-implement the imgui backend
-contract; they wrap the real `imgui_impl_*` backends behind an exposed `ImGuiApp_ImplXXX_*`
-lifecycle (`_Init(const InitInfo*)`/`_Shutdown`/`_NewFrame`/`_RenderDrawData`/`_PresentFrame`,
-imgui impl pattern; InitInfo public in the header). The lifecycle rides the
-`ImGuiApp_GetPlatformBackend()` vtable, driven by the app core's frame phases; the ImGuiX seam
-optionally binds the same vtable via `ImGuiX::Initialize()`. Neither imguiapp core nor backend
-TUs include imguix.h; the platform host owns the ImGui context it creates (none existed) and
-destroys it in ShutdownPlatform. Consequences, ratified:
-
-- `io.BackendPlatformUserData`/`BackendRendererUserData` belong to the wrapped upstream backends;
-  the host's `ImGuiApp_ImplXXX_Data` is `IM_NEW`-allocated and reached (by the lifecycle and by
-  context-free viewport hooks alike) through a `ImGuiApp_ImplXXX_GetBackendData()` accessor over
-  a single instance pointer (one backend per process; init asserts "Already initialized").
-- io wiring, render-state backup/restore, texture lifecycle, and shaders (B9-B14) are audited at
-  the wrapped backend, not the wrapper.
-
-**Not ratified**: file-scope mutable Data *values* and secondary globals (the pre-Δ4 `GBackend`
-value + `GState` pattern) — fixed to the allocated-instance form above.
 
 ### Δ7 — Unity `imguiapp.cpp` instead of topical satellite files (departs A16)
 

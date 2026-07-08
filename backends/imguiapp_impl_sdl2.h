@@ -5,6 +5,9 @@
 
 #pragma once
 #include "imguiapp.h"      // ImGuiApp
+#ifndef IMGUI_DISABLE
 
 // Shared SDL2/emscripten main loop (renderer-agnostic).
 int ImGuiApp_ImplSDL2_RunLoop(ImGuiApp* app);
+
+#endif // #ifndef IMGUI_DISABLE

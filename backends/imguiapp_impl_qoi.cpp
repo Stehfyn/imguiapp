@@ -3,7 +3,11 @@
 // each frame's FrameID (file, frame_index, time_sec, tsc) -- realtime PTS are exact
 // by construction, so SupportsRealtimePts is true for every timing mode.
 
+// CHANGELOG
+//  2026-07-08: Backend-internal symbols prefixed ImGuiApp_ImplQoi_* (house backend grammar); IMGUI_DISABLE guards added.
+
 #include "imguiapp_impl_qoi.h"
+#ifndef IMGUI_DISABLE
 #include "imguiapp_internal.h"
 #include "imgui_internal.h"   // ImFileOpen/ImFileWrite/ImFileClose, ImFormatString
 
@@ -18,7 +22,7 @@
 #include <sys/types.h>
 #endif
 
-struct ImGuiAppQoiSeqEncoderData
+struct ImGuiApp_ImplQoi_Data
 {
     char           Dir[512];
     ImFileHandle   Index;
@@ -27,7 +31,7 @@ struct ImGuiAppQoiSeqEncoderData
     int            Height;
     ImVector<char> Encoded; // reused per frame
 
-    ImGuiAppQoiSeqEncoderData()
+    ImGuiApp_ImplQoi_Data()
     {
         Dir[0]       = 0;
         Index        = nullptr;
@@ -37,7 +41,7 @@ struct ImGuiAppQoiSeqEncoderData
     }
 };
 
-static bool QoiSeqMkdirOne(const char* path)
+static bool ImGuiApp_ImplQoi_MkdirOne(const char* path)
 {
 #ifdef _WIN32
     const int rc = _mkdir(path);
@@ -48,7 +52,7 @@ static bool QoiSeqMkdirOne(const char* path)
 }
 
 // Create every missing directory on the path (separators '/' or '\').
-static bool QoiSeqMkdirRecursive(const char* path)
+static bool ImGuiApp_ImplQoi_MkdirRecursive(const char* path)
 {
     char buf[512];
     snprintf(buf, sizeof(buf), "%s", path);
@@ -58,20 +62,20 @@ static bool QoiSeqMkdirRecursive(const char* path)
             continue;
         const char sep = *c;
         *c = 0;
-        if (buf[0] != 0 && buf[strlen(buf) - 1] != ':' && !QoiSeqMkdirOne(buf))
+        if (buf[0] != 0 && buf[strlen(buf) - 1] != ':' && !ImGuiApp_ImplQoi_MkdirOne(buf))
             return false;
         *c = sep;
     }
-    return QoiSeqMkdirOne(buf);
+    return ImGuiApp_ImplQoi_MkdirOne(buf);
 }
 
-static bool ImGuiAppQoiSeq_Open(ImGuiAppAVEncoder* self, const ImGuiAppAVEncodeConfig* config)
+static bool ImGuiApp_ImplQoi_Open(ImGuiAppAVEncoder* self, const ImGuiAppAVEncodeConfig* config)
 {
-    ImGuiAppQoiSeqEncoderData* bd = (ImGuiAppQoiSeqEncoderData*)self->UserData;
+    ImGuiApp_ImplQoi_Data* bd = (ImGuiApp_ImplQoi_Data*)self->UserData;
     if (bd == nullptr || config == nullptr || config->OutputPath == nullptr || bd->Index != nullptr)
         return false;
 
-    if (!QoiSeqMkdirRecursive(config->OutputPath))
+    if (!ImGuiApp_ImplQoi_MkdirRecursive(config->OutputPath))
         return false;
 
     snprintf(bd->Dir, sizeof(bd->Dir), "%s", config->OutputPath);
@@ -88,9 +92,9 @@ static bool ImGuiAppQoiSeq_Open(ImGuiAppAVEncoder* self, const ImGuiAppAVEncodeC
     return true;
 }
 
-static bool ImGuiAppQoiSeq_WriteFrame(ImGuiAppAVEncoder* self, const ImGuiAppAVFrame* frame)
+static bool ImGuiApp_ImplQoi_WriteFrame(ImGuiAppAVEncoder* self, const ImGuiAppAVFrame* frame)
 {
-    ImGuiAppQoiSeqEncoderData* bd = (ImGuiAppQoiSeqEncoderData*)self->UserData;
+    ImGuiApp_ImplQoi_Data* bd = (ImGuiApp_ImplQoi_Data*)self->UserData;
     if (bd == nullptr || frame == nullptr || frame->Pixels == nullptr || bd->Index == nullptr)
         return false;
 
@@ -125,18 +129,18 @@ static bool ImGuiAppQoiSeq_WriteFrame(ImGuiAppAVEncoder* self, const ImGuiAppAVF
     return true;
 }
 
-static void ImGuiAppQoiSeq_Close(ImGuiAppAVEncoder* self)
+static void ImGuiApp_ImplQoi_Close(ImGuiAppAVEncoder* self)
 {
-    ImGuiAppQoiSeqEncoderData* bd = (ImGuiAppQoiSeqEncoderData*)self->UserData;
+    ImGuiApp_ImplQoi_Data* bd = (ImGuiApp_ImplQoi_Data*)self->UserData;
     if (bd == nullptr || bd->Index == nullptr)
         return;
     ImFileClose(bd->Index);
     bd->Index = nullptr;
 }
 
-static void ImGuiAppQoiSeq_Destroy(ImGuiAppAVEncoder* self)
+static void ImGuiApp_ImplQoi_Destroy(ImGuiAppAVEncoder* self)
 {
-    ImGuiAppQoiSeqEncoderData* bd = (ImGuiAppQoiSeqEncoderData*)self->UserData;
+    ImGuiApp_ImplQoi_Data* bd = (ImGuiApp_ImplQoi_Data*)self->UserData;
     if (bd != nullptr)
     {
         if (bd->Index != nullptr)
@@ -147,23 +151,23 @@ static void ImGuiAppQoiSeq_Destroy(ImGuiAppAVEncoder* self)
     IM_DELETE(self);
 }
 
-IMGUI_API ImGuiAppAVEncoder* ImGuiApp_ImplQoi_CreateEncoder()
+ImGuiAppAVEncoder* ImGuiApp_ImplQoi_CreateEncoder()
 {
     ImGuiAppAVEncoder* enc = IM_NEW(ImGuiAppAVEncoder)();
     enc->Name = "qoi-sequence";
     enc->SupportsRealtimePts = true;
-    enc->Open = ImGuiAppQoiSeq_Open;
-    enc->WriteFrame = ImGuiAppQoiSeq_WriteFrame;
-    enc->Close = ImGuiAppQoiSeq_Close;
-    enc->Destroy = ImGuiAppQoiSeq_Destroy;
-    enc->UserData = IM_NEW(ImGuiAppQoiSeqEncoderData)();
+    enc->Open = ImGuiApp_ImplQoi_Open;
+    enc->WriteFrame = ImGuiApp_ImplQoi_WriteFrame;
+    enc->Close = ImGuiApp_ImplQoi_Close;
+    enc->Destroy = ImGuiApp_ImplQoi_Destroy;
+    enc->UserData = IM_NEW(ImGuiApp_ImplQoi_Data)();
     return enc;
 }
 
 // Strip chunk reader over decoded RGBA (the stamp writes R=G=B, so R is the luma).
 // Block grid per the frozen contract in imguiapp_av.h; per-frame framing
 // 'IMIL' | u32 chunk_size | chunk | u32 ImHashData(chunk).
-static bool QoiSeqReadStripChunk(const unsigned char* rgba, int w, int h, int embed_rows, ImVector<char>* scratch, ImVector<char>* out_meta)
+static bool ImGuiApp_ImplQoi_ReadStripChunk(const unsigned char* rgba, int w, int h, int embed_rows, ImVector<char>* scratch, ImVector<char>* out_meta)
 {
     if (embed_rows > h)
         return false;
@@ -206,7 +210,7 @@ static bool QoiSeqReadStripChunk(const unsigned char* rgba, int w, int h, int em
     return true;
 }
 
-IMGUI_API bool ImGuiApp_ImplQoi_ExtractEmbeddedMeta(const char* dir, int embed_rows, ImVector<char>* out_meta)
+bool ImGuiApp_ImplQoi_ExtractEmbeddedMeta(const char* dir, int embed_rows, ImVector<char>* out_meta)
 {
     IM_ASSERT(dir != nullptr && out_meta != nullptr && embed_rows >= 4);
     if (dir == nullptr || out_meta == nullptr || embed_rows < 4)
@@ -229,13 +233,13 @@ IMGUI_API bool ImGuiApp_ImplQoi_ExtractEmbeddedMeta(const char* dir, int embed_r
         IM_FREE(bytes);
         if (!decoded)
             return out_meta->Size > 0;
-        if (!QoiSeqReadStripChunk((const unsigned char*)rgba.Data, w, h, embed_rows, &scratch, out_meta))
+        if (!ImGuiApp_ImplQoi_ReadStripChunk((const unsigned char*)rgba.Data, w, h, embed_rows, &scratch, out_meta))
             return i > 0 && out_meta->Size > 0;   // frame 0 without magic = no embedded stream
     }
     return out_meta->Size > 0;
 }
 
-IMGUI_API bool ImGuiApp_ImplQoi_DecodeFrame(const char* dir, int frame_ordinal, ImVector<char>* out_rgba, int* out_w, int* out_h)
+bool ImGuiApp_ImplQoi_DecodeFrame(const char* dir, int frame_ordinal, ImVector<char>* out_rgba, int* out_w, int* out_h)
 {
     if (dir == nullptr || out_rgba == nullptr || frame_ordinal < 0)
         return false;
@@ -257,3 +261,5 @@ IMGUI_API bool ImGuiApp_ImplQoi_DecodeFrame(const char* dir, int frame_ordinal, 
         *out_h = h;
     return true;
 }
+
+#endif // #ifndef IMGUI_DISABLE

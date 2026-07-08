@@ -6,6 +6,7 @@
 
 #pragma once
 #include "imguiapp.h"      // ImGuiApp
+#ifndef IMGUI_DISABLE
 
 // Shared win32 message-pump main loop (renderer-agnostic).
 int ImGuiApp_ImplWin32_RunLoop(ImGuiApp* app);
@@ -16,3 +17,5 @@ int ImGuiApp_ImplWin32_RunLoop(ImGuiApp* app);
 #if 0
 extern LRESULT WINAPI ImGuiApp_ImplWin32_WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 #endif
+
+#endif // #ifndef IMGUI_DISABLE
