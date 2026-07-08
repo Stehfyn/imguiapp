@@ -3564,16 +3564,16 @@ static void RenderTextT(const char* text, ImVec2 text_size, ImVec2 pos, ImVec2 a
 
 struct RandomTimeData
 {
-    char  label[128];
-    char  type[128];
-    float max_timer_secs;
-    ImU64 rng; // seeded once in OnInitialize, stepped only by OnUpdate: snapshots capture it,
+    char  Label[128];
+    char  Type[128];
+    float MaxTimerSecs;
+    ImU64 Rng; // seeded once in OnInitialize, stepped only by OnUpdate: snapshots capture it,
                // record/replay reproduces every roll (see ImAppRandom)
 };
 
 struct RandomTimeTempData
 {
-    bool generate;
+    bool Generate;
 };
 
 // The one host for the sample controls: every control is composed into a window or sidebar.
@@ -3587,15 +3587,11 @@ struct RandomTimeControlDemo : ImGuiAppControl <RandomTimeData, RandomTimeTempDa
 
     virtual void OnInitialize(ImGuiApp*, RandomTimeData* data) const override final
     {
-        std::string_view sv;
+        snprintf(data->Type, sizeof(data->Type), "%.*s", (int)ImGuiAppType<decltype(this)>::Name.length(), ImGuiAppType<decltype(this)>::Name.data());
+        snprintf(data->Label, sizeof(data->Label), "%s", data->Type);
 
-        sv = ImGuiAppType<decltype(this)>::Name;
-
-        ImStrncpy(data->type, sv.data(), sv.length() + 1); // +1: ImStrncpy copies count-1 chars
-        ImFormatString(data->label, sizeof(data->label), "%s", data->type);
-
-        data->rng = (ImU64)time(nullptr);
-        data->max_timer_secs = GenerateTime(&data->rng);
+        data->Rng = (ImU64)time(nullptr);
+        data->MaxTimerSecs = GenerateTime(&data->Rng);
     }
 
     virtual void OnUpdate(float dt, RandomTimeData* data, const RandomTimeTempData* temp_data, const RandomTimeTempData* last_temp_data) const override final
@@ -3603,8 +3599,8 @@ struct RandomTimeControlDemo : ImGuiAppControl <RandomTimeData, RandomTimeTempDa
         IM_UNUSED(dt);
         IM_UNUSED(last_temp_data);
 
-        if (temp_data->generate)
-            data->max_timer_secs = GenerateTime(&data->rng);
+        if (temp_data->Generate)
+            data->MaxTimerSecs = GenerateTime(&data->Rng);
     }
 
     virtual void OnRender(const RandomTimeData* data, RandomTimeTempData* temp_data) const override final
@@ -3612,28 +3608,28 @@ struct RandomTimeControlDemo : ImGuiAppControl <RandomTimeData, RandomTimeTempDa
         // Renders between the host window's Begin/End.
         ImGui::Text("%s", "Max Timer Seconds");
 
-        temp_data->generate = ImGui::Button("Generate");
+        temp_data->Generate = ImGui::Button("Generate");
         ImGui::SameLine();
 
-        ImGui::Text("%.1f", data->max_timer_secs);
+        ImGui::Text("%.1f", data->MaxTimerSecs);
     }
 };
 
 struct BreathingControlData
 {
-    char   label[128];
-    char   type[128];
-    char   text[128];
-    char   timer_text[128];
-    float  timer_secs;
-    float  t_value;
-    float  t_direction;
-    ImVec4 col;
+    char   Label[128];
+    char   Type[128];
+    char   Text[128];
+    char   TimerText[128];
+    float  TimerSecs;
+    float  TValue;
+    float  TDirection;
+    ImVec4 Col;
 };
 
 struct BreathingControlTempData
 {
-    bool hovered;
+    bool Hovered;
 };
 
 // RandomTimeData is an Optional dependency: null while the Random Time example is disabled,
@@ -3645,7 +3641,7 @@ struct BreathingControlDemo : ImGuiAppControl<BreathingControlData, BreathingCon
     static float SourceMaxTimerSecs(const RandomTimeData* src)
     {
         if (src != nullptr)
-            return src->max_timer_secs;
+            return src->MaxTimerSecs;
         return DefaultMaxTimerSecs;
     }
 
@@ -3654,39 +3650,42 @@ struct BreathingControlDemo : ImGuiAppControl<BreathingControlData, BreathingCon
         IM_UNUSED(app);
         IM_UNUSED(src);
 
-        std::string_view sv;
-
-        sv = ImGuiAppType<decltype(this)>::Name;
-
-        ImStrncpy(data->type, sv.data(), sv.length() + 1); // +1: ImStrncpy copies count-1 chars
-        ImFormatString(data->label, sizeof(data->label), "%s", data->type);
+        snprintf(data->Type, sizeof(data->Type), "%.*s", (int)ImGuiAppType<decltype(this)>::Name.length(), ImGuiAppType<decltype(this)>::Name.data());
+        snprintf(data->Label, sizeof(data->Label), "%s", data->Type);
     }
 
     virtual void OnUpdate(float dt, BreathingControlData* data, const BreathingControlTempData* temp_data, const BreathingControlTempData* last_temp_data, const RandomTimeData* src) const override final
     {
-        data->timer_secs = ImMax(0.0f, data->timer_secs - dt);
+        data->TimerSecs = data->TimerSecs - dt > 0.0f ? data->TimerSecs - dt : 0.0f;
 
-        if (temp_data->hovered ^ last_temp_data->hovered)
+        if (temp_data->Hovered ^ last_temp_data->Hovered)
         {
-            data->timer_secs = temp_data->hovered * SourceMaxTimerSecs(src);
-            data->t_value = 0.0f;
-            data->t_direction = 1.0f;
+            data->TimerSecs = temp_data->Hovered * SourceMaxTimerSecs(src);
+            data->TValue = 0.0f;
+            data->TDirection = 1.0f;
         }
 
-        if (0.0f < data->timer_secs)
+        if (0.0f < data->TimerSecs)
         {
-            ImFormatString(data->timer_text, sizeof(data->timer_text), "%.1f Seconds Left!", data->timer_secs);
+            snprintf(data->TimerText, sizeof(data->TimerText), "%.1f Seconds Left!", data->TimerSecs);
         }
         else
         {
-            ImStrncpy(data->timer_text, "Timer Expired!", sizeof(data->timer_text));
+            snprintf(data->TimerText, sizeof(data->TimerText), "%s", "Timer Expired!");
         }
 
-        if (temp_data->hovered)
+        if (temp_data->Hovered)
         {
-            data->t_value = ImLinearSweep(data->t_value, data->t_direction, dt);
-            data->t_direction = (data->t_value == data->t_direction) ? -data->t_direction : data->t_direction;
-            data->col = ImLerp(ImGui::GetStyleColorVec4(ImGuiCol_Button), ImGui::GetStyleColorVec4(ImGuiCol_WindowBg), 0.0f <= data->t_value ? data->t_value : -data->t_value);
+            // User-code forms of ImLinearSweep/ImLerp (imgui_internal helpers are off-limits here).
+            if (data->TValue < data->TDirection)
+                data->TValue = (data->TValue + dt < data->TDirection) ? data->TValue + dt : data->TDirection;
+            else if (data->TValue > data->TDirection)
+                data->TValue = (data->TValue - dt > data->TDirection) ? data->TValue - dt : data->TDirection;
+            data->TDirection = (data->TValue == data->TDirection) ? -data->TDirection : data->TDirection;
+            const ImVec4  ca = ImGui::GetStyleColorVec4(ImGuiCol_Button);
+            const ImVec4  cb = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
+            const float   ct = 0.0f <= data->TValue ? data->TValue : -data->TValue;
+            data->Col = ImVec4(ca.x + (cb.x - ca.x) * ct, ca.y + (cb.y - ca.y) * ct, ca.z + (cb.z - ca.z) * ct, ca.w + (cb.w - ca.w) * ct);
         }
     }
 
@@ -3697,9 +3696,9 @@ struct BreathingControlDemo : ImGuiAppControl<BreathingControlData, BreathingCon
         // Renders between the host window's Begin/End.
         ImVec2 size = ImVec2(ImGui::GetContentRegionAvail().x, 2.0f * ImGui::GetFrameHeight());
 
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, data->col);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, data->Col);
         ImGui::Button("Hover Me!", size);
-        temp_data->hovered = ImGui::IsItemHovered();
+        temp_data->Hovered = ImGui::IsItemHovered();
         ImGui::PopStyleColor();
 
         ImVec2 pos = ImGui::GetCursorScreenPos();
@@ -3708,7 +3707,7 @@ struct BreathingControlDemo : ImGuiAppControl<BreathingControlData, BreathingCon
 
         ImGui::PushClipRect(r.Min, r.Max, true);
         ImGui::NewLine();
-        RenderTextT(data->timer_text, ImGui::CalcTextSize(data->timer_text), ImGui::GetCursorScreenPos(), ImGui::GetContentRegionAvail(), data->t_value);
+        RenderTextT(data->TimerText, ImGui::CalcTextSize(data->TimerText), ImGui::GetCursorScreenPos(), ImGui::GetContentRegionAvail(), data->TValue);
         ImGui::PopClipRect();
     }
 };
@@ -23434,87 +23433,87 @@ void ImGuiAppComposerControl::OnRender(const ImGuiAppComposerControlData* data, 
 void ImAppTween::OnInitialize(ImGuiApp* app, ImAppTweenData* data) const
 {
     IM_UNUSED(app);
-    data->a = 0.0f;
-    data->b = 1.0f;
-    data->duration = 1.0f;
-    data->ease = ImAppEase_Linear;
-    data->t = 0.0f;
-    data->value = data->a;
-    data->done = false;
+    data->A = 0.0f;
+    data->B = 1.0f;
+    data->Duration = 1.0f;
+    data->Ease = ImAppEase_Linear;
+    data->T = 0.0f;
+    data->Value = data->A;
+    data->Done = false;
 }
 
 void ImAppTween::OnUpdate(float dt, ImAppTweenData* data, const ImAppTweenTempData* temp_data, const ImAppTweenTempData* last_temp_data) const
 {
-    if (temp_data->trigger && !last_temp_data->trigger)   // rising: restart
+    if (temp_data->Trigger && !last_temp_data->Trigger)   // rising: restart
     {
-        data->t = 0.0f;
-        data->done = false;
+        data->T = 0.0f;
+        data->Done = false;
     }
-    data->t += data->duration > 0.0f ? dt / data->duration : 1.0f;
-    if (data->t > 1.0f)
-        data->t = 1.0f;
-    data->value = data->a + (data->b - data->a) * ImAppEase(data->ease, data->t);
-    data->done = data->t >= 1.0f;
+    data->T += data->Duration > 0.0f ? dt / data->Duration : 1.0f;
+    if (data->T > 1.0f)
+        data->T = 1.0f;
+    data->Value = data->A + (data->B - data->A) * ImAppEase(data->Ease, data->T);
+    data->Done = data->T >= 1.0f;
 }
 
 void ImAppTimer::OnInitialize(ImGuiApp* app, ImAppTimerData* data) const
 {
     IM_UNUSED(app);
-    data->duration = 1.0f;
-    data->elapsed = 0.0f;
-    data->done = false;
+    data->Duration = 1.0f;
+    data->Elapsed = 0.0f;
+    data->Done = false;
 }
 
 void ImAppTimer::OnUpdate(float dt, ImAppTimerData* data, const ImAppTimerTempData* temp_data, const ImAppTimerTempData* last_temp_data) const
 {
-    if (temp_data->trigger && !last_temp_data->trigger)   // rising: restart
+    if (temp_data->Trigger && !last_temp_data->Trigger)   // rising: restart
     {
-        data->elapsed = 0.0f;
-        data->done = false;
+        data->Elapsed = 0.0f;
+        data->Done = false;
     }
-    data->elapsed += dt;
-    data->done = data->elapsed >= data->duration;
+    data->Elapsed += dt;
+    data->Done = data->Elapsed >= data->Duration;
 }
 
 void ImAppSpring::OnInitialize(ImGuiApp* app, ImAppSpringData* data) const
 {
     IM_UNUSED(app);
-    data->target = 1.0f;
-    data->stiffness = 8.0f;
-    data->damping = 2.0f;
-    data->value = 0.0f;
-    data->velocity = 0.0f;
+    data->Target = 1.0f;
+    data->Stiffness = 8.0f;
+    data->Damping = 2.0f;
+    data->Value = 0.0f;
+    data->Velocity = 0.0f;
 }
 
 void ImAppSpring::OnUpdate(float dt, ImAppSpringData* data, const ImAppSpringTempData* temp_data, const ImAppSpringTempData* last_temp_data) const
 {
     IM_UNUSED(temp_data);
     IM_UNUSED(last_temp_data);
-    data->velocity += (data->stiffness * (data->target - data->value) - data->damping * data->velocity) * dt;
-    data->value += data->velocity * dt;
+    data->Velocity += (data->Stiffness * (data->Target - data->Value) - data->Damping * data->Velocity) * dt;
+    data->Value += data->Velocity * dt;
 }
 
 void ImAppPulse::OnInitialize(ImGuiApp* app, ImAppPulseData* data) const
 {
     IM_UNUSED(app);
-    data->period = 1.0f;
-    data->phase = 0.0f;
-    data->pulse = false;
+    data->Period = 1.0f;
+    data->Phase = 0.0f;
+    data->Pulse = false;
 }
 
 void ImAppPulse::OnUpdate(float dt, ImAppPulseData* data, const ImAppPulseTempData* temp_data, const ImAppPulseTempData* last_temp_data) const
 {
     IM_UNUSED(temp_data);
     IM_UNUSED(last_temp_data);
-    data->phase += data->period > 0.0f ? dt / data->period : 0.0f;
-    if (data->phase >= 1.0f)
+    data->Phase += data->Period > 0.0f ? dt / data->Period : 0.0f;
+    if (data->Phase >= 1.0f)
     {
-        data->phase -= 1.0f;
-        data->pulse = true;
+        data->Phase -= 1.0f;
+        data->Pulse = true;
     }
     else
     {
-        data->pulse = false;
+        data->Pulse = false;
     }
 }
 

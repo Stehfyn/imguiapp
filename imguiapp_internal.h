@@ -1070,17 +1070,17 @@ static inline float ImAppEase(int ease, float t)
 //-----------------------------------------------------------------------------
 struct ImAppTweenData
 {
-    float a;         // start value (param)
-    float b;         // end value (param)
-    float duration;  // seconds (param)
-    int   ease;      // ImAppEase_ (param)
-    float t;         // accumulator [0,1]
-    float value;     // DataOut: eased a->b at t
-    bool  done;      // DataOut: t reached 1
+    float A;         // start value (param)
+    float B;         // end value (param)
+    float Duration;  // seconds (param)
+    int   Ease;      // ImAppEase_ (param)
+    float T;         // accumulator [0,1]
+    float Value;     // DataOut: eased A->B at T
+    bool  Done;      // DataOut: T reached 1
 };
 struct ImAppTweenTempData
 {
-    bool trigger;    // rising edge restarts
+    bool Trigger;    // rising edge restarts
 };
 struct ImAppTween : ImGuiAppControl<ImAppTweenData, ImAppTweenTempData>
 {
@@ -1093,13 +1093,13 @@ struct ImAppTween : ImGuiAppControl<ImAppTweenData, ImAppTweenTempData>
 //-----------------------------------------------------------------------------
 struct ImAppTimerData
 {
-    float duration;  // seconds (param)
-    float elapsed;   // accumulator
-    bool  done;      // DataOut: elapsed >= duration
+    float Duration;  // seconds (param)
+    float Elapsed;   // accumulator
+    bool  Done;      // DataOut: Elapsed >= Duration
 };
 struct ImAppTimerTempData
 {
-    bool trigger;    // rising edge restarts
+    bool Trigger;    // rising edge restarts
 };
 struct ImAppTimer : ImGuiAppControl<ImAppTimerData, ImAppTimerTempData>
 {
@@ -1112,11 +1112,11 @@ struct ImAppTimer : ImGuiAppControl<ImAppTimerData, ImAppTimerTempData>
 //-----------------------------------------------------------------------------
 struct ImAppSpringData
 {
-    float target;     // param
-    float stiffness;  // param (k)
-    float damping;    // param (c)
-    float value;      // DataOut
-    float velocity;   // accumulator
+    float Target;     // param
+    float Stiffness;  // param (k)
+    float Damping;    // param (c)
+    float Value;      // DataOut
+    float Velocity;   // accumulator
 };
 struct ImAppSpringTempData
 {
@@ -1132,9 +1132,9 @@ struct ImAppSpring : ImGuiAppControl<ImAppSpringData, ImAppSpringTempData>
 //-----------------------------------------------------------------------------
 struct ImAppPulseData
 {
-    float period;   // seconds per cycle (param)
-    float phase;    // accumulator [0,1)
-    bool  pulse;    // DataOut: one-frame wrap flag
+    float Period;   // seconds per cycle (param)
+    float Phase;    // accumulator [0,1)
+    bool  Pulse;    // DataOut: one-frame wrap flag
 };
 struct ImAppPulseTempData
 {
