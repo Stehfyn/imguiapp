@@ -79,14 +79,10 @@ assert missing. 0 `IM_ASSERT_USER_ERROR`; 11/152 asserts messaged (7%); invisibl
 anti-pattern persists (`:482`). Route Pop/registration misuse through `IM_ASSERT_USER_ERROR` + WAL;
 sweep user-reachable asserts into sentence-with-hint form.
 
-### S9. Micro-lexicon + constant tier — F25/F26/F14/F28 + N22/N23 (sed-class in aggregate)
-Bare `default:` 50 vs 1 merged; index name `i` ×398 vs `n` ×1 (decide once); 15 C++ casts
-(13 `static_cast`: cpp `:3826,:6581`, h `:986-:1213`, backends ×6; 2 `const_cast`: `:22198,:23245`);
-13 `sizeof(Type)` in mem* (`:1472,:1509,:7309,:7312,:24733-:26459`); 1 `while (true)` (`:23818`);
-the single `ImQsort` comparator = anonymous non-`IMGUI_CDECL` lambda, `a/b` params (`:27183` —
-N22's exact fenced hazard → `struct Func { static int IMGUI_CDECL SampleComparerByValue(...) }`);
-k-tier: 56 defs / 61 names / 243 uses, 0 UPPER_SNAKE tunables (86% in the graph-editor region) —
-target N23 form, ID-key blocks get rationale comments.
+### S9. Micro-lexicon residue — F25 (LOW; remainder of the fixed wave)
+6 bare `default:` with load-bearing bodies remain (each needs a per-site named-case merge or a
+fall-out-of-switch restructure; the mergeable/no-op 9 are fixed). House index name decided: `i`
+(the imguiapp majority form; canon's `n` not adopted — 398:1 corpus vote).
 
 ---
 
