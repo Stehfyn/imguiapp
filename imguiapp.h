@@ -232,6 +232,7 @@ namespace ImGui
     IMGUI_API bool        AppWALOpen(ImGuiAppWAL* wal, const char* path, ImGuiAppWALLevel level);
     IMGUI_API void        AppWALClose(ImGuiAppWAL* wal);
     IMGUI_API void        AppWALWrite(ImGuiAppWAL* wal, ImGuiAppWALLevel level, const char* fmt, ...) IM_FMTARGS(3);
+    IMGUI_API void        AppWALWriteV(ImGuiAppWAL* wal, ImGuiAppWALLevel level, const char* fmt, va_list args) IM_FMTLIST(3);
 
     // WAL sink for IM_ASSERT failures routed to ImAppAssertFail.
     IMGUI_API void        SetAppAssertWAL(ImGuiAppWAL* wal);

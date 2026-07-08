@@ -132,6 +132,9 @@ typedef int ImGuiAppTransportSource;   // -> enum ImGuiAppTransportSource_   // 
 // [SECTION] Macros
 //-----------------------------------------------------------------------------
 
+// Buffer-size census (F27): recurring de-facto sizes used WITHOUT per-site comments -- 560-byte
+// path buffers (filesystem path + suffix headroom) and 1200-byte compiler command lines. Any
+// other off-census fixed size carries its reason at the site.
 #define IMGUIAPP_CONTROL_BODY_MAX 2048   // ImGuiAppNodeDraft per-method custom C++ body cap (fixed buffer -> draft stays memcpy-safe)
 
 #ifndef IMGUIAPP_PREVIEW_ABI
@@ -1367,13 +1370,13 @@ inline bool EditAppField(const char* label, T* value)
 
 // Node rendering (canvas)
 // Canvas-engine node scaffold (see imguiapp_canvas.h): titled node between CanvasBegin/End.
-IMGUI_API void        BeginAppNode(::ImGuiCanvasState* c, int id, const char* title);
+IMGUI_API void        AppNodeBegin(::ImGuiCanvasState* c, int id, const char* title);
 IMGUI_API void        EndAppNode(::ImGuiCanvasState* c);
 
 // Renamable node scaffold: the title bar shows *name, turns into an inline text box when clicked.
 // Commits on Enter or focus loss, cancels on Escape. *editing_node_id is caller-owned (-1 = none);
 // set on title click, cleared when the edit ends. Pair with EndAppNode().
-IMGUI_API void        BeginAppNodeRenamable(::ImGuiCanvasState* c, int id, char* name, int name_size, int* editing_node_id);
+IMGUI_API void        AppNodeBeginRenamable(::ImGuiCanvasState* c, int id, char* name, int name_size, int* editing_node_id);
 
 // Render every reflected field of an aggregate as read-only labelled rows in the current node.
 template <typename T>
@@ -1418,10 +1421,10 @@ IMGUI_API void        AppNodeDraftRemoveField(ImVector<ImGuiAppFieldDesc>* field
 
 // Design-phase node drafts
 // Inspector UI: rename the draft and add/remove/edit its persist and temp fields.
-IMGUI_API void EditAppNodeDraft(ImGuiAppNodeDraft* draft);
+IMGUI_API void AppNodeDraftEdit(ImGuiAppNodeDraft* draft);
 
 // Persist/temp field editors without the Name input, for hosts that edit the name elsewhere.
-IMGUI_API void EditAppNodeDraftFields(ImGuiAppNodeDraft* draft);
+IMGUI_API void AppNodeDraftFieldsEdit(ImGuiAppNodeDraft* draft);
 
 // Render a draft's fields as read-only node rows (no reflection: the type does not exist yet).
 IMGUI_API void DrawAppNodeDraft(const ImGuiAppNodeDraft* draft);
@@ -1514,7 +1517,7 @@ IMGUI_API void                                ShowAppGraphEditor(ImGuiApp* app, 
 // Emit an ImGuiAppControl from a draft: <Name>Data, <Name>TempData, and the control skeleton with
 // stubbed overrides. A String field emits char[N], which falls outside the reflection subset.
 // Appends to *out.
-IMGUI_API void GenerateAppControlCode(const ImGuiAppNodeDraft* draft, ImGuiTextBuffer* out);
+IMGUI_API void AppControlCodeGenerate(const ImGuiAppNodeDraft* draft, ImGuiTextBuffer* out);
 
 IMGUI_API int                                 AppGraphEditorCommandCount();
 IMGUI_API const ImGuiAppEditorCommand*        AppGraphEditorCommandAt(int index);
@@ -1655,29 +1658,29 @@ IMGUI_API bool                                AppEventExprCheck(const ImGuiAppGr
 // Whole-graph codegen: data structs + controls with derived DataDependencies (topo order) + one
 // bring-up function pushing layers, then windows/sidebars, then controls. Appends to *out. The Ex
 // variant also records the per-node source map (out_spans may be null; cleared first).
-IMGUI_API void                                GenerateAppGraphCode(const ImGuiAppGraph* g, ImGuiTextBuffer* out);
+IMGUI_API void                                AppGraphCodeGenerate(const ImGuiAppGraph* g, ImGuiTextBuffer* out);
 IMGUI_API void                                GenerateAppGraphCodeEx(const ImGuiAppGraph* g, ImGuiTextBuffer* out, ImVector<ImGuiAppCodeSpan>* out_spans);
 
-// Generated-shell bootstrap: the composition body from GenerateAppGraphCode (the SINGLE emitter) wrapped in
+// Generated-shell bootstrap: the composition body from AppGraphCodeGenerate (the SINGLE emitter) wrapped in
 // the host scaffold a standalone program needs -- a concrete ImGuiApp composing via the emitted SetupApp on
 // its first initialized frame, plus main(). A Composer-hosting composition emits a shell that runs the Composer.
-IMGUI_API void                                GenerateAppShellCode(const ImGuiAppGraph* g, ImGuiTextBuffer* out);
+IMGUI_API void                                AppShellCodeGenerate(const ImGuiAppGraph* g, ImGuiTextBuffer* out);
 
 // Interpreter (F66/F67): module codegen + session
 // DLL preview module (F78): the shell composition body + host scaffold, but with a C-ABI entry point
 // (extern "C" ImGuiAppPreview_Create/_Destroy/_ABI) instead of main(); the module hands the host a composed
 // ImGuiApp as a framework base pointer. IMGUIAPP_PREVIEW_ABI is baked into both sides; a load-time mismatch is refused.
-IMGUI_API void             GenerateAppPreviewModuleCode(const ImGuiAppGraph* g, ImGuiTextBuffer* out);
+IMGUI_API void             AppPreviewModuleCodeGenerate(const ImGuiAppGraph* g, ImGuiTextBuffer* out);
 
 // Per-node codegen: emits only the code one node produces -- a Control's struct(s) with derived
 // deps, the CommandLayer's AppCommand enum + dispatch, a bring-up line, or (App node) the whole
 // composition. Appends to *out.
-IMGUI_API void             GenerateAppNodeCode(const ImGuiAppGraph* g, const ImGuiAppNode* n, ImGuiTextBuffer* out, ImGuiApp* live_app = nullptr);   // live control + live_app -> reflected real structs
+IMGUI_API void             AppNodeCodeGenerate(const ImGuiAppGraph* g, const ImGuiAppNode* n, ImGuiTextBuffer* out, ImGuiApp* live_app = nullptr);   // live control + live_app -> reflected real structs
 
-// Persist / restore the whole graph as imgui-style text. LoadAppGraph also ingests the legacy
+// Persist / restore the whole graph as imgui-style text. AppGraphLoad also ingests the legacy
 // single/multi "[Draft]" format (each becomes a Control node). Return false on file error.
-IMGUI_API bool             SaveAppGraph(const char* path, const ImGuiAppGraph* g);
-IMGUI_API bool             LoadAppGraph(const char* path, ImGuiAppGraph* g);
+IMGUI_API bool             AppGraphSave(const char* path, const ImGuiAppGraph* g);
+IMGUI_API bool             AppGraphLoad(const char* path, ImGuiAppGraph* g);
 
 // Headless codegen: load a graph file, write its generated C++ to out_header_path. Returns false on
 // a load or write error.
@@ -1725,7 +1728,7 @@ IMGUI_API const char*      AppGraphPrefabName(const ImGuiAppGraph* g, int index)
 IMGUI_API int              AppGraphInstantiatePrefab(ImGuiAppGraph* g, int index, ImVec2 origin);
 
 // Seed the starter prefab library (producer/consumer pair, event->command control) when the registry
-// is empty. The registry itself persists in a "<graph>.prefabs" sidecar written/read by Save/LoadAppGraph.
+// is empty. The registry itself persists in a "<graph>.prefabs" sidecar written/read by Save/AppGraphLoad.
 IMGUI_API void             AppGraphSeedStarterPrefabs(ImGuiAppGraph* g);
 
 // Ensure the four foundation layers (Window, Task, Command, Status) exist in g -- adds missing,

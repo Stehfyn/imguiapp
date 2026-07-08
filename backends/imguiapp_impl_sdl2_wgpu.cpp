@@ -157,7 +157,7 @@ static WGPUDevice ImGuiApp_ImplSDL2WGPU_RequestDevice(wgpu::Instance& instance, 
         return nullptr;
     return acquired_device.MoveToCHandle();
 }
-#endif
+#endif // #if defined(IMGUI_IMPL_WEBGPU_BACKEND_DAWN)
 
 static bool ImGuiApp_ImplSDL2WGPU_ResizeSurface(ImGuiApp_ImplSDL2WGPU_Data* bd, int width, int height)
 {
@@ -226,7 +226,7 @@ static bool ImGuiApp_ImplSDL2WGPU_InitWGPU(ImGuiApp_ImplSDL2WGPU_Data* bd)
     }
 #else
 #error "ImGuiX SDL2 WebGPU backend currently expects IMGUI_IMPL_WEBGPU_BACKEND_DAWN."
-#endif
+#endif // #if defined(IMGUI_IMPL_WEBGPU_BACKEND_DAWN)
 
     if (preferred_format == WGPUTextureFormat_Undefined)
         preferred_format = WGPUTextureFormat_BGRA8Unorm;

@@ -131,7 +131,7 @@ IMGUI_API int ImStackTrace(char* out, int out_size, int skip_frames)
 #else
     IM_UNUSED(skip_frames);
     return 0;
-#endif
+#endif // #ifdef _WIN32
 }
 
 IMGUI_API void ImAppAssertFail(const char* expr, const char* file, int line)
@@ -331,7 +331,7 @@ static float AppPacerViewportRefreshHz(const ImGuiViewport* viewport)
 #else
     IM_UNUSED(viewport);
     return 60.0f;
-#endif
+#endif // #ifdef _WIN32
 }
 
 bool ImGuiApp::Initialize(const ImGuiAppConfig* config)
@@ -501,7 +501,7 @@ void ImGui::AppRegisterTypeSchema(const ImGuiAppTypeSchema* schema)
     // Count may still be 0 here: AppEnsureTypeRegistered registers the entry before
     // filling its fields so cyclic member reachability terminates.
     IM_ASSERT(schema != nullptr && schema->TypeName != nullptr && schema->Fields != nullptr);
-    IM_ASSERT(AppFindTypeSchema(schema->TypeName) == nullptr);   // one schema per display name
+    IM_ASSERT(AppFindTypeSchema(schema->TypeName) == nullptr && "One schema per display name.");
     AppTypeSchemas()->push_back(schema);
 }
 
@@ -1157,7 +1157,7 @@ IMGUI_API void AppControlRegisterStorage(ImGuiApp* app, ImGuiAppControlBase* con
 {
     // Instance data is keyed by the instance-qualified data type id so dependents can resolve it.
     const ImGuiID id = ImAppHashType(data_type_id, instance);
-    IM_ASSERT(app->Data.GetVoidPtr(id) == nullptr);   // one instance per (control data type, instance id)
+    IM_ASSERT(app->Data.GetVoidPtr(id) == nullptr && "One instance per (control data type, instance id).");
     if (host_label == nullptr)
         AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push control %s (instance %u)", name, (unsigned)instance);
     else
@@ -1661,7 +1661,7 @@ IMGUI_API void AppPacerWait(ImGuiApp* app)
         nanosleep(&req, nullptr);
         t = AppClockNowSec();
     }
-#endif
+#endif // #ifdef _WIN32
     while (t < deadline)
         t = AppClockNowSec();
 
@@ -1760,16 +1760,13 @@ IMGUI_API void AppWALClose(ImGuiAppWAL* wal)
     wal->Level = ImGuiAppWALLevel_Off;
 }
 
-IMGUI_API void AppWALWrite(ImGuiAppWAL* wal, ImGuiAppWALLevel level, const char* fmt, ...)
+IMGUI_API void AppWALWriteV(ImGuiAppWAL* wal, ImGuiAppWALLevel level, const char* fmt, va_list args)
 {
     if (wal == nullptr || wal->File == nullptr || level > wal->Level)
         return;
 
     char msg[512];
-    va_list args;
-    va_start(args, fmt);
     ImFormatStringV(msg, IM_ARRAYSIZE(msg), fmt, args);
-    va_end(args);
 
     // WAL must also work before/after the ImGui context's lifetime.
     const int frame = ImGui::GetCurrentContext() != nullptr ? ImGui::GetFrameCount() : -1;
@@ -1780,6 +1777,14 @@ IMGUI_API void AppWALWrite(ImGuiAppWAL* wal, ImGuiAppWALLevel level, const char*
     else
         fprintf(f, "[%06d f%05d] %s\n", wal->Seq++, frame, msg);
     fflush(f);   // write-ahead guarantee
+}
+
+IMGUI_API void AppWALWrite(ImGuiAppWAL* wal, ImGuiAppWALLevel level, const char* fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    AppWALWriteV(wal, level, fmt, args);
+    va_end(args);
 }
 
 IMGUI_API void SetAppAssertWAL(ImGuiAppWAL* wal)
@@ -4010,7 +4015,7 @@ static void ComposerApplyLayoutPreset(ImGuiAppGraphDocData* doc, int preset)
 static void ComposerGenerateHeader(ImGuiAppGraphDocData* doc)
 {
     ImGuiTextBuffer full;
-    ImGui::GenerateAppGraphCode(&doc->Graph, &full);
+    ImGui::AppGraphCodeGenerate(&doc->Graph, &full);
     if (ImFileHandle fh = ImFileOpen(doc->HeaderPath, "wt"))
     {
         ImFileWrite(full.c_str(), sizeof(char), (ImU64)full.size(), fh);
@@ -4110,7 +4115,7 @@ struct GraphDocControl : ImGuiAppControl<ImGuiAppGraphDocData, ImGuiAppGraphDocT
         {
             data->CodegenWarnSig = data->FrameSig;
             ImGuiTextBuffer code;
-            ImGui::GenerateAppGraphCode(&data->Graph, &code);
+            ImGui::AppGraphCodeGenerate(&data->Graph, &code);
             data->CodegenWarnCount = ImGui::AppScanCodegenWarnings(code.c_str(), nullptr);
         }
 
@@ -4659,12 +4664,12 @@ struct ImGuiAppToolbarControl : ImGuiAppControl<ImGuiAppToolbarData, ImGuiAppToo
         ImGuiAppGraphDocData* doc = data->Doc;
         if (temp_data->Save)
         {
-            ImGui::SaveAppGraph(doc->GraphPath, &doc->Graph);
+            ImGui::AppGraphSave(doc->GraphPath, &doc->Graph);
             DocLog(doc, 0, "saved graph -> %s", doc->GraphPath);
         }
         if (temp_data->Load)
         {
-            ImGui::LoadAppGraph(doc->GraphPath, &doc->Graph);
+            ImGui::AppGraphLoad(doc->GraphPath, &doc->Graph);
             ImGui::AppGraphEnsureFoundation(&doc->Graph);
             ImGui::AppGraphRequestFitAll(&doc->Graph);
             DocLog(doc, 0, "loaded graph <- %s", doc->GraphPath);
@@ -4706,7 +4711,7 @@ struct ImGuiAppToolbarControl : ImGuiAppControl<ImGuiAppToolbarData, ImGuiAppToo
         if (temp_data->CopyCode)
         {
             ImGuiTextBuffer full;
-            ImGui::GenerateAppGraphCode(&doc->Graph, &full);
+            ImGui::AppGraphCodeGenerate(&doc->Graph, &full);
             ImGui::SetClipboardText(full.c_str());
             ImFormatString(doc->WriteMsg, IM_ARRAYSIZE(doc->WriteMsg), "generated C++ -> clipboard");
             DocLog(doc, 0, "copied generated C++ -> clipboard");
@@ -4722,7 +4727,7 @@ struct ImGuiAppToolbarControl : ImGuiAppControl<ImGuiAppToolbarData, ImGuiAppToo
         if (temp_data->Diff)
         {
             ImGuiAppGraph saved;
-            if (ImGui::LoadAppGraph(doc->GraphPath, &saved))
+            if (ImGui::AppGraphLoad(doc->GraphPath, &saved))
             {
                 ImGuiTextBuffer d;
                 ImGui::AppGraphDiffCode(&saved, &doc->Graph, &d);
@@ -4866,7 +4871,7 @@ struct ImGuiAppToolbarControl : ImGuiAppControl<ImGuiAppToolbarData, ImGuiAppToo
                     ImGui::TextDisabled("Codegen warnings (%d)", doc->CodegenWarnCount);
                     ImGui::Separator();
                     ImGuiTextBuffer code;
-                    ImGui::GenerateAppGraphCode(&doc->Graph, &code);   // pure read; the list regenerates while the popup is open
+                    ImGui::AppGraphCodeGenerate(&doc->Graph, &code);   // pure read; the list regenerates while the popup is open
                     ImGuiTextBuffer list;
                     ImGui::AppScanCodegenWarnings(code.c_str(), &list);
                     ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
@@ -5738,7 +5743,7 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
 
         if (temp_data->ProjLoadGraph)
         {
-            ImGui::LoadAppGraph(doc->GraphPath, &doc->Graph);
+            ImGui::AppGraphLoad(doc->GraphPath, &doc->Graph);
             ImGui::AppGraphEnsureFoundation(&doc->Graph);
             ImGui::AppGraphRequestFitAll(&doc->Graph);
             DocLog(doc, 0, "loaded graph <- %s (Project)", doc->GraphPath);
@@ -5812,7 +5817,7 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
             data->CodeName[0] = 0;
             if (const ImGuiAppNode* seln = doc->Selection >= 0 ? ImGui::AppGraphFindNode(&doc->Graph, doc->Selection) : nullptr)
             {
-                ImGui::GenerateAppNodeCode(&doc->Graph, seln, &data->CodeNodeText, doc->Mirror);
+                ImGui::AppNodeCodeGenerate(&doc->Graph, seln, &data->CodeNodeText, doc->Mirror);
                 ImStrncpy(data->CodeName, seln->Draft.Name, sizeof(data->CodeName));
                 data->HasNodeCode = data->CodeNodeText.size() > 0;
             }
@@ -5823,7 +5828,7 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
             if (data->DiffMode)
             {
                 ImGuiAppGraph saved;
-                if (ImGui::LoadAppGraph(doc->GraphPath, &saved))
+                if (ImGui::AppGraphLoad(doc->GraphPath, &saved))
                 {
                     ImGui::AppGraphDiffCode(&saved, &doc->Graph, &data->DiffText);
                     data->HasDiff = true;
@@ -6722,7 +6727,7 @@ IMGUI_API void ShowAppDemo(bool* p_open, ImGuiApp* host)
     // Chrome composition, once. Examples are pushed/popped AFTER the chrome, so they are always
     // the tail of their vectors and the toggle rebuild below can pop them back off.
     static ImGuiApp* s_composed = nullptr;
-    IM_ASSERT(s_composed == nullptr || s_composed == app);   // one application per process
+    IM_ASSERT((s_composed == nullptr || s_composed == app) && "One composed application per process.");
     if (s_composed != app)
     {
         ImGuiViewport* vp = ImGui::GetMainViewport();
@@ -6847,7 +6852,7 @@ IMGUI_API void ShowAppDemo(bool* p_open, ImGuiApp* host)
 //-----------------------------------------------------------------------------
 // DLL preview backend (F78; docs/designs.md (dll-preview-design)). Copy-marshalling: the preview DLL owns
 // its entire runtime; the host only compiles/loads it and moves bytes across the C-ABI (emitted surface in
-// GenerateAppPreviewModuleCode) -- no shared context/allocator/pointer, link-agnostic. Build-baked paths
+// AppPreviewModuleCodeGenerate) -- no shared context/allocator/pointer, link-agnostic. Build-baked paths
 // (imguix/CMakeLists.txt file(GENERATE), Windows/MSVC only): IMGUIX_PREVIEW_CL_ARGS (include/define flags
 // matching imguix) + IMGUIX_PREVIEW_LIBS (static libs the module links); absent -> disabled path (interpreter).
 //
@@ -6910,7 +6915,7 @@ struct ImGuiAppPreviewDll
     ImVector<char> DrawBuf;             // reused draw-data blob (frame render)
     ImVector<ImDrawVert> VtxScratch;    // aligned per-list vertex copy out of the byte blob
     ImVector<ImDrawIdx>  IdxScratch;    // aligned per-list index copy out of the byte blob
-#endif
+#endif // #if IMGUIX_PREVIEW_DLL_ENABLED
 };
 
 namespace ImGui
@@ -6984,7 +6989,7 @@ static bool AppPreviewDllCompile(ImGuiAppPreviewDll* s, const ImGuiAppGraph* gra
     ImFormatString(log_path, IM_ARRAYSIZE(log_path), "%s\\preview_%d.log", s->ScratchDir, n);
 
     ImGuiTextBuffer module;
-    GenerateAppPreviewModuleCode(graph, &module);
+    AppPreviewModuleCodeGenerate(graph, &module);
     FILE* f = fopen(cpp_path, "wb");
     if (f == nullptr)
     {
@@ -7443,7 +7448,7 @@ bool                AppPreviewDllReload(ImGuiAppPreviewDll*, const ImGuiAppGraph
 void                AppPreviewDllSetDisplaySize(ImGuiAppPreviewDll*, int, int) {}
 bool                AppPreviewDllRasterizeFrame(ImGuiAppPreviewDll*, int, int, unsigned int, ImVector<unsigned char>*) { return false; }
 
-#endif
+#endif // #if IMGUIX_PREVIEW_DLL_ENABLED
 }
 
 
@@ -7473,7 +7478,7 @@ bool                AppPreviewDllRasterizeFrame(ImGuiAppPreviewDll*, int, int, u
 // [SECTION] Scope interior (walls, boundary portals, density altitude, scope-local placement)
 // [SECTION] Topological order + whole-graph codegen
 // [SECTION] Event expression checking (AppEventExprCheck)
-// [SECTION] Whole-graph persistence (SaveAppGraph / LoadAppGraph, legacy [Draft] ingest)
+// [SECTION] Whole-graph persistence (AppGraphSave / AppGraphLoad, legacy [Draft] ingest)
 // [SECTION] Round-trip: parse C++ struct blocks back into Struct nodes
 // [SECTION] Undo / redo (in-memory serialized snapshots)
 // [SECTION] Copy / paste (subtree clipboard with id remap)
@@ -7500,7 +7505,7 @@ static const ImGuiID APP_KEY_WRAP_EDITING = 0x424C0007;
 static const ImGuiID APP_KEY_WRAP_OWNER   = 0x424C0008;
 static const ImGuiID APP_KEY_WRAP_ID      = 0x424C0009;
 
-void BeginAppNode(ImGuiCanvasState* c, int id, const char* title)
+void AppNodeBegin(ImGuiCanvasState* c, int id, const char* title)
 {
     IM_ASSERT(c != nullptr && title != nullptr);
 
@@ -7521,7 +7526,7 @@ void EndAppNode(ImGuiCanvasState* c)
     st->SetInt(APP_KEY_WRAP_ID, -1);
 }
 
-void BeginAppNodeRenamable(ImGuiCanvasState* c, int id, char* name, int name_size, int* editing_node_id)
+void AppNodeBeginRenamable(ImGuiCanvasState* c, int id, char* name, int name_size, int* editing_node_id)
 {
     IM_ASSERT(c != nullptr && name != nullptr && editing_node_id != nullptr);
 
@@ -7602,7 +7607,7 @@ static bool AppRowDeleteButton(const char* str_id)
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 center = ImVec2(pos.x + sz * 0.5f, pos.y + sz * 0.5f);
     if (hovered || held)
-        dl->AddCircleFilled(center, sz * 0.5f, ImGui::GetColorU32(held ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered));
+        dl->AddCircleFilled(center, sz * 0.5f, ImGui::GetColorU32((held && hovered) ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered));
 
     const ImU32 cross = ImGui::GetColorU32(ImGuiCol_Text, (hovered || held) ? 1.0f : 0.55f);
     const float arm = sz * 0.22f;
@@ -7624,7 +7629,7 @@ static bool AppRowReorderButton(const char* str_id, bool up, bool enabled)
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 c = ImVec2(pos.x + sz * 0.5f, pos.y + sz * 0.5f);
     if (hovered || held)
-        dl->AddCircleFilled(c, sz * 0.5f, ImGui::GetColorU32(held ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered));
+        dl->AddCircleFilled(c, sz * 0.5f, ImGui::GetColorU32((held && hovered) ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered));
 
     const ImU32 col = ImGui::GetColorU32(ImGuiCol_Text, !enabled ? 0.28f : (hovered || held) ? 1.0f : 0.62f);
     const float a = sz * 0.20f;
@@ -7797,14 +7802,14 @@ ImU32 AppBlText()      { return AppComposerGetStyle()->FieldText; }
 const float BL_ROUNDING = 0.28f;
 }
 
-  void EditAppNodeDraft(ImGuiAppNodeDraft* draft)
+  void AppNodeDraftEdit(ImGuiAppNodeDraft* draft)
 {
     IM_ASSERT(draft != nullptr);
 
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12.0f);
     ImGui::InputText("Name", draft->Name, IM_ARRAYSIZE(draft->Name));
 
-    EditAppNodeDraftFields(draft);
+    AppNodeDraftFieldsEdit(draft);
 }
 
 namespace
@@ -7849,7 +7854,7 @@ static bool AppRowKebabButton(const char* str_id)
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 c(pos.x + sz * 0.5f, pos.y + sz * 0.5f);
     if (hovered || held)
-        dl->AddCircleFilled(c, sz * 0.5f, ImGui::GetColorU32(held ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered));
+        dl->AddCircleFilled(c, sz * 0.5f, ImGui::GetColorU32((held && hovered) ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered));
     const ImU32 col = ImGui::GetColorU32(ImGuiCol_Text, (hovered || held) ? 1.0f : 0.55f);
     const float r = ImMax(1.0f, sz * 0.055f);
     const float step = sz * 0.20f;
@@ -8174,7 +8179,7 @@ static void EditAppFieldList(const char* list_label, ImVector<ImGuiAppFieldDesc>
     ImGui::PopID();
 }
 
-void EditAppNodeDraftFields(ImGuiAppNodeDraft* draft)
+void AppNodeDraftFieldsEdit(ImGuiAppNodeDraft* draft)
 {
     IM_ASSERT(draft != nullptr);
 
@@ -9274,7 +9279,7 @@ static void AppEmitControlWithDeps(const ImGuiAppGraph* g, const ImGuiAppNode* n
 // F16: a lone draft is the graph emitter's depCount==0 path -- a single Control node with no incoming
 // edges, no events, no commands. Build that scratch node and emit through the ONE control emitter
 // (AppEmitControlWithDeps), so no parallel codegen path can drift. The historic output is byte-locked in the proof.
-void GenerateAppControlCode(const ImGuiAppNodeDraft* draft, ImGuiTextBuffer* out)
+void AppControlCodeGenerate(const ImGuiAppNodeDraft* draft, ImGuiTextBuffer* out)
 {
     IM_ASSERT(draft != nullptr && out != nullptr);
     ImGuiAppGraph g;
@@ -12262,6 +12267,7 @@ static bool AppHandleLayerVerticalDrag(ImGuiAppGraph* g, bool show_live, int* ou
 
 #endif // IMGUIX_DISABLE_TOOLS
 static const char*    APP_DOCK_DIR_NAMES[] = { "Left", "Right", "Up", "Down" };
+IM_STATIC_ASSERT(IM_ARRAYSIZE(APP_DOCK_DIR_NAMES) == 4); // one name per ImGuiDir
 static const ImGuiDir APP_DOCK_DIRS[]     = { ImGuiDir_Left, ImGuiDir_Right, ImGuiDir_Up, ImGuiDir_Down };
 
 // Codegen: the C++ enum spelling for a sidebar dock direction.
@@ -13237,14 +13243,24 @@ static void AppScopeValidate(ImGuiAppGraph* g)
 }
 
 // Editor notice toast: shares the graph's LastLinkErr channel (status hint + canvas toast).
+//-----------------------------------------------------------------------------
+// [SECTION] Forward declarations (graph editor region)
+//-----------------------------------------------------------------------------
 static void AppGraphNotify(ImGuiAppGraph* g, const char* fmt, ...) IM_FMTARGS(2);
+static void AppGraphNotifyV(ImGuiAppGraph* g, const char* fmt, va_list args) IM_FMTLIST(2);
+
+static void AppGraphNotifyV(ImGuiAppGraph* g, const char* fmt, va_list args)
+{
+    ImFormatStringV(g->LastLinkErr, IM_ARRAYSIZE(g->LastLinkErr), fmt, args);
+    g->LastLinkErrSeq++;
+}
+
 static void AppGraphNotify(ImGuiAppGraph* g, const char* fmt, ...)
 {
     va_list args;
     va_start(args, fmt);
-    ImFormatStringV(g->LastLinkErr, IM_ARRAYSIZE(g->LastLinkErr), fmt, args);
+    AppGraphNotifyV(g, fmt, args);
     va_end(args);
-    g->LastLinkErrSeq++;
 }
 
 // Canonical refusal when a mutating verb is attempted on a live-mirror node. One phrasing across every
@@ -19499,7 +19515,7 @@ static void AppEmitStructCode(const ImGuiAppGraph* g, const ImGuiAppNode* n, ImG
     out->appendf("};\n\n");
 }
 
-void GenerateAppGraphCode(const ImGuiAppGraph* g, ImGuiTextBuffer* out)
+void AppGraphCodeGenerate(const ImGuiAppGraph* g, ImGuiTextBuffer* out)
 {
     GenerateAppGraphCodeEx(g, out, nullptr);
 }
@@ -19974,13 +19990,13 @@ void GenerateAppGraphCodeEx(const ImGuiAppGraph* g, ImGuiTextBuffer* out, ImVect
     out->appendf("}\n");
 }
 
-void GenerateAppShellCode(const ImGuiAppGraph* g, ImGuiTextBuffer* out)
+void AppShellCodeGenerate(const ImGuiAppGraph* g, ImGuiTextBuffer* out)
 {
     IM_ASSERT(g != nullptr && out != nullptr);
 
     // Composition body (data structs, optional ClientApp, SetupApp) from the single graph emitter;
     // the shell only ADDS the host that runs it -- no parallel codegen path.
-    GenerateAppGraphCode(g, out);
+    AppGraphCodeGenerate(g, out);
 
     // Host scaffold: a concrete ImGuiApp that composes via the emitted SetupApp on its first
     // initialized frame, then main() runs it. The composition it pushes (incl. any Composer control)
@@ -20006,7 +20022,7 @@ void GenerateAppShellCode(const ImGuiAppGraph* g, ImGuiTextBuffer* out)
 // declaration-only -- their definitions are the ones compiled into the running binary.
 //-----------------------------------------------------------------------------
 
-void GenerateAppPreviewModuleCode(const ImGuiAppGraph* g, ImGuiTextBuffer* out)
+void AppPreviewModuleCodeGenerate(const ImGuiAppGraph* g, ImGuiTextBuffer* out)
 {
     IM_ASSERT(g != nullptr && out != nullptr);
 
@@ -20015,7 +20031,7 @@ void GenerateAppPreviewModuleCode(const ImGuiAppGraph* g, ImGuiTextBuffer* out)
     // SOURCE (not a -D) so imgui.h's include needs no command-line quote juggling; imconfig found on the baked -I path.
     out->appendf("#define IMGUI_USER_CONFIG \"imguix_imconfig.h\"\n");
     out->appendf("#include \"imguiapp.h\"\n#include <string.h>\n\n");
-    GenerateAppGraphCode(g, out);
+    AppGraphCodeGenerate(g, out);
 
     // Copy-marshalling module: it owns its ENTIRE runtime (own ImGuiContext + allocator + app) and shares
     // NOTHING with the host. The host copies TempData bytes IN, ticks, copies Persist/Temp bytes OUT across the
@@ -20139,7 +20155,7 @@ void GenerateAppPreviewModuleCode(const ImGuiAppGraph* g, ImGuiTextBuffer* out)
     out->appendf("  return (int)(p - (char*)buf);\n}\n");
 }
 
-void GenerateAppNodeCode(const ImGuiAppGraph* g, const ImGuiAppNode* n, ImGuiTextBuffer* out, ImGuiApp* live_app)
+void AppNodeCodeGenerate(const ImGuiAppGraph* g, const ImGuiAppNode* n, ImGuiTextBuffer* out, ImGuiApp* live_app)
 {
     IM_ASSERT(g != nullptr && n != nullptr && out != nullptr);
 
@@ -20213,7 +20229,7 @@ void GenerateAppNodeCode(const ImGuiAppGraph* g, const ImGuiAppNode* n, ImGuiTex
     case ImGuiAppNodeKind_Op:
         break;   // an Op folds into its consumer's expression (F55); no standalone type is emitted
     case ImGuiAppNodeKind_App: default:
-        GenerateAppGraphCode(g, out);                 // App node == the whole composition
+        AppGraphCodeGenerate(g, out);                 // App node == the whole composition
         break;
     }
 
@@ -20227,7 +20243,7 @@ void GenerateAppNodeCode(const ImGuiAppGraph* g, const ImGuiAppNode* n, ImGuiTex
 }
 
 //-----------------------------------------------------------------------------
-// [SECTION] Whole-graph persistence (SaveAppGraph / LoadAppGraph, legacy [Draft] ingest)
+// [SECTION] Whole-graph persistence (AppGraphSave / AppGraphLoad, legacy [Draft] ingest)
 //-----------------------------------------------------------------------------
 
 // F78.5 method bodies are multi-line C++; the graph file is line-based, so escape newline -> "\n" and
@@ -20353,7 +20369,7 @@ static void AppNodeParseEvent(ImGuiAppNode* n, const char* line)
     n->Events.push_back(ev);
 }
 
-// Serialize the whole graph to the imgui-style text format (shared by SaveAppGraph for files and by the
+// Serialize the whole graph to the imgui-style text format (shared by AppGraphSave for files and by the
 // in-memory undo snapshots). Positions are included so undo restores layout, not just topology.
 static void AppGraphSerialize(const ImGuiAppGraph* g, ImGuiTextBuffer* buf)
 {
@@ -20462,7 +20478,7 @@ static void AppGraphDeserializePrefabs(ImGuiAppGraph* g, char* data)
     }
 }
 
-bool SaveAppGraph(const char* path, const ImGuiAppGraph* g)
+bool AppGraphSave(const char* path, const ImGuiAppGraph* g)
 {
     IM_ASSERT(path != nullptr && g != nullptr);
 
@@ -20544,7 +20560,7 @@ static void AppGraphNormalizeLoadedPorts(ImGuiAppGraph* g)
 }
 
 // Parse a serialized graph (mutable in-memory text, NUL-terminated) into g, replacing its contents. Shared by
-// LoadAppGraph (file) and the in-memory undo snapshots. Does not free `data`.
+// AppGraphLoad (file) and the in-memory undo snapshots. Does not free `data`.
 static void AppGraphDeserialize(ImGuiAppGraph* g, char* data)
 {
     g->Nodes.clear();
@@ -20713,7 +20729,7 @@ static void AppGraphDeserialize(ImGuiAppGraph* g, char* data)
     IM_UNUSED(is_legacy);
 }
 
-bool LoadAppGraph(const char* path, ImGuiAppGraph* g)
+bool AppGraphLoad(const char* path, ImGuiAppGraph* g)
 {
     IM_ASSERT(path != nullptr && g != nullptr);
 
@@ -20742,11 +20758,11 @@ bool AppGraphGenerateToFiles(const char* graph_path, const char* out_header_path
     IM_ASSERT(graph_path != nullptr && out_header_path != nullptr);
 
     ImGuiAppGraph g;
-    if (!LoadAppGraph(graph_path, &g))
+    if (!AppGraphLoad(graph_path, &g))
         return false;
 
     ImGuiTextBuffer buf;
-    GenerateAppGraphCode(&g, &buf);
+    AppGraphCodeGenerate(&g, &buf);
 
     ImFileHandle fh = ImFileOpen(out_header_path, "wt");
     if (fh == nullptr)
@@ -20778,8 +20794,8 @@ void AppGraphDiffCode(const ImGuiAppGraph* a, const ImGuiAppGraph* b, ImGuiTextB
     IM_ASSERT(a != nullptr && b != nullptr && out != nullptr);
 
     ImGuiTextBuffer ca, cb;
-    GenerateAppGraphCode(a, &ca);
-    GenerateAppGraphCode(b, &cb);
+    AppGraphCodeGenerate(a, &ca);
+    AppGraphCodeGenerate(b, &cb);
 
     // Mutable copies for in-place line splitting.
     const int la = ca.size();
@@ -24876,7 +24892,7 @@ static const ImGuiAppThreadFuncs GAppThreadFuncsDefault =
 static const ImGuiAppThreadFuncs* GAppThreadFuncs = &GAppThreadFuncsDefault;
 #else
 static const ImGuiAppThreadFuncs* GAppThreadFuncs = nullptr;
-#endif
+#endif // #ifndef IMGUIAPP_DISABLE_DEFAULT_THREAD_FUNCS
 
 IMGUI_API void ImGui::SetAppThreadFuncs(const ImGuiAppThreadFuncs* funcs)
 {
