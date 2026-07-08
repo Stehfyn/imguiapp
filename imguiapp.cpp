@@ -226,6 +226,27 @@ IMGUI_API void ImAppAssertFail(const char* expr, const char* file, int line)
 // Instance-qualified type id (ImHash* family): hash-combines a data type id with an instance
 // number to key a control's instance data in ImGuiApp::Data. instance 0 keeps the bare type id
 // (the type singleton); any other instance qualifies it.
+// Dependency-slot key resolution for the adapter template (imguiapp.h): explicit binding wins,
+// then the control's own instance id (when a producer instance exists under it), then the type
+// singleton. Optional is only carried by an explicit binding.
+IMGUI_API ImGuiID ImGui::AppResolveDependencyKey(const ImGuiApp* app, ImGuiID type_id, ImGuiID instance_id, const ImGuiAppDataBinding* binds, int binds_count, bool* out_optional)
+{
+    *out_optional = false;
+    for (int i = 0; i < binds_count; i++)
+        if (binds[i].TypeID == type_id)
+        {
+            *out_optional = binds[i].Optional;
+            return ImAppHashType(type_id, binds[i].Instance);
+        }
+    if (instance_id != 0)
+    {
+        const ImGuiID own_key = ImAppHashType(type_id, instance_id);
+        if (app->Data.GetVoidPtr(own_key) != nullptr)
+            return own_key;
+    }
+    return type_id;
+}
+
 IMGUI_API ImGuiID ImAppHashType(ImGuiID type_id, ImGuiID instance)
 {
     if (instance == 0)
@@ -458,7 +479,7 @@ void ImGuiApp::OnDrawFrame()
 
     ImGuiAppGetPlatformBackend()->NewFrameFn();
     ImGui::NewFrame();
-    DrawFrame(this);
+    ImGui::DrawAppFrame(this);
 }
 
 void ImGuiApp::OnRenderFrame()
@@ -493,7 +514,7 @@ void ImGuiApp::OnExecuteCommand(ImGuiAppCommand cmd)
         ShutdownPending = true;
 }
 
-void ImGuiApp::DrawFrame(ImGuiApp* app)
+void ImGui::DrawAppFrame(ImGuiApp* app)
 {
     IM_ASSERT(app != nullptr);
     if (app == nullptr)

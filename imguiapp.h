@@ -118,6 +118,7 @@ namespace ImGui
     IMGUI_API void        UpdateApp(ImGuiApp* app);           // dt = GetIO().DeltaTime
     IMGUI_API void        UpdateApp(ImGuiApp* app, float dt); // explicit dt (replay injects here)
     IMGUI_API void        RenderApp(const ImGuiApp* app);
+    IMGUI_API void        DrawAppFrame(ImGuiApp* app);         // the draw phase's layer/widget submission body (UpdateApp + OnLayout + RenderApp)
 
     // Composition: push/pop layers, windows, sidebars, controls (templates defined in the inline section below)
     template <typename T>
@@ -174,6 +175,9 @@ namespace ImGui
     // Internal helper for the inline Push templates below (defined in imguiapp.cpp; must stay here because
     // those public templates call it). ShutdownAppControls -- cpp-only -- lives in imguiapp_internal.h.
     IMGUI_API void        AppDeduplicateItemLabel(char* label, int label_size, const ImVector<ImGuiAppWindowBase*>* windows, const ImVector<ImGuiAppSidebarBase*>* sidebars);
+    // Dependency-slot key resolution for the adapter template below (order: explicit binding ->
+    // the control's own instance id -> the type singleton). Defined in imguiapp.cpp.
+    IMGUI_API ImGuiID     AppResolveDependencyKey(const ImGuiApp* app, ImGuiID type_id, ImGuiID instance_id, const ImGuiAppDataBinding* binds, int binds_count, bool* out_optional);
     // Non-template tail of PushAppLayer/Window/Sidebar (WAL-log the push + dedup label + append + attach/init).
     // The template caller constructs the item (IM_NEW<T>) and its type name; these do everything else, in imguiapp.cpp.
     IMGUI_API void        AppRegisterLayer(ImGuiApp* app, ImGuiAppLayerBase* layer, const char* name);
@@ -932,39 +936,36 @@ struct ImGuiAppInputLog
 
 struct ImGuiApp : ImGuiAppBase
 {
-    ImGuiStorage                   Data;
+    // State: composition (push order), platform/presentation, services (null = inactive)
+    ImGuiStorage                   Data;                          // id-keyed instance storage (controls' Persist/Temp blocks)
     ImVector<ImGuiAppStorageEntry> StorageEntries;
     ImVector<ImGuiAppLayerBase*>   Layers;
     ImVector<ImGuiAppWindowBase*>  Windows;
     ImVector<ImGuiAppSidebarBase*> Sidebars;
     ImVector<ImGuiAppControlBase*> Controls;
-    ImVector<ImGuiAppControlBase*> UpdateOrder;         // dependency-sorted OnUpdate iteration (AppRebuildUpdateOrder)
-    int                            CompositionRevision; // bumped by every storage register/unregister; unlike the composition HASH, pop+repush of the same type still advances it
-    int                            UpdateOrderRevision; // revision UpdateOrder and the cached dependency bindings were built at
-    ImGuiAppPlatform               Platform;
+    ImVector<ImGuiAppControlBase*> UpdateOrder;                   // dependency-sorted OnUpdate iteration (AppRebuildUpdateOrder)
+    int                            CompositionRevision = 0;       // bumped by every storage register/unregister (pop+repush of the same type still advances it)
+    int                            UpdateOrderRevision = -1;      // revision UpdateOrder + the cached dependency bindings were built at
+    ImGuiAppPlatform               Platform            = {};      // zeroed so a not-yet-Initialize()'d app is safe to render (StatusLayer null-guards Platform.Name)
     ImVec4                         ClearColor;
-    ImGuiAppPlatformData*         PlatformData; // opaque platform host state (allocated/freed by the backend's Init/ShutdownPlatform)
-    ImGuiAppWAL*                   WAL;      // optional write-ahead logger (caller-owned); null = silent
-    ImGuiAppRecorder*              Recorder; // active recording (AppRecordBegin registers, AppRecordEnd clears); null = none
-    ImGuiAppFrameID                FrameID;  // updated at the top of OnDrawFrame; correlation key for WAL/video/sidecar
-    ImGuiAppPacer                  Pacer;    // advisory; consulted by the backend run loop via AppPacerWait
-    bool                           Initialized;
+    ImGuiAppPlatformData*          PlatformData        = nullptr; // opaque platform host state (allocated/freed by the backend's Init/ShutdownPlatform)
+    ImGuiAppWAL*                   WAL                 = nullptr; // optional write-ahead logger (caller-owned); null = silent
+    ImGuiAppRecorder*              Recorder            = nullptr; // active recording (AppRecordBegin registers, AppRecordEnd clears); null = none
+    ImGuiAppFrameID                FrameID;                       // stamped at the top of OnDrawFrame; correlation key for WAL/video/sidecar
+    ImGuiAppPacer                  Pacer;                         // advisory; consulted by the backend run loop via AppPacerWait
+    bool                           Initialized         = false;
 
-    // Platform is a bare POD (no ctor); the owner zeroes it so a not-yet-Initialize()'d app is still
-    // safe to render -- StatusLayer reads Platform.Name and only null-guards it, so garbage would crash.
-    ImGuiApp() : CompositionRevision(0), UpdateOrderRevision(-1), PlatformData(nullptr), WAL(nullptr), Recorder(nullptr), Initialized(false) { Platform.Name = nullptr; Platform.NativeWindowHandle = nullptr; }
-    virtual ~ImGuiApp();
+    // Lifecycle. One frame = the four phases in order: draw (frame id, NewFrame, app layers/widgets),
+    // render (draw data -> GPU, platform windows), encode (recorder pump reads the frame just
+    // rendered), present. Backend run loops call Frame(); override a phase or hook to extend it.
+    virtual      ~ImGuiApp();
     int          Run(int argc, char** argv);
     bool         Initialize(const ImGuiAppConfig* config);
-    bool         IsInitialized() const { return Initialized; }
     virtual void Shutdown();
-    static void  DrawFrame(ImGuiApp* app);
+    bool         IsInitialized() const { return Initialized; }
+    void         Frame();
     virtual bool OnInitialize(int argc, char** argv) { return true; }
     virtual void OnLayout() {}
-    // One frame = the four phases in order: draw (frame id, NewFrame, app layers/widgets),
-    // render (draw data -> GPU, platform windows), encode (recorder pump reads the frame
-    // just rendered), present. Backend run loops call Frame(); override a phase to extend it.
-    void         Frame();
     virtual void OnDrawFrame();
     virtual void OnRenderFrame();
     virtual void OnEncodeFrame();
@@ -977,7 +978,7 @@ struct ImGuiApp : ImGuiAppBase
 template <typename Base, typename PersistDataT, typename TempDataT, typename... DataDependencies>
 struct ImGuiAppInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistDataT, TempDataT, DataDependencies...>
 {
-    // Created, registered in ImGuiApp::Data, and bound here by PushAppControl<>() before OnInitialize.
+    // Instance data for this control, created in ImGuiApp::Data and bound here by PushAppControl<>() before OnInitialize.
     struct InstanceData
     {
         PersistDataT PersistData;
@@ -985,137 +986,87 @@ struct ImGuiAppInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistData
         TempDataT    TempData;
     }* _InstanceData = nullptr;
 
-    // Instance identity + dependency routing, resolved once by PushAppControl<>() before OnInitialize.
-    // _Dependencies is an opaque slot array (the member-level pimpl over the typed pack): the pack
-    // type re-attaches at the dispatch boundary below, so no STL type is a member here.
+    // Instance identity + routed dependency slots (opaque: the pack's types re-attach at dispatch below),
+    // resolved once by PushAppControl<>() before OnInitialize.
     ImGuiID _InstanceID                                                                            = 0;
     void*   _Dependencies[sizeof...(DataDependencies) > 0 ? sizeof...(DataDependencies) : 1]       = {};
     ImGuiID _DependencyKeys[sizeof...(DataDependencies) > 0 ? sizeof...(DataDependencies) : 1]     = {};
     bool    _DependencyOptional[sizeof...(DataDependencies) > 0 ? sizeof...(DataDependencies) : 1] = {};
 
-    // Resolution order: explicit binding -> this control's own instance id -> the type singleton.
-    // Asserts when the resolved producer was not pushed before this control, unless the binding
-    // marks the dependency Optional (then null, rebound live as the producer comes and goes).
-    template <typename Dep>
-    inline Dep* ResolveDependency(const ImGuiApp* app, const ImGuiAppDataBinding* binds, int binds_count, int slot)
+    // If you assert here, a dependency's producer was not pushed before this control (PushAppControl<>()
+    // seats producers first), or a popped producer left a non-Optional consumer alive.
+    template <typename Dep> inline Dep* GetData(size_t slot) const { return (Dep*)_Dependencies[slot]; }
+    template <typename Dep> inline Dep* ResolveDependency(const ImGuiApp* app, const ImGuiAppDataBinding* binds, int binds_count, int slot)
     {
-        const ImGuiID type_id = ImGuiAppType<Dep>::ID;
-        for (int i = 0; i < binds_count; i++)
-            if (binds[i].TypeID == type_id)
-            {
-                _DependencyKeys[slot]     = ImAppHashType(type_id, binds[i].Instance);
-                _DependencyOptional[slot] = binds[i].Optional;
-                Dep* data                 = (Dep*)app->Data.GetVoidPtr(_DependencyKeys[slot]);
-                IM_ASSERT(data != nullptr || binds[i].Optional);
-                return data;
-            }
-        if (_InstanceID != 0)
-        {
-            const ImGuiID own_key = ImAppHashType(type_id, _InstanceID);
-            Dep*          data    = (Dep*)app->Data.GetVoidPtr(own_key);
-            if (data != nullptr)
-            {
-                _DependencyKeys[slot] = own_key;
-                return data;
-            }
-        }
-        _DependencyKeys[slot] = type_id;
-        Dep* data             = (Dep*)app->Data.GetVoidPtr(type_id);
-        IM_ASSERT(data != nullptr);
+        _DependencyKeys[slot] = ImGui::AppResolveDependencyKey(app, ImGuiAppType<Dep>::ID, _InstanceID, binds, binds_count, &_DependencyOptional[slot]);
+        Dep* data             = (Dep*)app->Data.GetVoidPtr(_DependencyKeys[slot]);
+        IM_ASSERT(data != nullptr || _DependencyOptional[slot]);
         return data;
     }
-
-    inline void ResolveDependencies(const ImGuiApp* app, const ImGuiAppDataBinding* binds, int binds_count)
-    {
-        int slot = 0;
-        IM_UNUSED(slot); IM_UNUSED(app); IM_UNUSED(binds); IM_UNUSED(binds_count);
-        void* resolved[] = { nullptr, (void*)ResolveDependency<DataDependencies>(app, binds, binds_count, slot++)... }; // braced init: left-to-right slots
-        for (int i = 0; i < (int)(sizeof...(DataDependencies)); i++)
-            _Dependencies[i] = resolved[i + 1];
-    }
-
-    // Re-fetch each cached dependency pointer by its resolved key. Asserts when a producer was
-    // popped while this consumer is still alive -- except Optional dependencies, which go null.
-    template <typename Dep>
-    inline Dep* LookupDependency(const ImGuiApp* app, int slot) const
+    template <typename Dep> inline Dep* LookupDependency(const ImGuiApp* app, size_t slot) const
     {
         Dep* data = (Dep*)app->Data.GetVoidPtr(_DependencyKeys[slot]);
         IM_ASSERT(data != nullptr || _DependencyOptional[slot]);
         return data;
     }
 
-    inline void RebindDependencies(const ImGuiApp* app)
-    {
-        int slot = 0;
-        IM_UNUSED(slot); IM_UNUSED(app);
-        void* rebound[] = { nullptr, (void*)LookupDependency<DataDependencies>(app, slot++)... }; // braced init: left-to-right slots
-        for (int i = 0; i < (int)(sizeof...(DataDependencies)); i++)
-            _Dependencies[i] = rebound[i + 1];
-    }
-
-    // Typed fan-out over the opaque slots: the index pack and the dependency pack expand in
-    // lockstep, re-attaching each slot's static type at the call boundary (no tuple/apply).
-    using _DepSeq = typename ImAppMakeIndexSeq<sizeof...(DataDependencies)>::Type;
-
+    //
+    //
+    //
+    //
     virtual void OnInitialize(ImGuiApp*, PersistDataT*, const DataDependencies*...) const override {}
-    template <size_t... Is>
-    inline void _OnInitializeExpand(ImGuiApp* app, ImAppIndexSeq<Is...>) const
-    {
-        OnInitialize(app, &_InstanceData->PersistData, (DataDependencies*)_Dependencies[Is]...);
-    }
-    virtual void OnInitialize(ImGuiApp* app) const override final
-    {
-        IM_ASSERT(_InstanceData != nullptr);
-        _OnInitializeExpand(app, _DepSeq());
-    }
+    virtual void OnInitialize(ImGuiApp* app) const override final { IM_ASSERT(_InstanceData != nullptr); FanOutInitialize(app, DepSeq()); }
 
+    //
+    //
+    //
+    //
     virtual void OnShutdown(ImGuiApp*, PersistDataT*, const DataDependencies*...) const override {}
-    template <size_t... Is>
-    inline void _OnShutdownExpand(ImGuiApp* app, ImAppIndexSeq<Is...>) const
-    {
-        OnShutdown(app, &_InstanceData->PersistData, (DataDependencies*)_Dependencies[Is]...);
-    }
-    virtual void OnShutdown(ImGuiApp* app) const override final
-    {
-        _OnShutdownExpand(app, _DepSeq());
-    }
+    virtual void OnShutdown(ImGuiApp* app) const override final { FanOutShutdown(app, DepSeq()); }
 
+    //
+    //
+    //
+    //
     virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*, const PersistDataT*, const TempDataT*, const DataDependencies*...) const override {}
-    template <size_t... Is>
-    inline void _OnGetCommandExpand(const ImGuiApp* app, ImGuiAppCommand* cmd, ImAppIndexSeq<Is...>) const
-    {
-        OnGetCommand(app, cmd, &_InstanceData->PersistData, &_InstanceData->TempData, (DataDependencies*)_Dependencies[Is]...);
-    }
-    virtual void OnGetCommand(const ImGuiApp* app, ImGuiAppCommand* cmd) const override final
-    {
-        _OnGetCommandExpand(app, cmd, _DepSeq());
-    }
+    virtual void OnGetCommand(const ImGuiApp* app, ImGuiAppCommand* cmd) const override final { FanOutGetCommand(app, cmd, DepSeq()); }
 
+    //
+    //
+    //
+    //
     virtual void OnUpdate(float, PersistDataT*, const TempDataT*, const TempDataT*, const DataDependencies*...) const override {}
-    template <size_t... Is>
-    inline void _OnUpdateExpand(float dt, ImAppIndexSeq<Is...>) const
-    {
-        OnUpdate(dt, &_InstanceData->PersistData, &_InstanceData->TempData, &_InstanceData->LastTempData, (DataDependencies*)_Dependencies[Is]...);
-    }
-    virtual void OnUpdate(const ImGuiApp* app, float dt) const override final
-    {
-        IM_UNUSED(app);
-        _OnUpdateExpand(dt, _DepSeq());
-        _InstanceData->LastTempData = _InstanceData->TempData;
-    }
+    virtual void OnUpdate(const ImGuiApp* app, float dt) const override final { IM_UNUSED(app); FanOutUpdate(dt, DepSeq()); _InstanceData->LastTempData = _InstanceData->TempData; }
 
+    //
+    //
+    //
+    //
     virtual void OnRender(const PersistDataT*, TempDataT*, const DataDependencies*...) const override {}
-    template <size_t... Is>
-    inline void _OnRenderExpand(ImAppIndexSeq<Is...>) const
+    virtual void OnRender(const ImGuiApp* app) const override final { IM_UNUSED(app); _InstanceData->TempData = {}; FanOutRender(DepSeq()); }
+
+    // Slot binding + typed fan-out: the index pack and the type pack expand in lockstep, re-attaching
+    // each opaque slot's static type at the call boundary (no tuple/apply; see ImAppIndexSeq).
+    using DepSeq = typename ImAppMakeIndexSeq<sizeof...(DataDependencies)>::Type;
+
+    inline void ResolveDependencies(const ImGuiApp* app, const ImGuiAppDataBinding* binds, int binds_count) { ResolveSlots(app, binds, binds_count, DepSeq()); }
+    inline void RebindDependencies(const ImGuiApp* app)                                                     { RebindSlots(app, DepSeq()); }
+
+    template <size_t... Is> inline void ResolveSlots(const ImGuiApp* app, const ImGuiAppDataBinding* binds, int binds_count, ImAppIndexSeq<Is...>)
     {
-        OnRender(&_InstanceData->PersistData, &_InstanceData->TempData, (DataDependencies*)_Dependencies[Is]...);
+        int expand[] = { 0, (_Dependencies[Is] = (void*)ResolveDependency<DataDependencies>(app, binds, binds_count, (int)Is), 0)... }; // braced init: left-to-right slots
+        IM_UNUSED(expand);
     }
-    virtual void OnRender(const ImGuiApp* app) const override final
+    template <size_t... Is> inline void RebindSlots(const ImGuiApp* app, ImAppIndexSeq<Is...>)
     {
-        IM_UNUSED(app);
-        _InstanceData->TempData = {};
-        _OnRenderExpand(_DepSeq());
+        int expand[] = { 0, (_Dependencies[Is] = (void*)LookupDependency<DataDependencies>(app, Is), 0)... };
+        IM_UNUSED(expand);
     }
+    template <size_t... Is> inline void FanOutInitialize(ImGuiApp* app, ImAppIndexSeq<Is...>) const                             { OnInitialize(app, &_InstanceData->PersistData, GetData<DataDependencies>(Is)...); }
+    template <size_t... Is> inline void FanOutShutdown(ImGuiApp* app, ImAppIndexSeq<Is...>) const                               { OnShutdown(app, &_InstanceData->PersistData, GetData<DataDependencies>(Is)...); }
+    template <size_t... Is> inline void FanOutGetCommand(const ImGuiApp* app, ImGuiAppCommand* cmd, ImAppIndexSeq<Is...>) const { OnGetCommand(app, cmd, &_InstanceData->PersistData, &_InstanceData->TempData, GetData<DataDependencies>(Is)...); }
+    template <size_t... Is> inline void FanOutUpdate(float dt, ImAppIndexSeq<Is...>) const                                      { OnUpdate(dt, &_InstanceData->PersistData, &_InstanceData->TempData, &_InstanceData->LastTempData, GetData<DataDependencies>(Is)...); }
+    template <size_t... Is> inline void FanOutRender(ImAppIndexSeq<Is...>) const                                                { OnRender(&_InstanceData->PersistData, &_InstanceData->TempData, GetData<DataDependencies>(Is)...); }
 };
 
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
