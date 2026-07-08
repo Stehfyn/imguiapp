@@ -1797,6 +1797,9 @@ IMGUI_API bool             AppPreviewReconcile(ImGuiAppPreview* session, char* e
 // Headless test harness
 // Runs queued tests to completion and returns a ctest-ready exit code (see docs/designs.md (av-design)).
 IMGUI_API int AppTestHarnessRun(ImGuiApp* app, const ImGuiAppTestHarnessConfig* config);
+
+// Media Foundation MFStartup/COM process refcount slot (used by imguiapp_impl_mediafoundation).
+IMGUI_API int&             AppMediaFoundationStartupRefs();
 } // namespace ImGui
 
 #ifndef IMGUIX_DISABLE_TOOLS
@@ -2275,9 +2278,6 @@ IMGUI_API ::ImGuiAppGraph* AppLayerDemoGraph(ImGuiApp* host);
 // Monospace font for the generated-code inspector (space-padded alignment needs fixed width). Register
 // at font-init; null leaves the inspector on the UI font. (Was in imguiapp.h; tool-coupled.)
 IMGUI_API void             SetAppCodeFont(ImGuiAppGraph* g, ImFont* font);
-
-// Media Foundation MFStartup/COM process refcount slot (used by imguiapp_impl_mediafoundation).
-IMGUI_API int&             AppMediaFoundationStartupRefs();
 
 // Composer introspection accessors (relocated from imguiapp.h; tool-coupled, "exposed for tests").
 // App-time transport (F29): number of state snapshots the running composer has recorded of its

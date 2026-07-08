@@ -60,10 +60,8 @@
 #endif
 #include <windows.h>                      // CaptureStackBackTrace, IsDebuggerPresent
 #include <dbghelp.h>                      // SymInitialize, SymFromAddr, SymGetLineFromAddr64
-#include <avrt.h>                         // MMCSS thread class (pacer wakeup QoS)
 #include <intrin.h>                       // __rdtsc (frame id)
 #pragma comment(lib, "dbghelp.lib")
-#pragma comment(lib, "avrt.lib")
 #else
 #include <time.h>                         // clock_gettime (pacer/frame-id monotonic clock)
 #endif
@@ -94,25 +92,9 @@ struct ImGuiAppViewportPace
 struct ImGuiAppPacerState
 {
     const ImGuiApp* App          = nullptr;
-    double          NextDeadline = -1.0; // on the monotonic app clock; < 0 = chain not started
+    double          NextDeadline = -1.0; // on the impl's monotonic clock; < 0 = chain not started
     double          LastEnter    = -1.0; // previous AppPacerWait entry (feeds LastFrameMs)
-#ifdef _WIN32
-    // High-res waitable timer + MMCSS "Games" registration for the paced thread: the timer
-    // decides WHEN the thread is ready, MMCSS makes the scheduler run it promptly under
-    // contention. Both best-effort; *Failed latches a one-time failure so we stop retrying.
-    HANDLE          Timer        = nullptr; // null = uncreated
-    bool            TimerFailed  = false;
-    HANDLE          Mmcss        = nullptr; // null = unregistered
-    bool            MmcssFailed  = false;
-#endif
     ImVector<ImGuiAppViewportPace> ViewportPace; // secondary-window present deadlines
-};
-
-// Hz cache entry for the monitor hosting a viewport (stale after a display-mode change until restart).
-struct ImGuiAppCachedHz
-{
-    void* Handle;
-    float Hz;
 };
 
 // THE process-wide state root (the applayer's GImGui analog): every formerly ad-hoc mutable
@@ -126,7 +108,6 @@ struct ImGuiAppProcessState
     const ImGuiAppThreadFuncs*          ThreadFuncs         = nullptr; // null = resolve the default at use
     double                              RunEpoch            = 0.0;     // 0 = unset (first stamped frame sets it)
     ImU64                               QpcHz               = 0;       // 0 = unset (win32 QPC frequency)
-    ImVector<ImGuiAppCachedHz>          MonitorHz;                     // per-monitor refresh cache
     bool                                AssertSymReady      = false;   // win32 sym handler initialized
     int                                 MediaFoundationRefs = 0;       // MFStartup/COM process refcount (mf backend)
     ImGuiApp*                           DemoHost            = nullptr; // ShowAppDemo's current host
@@ -290,89 +271,21 @@ int ImGuiApp::Run(int argc, char** argv)
     return ImGuiAppGetPlatformBackend()->RunLoopFn(this);
 }
 
-#ifdef _WIN32
-// High-resolution waitable timer (Win10 1803+): sub-millisecond waits with no change to global scheduler
-// resolution (never timeBeginPeriod: system-wide + power-hostile). Creation failure (older Windows) falls
-// back to a coarse Sleep loop; the spin phase still lands the deadline exactly, just spinning longer.
-#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
-#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
-#endif
-#endif
-
-// Process-wide pacer state (one paced app per process); never aggregate-reset, so the timer/MMCSS
-// handles survive a paced app's Shutdown (only the deadline-chain fields clear; see Shutdown).
+// Process-wide pacer state (one paced app per process); only the deadline-chain fields
+// clear on a paced app's Shutdown (see Shutdown).
 static ImGuiAppPacerState& AppPacer() { return AppState().Pacer; }
 
-static void AppPacerShutdownTimer()
+// Optional-hook fallbacks (null hook or non-positive answer = the documented default).
+static float AppPacerImplPrimaryHz(const ImGuiAppPacerImpl* impl)
 {
-#ifdef _WIN32
-    ImGuiAppPacerState& pacer = AppPacer();
-    if (pacer.Timer != nullptr)
-    {
-        ::CloseHandle(pacer.Timer);
-        pacer.Timer = nullptr;
-    }
-    pacer.TimerFailed = false;
-    if (pacer.Mmcss != nullptr)
-    {
-        ::AvRevertMmThreadCharacteristics(pacer.Mmcss);
-        pacer.Mmcss = nullptr;
-    }
-    pacer.MmcssFailed = false;
-#endif
+    const float hz = impl != nullptr && impl->PrimaryRefreshHzFn != nullptr ? impl->PrimaryRefreshHzFn() : 0.0f;
+    return hz > 0.0f ? hz : 60.0f;
 }
 
-static float AppPacerPrimaryRefreshHz()
+static float AppPacerImplViewportHz(const ImGuiAppPacerImpl* impl, const ImGuiViewport* viewport)
 {
-#ifdef _WIN32
-    DEVMODEA dm = {};
-    dm.dmSize = sizeof(dm);
-    if (::EnumDisplaySettingsA(nullptr, ENUM_CURRENT_SETTINGS, &dm) && dm.dmDisplayFrequency > 1)
-        return (float)dm.dmDisplayFrequency;
-#endif
-    return 60.0f;
-}
-
-// Refresh rate of the monitor hosting a viewport. ImGuiPlatformMonitor carries no
-// refresh field, so win32 resolves it from the HMONITOR the platform backend stored in
-// PlatformHandle; cached per monitor (stale after a display-mode change until restart).
-static float AppPacerViewportRefreshHz(const ImGuiViewport* viewport)
-{
-#ifdef _WIN32
-    ImVector<ImGuiAppCachedHz>& monitor_hz = AppState().MonitorHz;
-
-    const ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
-    const short monitor_idx = ((const ImGuiViewportP*)viewport)->PlatformMonitor;   // internal field; public ImGuiViewport has no monitor index
-    void* hmon = nullptr;
-    if (monitor_idx >= 0 && monitor_idx < pio.Monitors.Size)
-        hmon = pio.Monitors[monitor_idx].PlatformHandle;
-    if (hmon == nullptr)
-        return AppPacerPrimaryRefreshHz();
-
-    for (int i = 0; i < monitor_hz.Size; i++)
-        if (monitor_hz.Data[i].Handle == hmon)
-            return monitor_hz.Data[i].Hz;
-
-    float hz = 60.0f;
-    MONITORINFOEXA mi;
-    memset(&mi, 0, sizeof(mi));
-    mi.cbSize = sizeof(mi);
-    if (::GetMonitorInfoA((HMONITOR)hmon, &mi))
-    {
-        DEVMODEA dm = {};
-        dm.dmSize = sizeof(dm);
-        if (::EnumDisplaySettingsExA(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm, 0) && dm.dmDisplayFrequency > 1)
-            hz = (float)dm.dmDisplayFrequency;
-    }
-    ImGuiAppCachedHz cached;
-    cached.Handle = hmon;
-    cached.Hz = hz;
-    monitor_hz.push_back(cached);
-    return hz;
-#else
-    IM_UNUSED(viewport);
-    return 60.0f;
-#endif // #ifdef _WIN32
+    const float hz = impl->ViewportRefreshHzFn != nullptr ? impl->ViewportRefreshHzFn(viewport) : 0.0f;
+    return hz > 0.0f ? hz : AppPacerImplPrimaryHz(impl);
 }
 
 bool ImGuiApp::Initialize(const ImGuiAppConfig* config)
@@ -399,9 +312,8 @@ void ImGuiApp::Shutdown()
     if (!Initialized && PlatformData == nullptr && Layers.empty() && Windows.empty() && Sidebars.empty() && StorageEntries.empty())
         return;
 
-    // One paced app per process by design: the timer/MMCSS teardown is unconditional, so another live app's
-    // pacing hiccups for one frame and self-heals on its next wait. AvRevertMmThreadCharacteristics is only
-    // valid on the thread that registered -- Shutdown must run on the paced (main) thread.
+    // One paced app per process by design. The impl's teardown hook releases its wait
+    // machinery (timers, thread QoS registrations); it must run on the paced (main) thread.
     ImGuiAppPacerState& pacer = AppPacer();
     if (pacer.App == this)
     {
@@ -409,7 +321,8 @@ void ImGuiApp::Shutdown()
         pacer.NextDeadline = -1.0;
         pacer.LastEnter = -1.0;
     }
-    AppPacerShutdownTimer();
+    if (Pacer.Impl != nullptr && Pacer.Impl->ShutdownFn != nullptr)
+        Pacer.Impl->ShutdownFn();
 
     ImGui::ShutdownApp(this);
     OnShutdownPlatform();
@@ -737,6 +650,7 @@ ImGuiAppPacer::ImGuiAppPacer()
     Mode            = ImGuiAppPacerMode_Off;
     TargetHz        = 0.0f;
     SleepSlackMs    = 2.0f;
+    Impl            = nullptr;
     LastFrameMs     = 0.0;
     LastWaitMs      = 0.0;
     MissedDeadlines = 0;
@@ -1650,10 +1564,12 @@ IMGUI_API void AppPacerWait(ImGuiApp* app)
         return;
 
     ImGuiAppPacer* p = &app->Pacer;
+    const ImGuiAppPacerImpl* impl = p->Impl;
+
     float hz = p->TargetHz;
     if (hz <= 0.0f)
     {
-        hz = AppPacerPrimaryRefreshHz();
+        hz = AppPacerImplPrimaryHz(impl);
         // Fixed mode's dt injection (DrawFrame) reads TargetHz; resolve it ONCE so the
         // deterministic timestep exists and never re-tracks a monitor change mid-run.
         if (p->Mode == ImGuiAppPacerMode_Fixed)
@@ -1661,8 +1577,14 @@ IMGUI_API void AppPacerWait(ImGuiApp* app)
     }
     const double period = 1.0 / (double)hz;
 
+    // No impl installed: nothing to wait WITH. Fixed keeps its deterministic dt (resolved
+    // above); the loop free-runs at whatever the present mode allows.
+    if (impl == nullptr)
+        return;
+    IM_ASSERT(impl->NowFn != nullptr && impl->WaitUntilFn != nullptr && "ImGuiAppPacer::Impl: NowFn and WaitUntilFn are required.");
+
     ImGuiAppPacerState& pacer = AppPacer();
-    const double now = AppClockNowSec();
+    const double now = impl->NowFn();
     if (pacer.App != app || pacer.NextDeadline < 0.0)
     {
         // First paced frame (or the paced app changed): establish the deadline chain, no wait.
@@ -1685,50 +1607,9 @@ IMGUI_API void AppPacerWait(ImGuiApp* app)
         deadline = now;
     }
 
-    // Wait to deadline - slack without touching global scheduler state, spin the
-    // remainder on the monotonic clock to land the deadline exactly.
-    const double slack = (double)p->SleepSlackMs * 0.001;
-    const double sleep_until = deadline - slack;
-    double t = now;
-#ifdef _WIN32
-    if (pacer.Timer == nullptr && !pacer.TimerFailed)
-    {
-        pacer.Timer = ::CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
-        if (pacer.Timer == nullptr)
-            pacer.TimerFailed = true;
-    }
-    if (pacer.Mmcss == nullptr && !pacer.MmcssFailed)
-    {
-        DWORD mmcss_task_index = 0;
-        pacer.Mmcss = ::AvSetMmThreadCharacteristicsW(L"Games", &mmcss_task_index);
-        if (pacer.Mmcss == nullptr)
-            pacer.MmcssFailed = true;
-    }
-    if (pacer.Timer != nullptr && t < sleep_until)
-    {
-        LARGE_INTEGER due;
-        due.QuadPart = -(LONGLONG)((sleep_until - t) * 1e7);   // negative = relative, 100ns units
-        if (due.QuadPart < 0 && ::SetWaitableTimer(pacer.Timer, &due, 0, nullptr, nullptr, FALSE))
-            ::WaitForSingleObject(pacer.Timer, INFINITE);
-        t = AppClockNowSec();
-    }
-    while (t < sleep_until)   // fallback (timer unavailable) or residual: coarse sleep
-    {
-        ::Sleep(1);
-        t = AppClockNowSec();
-    }
-#else
-    while (t < sleep_until)
-    {
-        timespec req = { 0, 1000000 };
-        nanosleep(&req, nullptr);
-        t = AppClockNowSec();
-    }
-#endif // #ifdef _WIN32
-    while (t < deadline)
-        t = AppClockNowSec();
+    impl->WaitUntilFn(deadline, p->SleepSlackMs);
 
-    p->LastWaitMs = (t - now) * 1000.0;
+    p->LastWaitMs = (impl->NowFn() - now) * 1000.0;
     pacer.NextDeadline = deadline + period;
 }
 
@@ -1737,7 +1618,7 @@ IMGUI_API float AppPacerResolveHz(const ImGuiApp* app)
     IM_ASSERT(app != nullptr);
     if (app == nullptr)
         return 60.0f;
-    return app->Pacer.TargetHz > 0.0f ? app->Pacer.TargetHz : AppPacerPrimaryRefreshHz();
+    return app->Pacer.TargetHz > 0.0f ? app->Pacer.TargetHz : AppPacerImplPrimaryHz(app->Pacer.Impl);
 }
 
 IMGUI_API bool AppPacerViewportShouldPresent(ImGuiApp* app, ImGuiViewport* viewport)
@@ -1749,9 +1630,13 @@ IMGUI_API bool AppPacerViewportShouldPresent(ImGuiApp* app, ImGuiViewport* viewp
     if (viewport == GetMainViewport())
         return true;   // the run loop's AppPacerWait already paces the main viewport
 
-    const float hz = AppPacerViewportRefreshHz(viewport);
+    const ImGuiAppPacerImpl* impl = app->Pacer.Impl;
+    if (impl == nullptr || impl->NowFn == nullptr)
+        return true;   // no impl = no clock to gate with; present every frame
+
+    const float hz = AppPacerImplViewportHz(impl, viewport);
     const double period = 1.0 / (double)(hz > 1.0f ? hz : 60.0f);
-    const double now = AppClockNowSec();
+    const double now = impl->NowFn();
 
     ImVector<ImGuiAppViewportPace>& vp_pace = AppPacer().ViewportPace;
     ImGuiAppViewportPace* pace = nullptr;
@@ -1901,6 +1786,12 @@ int PushAppColorMods(const ImGuiAppColorModDesc* mods, int count)
 }
 } // namespace ImGui
 
+// AV codec backends: the unconditional recorder/decoder sections below call these, so they
+// stay outside the tools gate.
+#include "backends/imguiapp_impl_qoi.h"
+#ifdef IMGUIX_HAS_LIBAV
+#include "backends/imguiapp_impl_libav.h"
+#endif
 
 #ifndef IMGUIX_DISABLE_TOOLS
 //-----------------------------------------------------------------------------
@@ -1911,13 +1802,6 @@ int PushAppColorMods(const ImGuiAppColorModDesc* mods, int count)
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "imguiapp.h"
 #include "imguiapp_internal.h"
-#include "imguiapp_internal.h"
-#include "imguiapp_internal.h"
-#include "imguiapp_internal.h"
-#include "backends/imguiapp_impl_qoi.h"
-#ifdef IMGUIX_HAS_LIBAV
-#include "backends/imguiapp_impl_libav.h"
-#endif
 #include "imgui_internal.h"
 #include "IconsFontAwesome6.h"
 #include <ctime>
@@ -8436,7 +8320,10 @@ bool SaveAppNodeGraph(const char* path, const ImGuiAppNodeDraft* draft, const Im
     return true;
 }
 
-// Parse one "name,typeint,arraysize" field record into fields.
+#endif // IMGUIX_DISABLE_TOOLS
+
+// Parse one "name,typeint,arraysize" field record into fields. Shared with the multi-draft
+// loader below, which stays available in tool-less builds.
 static void AppNodeParseField(ImVector<ImGuiAppFieldDesc>* fields, const char* line)
 {
     ImGuiAppFieldDesc f;
@@ -8453,6 +8340,8 @@ static void AppNodeParseField(ImVector<ImGuiAppFieldDesc>* fields, const char* l
         fields->push_back(f);
     }
 }
+
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
 
 bool LoadAppNodeGraph(const char* path, ImGuiAppNodeDraft* draft, ImVector<ImGuiAppNodeLink>* links)
 {
@@ -9404,6 +9293,8 @@ void AppControlCodeGenerate(const ImGuiAppNodeDraft* draft, ImGuiTextBuffer* out
     AppEmitControlWithDeps(&g, n, out);
 }
 
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
+
 // Inspector section header. Optional enable checkbox and kebab (null omits); the caller answers the kebab
 // click with its own popup. Open state lives in window state storage (session-lived, shared per panel);
 // the first section per window each frame defaults open, the rest collapsed; a user toggle overrides. True while open.
@@ -9472,7 +9363,11 @@ bool AppInspectorSection(const char* str_id, const char* icon, const char* label
     return open;
 }
 
+#endif // IMGUIX_DISABLE_TOOLS
+
 static void AppEmitControlWithDeps(const ImGuiAppGraph* g, const ImGuiAppNode* n, ImGuiTextBuffer* out);   // fwd (the one control emitter)
+
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
 
 // Read-write: the project inspector's Theme section edits these live. Seeded from the composer
 // style; a global AppComposerStyleFromTheme re-derive reseeds it (inspector edits reset).
@@ -9507,6 +9402,8 @@ ImGuiAppChromeTheme* AppGraphChromeTheme()
     }
     return &t;
 }
+
+#endif // IMGUIX_DISABLE_TOOLS
 
 //-----------------------------------------------------------------------------
 // [SECTION] Typed node graph: allocation, factory, lookup
@@ -11908,12 +11805,14 @@ static int AppGraphParentOf(const ImGuiAppGraph* g, int child_node_id);         
 
 // One origin vocabulary shared by the canvas title-bar tint, the tree text tint, and the demo legend, so the
 // three surfaces cannot drift. design = default (no push).
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
 ImU32 AppGraphOriginColor(const ImGuiAppNode* n)   // exposed so the demo legend reads the same constants
 {
     if (n->IsLive)     return AppComposerGetStyle()->OriginLive;
     if (n->IsPromoted) return AppComposerGetStyle()->OriginPromoted;
     return 0;
 }
+#endif // IMGUIX_DISABLE_TOOLS
 
 static ImU32 AppKindColor(ImGuiAppNodeKind k);   // fwd
 
@@ -12700,6 +12599,8 @@ static void EditAppRegionRef(ImGuiAppGraph* g, ImGuiAppNode* n)
 }
 
 #endif // IMGUIX_DISABLE_TOOLS
+
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
 void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, bool show_live)
 {
     IM_ASSERT(g != nullptr);
@@ -15538,6 +15439,7 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
     // like the palette path).
     AppGraphCheckpoint(g);
 }
+#endif // IMGUIX_DISABLE_TOOLS
 
 //-----------------------------------------------------------------------------
 // [SECTION] Inspector (component sections, style/color descs, project + multi-select)
@@ -16219,6 +16121,7 @@ static void AppNotifyLiveReadOnly(ImGuiAppGraph* g, const ImGuiAppNode* n)
 
 // Multi-selection inspector: the Style section across every selected DESIGN node -- master enable over
 // all their descs, paste the section clipboard to all, clear all.
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
 void EditAppNodesInspectorMulti(ImGuiAppGraph* g)
 {
     IM_ASSERT(g != nullptr);
@@ -16328,6 +16231,7 @@ void EditAppNodesInspectorMulti(ImGuiAppGraph* g)
                 if (!n->IsLive)
                     TextDisabled("%s  --  %d style, %d color", n->Draft.Name[0] ? n->Draft.Name : "(unnamed)", n->StyleMods.Size, n->ColorMods.Size);
 }
+#endif // IMGUIX_DISABLE_TOOLS
 
 // True if this node should NOT be submitted to the canvas: outside the current drill-down scope,
 // or an ancestor group is collapsed. Eye-hidden nodes STAY submitted -- they render with the
@@ -17791,8 +17695,6 @@ static void AppDrawScopeEmptyCTA(ImGuiAppGraph* g, bool show_live, ImVec2 editor
 // Selection align/distribute (F48/R3): local-intent geometry over the current pick, complementing L (global
 // tidy). Reads each member's altitude-correct canvas rect and writes through the nudge idiom (drilled ->
 // this scope's placements, root -> GridPos). Live picks and collapse-hidden nodes are skipped.
-#endif // IMGUIX_DISABLE_TOOLS
-
 static void AppGraphAlignSelection(ImGuiAppGraph* g, int mode, bool show_live)
 {
     struct Rec { int id; ImVec2 pos; ImVec2 size; };
@@ -17876,7 +17778,6 @@ static void AppGraphAlignSelection(ImGuiAppGraph* g, int mode, bool show_live)
 }
 
 // The six ops as MenuItems, shared by the selection context submenu and the Shift+A popup.
-#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
 static void AppGraphAlignMenuItems(ImGuiAppGraph* g, bool show_live)
 {
     const bool has2 = g->Selection.Size >= 2;
@@ -17957,6 +17858,7 @@ const ImGuiAppEditorCommand* AppGraphEditorCommandAt(int index)
 
 // Availability predicate: add verbs gate on the drilled scope's composability; undo/redo gate on history;
 // everything else is always available.
+#ifndef IMGUIX_DISABLE_TOOLS   // TOOL: editor UI (Phase A2)
 bool AppGraphIsEditorCommandAvailable(const ImGuiAppGraph* g, const ImGuiAppEditorCommand* c)
 {
     IM_ASSERT(g != nullptr && c != nullptr);
@@ -17973,6 +17875,7 @@ bool AppGraphIsEditorCommandAvailable(const ImGuiAppGraph* g, const ImGuiAppEdit
     if (c->Id == 44 || c->Id == 45) return g->Selection.Size >= 3;   // distribute: three to space evenly
     return true;
 }
+#endif // IMGUIX_DISABLE_TOOLS
 
 //-----------------------------------------------------------------------------
 // Remappable input->command binding (F74/F75): the registry Key/Mods are the factory DEFAULT chord, the

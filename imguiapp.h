@@ -215,8 +215,9 @@ namespace ImGui
 
     // Frame pacing
     // Advisory frame pacing. Backend run loops call this once per iteration before OnDrawFrame; Off
-    // returns immediately (the call is unconditional in the loops). Sleeps until deadline - SleepSlackMs,
-    // spins the rest on QPC; Fixed mode also forces io.DeltaTime to exactly 1/TargetHz.
+    // returns immediately (the call is unconditional in the loops). The clock and the wait come from
+    // the client-installed impl seam (ImGuiAppPacer::Impl; null free-runs); Fixed mode also forces
+    // io.DeltaTime to exactly 1/TargetHz.
     IMGUI_API void        AppPacerWait(ImGuiApp* app);
 
     // The rate the pacer actually paces at: TargetHz when positive, else the primary
@@ -619,6 +620,21 @@ struct ImGuiAppConfig
     IMGUI_API ImGuiAppConfig();
 };
 
+// Pacer implementation seam (pimpl): the platform half of pacing behind one vtable, like
+// ImGuiAppPlatformBackend. The pacer owns the deadline chain (imguiapp.cpp, platform-free);
+// the CLIENT installs an impl supplying the clock, the wait, and the refresh queries.
+// Install BEFORE pacing starts. Null Impl = no wait machinery: the loop free-runs (Fixed
+// mode still forces its deterministic dt). NowFn/WaitUntilFn required; the rest optional
+// (null = the documented fallback).
+struct ImGuiAppPacerImpl
+{
+    double (*NowFn)();                                             // monotonic seconds (the pacer's time domain)
+    void   (*WaitUntilFn)(double time_sec, float sleep_slack_ms);  // block until NowFn() >= time_sec, landing it exactly; slack = spin-window hint
+    void   (*ShutdownFn)();                                        // optional: release wait machinery (timers, thread QoS); called by ImGuiApp::Shutdown
+    float  (*PrimaryRefreshHzFn)();                                // optional: primary monitor refresh; null or <= 0 = 60 assumed
+    float  (*ViewportRefreshHzFn)(const ImGuiViewport* viewport);  // optional: hosting monitor's refresh; null or <= 0 = primary
+};
+
 // Advisory frame pacer. Backend run loops call AppPacerWait once per iteration, before OnDrawFrame;
 // Off returns immediately. The pacer decides what time the app SIMULATES; video timing is separate
 // (imapp_av.h ImGuiAppAVTimingMode) -- honest-realtime video takes PTS from FrameID.TimeSec.
@@ -627,6 +643,7 @@ struct ImGuiAppPacer
     ImGuiAppPacerMode Mode;            // = ImGuiAppPacerMode_Off
     float             TargetHz;        // = 0.0f  // <= 0 with Mode_Target = pace to primary monitor refresh
     float             SleepSlackMs;    // = 2.0f  // spin the last N ms (OS sleep granularity guard)
+    const ImGuiAppPacerImpl* Impl;     // = NULL  // pimpl seam, client-installed; null = free-run (no wait)
     double            LastFrameMs;     // = 0.0
     double            LastWaitMs;      // = 0.0
     ImU64             MissedDeadlines; // = 0     // frames that arrived after their deadline

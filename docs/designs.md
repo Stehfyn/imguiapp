@@ -2525,10 +2525,23 @@ struct ImGuiAppPacer
   ImGuiAppPacerMode Mode;
   float  TargetHz;         // <= 0 with Mode_Target = pace to primary monitor refresh
   float  SleepSlackMs;     // spin the last N ms (OS sleep granularity guard); default 2.0
+  const ImGuiAppPacerImpl* Impl;  // pimpl seam, client-installed; null = free-run (no wait)
   // read-only telemetry
   double LastFrameMs;
   double LastWaitMs;
   ImU64  MissedDeadlines;  // frames that arrived after their deadline
+};
+
+// Pacer impl seam (pimpl, like ImGuiAppPlatformBackend): the platform half of pacing.
+// imguiapp.cpp owns the deadline chain and is platform-free; the CLIENT installs the
+// clock, the wait, and the refresh queries. Null Impl = free-run (Fixed keeps its dt).
+struct ImGuiAppPacerImpl
+{
+  double (*NowFn)();                                            // monotonic seconds (the pacer's time domain)
+  void   (*WaitUntilFn)(double time_sec, float sleep_slack_ms); // block until NowFn() >= time_sec, landing it exactly
+  void   (*ShutdownFn)();                                       // optional: release wait machinery (ImGuiApp::Shutdown)
+  float  (*PrimaryRefreshHzFn)();                               // optional: null or <= 0 = 60 assumed
+  float  (*ViewportRefreshHzFn)(const ImGuiViewport* viewport); // optional: null or <= 0 = primary
 };
 
 // Called once per loop iteration by every backend RunLoop, before OnDrawFrame.
@@ -2538,12 +2551,11 @@ IMGUI_API void AppPacerWait(ImGuiApp* app);
 
 - `Fixed` is the determinism mode: constant dt feeds the replay theorem (OnUpdate as a
   pure function of state + input + dt), so an encoded run and its WAL are reproducible.
+  With TargetHz > 0 (the harness path) Fixed needs no impl: dt injection reads TargetHz.
 - Pacer dt and video timing are DECOUPLED (section 3, "Timing"): the pacer decides what
   time the app simulates; the encoder decides what time the video claims. A video is
   honest about realtime only when its PTS come from the real clock (`FrameID.TimeSec`),
   never from counting pacer ticks.
-- Windows implementation raises timer resolution (`timeBeginPeriod(1)`) while a
-  non-Off pacer exists, sleeps until `deadline - SleepSlackMs`, spins the rest on QPC.
 
 #### Per-viewport pacing (phase 2)
 
