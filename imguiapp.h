@@ -21,7 +21,7 @@ Index of this file:
 
 #include "imgui.h"          // IMGUI_API, ImGuiID, ImGuiStorage, ImBitArray, ImGuiTextIndex, ImChunkStream
 #include "imgui_internal.h" // ImStrncpy
-#include "imapp_config.h"
+#include "imappconfig.h"
 // windows.h's min/max macros (leaked by platform-backend TUs) break imguiapp_reflect.h's std::min.
 #include "imguiapp_reflect.h" // compile-time type-identity + reflection (qlibs/reflect port): ImGuiAppStatic/Type, ImApp{GenerateLabel,TypeDisplayName,NulTerminate}, field walk (AppReflectFields), ImGuiAppLiveFieldDesc/ImGuiAppTypeSchema
 
@@ -239,7 +239,7 @@ namespace ImGui
 // [SECTION] Flags & Enumerations
 //-----------------------------------------------------------------------------
 
-// Frame/app configuration (relocated from the switch-only imapp_config.h).
+// Frame/app configuration (relocated from the switch-only imappconfig.h).
 enum ImGuiAppFrameFlags_
 {
     ImGuiAppFrameFlags_None              = 0,

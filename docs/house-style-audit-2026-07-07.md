@@ -2,7 +2,7 @@
 
 **Spec**: [imgui-house-style.md](imgui-house-style.md) (rule IDs P/N/F/A/G/B/I/D/C cited throughout).
 **Audited**: `imguiapp.h` (1341 L), `imguiapp_internal.h` (2384 L), `imguiapp.cpp` (27343 L),
-`imapp_config.h` (8 L), `backends/imguiapp_impl_*` (11 backends); `imguiapp_reflect.h` skeleton only
+`imappconfig.h` (8 L; `imapp_config.h` until the M4 exact-form rename), `backends/imguiapp_impl_*` (11 backends); `imguiapp_reflect.h` skeleton only
 (body = vendored qlibs/reflect port, exempt like `imstb_*`). Method: six parallel audits, one per
 spec dimension, every verdict evidence-cited. Mechanical layout was pre-screened by the style gate
 (`tests/style/`, baseline `imguiapp-baseline.json`: 132 pinned, 28 real).
@@ -200,8 +200,8 @@ near a known doc-tracked debt, drop the tag at the site; (3) add F20 tag-census 
 |---|---|---|---|
 | M1 | F (gate) | 28 pinned gate findings: ~26 missing `} // namespace X` closers (`imguiapp.h:240,1337`, `imguiapp.cpp` ×18, 1/backend ×5), 2 brace hits | Add closers; fix 2 braces; re-pin `imguiapp-baseline.json` (drops 132→104, vendored-only) |
 | M2 | N13 | 212 `k`-prefix constants (`kAppHue*` `:7633`, `kAppGraph*` `:8874`, `kAvMetaMagic` `:24880`, …) — foreign Google convention, 0 house-form | Decide target: SCREAMING_SNAKE for tunables (house form, `DRAGDROP_HOLD_TO_OPEN_TIMER` precedent). AST-dump rename plan → clang-rename batch; block-local `const float kX` → plain snake_case locals |
-| M3 | N18 | Macro namespace split: `IM_LABEL_SIZE` / `IMGUI_APPLAYER_VERSION` / `IMGUIAPP_HAS_REFLECT` / `IMGUIX_DISABLE_TOOLS` | Rule: `IM_` = value macros; `IMGUIAPP_` = everything this library defines (config/feature/version); `IMGUIX_` = umbrella build switches only. Rename `IMGUI_APPLAYER_VERSION*` → `IMGUIAPP_VERSION*`. Keep `IMGUIX_DISABLE_TOOLS` (it IS an umbrella build switch) but document the rule in imapp_config successor |
-| M4 | N20 | `imapp_config.h` prefix matches nothing | `git mv imapp_config.h imguiapp_config.h`; update the include (`imguiapp.h:24`) + CMake + docs |
+| M3 | N18 | Macro namespace split: `IM_LABEL_SIZE` / `IMGUI_APPLAYER_VERSION` / `IMGUIAPP_HAS_REFLECT` / `IMGUIX_DISABLE_TOOLS` | Rule: `IM_` = value macros; `IMGUIAPP_` = everything this library defines (config/feature/version); `IMGUIX_` = umbrella build switches only. Rename `IMGUI_APPLAYER_VERSION*` → `IMGUIAPP_VERSION*`. Keep `IMGUIX_DISABLE_TOOLS` (it IS an umbrella build switch) but document the rule in imappconfig.h |
+| M4 | N20 | ~~`imapp_config.h` prefix matches nothing~~ **RESOLVED 2026-07-08 — finding was wrong.** imgui's own config is `imconfig.h`: the config header is exactly where imgui uses the contracted prefix (`im` : `imgui` :: `imapp` : `imguiapp`; the `ImApp*` symbol family already sanctions the contraction). Original fix (rename to `imguiapp_config.h`) would have departed from canon. | Exact-form asserted: `git mv imapp_config.h imappconfig.h` (imconfig.h carries no underscore); include + CMake + style-gate scope updated. Spec correction 4 records the N20 fix |
 | M5 | A1 | No file banners/links on headers; no `IMGUI_DISABLE` wrap | Add `// imguiapp, v0.4.1 WIP` + role line + short links block to all files; wrap bodies in `#ifndef IMGUI_DISABLE` (imguiapp cannot function without imgui — honor upstream's master switch) with `#endif // #ifndef IMGUI_DISABLE` |
 | M6 | A3 | Warning pragmas MSVC-only in imguiapp.h; absent in internal.h/cpp | Copy imgui's 3-compiler push block (MSVC→clang w/ `__has_warning`→GCC, reason per line) into all three; matching pops at EOF |
 | M7 | A8 | Missing trailing symbol comments on includes (`imguiapp.h:24,33-35`, `internal.h:43,45-48`) | Add `// symbol, symbol` comments to every include |
@@ -238,12 +238,16 @@ near a known doc-tracked debt, drop the tag at the site; (3) add F20 tag-census 
    audits don't re-flag 283 sites.
 3. **B-section applicability**: add a note that composed/host backends (wrapping real imgui
    backends behind a seam) satisfy B9-B14 through the wrapped backend — audit them at the seam.
+4. **N20 incomplete** (found 2026-07-08, via M4): the rule's glob `imgui*.{h,cpp}` misses imgui's
+   own `imconfig.h` — the config header uses the CONTRACTED library prefix, no underscore;
+   everything else uses the full prefix. Fixed in the spec; imguiapp analog: `imappconfig.h`.
 
 ## Sequencing (each wave gated: imguix-tests + imguix-core-tests + imguix-headless-verify green, codegen corpus byte-identical, style ratchet re-pinned monotonically down)
 
 1. **Wave 0 — decisions**: write `docs/style-deltas.md` ratifying/rejecting Δ1-Δ6 (+Δ7 file split).
    Everything below assumes the recommendations above.
-2. **Wave 1 — sed-class batch**: M1, M4, M5, M6, M7, M8, M13, M15, M18, M21, M22, M30 + S2 index
+2. **Wave 1 — sed-class batch**: M1, M5, M6, M7, M8, M13, M15, M18, M21, M22, M30 + S2 index
+   (M4 resolved 2026-07-08 as the exact-form `imappconfig.h` rename — see the M4 row)
    regeneration. One commit ("style: mechanical house-style conformance"), zero behavior.
 3. **Wave 2 — format migration**: S3 clang-format APPLY on 2-space regions (whitespace-only
    commit) → re-pin baseline; add the indent lexical check to `tests/style`.

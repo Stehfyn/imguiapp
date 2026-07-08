@@ -91,7 +91,7 @@ The mission statement (`imgui.cpp:112-129`, verbatim bullets):
 
 ### 2.7 Files
 
-- **N20.** Core: `imgui*.{h,cpp}`; backends: `imgui_impl_<sdk>.{h,cpp}` (+ sidecars `_loader.h`, `_shaders.h`); vendored stb: `imstb_*` prefix with `[DEAR IMGUI]` modification markers and grep anchor (`imstb_truetype.h:1-4`).
+- **N20.** Core: `imgui*.{h,cpp}` — EXCEPT the config header, which uses the contracted library prefix with no underscore (`imconfig.h`, not `imgui_config.h`; imguiapp analog: `imappconfig.h`); backends: `imgui_impl_<sdk>.{h,cpp}` (+ sidecars `_loader.h`, `_shaders.h`); vendored stb: `imstb_*` prefix with `[DEAR IMGUI]` modification markers and grep anchor (`imstb_truetype.h:1-4`).
 
 ---
 
