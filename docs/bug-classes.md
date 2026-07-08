@@ -31,7 +31,7 @@ DPI, font, panning mode, layout direction). It is worse than a steady-state bug 
 intermittent, ugly, and erodes trust — the UI visibly "settles."
 
 **ImGuiAppLayer's whole architecture exists to kill this class.** The frame pipeline (ingest ->
-command -> publish -> render, with OnUpdate as the sole state mutator and OnRender pure) forces
+command -> publish -> render, with OnUpdate as the sole state mutator and OnDraw pure) forces
 derived data to be computed once, in phase, before anything draws. A feature that bypasses the
 pipeline and mixes phases has not just added a bug — it has contradicted the framework's thesis.
 
@@ -81,7 +81,7 @@ update:  for each owner:  publish(owner.fact);
          after all published:  if (drag_pending) mutate(model, using facts_this_frame)                                   // coherent
 ```
 
-This is why **rule 2 says mutate in the update pass, never in render.** OnRender's only write is the
+This is why **rule 2 says mutate in the update pass, never in render.** OnDraw's only write is the
 edit-INTENT (record "the user is dragging owner X"); OnUpdate applies it once every this-frame fact
 is published. Deferring costs one frame of settle — in model units, imperceptible (rule 4).
 
@@ -104,7 +104,7 @@ toggles that feed no measurement.
    is then timeless; consumers re-apply the CURRENT transform. (The Composer caches node geometry in
    *model units*: `pixels / zoom_at_render`, captured in the same-frame read-back.)
 2. **Derive in update, draw in render.** Counts, labels, sizes, layout solutions: computed in
-   OnUpdate (or a same-frame read-back phase), stored in PersistData, read by OnRender. OnRender
+   OnUpdate (or a same-frame read-back phase), stored in PersistData, read by OnDraw. OnDraw
    records raw input into TempData and mutates nothing (the edit-intent bus).
 3. **One producer per fact.** If two panels each recompute a value from raw state in their render
    paths, they can disagree for a frame. Compute once, publish, consume (this is what control data
@@ -175,24 +175,24 @@ for `None`/`Default` and give it no side effect. Never pair "0 is a valid action
 sentinel: the sentinel only protects the code paths that remember to set it, and it leaves the resting
 state (0) armed.
 
-**Why immediate-mode TempData makes this bite.** TempData is a control's per-frame INPUT: OnRender
+**Why immediate-mode TempData makes this bite.** TempData is a control's per-frame INPUT: OnDraw
 records it, OnUpdate consumes it. The framework value-initializes it — the instance is
-`IM_NEW()()`-constructed, and the OnRender wrapper does `_InstanceData->TempData = {}` at the top of
-every frame. OnUpdate consumes *last* frame's OnRender output. Two consequences put a zero-valued
+`IM_NEW()()`-constructed, and the OnDraw wrapper does `_InstanceData->TempData = {}` at the top of
+every frame. OnUpdate consumes *last* frame's OnDraw output. Two consequences put a zero-valued
 TempData in front of OnUpdate:
 
-- **First frame.** OnUpdate runs before any OnRender has written TempData (the per-frame order is
-  OnUpdate then OnRender), so it reads an all-zero struct.
-- **Any frame the writer skipped.** If the OnRender path that sets the field did not run (panel
+- **First frame.** OnUpdate runs before any OnDraw has written TempData (the per-frame order is
+  OnUpdate then OnDraw), so it reads an all-zero struct.
+- **Any frame the writer skipped.** If the OnDraw path that sets the field did not run (panel
   closed, early return), the `= {}` reset leaves the field at 0 for the next OnUpdate.
 
 A TempData field whose 0 value is a real action therefore fires on the first frame and on every
 skipped-writer frame — exactly the frames the author was not thinking about. Setting the sentinel in
-OnRender cannot fix the first frame; setting it in OnInitialize would patch only that one frame and
+OnDraw cannot fix the first frame; setting it in OnInitialize would patch only that one frame and
 leave skipped-writer frames armed. The robust fix is structural: make 0 mean none.
 
 Canonical post-mortem: a prefab-stamp selector stored as a **0-based** index with `-1 = none` and an
-OnRender-set guard. Frame 1: TempData zero-init → index 0 → `0 >= 0` → the library's first prefab
+OnDraw-set guard. Frame 1: TempData zero-init → index 0 → `0 >= 0` → the library's first prefab
 stamped into every clean graph. Tests missed it because they exercised the seed primitives directly,
 not the control's first-frame OnUpdate. Fix: 1-based index (`0 = none`, stamp `k-1` when `> 0`); the
 sentinel and its guard are deleted — the default graph is inert *by construction*, not by a guard
@@ -203,7 +203,7 @@ Checklist:
 - A TempData or enum field that selects an action: **0 = none/default; actions are positive.** Store
   indices 1-based.
 - Reserve the 0th enum entry for `None`/`Default`; never give it a side effect.
-- Do not rely on an OnRender-set sentinel (or an OnInitialize poke) to keep a zero-init field inert.
+- Do not rely on an OnDraw-set sentinel (or an OnInitialize poke) to keep a zero-init field inert.
 - Audit tell: a `>= 0` or `!= 0` guard on a TempData action selector. Each is a candidate for this
   bug; prefer `> 0` with a 1-based value.
 

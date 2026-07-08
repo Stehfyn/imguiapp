@@ -121,7 +121,7 @@ struct RandomTimeControlDemo : ImGuiAppControl <RandomTimeData, RandomTimeTempDa
             data->MaxTimerSecs = GenerateTime(&data->Rng);
     }
 
-    virtual void OnRender(const RandomTimeData* data, RandomTimeTempData* temp_data) const override final
+    virtual void OnDraw(const RandomTimeData* data, RandomTimeTempData* temp_data) const override final
     {
         // Renders between the host window's Begin/End.
         ImGui::Text("%s", "Max Timer Seconds");
@@ -207,7 +207,7 @@ struct BreathingControlDemo : ImGuiAppControl<BreathingControlData, BreathingCon
         }
     }
 
-    virtual void OnRender(const BreathingControlData* data, BreathingControlTempData* temp_data, const RandomTimeData* src) const override final
+    virtual void OnDraw(const BreathingControlData* data, BreathingControlTempData* temp_data, const RandomTimeData* src) const override final
     {
         IM_UNUSED(src);
 
@@ -232,7 +232,7 @@ struct BreathingControlDemo : ImGuiAppControl<BreathingControlData, BreathingCon
 
 struct BaseWindow : ImGuiAppWindow<BaseWindow>
 {
-    virtual void OnRender(const ImGuiApp*) const override final
+    virtual void OnDraw(const ImGuiApp*) const override final
     {
         ImGui::TextWrapped("%s", "This is a base window managed by ImGuiAppDisplayLayer.");
     }
@@ -258,7 +258,7 @@ struct BaseInfoControl : ImGuiAppControl<BaseInfoData, ImGuiAppNoTempData>
         data->Frames++;
     }
 
-    virtual void OnRender(const BaseInfoData* data, ImGuiAppNoTempData* temp_data) const override final
+    virtual void OnDraw(const BaseInfoData* data, ImGuiAppNoTempData* temp_data) const override final
     {
         IM_UNUSED(temp_data);
         ImGui::Separator();
@@ -268,7 +268,7 @@ struct BaseInfoControl : ImGuiAppControl<BaseInfoData, ImGuiAppNoTempData>
 
 struct StatusBar : ImGuiAppSidebar<StatusBar>
 {
-    virtual void OnRender(const ImGuiApp*) const override final
+    virtual void OnDraw(const ImGuiApp*) const override final
     {
         ImGui::TextWrapped("%s", "This is a status bar managed by ImGuiAppSidebar.");
     }
@@ -1162,7 +1162,7 @@ struct ImGuiAppToolbarData
 {
     ImGuiAppGraphDocData* Doc;
 };
-// Actions captured in OnRender, applied in OnUpdate -- TempData is the edit-intent bus.
+// Actions captured in OnDraw, applied in OnUpdate -- TempData is the edit-intent bus.
 struct ImGuiAppToolbarTempData
 {
     bool Save;
@@ -1274,7 +1274,7 @@ struct ImGuiAppToolbarControl : ImGuiAppControl<ImGuiAppToolbarData, ImGuiAppToo
         }
     }
 
-    virtual void OnRender(const ImGuiAppToolbarData* data, ImGuiAppToolbarTempData* temp_data, const ImGuiAppGraphDocData*) const override final
+    virtual void OnDraw(const ImGuiAppToolbarData* data, ImGuiAppToolbarTempData* temp_data, const ImGuiAppGraphDocData*) const override final
     {
         ImGuiAppGraphDocData*     doc       = data->Doc;
         const float       em        = ImGui::GetFontSize();
@@ -1683,7 +1683,7 @@ static bool ComposerStatusPill(const char* id, ImGuiAppComposerPillState s, cons
 }
 
 // Rendered last -> window bottom. Keymap hints left, document counts right; all right-side text is
-// derived in OnUpdate, OnRender only lays out text.
+// derived in OnUpdate, OnDraw only lays out text.
 struct ImGuiAppStatusStripData
 {
     ImGuiAppGraphDocData* Doc;
@@ -1759,7 +1759,7 @@ struct ImGuiAppStatusStripControl : ImGuiAppControl<ImGuiAppStatusStripData, ImG
 
         // Data-dependency cycle (F21): recompute on signature change; surface a name + the node set the
         // Select verb jumps to. Applying the recorded Select click is a model write, so it lands here in
-        // the update pass, not in OnRender.
+        // the update pass, not in OnDraw.
         if (data->CycleSig != doc->FrameSig)
         {
             data->CycleSig = doc->FrameSig;
@@ -1809,7 +1809,7 @@ struct ImGuiAppStatusStripControl : ImGuiAppControl<ImGuiAppStatusStripData, ImG
             ComposerGenerateHeader(doc);
     }
 
-    virtual void OnRender(const ImGuiAppStatusStripData* data, ImGuiAppStatusStripTempData* temp_data, const ImGuiAppGraphDocData* doc_dep) const override final
+    virtual void OnDraw(const ImGuiAppStatusStripData* data, ImGuiAppStatusStripTempData* temp_data, const ImGuiAppGraphDocData* doc_dep) const override final
     {
         const float       em    = ImGui::GetFontSize();
         const ImGuiStyle& style = ImGui::GetStyle();
@@ -2062,7 +2062,7 @@ struct ImGuiAppEditorBodyData
     ImVector<ImGuiAppProjFile> ProjFiles;
     float              ProjRescan; // seconds until the next directory scan
 };
-// Raw input recorded by OnRender (the only place ImGui item geometry exists), consumed by OnUpdate.
+// Raw input recorded by OnDraw (the only place ImGui item geometry exists), consumed by OnUpdate.
 struct ImGuiAppEditorBodyTempData
 {
     bool  TreeGripActivated; // drag started on the tree grip this frame
@@ -2384,7 +2384,7 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
         }
     }
 
-    virtual void OnRender(const ImGuiAppEditorBodyData* data, ImGuiAppEditorBodyTempData* temp_data, const ImGuiAppGraphDocData*) const override final
+    virtual void OnDraw(const ImGuiAppEditorBodyData* data, ImGuiAppEditorBodyTempData* temp_data, const ImGuiAppGraphDocData*) const override final
     {
         ImGuiAppGraphDocData* doc = data->Doc;
         if (doc->Mirror == nullptr)
@@ -2412,7 +2412,7 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
             }
         }
 
-        // Layout is local + display-only; nothing is written to the doc from OnRender.
+        // Layout is local + display-only; nothing is written to the doc from OnDraw.
         const float    em            = ImGui::GetFontSize();
         const ImGuiIO& io            = ImGui::GetIO();
         ImVec2         body          = ImGui::GetContentRegionAvail();
@@ -3065,10 +3065,10 @@ struct ComposerWindow : ImGuiAppWindow<ComposerWindow>
         // The composition fills the window exactly; a window scrollbar is always a layout bug.
         this->Flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
     }
-    virtual void OnRender(const ImGuiApp*) const override final {}
+    virtual void OnDraw(const ImGuiApp*) const override final {}
 };
 
-// Toggle values + "applied" bookkeeping live in PersistData; OnRender records MenuItem results into
+// Toggle values + "applied" bookkeeping live in PersistData; OnDraw records MenuItem results into
 // TempData; OnUpdate writes them back.
 // Demo host slot (Δ6 accessor idiom): set by ShowAppDemo each call; lets host-less demo
 // controls (DemoMenu) reach host-scoped introspection accessors.
@@ -3088,7 +3088,7 @@ struct ImGuiAppDemoMenuData
 };
 struct ImGuiAppDemoMenuTempData
 {
-    bool Rendered; // false until OnRender ran once (the first OnUpdate must not consume zeroed toggles)
+    bool Rendered; // false until OnDraw ran once (the first OnUpdate must not consume zeroed toggles)
     bool ShowBaseWindow;
     bool ShowStatusBar;
     bool ShowRandomTime;
@@ -3117,7 +3117,7 @@ struct ImGuiAppDemoMenuControl : ImGuiAppControl<ImGuiAppDemoMenuData, ImGuiAppD
         data->ShowMetrics    = temp_data->ShowMetrics;
     }
 
-    virtual void OnRender(const ImGuiAppDemoMenuData* data, ImGuiAppDemoMenuTempData* temp_data) const override final
+    virtual void OnDraw(const ImGuiAppDemoMenuData* data, ImGuiAppDemoMenuTempData* temp_data) const override final
     {
         temp_data->Rendered = true;
         bool show_base    = data->ShowBaseWindow;
@@ -3179,7 +3179,7 @@ static ImGuiAppDemoMenuData* GetDemoMenu(ImGuiApp* app)
 struct DemoPanelWindow : ImGuiAppWindow<DemoPanelWindow>
 {
     DemoPanelWindow() { ImStrncpy(this->Label, "ImGuiAppLayer Demo", sizeof(this->Label)); this->Flags = ImGuiWindowFlags_MenuBar; }
-    virtual void OnRender(const ImGuiApp*) const override final {}
+    virtual void OnDraw(const ImGuiApp*) const override final {}
 };
 } // namespace
 
@@ -3256,7 +3256,7 @@ IMGUI_API int AppComposerLayoutFlags(ImGuiApp* host)
 // [SECTION] Demo bring-up (ShowAppDemo: ONE application)
 //-----------------------------------------------------------------------------
 // The demo composes its chrome AND its examples INTO the running app -- the same object model the live
-// mirror reflects, so Live shows everything. Called from a late layer's OnRender: windows/sidebars/controls
+// mirror reflects, so Live shows everything. Called from a late layer's OnDraw: windows/sidebars/controls
 // are safe to push/pop here (their phase iterations for this frame already ran); layers are NOT (vector mid-iteration).
 
 IMGUI_API void ShowAppDemo(bool* p_open, ImGuiApp* host)

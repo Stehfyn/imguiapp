@@ -371,7 +371,7 @@ refactored into `AppEmitControl(draft, depNames, depCount, out)`; the legacy ent
    (nodes.cpp:479; `String`→`char[N]`, deliberately outside the reflect subset, constraint 1), then the
    control struct. Its `DataDependencies` = the *distinct* producer PersistData types of its incoming data
    edges, ordered by topo index (deterministic); each becomes an extra `ImGuiAppControl<...>` template arg
-   and a `const <Dep>Data*` param appended to `OnInitialize/OnUpdate/OnRender` in that order (matching
+   and a `const <Dep>Data*` param appended to `OnInitialize/OnUpdate/OnDraw` in that order (matching
    `ImGuiAppInterfaceAdapterBase`, h:297-302). Each `ImGuiAppFieldBinding` on that edge emits one `OnUpdate`
    line `data-><DstField> = <depParam>-><SrcField>;` (only when the two fields' `ImGuiAppFieldType` match;
    mismatches dropped).
@@ -397,7 +397,7 @@ struct Breathing : ImGuiAppControl<BreathingData, BreathingTempData, RandomTimeD
                 const RandomTimeData* random_time) const override final {
     data->timer_secs = random_time->max_timer_secs;     // from one field binding
   }
-  void OnRender(const BreathingData* data, BreathingTempData* temp_data,
+  void OnDraw(const BreathingData* data, BreathingTempData* temp_data,
                 const RandomTimeData* random_time) const override final {}
 };
 
@@ -1532,7 +1532,7 @@ OnUpdate; `imguiapp_demo.cpp:68-69,95-106`).
 | **Pulse** | `{ bool pulse; float phase; }` | `phase += dt/period; if (phase>=1){ phase-=1; pulse=true; } else pulse=false;` | free-running; `period` a param |
 
 `duration`, `period`, `target`, `stiffness`, `damping`, and the ease selector are PersistData params
-(authored constants) or wired dependency fields. Taking inputs from **wired deps** (not required OnRender
+(authored constants) or wired dependency fields. Taking inputs from **wired deps** (not required OnDraw
 input) keeps them headless-deterministic — no injected input, per the headless-only verification rule.
 
 #### 2.2 Phase discipline (each obeys phase-coherence)
@@ -1543,7 +1543,7 @@ sizes or styles UI from measured geometry, so none can trip the stale-frame clas
 
 The **temp^last** edge idiom (`big-idea.md`; `imguiapp_demo.cpp:167`) appears in two places:
 
-- **Trigger restart** (Timer/Tween): the trigger is a TempData bool recorded from a dep or OnRender; OnUpdate
+- **Trigger restart** (Timer/Tween): the trigger is a TempData bool recorded from a dep or OnDraw; OnUpdate
   restarts on `temp_data->trigger ^ last_temp_data->trigger` (rising) — the exact `^` shape codegen already
   emits for authored events (`:10824`, `AppEmitEventGuard`).
 - **Downstream edge consumption** (Pulse): `pulse` is a one-frame flag; a consumer that wants the *edge*
@@ -1565,7 +1565,7 @@ line and its wiring, identical to any builtin. Example — a Tween driving a con
 
 and inside the consumer's `OnUpdate`, the dependency binding line the emitter already produces
 (`:10707-10761`): `data->col = tween->value;` (or via an explicit binding row). The dep param
-(`const ImAppTweenData* tween`) is threaded through OnInitialize / OnUpdate / OnGetCommand / OnRender by
+(`const ImAppTweenData* tween`) is threaded through OnInitialize / OnUpdate / OnGetCommand / OnDraw by
 `emit_dep_params` (`:10632-10641`) — unchanged. Wiring, one-producer-per-type, and cycle refusal are the
 shared `AppGraphResolveLink` rails: a builtin's DataOut carries its real `DataTypeId` (`:1955-1965`,
 `:1287-1288`), so two Tweens into one consumer collide (`:3016-3031`) and a feedback loop is refused
@@ -3405,7 +3405,7 @@ ImGuiAppControlBase` stands in for every interpreted control; its "type" is data
   DataOut, so dependency keying by type is unchanged and `GetAppCompositionID` sees it,
   `imguiapp.cpp:1313-1318`).
 - `OnInitialize` default-initialises the Persist buffer from field defaults; `OnUpdate` runs the Task
-  work (§4); `OnGetCommand` drains the command latches (§4.3); `OnRender` renders the field-widget
+  work (§4); `OnGetCommand` drains the command latches (§4.3); `OnDraw` renders the field-widget
   panel and records interaction into the Temp buffer (§8).
 - Dependencies resolve by the same type-keyed lookup the framework uses (`app->Data.GetVoidPtr`,
   `imguiapp.h:949`) — one producer per PersistData type, topo push order — because the interpreter
@@ -3496,22 +3496,22 @@ one grammar, two visitors (typecheck / evaluate), the single-authority rule (voc
   rejection (vocabulary §6) honored at run time.
 
 #### 4.6 Layout + Window/Status passes — render (pure)
-`RenderApp` iterates layers' `OnRender` (`imguiapp.cpp:1491-1501`). The **Layout** layer runs its
+`RenderApp` iterates layers' `OnDraw` (`imguiapp.cpp:1491-1501`). The **Layout** layer runs its
 DockBuilder sequence before any window Begins (layer order Layout-before-Display,
 `AppGraphEnsureFoundation`, vocabulary §3b, `imguiapp_nodes.cpp:1981-1991`): Region/Split/Tabs →
 `DockBuilderAddNode`/`SplitNode`/tab-bar, each Window's `Region=` field selecting its `DockWindow`
 target (vocabulary §3b codegen block) — run directly instead of emitted into `OnLayout()`. The
 **Window/Sidebar** pass Begins each host and renders its hosted controls' field-widget panels bound to
 live storage (§8). The **Status** framework layer renders the built-in status bar
-(`ImGuiAppStatusLayer::OnRender`, `imguiapp.cpp:544`); a *custom* Status layer's body is not run (§5).
+(`ImGuiAppStatusLayer::OnDraw`, `imguiapp.cpp:544`); a *custom* Status layer's body is not run (§5).
 Render mutates no Persist — widget interaction writes only the Temp input buffer (§8), the framework's
-"OnRender records TempData" contract (`big-idea.md:31`).
+"OnDraw records TempData" contract (`big-idea.md:31`).
 
 ---
 
 ### 5. Custom C++ control bodies — the reflected card (never faked)
 
-A **custom C++ control** is a control whose real behaviour is a hand-written `OnUpdate`/`OnRender` in a
+A **custom C++ control** is a control whose real behaviour is a hand-written `OnUpdate`/`OnDraw` in a
 compiled type — code the interpreter cannot and must not synthesize. The previewer renders it as a
 **reflected field-widget card**, never an execution:
 
@@ -3523,7 +3523,7 @@ compiled type — code the interpreter cannot and must not synthesize. The previ
   (the live-mirror case), the card reflects the **real** members with `VisitAppFields` /
   `ImAppReflect` (`imguiapp_nodes.h:110-121`, `imguiapp_reflect.h`) — the same reflection the live node
   inspector uses (`imguiapp_nodes.cpp:9767-9772`).
-- **What does NOT run:** the user's `OnRender` widget layout and any imperative `OnUpdate` logic beyond
+- **What does NOT run:** the user's `OnDraw` widget layout and any imperative `OnUpdate` logic beyond
   what the *model* declares (events/commands/bindings, which the interpreter runs generically). The
   card is the honest boundary: the design control's field panel *is* its interpreted UI; once the user
   authors a real body, that body is C++ that only exists after Generate — the note states exactly this.
@@ -3606,7 +3606,7 @@ slot carries its value across the edit.
 #### 8.1 Input routing
 The preview surface hosts **real ImGui widgets**: each interpreted/reflected control renders its field
 panel (the §5/§6 widget rows) inside its host window during the Window pass. User interaction with a
-widget writes the bound **Temp** slot through the manifest — the interpreter's `OnRender`-records-input
+widget writes the bound **Temp** slot through the manifest — the interpreter's `OnDraw`-records-input
 step (`big-idea.md:31`; the framework `TempData` contract). The next frame's Task pass compares
 temp^last and derives events (§4.2). So input maps with zero routing table: the previewed app's inputs
 *are* imgui inputs to the panel widgets, and the framework's one-frame skew turns them into edges. The
@@ -3653,7 +3653,7 @@ and the animation builtins) appears exactly once; F67 implements straight from t
 | **Layer / Status** | interpreted (framework) | Render | Framework status bar renders. A *custom* Status subclass body is not run → stub note. (`imguiapp.cpp:544`, §4.6) |
 | **Layer / Layout** | interpreted | Render (pre-window) | Run the DockBuilder sequence from child Layout nodes before windows Begin. (vocabulary §3b; `imguiapp_nodes.cpp:1981-1991`, §4.6) |
 | **Layer / Display** | interpreted | Render | Container/order for Window/Sidebar rendering. (§4.6) |
-| **Layer / Custom** | reflected + stub | — | A user `ImGuiAppLayer` subclass: its C++ `OnUpdate`/`OnRender` is **not** run (named stub in the stack, "body runs after Generate"); its contained windows still render. (§5) |
+| **Layer / Custom** | reflected + stub | — | A user `ImGuiAppLayer` subclass: its C++ `OnUpdate`/`OnDraw` is **not** run (named stub in the stack, "body runs after Generate"); its contained windows still render. (§5) |
 | **Window** | interpreted | Render | Real `Begin`/`End`; hosts its controls' field panels bound to live storage; honors `Region=`/placement fields. (§4.6, §8.1) |
 | **Sidebar** | interpreted | Render | Docked host, same as Window with `DockDir`/`DockSize`. (§4.6) |
 | **Control — builtin, animation** (Tween/Timer/Spring/Pulse) | interpreted | Task | The vocabulary §2.1 closed-form dt rule over its Persist accumulator; deterministic under Fixed-dt scrub. (§4.4) |
@@ -3896,7 +3896,7 @@ during build.)
   Design-time preview references real impls. F78.5 bodies are already real; this extends to embedded source.
 
 #### 3.4 The final fold (write-back)
-- Loop: edit a control's OnRender (F78.5) body → test live in the previewer/DLL (V0) → the tool writes the
+- Loop: edit a control's OnDraw (F78.5) body → test live in the previewer/DLL (V0) → the tool writes the
   edit back to the REAL file on disk at the mapped span. Inverse of the F22–F24 import edge → full
   bidirectional source↔graph↔source.
 - **Tiers:** (1) **method bodies** map to one file + one span → surgical replace, FIRST target (pairs with the

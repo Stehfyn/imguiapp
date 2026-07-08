@@ -444,7 +444,7 @@ void ImGuiAppTaskLayer::OnDetach(ImGuiApp* app) const
 
 void ImGuiAppTaskLayer::OnUpdate(ImGuiApp* app, float dt) const
 {
-    // OnUpdate consumes the TempData recorded by last frame's OnRender and mutates PersistData; runs before
+    // OnUpdate consumes the TempData recorded by last frame's OnDraw and mutates PersistData; runs before
     // the Command layer collects OnGetCommand, so state updated this frame can emit a command the same frame.
     // Dependency order: every producer updates before its consumers, regardless of hosting order.
     const ImVector<ImGuiAppControlBase*>* order = ImGui::AppRebuildUpdateOrder(app);
@@ -452,7 +452,7 @@ void ImGuiAppTaskLayer::OnUpdate(ImGuiApp* app, float dt) const
         order->Data[i]->OnUpdate(app, dt);
 }
 
-void ImGuiAppTaskLayer::OnRender(const ImGuiApp* app) const
+void ImGuiAppTaskLayer::OnDraw(const ImGuiApp* app) const
 {
     IM_UNUSED(app);
 }
@@ -495,7 +495,7 @@ void ImGuiAppCommandLayer::OnUpdate(ImGuiApp* app, float dt) const
     }
 }
 
-void ImGuiAppCommandLayer::OnRender(const ImGuiApp* app) const
+void ImGuiAppCommandLayer::OnDraw(const ImGuiApp* app) const
 {
     IM_UNUSED(app);
 }
@@ -516,7 +516,7 @@ void ImGuiAppStatusLayer::OnUpdate(ImGuiApp* app, float dt) const
     IM_UNUSED(dt);
 }
 
-void ImGuiAppStatusLayer::OnRender(const ImGuiApp* app) const
+void ImGuiAppStatusLayer::OnDraw(const ImGuiApp* app) const
 {
     IM_ASSERT(app != nullptr);
     if (app == nullptr)
@@ -671,7 +671,7 @@ void ImGuiAppLayoutLayer::OnUpdate(ImGuiApp* app, float dt) const
     app->OnLayout();
 }
 
-void ImGuiAppLayoutLayer::OnRender(const ImGuiApp* app) const
+void ImGuiAppLayoutLayer::OnDraw(const ImGuiApp* app) const
 {
     IM_UNUSED(app);
 }
@@ -710,7 +710,7 @@ void ImGuiAppDisplayLayer::OnUpdate(ImGuiApp* app, float dt) const
         window->OnUpdate(app, dt);
 }
 
-void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
+void ImGuiAppDisplayLayer::OnDraw(const ImGuiApp* app) const
 {
     for (ImGuiAppSidebarBase* sidebar : app->Sidebars)
     {
@@ -734,7 +734,7 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
         {
             sidebar->Open = true;
             sidebar->Window = ImGui::GetCurrentWindow();
-            sidebar->OnRender(app);
+            sidebar->OnDraw(app);
         }
         else
         {
@@ -748,7 +748,7 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
         for (ImGuiAppControlBase* control : sidebar->Controls)
         {
             const ImGuiAppStyleScope control_scope = PushItemStyle(control);
-            control->OnRender(app);
+            control->OnDraw(app);
             PopItemStyle(control_scope);
         }
     }
@@ -756,7 +756,7 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
     for (ImGuiAppWindowBase* window : app->Windows)
     {
         // Closed window: composition member stays (mirror, wiring), but nothing renders -- no Begin,
-        // no OnRender, no hosted controls. Reopen by writing Open (outliner eye / host UI).
+        // no OnDraw, no hosted controls. Reopen by writing Open (outliner eye / host UI).
         if (!window->Open)
             continue;
 
@@ -783,14 +783,14 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
         if (ImGui::Begin(window->Label, &window->Open, window->Flags))
         {
             window->Window = ImGui::GetCurrentWindow();
-            window->OnRender(app);
+            window->OnDraw(app);
 
             // Hosted controls render INSIDE the host window (child regions, not their own Begin/End).
-            // Style mods bracket OnRender only: they style the control's region but not its popups.
+            // Style mods bracket OnDraw only: they style the control's region but not its popups.
             for (ImGuiAppControlBase* control : window->Controls)
             {
                 const ImGuiAppStyleScope control_scope = PushItemStyle(control);
-                control->OnRender(app);
+                control->OnDraw(app);
                 PopItemStyle(control_scope);
             }
         }
@@ -802,7 +802,7 @@ void ImGuiAppDisplayLayer::OnRender(const ImGuiApp* app) const
     for (ImGuiAppControlBase* control : app->Controls)
     {
         const ImGuiAppStyleScope control_scope = PushItemStyle(control);
-        control->OnRender(app);
+        control->OnDraw(app);
         PopItemStyle(control_scope);
     }
 }
@@ -918,7 +918,7 @@ IMGUI_API void RenderApp(const ImGuiApp* app)
     for (ImGuiAppLayerBase* layer : app->Layers)
     {
         AppWALWrite(app->WAL, ImGuiAppWALLevel_Frame, "render %s", layer->Label);
-        layer->OnRender(app);
+        layer->OnDraw(app);
     }
 }
 

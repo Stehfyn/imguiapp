@@ -1776,7 +1776,7 @@ static void AppEmitControlWithDeps(const ImGuiAppGraph* g, const ImGuiAppNode* n
                 out->appendf("    // TODO: choose a destination field for %s->%s\n", sparam, fld);
         }
 
-        // Authored events. OnRender recorded temp_data; compare against last frame's to identify what
+        // Authored events. OnDraw recorded temp_data; compare against last frame's to identify what
         // happened, then mutate persistent state -- OnUpdate is the sole mutator.
         if (n->Events.Size > 0)
         {
@@ -1841,16 +1841,16 @@ static void AppEmitControlWithDeps(const ImGuiAppGraph* g, const ImGuiAppNode* n
         out->appendf("  }\n\n");
     }   // F78.5: end OnUpdate default (custom-body else)
 
-    out->appendf("  virtual void OnRender(const %s* data, %s* temp_data", persist_type, temp_type);
+    out->appendf("  virtual void OnDraw(const %s* data, %s* temp_data", persist_type, temp_type);
     emit_dep_params(out);
     out->appendf(") const override final\n  {\n    IM_UNUSED(data); IM_UNUSED(temp_data);\n");
-    if (n->Draft.MethodBody[ImGuiAppControlMethod_OnRender][0])   // F78.5: hand-written body replaces the render stub
-        out->appendf("    %s\n  }\n};\n\n", n->Draft.MethodBody[ImGuiAppControlMethod_OnRender]);
+    if (n->Draft.MethodBody[ImGuiAppControlMethod_OnDraw][0])   // F78.5: hand-written body replaces the render stub
+        out->appendf("    %s\n  }\n};\n\n", n->Draft.MethodBody[ImGuiAppControlMethod_OnDraw]);
     else
     {
         out->appendf("    // TODO: render widgets from const data\n");
         {
-            // Capture stubs: OnRender's half of the contract is recording raw input into temp_data (zeroed each
+            // Capture stubs: OnDraw's half of the contract is recording raw input into temp_data (zeroed each
             // frame) for the next OnUpdate to compare -- list the authored temp fields so the hookup is obvious.
             ImVector<ImGuiAppFieldDesc> temp_fields;
             AppNodeEffectiveFields(g, n, 1, &temp_fields);
@@ -1865,7 +1865,7 @@ static void AppEmitControlWithDeps(const ImGuiAppGraph* g, const ImGuiAppNode* n
             }
         }
         out->appendf("  }\n};\n\n");
-    }   // F78.5: end OnRender default (custom-body else)
+    }   // F78.5: end OnDraw default (custom-body else)
 }
 
 // F16: a lone draft is the graph emitter's depCount==0 path -- a single Control node with no incoming
@@ -3593,7 +3593,7 @@ static void EditAppControlCommandChoices(const ImGuiAppGraph* g, ImGuiAppNode* n
 //-----------------------------------------------------------------------------
 // Authored events (the temp ^ last_temp idiom, made first-class)
 //
-// Per-frame contract: OnRender records raw input into TempData (zeroed every frame); OnUpdate receives
+// Per-frame contract: OnDraw records raw input into TempData (zeroed every frame); OnUpdate receives
 // that TempData AND last frame's, and user code identifies what happened by comparing them. An
 // ImGuiAppEventDesc authors one such comparison plus its reaction; codegen emits the guarded block verbatim.
 //-----------------------------------------------------------------------------
@@ -9406,14 +9406,14 @@ static const char* AppScopeCaption(const ImGuiAppGraph* g)
         case ImGuiAppLayerType_Status:  return "publishes the app's own status for other modules (today: the status bar) -- nothing composes here yet";
         case ImGuiAppLayerType_Layout:  return "workspace layout: the app's OnLayout() submits dockspaces & dock bindings before any window Begins";
         case ImGuiAppLayerType_Display: return "presentation only -- windows & sidebars render the collected state, in push order, mutating nothing";
-        case ImGuiAppLayerType_Custom:  return "your ImGuiAppLayer subclass:  OnAttach/OnDetach at push/pop, OnUpdate -> OnRender at its stack position";
+        case ImGuiAppLayerType_Custom:  return "your ImGuiAppLayer subclass:  OnAttach/OnDetach at push/pop, OnUpdate -> OnDraw at its stack position";
         default: break;
         }
     }
     if (tn->Kind == ImGuiAppNodeKind_Window || tn->Kind == ImGuiAppNodeKind_Sidebar)
-        return "hosted controls run in push order between the host's Begin/End:  OnGetCommand -> OnUpdate -> OnRender";
+        return "hosted controls run in push order between the host's Begin/End:  OnGetCommand -> OnUpdate -> OnDraw";
     if (tn->Kind == ImGuiAppNodeKind_Control)
-        return "data domain:  OnRender records TempData  ->  OnUpdate derives events (temp ^ last_temp) and mutates PersistData";
+        return "data domain:  OnDraw records TempData  ->  OnUpdate derives events (temp ^ last_temp) and mutates PersistData";
     if (tn->Kind == ImGuiAppNodeKind_Struct)
         return "data fields -- wire values out to consumers";
     if (tn->Kind == ImGuiAppNodeKind_Layout)
@@ -12140,7 +12140,7 @@ static void AppEmitCustomLayerCode(const ImGuiAppNode* n, ImGuiTextBuffer* out)
     out->appendf("  virtual void OnAttach(ImGuiApp* app) const override\n  {\n    IM_UNUSED(app);\n  }\n\n");
     out->appendf("  virtual void OnDetach(ImGuiApp* app) const override\n  {\n    IM_UNUSED(app);\n  }\n\n");
     out->appendf("  virtual void OnUpdate(ImGuiApp* app, float dt) const override\n  {\n    IM_UNUSED(app); IM_UNUSED(dt);\n    // TODO: this layer's per-frame work, at its position in the stack\n  }\n\n");
-    out->appendf("  virtual void OnRender(const ImGuiApp* app) const override\n  {\n    IM_UNUSED(app);\n  }\n};\n\n");
+    out->appendf("  virtual void OnDraw(const ImGuiApp* app) const override\n  {\n    IM_UNUSED(app);\n  }\n};\n\n");
 }
 
 // Emit a standalone struct type from a Struct node: its PersistFields are the members.
@@ -12220,7 +12220,7 @@ static void AppEmitLiveLayerCode(const ImGuiAppNode* n, ImGuiTextBuffer* out)
     char base[IM_LABEL_SIZE];
     AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
     out->appendf("// live layer '%s' -- definitions live in the running binary\n", n->Draft.Name);
-    out->appendf("struct %s : ImGuiAppLayer\n{\n  virtual void OnRender(const ImGuiApp* app) const override;\n};\n\n", base);
+    out->appendf("struct %s : ImGuiAppLayer\n{\n  virtual void OnDraw(const ImGuiApp* app) const override;\n};\n\n", base);
 }
 
 static void AppEmitLiveHostCode(const ImGuiAppNode* n, ImGuiTextBuffer* out)
@@ -12229,7 +12229,7 @@ static void AppEmitLiveHostCode(const ImGuiAppNode* n, ImGuiTextBuffer* out)
     AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
     const char* kind = n->Kind == ImGuiAppNodeKind_Sidebar ? "Sidebar" : "Window";
     out->appendf("// live %s '%s' -- definitions live in the running binary\n", n->Kind == ImGuiAppNodeKind_Sidebar ? "sidebar" : "window", n->Draft.Name);
-    out->appendf("struct %s : ImGuiApp%s<%s>\n{\n  virtual void OnRender(const ImGuiApp* app) const override;\n};\n\n", base, kind, base);
+    out->appendf("struct %s : ImGuiApp%s<%s>\n{\n  virtual void OnDraw(const ImGuiApp* app) const override;\n};\n\n", base, kind, base);
 }
 
 // Mirrored initial placement the running host carries (Flags ride the push site).
@@ -12401,7 +12401,7 @@ static bool AppEmitLiveControlCode(const ImGuiAppGraph* g, ImGuiApp* live_app, c
     out->appendf("  virtual void OnUpdate(float dt, %s* data, const %s* temp_data, const %s* last_temp_data", pname, temp_type, temp_type);
     emit_dep_params(out);
     out->appendf(") const override;\n");
-    out->appendf("  virtual void OnRender(const %s* data, %s* temp_data", pname, temp_type);
+    out->appendf("  virtual void OnDraw(const %s* data, %s* temp_data", pname, temp_type);
     emit_dep_params(out);
     out->appendf(") const override;\n};\n\n");
     return true;
@@ -15956,7 +15956,7 @@ void ImGuiAppComposerControl::OnInitialize(ImGuiApp* app, ImGuiAppComposerContro
     ImGui::AppGraphEnsureFoundation(&data->Graph);     // an empty composition still shows its foundation stack
 }
 
-void ImGuiAppComposerControl::OnRender(const ImGuiAppComposerControlData* data, ImGuiAppNoTempData* temp_data) const
+void ImGuiAppComposerControl::OnDraw(const ImGuiAppComposerControlData* data, ImGuiAppNoTempData* temp_data) const
 {
     IM_UNUSED(temp_data);
     // The editor edits the owned graph in place; render is where the Composer authors, mirroring the

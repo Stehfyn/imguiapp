@@ -82,7 +82,7 @@ struct ImGuiAppPvDep
     ImGuiID ProducerDataTypeId;
 };
 
-// Scripted input: the headless equivalent of a widget recording into TempData during OnRender. F68
+// Scripted input: the headless equivalent of a widget recording into TempData during OnDraw. F68
 // replaces this with real widget input on the composed window surface.
 struct ImGuiAppPvScript
 {
@@ -108,7 +108,7 @@ struct ImGuiAppPvCommandName
 // composer: HoverNode/ClickNode report the node the mouse is over / clicked, latched until taken.
 struct ImGuiAppPvSurface
 {
-    bool Enabled;        // OnRender submits real widgets into the current window (else headless CORE)
+    bool Enabled;        // OnDraw submits real widgets into the current window (else headless CORE)
     int  BrushSelected;  // composer -> preview halo target (primary selection node id, -1 none)
     int  BrushHover;     // composer -> preview halo target (hovered node id, -1 none)
     int  HoverNode;      // preview -> composer: node under the mouse this frame (-1 none)
@@ -831,7 +831,7 @@ struct ImGuiAppPreviewControl : ImGuiAppControlBase
         }
     }
 
-    virtual void OnRender(const ImGuiApp* app) const override final;
+    virtual void OnDraw(const ImGuiApp* app) const override final;
 
 private:
     // Command value for an event's command name -- defined out-of-line (needs the session table).
@@ -943,12 +943,12 @@ int ImGuiAppPreviewControl::AppPvCommandValueForEvent(ImGuiAppPreview* s, const 
     return AppPvCommandValue(s, name);
 }
 
-void ImGuiAppPreviewControl::OnRender(const ImGuiApp* app) const
+void ImGuiAppPreviewControl::OnDraw(const ImGuiApp* app) const
 {
     char* buffer = (char*)app->Data.GetVoidPtr(Inst->DataTypeId);
     if (buffer == nullptr) return;
 
-    // OnRender records TempData: zero the Temp sub-buffer first (framework contract), then record input.
+    // OnDraw records TempData: zero the Temp sub-buffer first (framework contract), then record input.
     char* temp = buffer + Inst->PersistBytes + Inst->TempBytes;
     if (Inst->TempBytes > 0) memset(temp, 0, Inst->TempBytes);
 
@@ -1085,7 +1085,7 @@ void AppPvBuildPopulation(ImGuiAppPreview* s, const ImVector<int>& order)
     app->Session = s;
     s->App = app;
 
-    // Task (mutate), Command (dispatch), Display (render app-level + hosted controls' OnRender). Status is
+    // Task (mutate), Command (dispatch), Display (render app-level + hosted controls' OnDraw). Status is
     // omitted -- it submits a real ImGui window; the surface hosts controls in the composer's own window.
     ImGui::PushAppLayer<ImGuiAppTaskLayer>(app);
     ImGui::PushAppLayer<ImGuiAppCommandLayer>(app);

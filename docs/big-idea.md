@@ -27,7 +27,7 @@ different loop iterations. The fix is pipelining: defer input processing one fra
 buffer. Each control keeps a three-part memory:
 
 - **PersistData** — durable state. One writer: `OnUpdate`.
-- **TempData** — this frame's raw input sample, recorded by `OnRender`, zeroed every frame.
+- **TempData** — this frame's raw input sample, recorded by `OnDraw`, zeroed every frame.
 - **LastTempData** — the previous frame's sample, maintained by the framework.
 
 `OnUpdate` receives both samples and compares them. That one-frame skew restores the strict

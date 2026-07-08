@@ -796,7 +796,7 @@ struct ImGuiAppLayerBase : ImGuiAppInterface
     virtual void OnAttach(ImGuiApp*) const        = 0;
     virtual void OnDetach(ImGuiApp*) const        = 0;
     virtual void OnUpdate(ImGuiApp*, float) const = 0;
-    virtual void OnRender(const ImGuiApp*) const  = 0;
+    virtual void OnDraw(const ImGuiApp*) const    = 0;
 };
 
 struct ImGuiAppItemBase : ImGuiAppInterface
@@ -813,7 +813,7 @@ struct ImGuiAppItemBase : ImGuiAppInterface
     virtual void OnShutdown(ImGuiApp*) const                           = 0;
     virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*) const = 0;
     virtual void OnUpdate(const ImGuiApp* app, float dt) const         = 0;
-    virtual void OnRender(const ImGuiApp*) const                       = 0;
+    virtual void OnDraw(const ImGuiApp*) const                         = 0;
 };
 
 struct ImGuiAppWindowBase : ImGuiAppItemBase
@@ -865,7 +865,7 @@ struct ImGuiAppControlBase : ImGuiAppItemBase
 // all live in imguiapp_reflect.h, included at the top of this file.
 
 // TempData for a control with no per-frame input: pass as TempDataT instead of authoring an
-// empty per-control struct (OnRender records nothing, OnUpdate compares nothing).
+// empty per-control struct (OnDraw records nothing, OnUpdate compares nothing).
 struct ImGuiAppNoTempData {};
 
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
@@ -875,7 +875,7 @@ struct ImGuiAppInterfaceAdapterBase : ImGuiAppInterface
     virtual void OnShutdown(ImGuiApp*, PersistDataT*, const DataDependencies*...) const                                                   = 0;
     virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*, const PersistDataT*, const TempDataT*, const DataDependencies*...) const = 0;
     virtual void OnUpdate(float, PersistDataT*, const TempDataT*, const TempDataT*, const DataDependencies*...) const                     = 0;
-    virtual void OnRender(const PersistDataT*, TempDataT*, const DataDependencies*...) const                                              = 0;
+    virtual void OnDraw(const PersistDataT*, TempDataT*, const DataDependencies*...) const                                                = 0;
 };
 
 struct ImGuiAppLayer : ImGuiAppLayerBase
@@ -883,7 +883,7 @@ struct ImGuiAppLayer : ImGuiAppLayerBase
     virtual void OnAttach(ImGuiApp*)        const override { }
     virtual void OnDetach(ImGuiApp*)        const override { }
     virtual void OnUpdate(ImGuiApp*, float) const override { }
-    virtual void OnRender(const ImGuiApp*)  const override { }
+    virtual void OnDraw(const ImGuiApp*)    const override { }
 };
 
 struct ImGuiAppTaskLayer : ImGuiAppLayer
@@ -891,7 +891,7 @@ struct ImGuiAppTaskLayer : ImGuiAppLayer
     virtual void OnAttach(ImGuiApp*)        const override final;
     virtual void OnDetach(ImGuiApp*)        const override final;
     virtual void OnUpdate(ImGuiApp*, float) const override final;
-    virtual void OnRender(const ImGuiApp*)  const override final;
+    virtual void OnDraw(const ImGuiApp*)    const override final;
 };
 
 struct ImGuiAppCommandLayer : ImGuiAppLayer
@@ -899,7 +899,7 @@ struct ImGuiAppCommandLayer : ImGuiAppLayer
     virtual void OnAttach(ImGuiApp*)        const override final;
     virtual void OnDetach(ImGuiApp*)        const override final;
     virtual void OnUpdate(ImGuiApp*, float) const override final;
-    virtual void OnRender(const ImGuiApp*)  const override final;
+    virtual void OnDraw(const ImGuiApp*)    const override final;
 };
 
 struct ImGuiAppStatusLayer : ImGuiAppLayer
@@ -907,7 +907,7 @@ struct ImGuiAppStatusLayer : ImGuiAppLayer
     virtual void OnAttach(ImGuiApp*)        const override final;
     virtual void OnDetach(ImGuiApp*)        const override final;
     virtual void OnUpdate(ImGuiApp*, float) const override final;
-    virtual void OnRender(const ImGuiApp*)  const override final;
+    virtual void OnDraw(const ImGuiApp*)    const override final;
 };
 
 struct ImGuiAppLayoutLayer : ImGuiAppLayer
@@ -915,7 +915,7 @@ struct ImGuiAppLayoutLayer : ImGuiAppLayer
     virtual void OnAttach(ImGuiApp*)        const override final;
     virtual void OnDetach(ImGuiApp*)        const override final;
     virtual void OnUpdate(ImGuiApp*, float) const override final;
-    virtual void OnRender(const ImGuiApp*)  const override final;
+    virtual void OnDraw(const ImGuiApp*)    const override final;
 };
 
 struct ImGuiAppDisplayLayer : ImGuiAppLayer
@@ -923,7 +923,7 @@ struct ImGuiAppDisplayLayer : ImGuiAppLayer
     virtual void OnAttach(ImGuiApp*)        const override final;
     virtual void OnDetach(ImGuiApp*)        const override final;
     virtual void OnUpdate(ImGuiApp*, float) const override final;
-    virtual void OnRender(const ImGuiApp*)  const override final;
+    virtual void OnDraw(const ImGuiApp*)    const override final;
 };
 
 struct ImGuiAppBase : ImGuiAppInterface
@@ -1113,8 +1113,8 @@ struct ImGuiAppInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistData
     //
     //
     //
-    virtual void OnRender(const PersistDataT*, TempDataT*, const DataDependencies*...) const override {}
-    virtual void OnRender(const ImGuiApp* app) const override final { IM_UNUSED(app); _InstanceData->TempData = {}; ApplyRender(DepSeq()); }
+    virtual void OnDraw(const PersistDataT*, TempDataT*, const DataDependencies*...) const override {}
+    virtual void OnDraw(const ImGuiApp* app) const override final { IM_UNUSED(app); _InstanceData->TempData = {}; ApplyDraw(DepSeq()); }
 
     // Typed apply: the index pack and the type pack expand in lockstep, re-attaching each opaque
     // slot's static type at the call boundary (no tuple/apply; see ImAppIndexSeq).
@@ -1122,7 +1122,7 @@ struct ImGuiAppInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistData
     template <size_t... Is> inline void ApplyShutdown(ImGuiApp* app, ImAppIndexSeq<Is...>) const                               { OnShutdown(app, &_InstanceData->PersistData, GetData<DataDependencies>(Is)...); }
     template <size_t... Is> inline void ApplyGetCommand(const ImGuiApp* app, ImGuiAppCommand* cmd, ImAppIndexSeq<Is...>) const { OnGetCommand(app, cmd, &_InstanceData->PersistData, &_InstanceData->TempData, GetData<DataDependencies>(Is)...); }
     template <size_t... Is> inline void ApplyUpdate(float dt, ImAppIndexSeq<Is...>) const                                      { OnUpdate(dt, &_InstanceData->PersistData, &_InstanceData->TempData, &_InstanceData->LastTempData, GetData<DataDependencies>(Is)...); }
-    template <size_t... Is> inline void ApplyRender(ImAppIndexSeq<Is...>) const                                                { OnRender(&_InstanceData->PersistData, &_InstanceData->TempData, GetData<DataDependencies>(Is)...); }
+    template <size_t... Is> inline void ApplyDraw(ImAppIndexSeq<Is...>) const                                                  { OnDraw(&_InstanceData->PersistData, &_InstanceData->TempData, GetData<DataDependencies>(Is)...); }
 };
 
 // Live-mirror implementation over the adapter's pack: the ImGuiAppControlMirrorBase hooks,
@@ -1241,7 +1241,7 @@ struct ImGuiAppWindow : ImGuiAppWindowBase
     virtual void OnShutdown(ImGuiApp*)                           const override { };
     virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*) const override { };
     virtual void OnUpdate(const ImGuiApp* app, float dt)         const override { };
-    virtual void OnRender(const ImGuiApp*)                       const override { };
+    virtual void OnDraw(const ImGuiApp*)                         const override { };
 };
 
 template <typename T>
@@ -1251,7 +1251,7 @@ struct ImGuiAppSidebar : ImGuiAppSidebarBase
     virtual void OnShutdown(ImGuiApp*)                           const override { };
     virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*) const override { };
     virtual void OnUpdate(const ImGuiApp* app, float dt)         const override { };
-    virtual void OnRender(const ImGuiApp*)                       const override { };
+    virtual void OnDraw(const ImGuiApp*)                         const override { };
 };
 
 //-----------------------------------------------------------------------------

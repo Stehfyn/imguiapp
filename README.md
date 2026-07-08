@@ -8,7 +8,7 @@ struct DemoAppLayer : ImGuiAppLayer
     Counter++;
   }
 
-  virtual void OnRender(const ImGuiApp*) override final
+  virtual void OnDraw(const ImGuiApp*) override final
   {
     ImGui::Begin("App Layer Window");
     ImGui::Text("Hello from App Layer!");
@@ -35,7 +35,7 @@ An application layer for Dear ImGui. The app is a **composition** (layers → wi
 controls → data) and the frame is one pass of a **control loop** — ingest module status & update
 state (Task), handle commands (Command), publish own status (Status), then render without mutating
 (Window). Input arrives mid-render in immediate mode, so processing is deferred one frame:
-`OnRender` records raw input into `TempData`, `OnUpdate` compares it with last frame's and mutates
+`OnDraw` records raw input into `TempData`, `OnUpdate` compares it with last frame's and mutates
 `PersistData` — events are *derived, not stored*:
 
 ```c++

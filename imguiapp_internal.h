@@ -383,7 +383,7 @@ enum ImGuiAppControlMethod_
     ImGuiAppControlMethod_OnInitialize = 0,
     ImGuiAppControlMethod_OnGetCommand,
     ImGuiAppControlMethod_OnUpdate,
-    ImGuiAppControlMethod_OnRender,
+    ImGuiAppControlMethod_OnDraw,
     ImGuiAppControlMethod_COUNT
 };
 
@@ -498,7 +498,7 @@ struct ImGuiAppOpOperand
     char Text[IM_LABEL_SIZE] = "";
 };
 
-// OnRender records raw input into TempData (zeroed every frame); OnUpdate receives BOTH this frame's
+// OnDraw records raw input into TempData (zeroed every frame); OnUpdate receives BOTH this frame's
 // TempData and last frame's, deriving events by comparing them. An edge names which comparison the
 // generated OnUpdate guards with.
 enum ImGuiAppEventEdge_
@@ -1032,7 +1032,7 @@ struct ImGuiAppComposerControlData
 struct ImGuiAppComposerControl : ImGuiAppControl<ImGuiAppComposerControlData, ImGuiAppNoTempData>
 {
     virtual void OnInitialize(ImGuiApp* app, ImGuiAppComposerControlData* data) const override;
-    virtual void OnRender(const ImGuiAppComposerControlData* data, ImGuiAppNoTempData* temp_data) const override;
+    virtual void OnDraw(const ImGuiAppComposerControlData* data, ImGuiAppNoTempData* temp_data) const override;
 };
 
 // Interpreter core (a second graph backend beside codegen; API in the core namespace below) has no
@@ -1850,7 +1850,7 @@ IMGUI_API ImGuiApp*        AppPreviewApp(ImGuiAppPreview* session);
 // Window render. Advances the session tick.
 IMGUI_API void             AppPreviewFrame(ImGuiAppPreview* session, float dt);
 
-// Scripted input seam: the headless equivalent of a widget recording into TempData during OnRender.
+// Scripted input seam: the headless equivalent of a widget recording into TempData during OnDraw.
 // Sticky until changed. F68 replaces this with real widget input on the composed window surface.
 // Returns false when the node id / temp field name is unknown. Value is coerced to the field's type.
 IMGUI_API bool             AppPreviewSetInput(ImGuiAppPreview* session, int node_id, const char* temp_field, double value);
@@ -2381,7 +2381,7 @@ IMGUI_API int              AppComposerLayoutFlags(ImGuiApp* host);
 
 
 // F68 preview surface + brushing
-// On-camera surface (design 8.1): with it enabled, each interpreted control's OnRender submits its
+// On-camera surface (design 8.1): with it enabled, each interpreted control's OnDraw submits its
 // manifest-bound field widgets into the CURRENT ImGui window (the composer's Preview panel). Disabled
 // (the default / F67 CORE path) the controls issue no ImGui calls, so the interpreter runs headless.
 IMGUI_API void AppPreviewSetSurface(ImGuiAppPreview* session, bool on);
