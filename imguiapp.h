@@ -153,9 +153,11 @@ namespace ImGui
     // unrouted ones resolve to the pusher's instance id, then the singleton. Producer pushed first either way.
     template <typename T>
     IMGUI_API inline T*   AppControlCreate(ImGuiApp* app, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count, const char* host_kind, const char* host_label);
+    // Task nodes (N4): external informational sources hosted by the Task layer; same instance/binds
+    // grammar as controls, no display slot. Controls are always window/sidebar-hosted (no free push).
     template <typename T>
-    IMGUI_API inline void PushAppControl(ImGuiApp* app, ImGuiID instance = 0, const ImGuiAppDataBinding* binds = nullptr, int binds_count = 0);
-    IMGUI_API void        PopAppControl(ImGuiApp* app);
+    IMGUI_API inline void PushAppTask(ImGuiApp* app, ImGuiID instance = 0, const ImGuiAppDataBinding* binds = nullptr, int binds_count = 0);
+    IMGUI_API void        PopAppTask(ImGuiApp* app);
     // No PopWindowControl/PopSidebarControl: a window/sidebar control is owned by its host item
     // and pops with it (PopAppWindow / PopAppSidebar).
     template <typename T>
@@ -178,13 +180,13 @@ namespace ImGui
     // Register a control's instance data (id-keyed). snapshottable => registers inst_size + TempData byte range
     // (snapshot/replay); otherwise registers opaque (caller passes the type-derived sizes/offset/destroy).
     IMGUI_API void        RegisterAppControlStorage(ImGuiApp* app, ImGuiID id, void* instance_data, bool snapshottable, int inst_size, int temp_offset, int temp_size, void (*destroy)(void*));
-    // Type-erased front of PushAppControl / PushWindowControl / PushSidebarControl: WAL-logs the push
-    // (host_kind/host_label = owning window/sidebar, or null), labels the control, registers its instance
+    // Type-erased front of PushAppTask / PushWindowControl / PushSidebarControl: WAL-logs the push
+    // (host_kind/host_label = owning window/sidebar, or null), labels the node, registers its instance
     // storage. The typed template caller then wires _InstanceID/_InstanceData and ResolveDependencies.
-    IMGUI_API void        AppControlRegisterStorage(ImGuiApp* app, ImGuiAppControlBase* control, const char* name, ImGuiID data_type_id, ImGuiID instance, void* instance_data, bool snapshottable, int inst_size, int temp_offset, int temp_size, void (*destroy)(void*), const char* host_kind, const char* host_label);
+    IMGUI_API void        AppControlRegisterStorage(ImGuiApp* app, ImGuiAppNodeBase* node, const char* name, ImGuiID data_type_id, ImGuiID instance, void* instance_data, bool snapshottable, int inst_size, int temp_offset, int temp_size, void (*destroy)(void*), const char* host_kind, const char* host_label);
     // Type-erased tail: append the wired node to its owning list, initialize and attach it.
     IMGUI_API void        AppControlPush(ImGuiApp* app, ImVector<ImGuiAppDisplayNodeBase*>* list, ImGuiAppDisplayNodeBase* node);
-    IMGUI_API void        AppControlPush(ImGuiApp* app, ImVector<ImGuiAppNodeBase*>* list, ImGuiAppNodeBase* node);
+    IMGUI_API void        AppTaskPush(ImGuiApp* app, ImVector<ImGuiAppNodeBase*>* list, ImGuiAppNodeBase* node);   // stamps Kind_Task
     IMGUI_API void        UnregisterAppStorage(ImGuiApp* app, ImGuiID id);                                                                            // destroys + removes one entry
     IMGUI_API void        ClearAppStorage(ImGuiApp* app);
 
@@ -793,8 +795,9 @@ IMGUI_API ImGuiID ImAppHashType(ImGuiID type_id, ImGuiID instance);
 //-----------------------------------------------------------------------------
 
 // Node discriminator, shared by the runtime (ImGuiAppNodeBase::Kind, stamped by the push paths)
-// and the Composer's model. App is the singleton root; Layers push via PushAppLayer<T>,
-// Windows/Sidebars via PushAppWindow/Sidebar<T>, Controls (the only draftable kind) via PushAppControl<T>.
+// and the Composer's model. App is the singleton root; Layers push via PushAppLayer<T>, Windows/
+// Sidebars via PushAppWindow/Sidebar<T>, Controls via PushWindowControl/PushSidebarControl<T>
+// (always hosted), Tasks via PushAppTask<T>.
 typedef int ImGuiAppNodeKind;   // -> enum ImGuiAppNodeKind_
 enum ImGuiAppNodeKind_
 {
@@ -808,8 +811,13 @@ enum ImGuiAppNodeKind_
     ImGuiAppNodeKind_Note,      // non-semantic annotation frame (F48/R1): titled rect, excluded from codegen/validation. APPEND ONLY -- serialized as int
     ImGuiAppNodeKind_Op,        // logic/compare/select/min-max operator (F54): operator in TypeName, IsBuiltin=false, folds into the consumer's expression (F55). APPEND ONLY -- serialized as int
     ImGuiAppNodeKind_Layout,    // dock-builder composition node (F57): Region/Split/Tabs variant in TypeName; Layout layer's first domain. APPEND ONLY -- serialized as int
+    ImGuiAppNodeKind_Task,      // external informational source node hosted by the Task layer (N4) -- the record/replay nondeterminism boundary. APPEND ONLY -- serialized as int
     ImGuiAppNodeKind_COUNT,
 };
+
+// A data node carries Persist/Temp instance data through the adapter stack (drafts, wiring, codegen,
+// mirror): Task is the unhosted flavor (Task layer), Control the window/sidebar-hosted one (display).
+static inline bool ImAppNodeKindIsData(ImGuiAppNodeKind kind) { return kind == ImGuiAppNodeKind_Control || kind == ImGuiAppNodeKind_Task; }
 
 // A node: an authorable item in the composition tree + the live-mirror surface -- compile-time-erased
 // data identity re-exposed on the type-erased base, so tools inspect any node without knowing its
@@ -821,11 +829,12 @@ struct ImGuiAppNodeBase : ImGuiAppInterface
     ImGuiAppNodeKind Kind = ImGuiAppNodeKind_COUNT;    // stamped by the push paths; discriminates generic node lists
 
     // Lifetime bracket: once per node object (push creates -> OnInitialize; pop destroys -> OnShutdown).
+    // No OnDraw here (D5): each branch declares its own phase hook -- display nodes and layers draw
+    // (OnDraw), task nodes poll (OnPoll).
     virtual void OnInitialize(ImGuiApp*) const                         = 0;
     virtual void OnShutdown(ImGuiApp*) const                           = 0;
     virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*) const = 0;
     virtual void OnUpdate(ImGuiApp* app, float dt) const               = 0;
-    virtual void OnDraw(const ImGuiApp*) const                         = 0;
 
     // Membership bracket, distinct from the lifetime pair: push fires OnInitialize -> OnAttach, pop
     // fires OnDetach -> OnShutdown, and recomposition may detach/re-attach a node without destroying it.
@@ -851,10 +860,13 @@ struct ImGuiAppNodeBase : ImGuiAppInterface
 };
 
 // A layer node: a domain in the stack (Task/Command/Status/Layout/Display or custom); hosts its
-// domain's nodes as generic children (N3), discriminated by Kind.
+// domain's nodes as generic children (N3), discriminated by Kind. Layers run the render phase:
+// what OnDraw does is the layer's contract (display submits windows, task polls its sources).
 struct ImGuiAppLayerBase : ImGuiAppNodeBase
 {
     ImVector<ImGuiAppNodeBase*> Children;   // hosted domain nodes, in push order
+
+    virtual void OnDraw(const ImGuiApp*) const = 0;
 };
 
 // A display node: submits ImGui widgets during the draw phase. The display layer brackets each
@@ -865,6 +877,8 @@ struct ImGuiAppDisplayNodeBase : ImGuiAppNodeBase
 {
     ImVector<ImGuiAppStyleModDesc> StyleMods;
     ImVector<ImGuiAppColorModDesc> ColorMods;
+
+    virtual void OnDraw(const ImGuiApp*) const = 0;
 };
 
 struct ImGuiAppWindowBase : ImGuiAppDisplayNodeBase
@@ -894,6 +908,15 @@ struct ImGuiAppControlBase : ImGuiAppDisplayNodeBase
 {
 };
 
+// A task node: an external informational source (clock/filesystem/network/device poller) -- the
+// app's nondeterminism boundary (D4). Never draws (D5); OnPoll records this frame's observation
+// into TempData during the Task layer's render pass (where display OnDraw records), so replay --
+// which drives UpdateApp only -- injects TempData and the poll never runs.
+struct ImGuiAppTaskNodeBase : ImGuiAppNodeBase
+{
+    virtual void OnPoll(const ImGuiApp*) const = 0;
+};
+
 // The reflectability contracts, type-schema registry, and reflection field-walk these adapters drive
 // (ImAppDataReflectable, ImGuiAppTypeSchema, AppReflectFields, AppEnsureTypeRegistered, ImAppFormatLabel, ...)
 // all live in imguiapp_reflect.h, included at the top of this file.
@@ -905,11 +928,12 @@ struct ImGuiAppNoTempData {};
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
 struct ImGuiAppInterfaceAdapterBase : ImGuiAppInterface
 {
+    // No typed OnDraw here (D5): the phase pair lives on the display/task mirror adapters
+    // (OnDraw records-and-submits, OnPoll records only).
     virtual void OnInitialize(ImGuiApp*, PersistDataT*, const DataDependencies*...) const                                                 = 0;
     virtual void OnShutdown(ImGuiApp*, PersistDataT*, const DataDependencies*...) const                                                   = 0;
     virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*, const PersistDataT*, const TempDataT*, const DataDependencies*...) const = 0;
     virtual void OnUpdate(float, PersistDataT*, const TempDataT*, const TempDataT*, const DataDependencies*...) const                     = 0;
-    virtual void OnDraw(const PersistDataT*, TempDataT*, const DataDependencies*...) const                                                = 0;
 };
 
 struct ImGuiAppLayer : ImGuiAppLayerBase
@@ -921,6 +945,9 @@ struct ImGuiAppLayer : ImGuiAppLayerBase
     virtual void OnDraw(const ImGuiApp*)                         const override { }
 };
 
+// Task domain (D4): hosts external informational source nodes; its render pass polls them
+// (OnDraw = the poll pass). Push/pop routes through the app->TaskLayer cache (seated by OnAttach,
+// cleared -- after draining -- by OnDetach).
 struct ImGuiAppTaskLayer : ImGuiAppLayer
 {
     virtual void OnAttach(ImGuiApp*)        const override final;
@@ -977,7 +1004,6 @@ struct ImGuiAppBase : ImGuiAppNodeBase
     virtual void OnShutdown(ImGuiApp*)                           const override { }
     virtual void OnGetCommand(const ImGuiApp*, ImGuiAppCommand*) const override { }
     virtual void OnUpdate(ImGuiApp*, float)                      const override { }
-    virtual void OnDraw(const ImGuiApp*)                         const override { }
 };
 
 struct ImGuiAppStorageEntry
@@ -1030,9 +1056,13 @@ struct ImGuiApp : ImGuiAppBase
     // State: composition (push order), platform/presentation, services (null = inactive)
     ImGuiStorage                       Data;                          // id-keyed instance storage (controls' Persist/Temp blocks)
     ImVector<ImGuiAppStorageEntry>     StorageEntries;
-    ImVector<ImGuiAppNodeBase*>        Layers;                        // layer nodes, in stack order (the root node's children)
+    ImVector<ImGuiAppLayerBase*>       Layers;                        // layer nodes, in stack order (the root node's children)
     ImGuiAppDisplayLayer*              DisplayLayer        = nullptr; // display-domain host (seated by its attach; null = no display layer composed)
+    ImGuiAppTaskLayer*                 TaskLayer           = nullptr; // task-domain host (seated by its attach; null = no task layer composed)
     ImVector<ImGuiAppNodeBase*>        UpdateOrder;                   // dependency-sorted OnUpdate iteration (AppRebuildUpdateOrder)
+    ImVector<double>                   LayerUpdateSec;                // previous frame, seconds: [i] pairs with Layers[i] (UpdateApp)
+    ImVector<double>                   LayerDrawSec;                  // previous frame, seconds: [i] pairs with Layers[i] (RenderApp)
+    double                             UpdateWalkSec       = 0.0;     // previous frame, seconds: the dependency-sorted data-node walk (UpdateApp)
     int                                CompositionRevision = 0;       // bumped by every storage register/unregister (pop+repush of the same type still advances it)
     int                                UpdateOrderRevision = -1;      // revision UpdateOrder + the cached dependency bindings were built at
     const char*                        PlatformName        = nullptr; // app label for diagnostics (StatusLayer null-guards it); from config
@@ -1155,27 +1185,19 @@ struct ImGuiAppInterfaceAdapter : Base, ImGuiAppInterfaceAdapterBase<PersistData
     virtual void OnUpdate(float, PersistDataT*, const TempDataT*, const TempDataT*, const DataDependencies*...) const override {}
     virtual void OnUpdate(ImGuiApp* app, float dt) const override final { IM_UNUSED(app); ApplyUpdate(dt, DepSeq()); _InstanceData->LastTempData = _InstanceData->TempData; }
 
-    //
-    //
-    //
-    //
-    virtual void OnDraw(const PersistDataT*, TempDataT*, const DataDependencies*...) const override {}
-    virtual void OnDraw(const ImGuiApp* app) const override final { IM_UNUSED(app); _InstanceData->TempData = {}; ApplyDraw(DepSeq()); }
-
     // Typed apply: the index pack and the type pack expand in lockstep, re-attaching each opaque
     // slot's static type at the call boundary (no tuple/apply; see ImAppIndexSeq).
     template <size_t... Is> inline void ApplyInitialize(ImGuiApp* app, ImAppIndexSeq<Is...>) const                             { OnInitialize(app, &_InstanceData->PersistData, GetData<DataDependencies>(Is)...); }
     template <size_t... Is> inline void ApplyShutdown(ImGuiApp* app, ImAppIndexSeq<Is...>) const                               { OnShutdown(app, &_InstanceData->PersistData, GetData<DataDependencies>(Is)...); }
     template <size_t... Is> inline void ApplyGetCommand(const ImGuiApp* app, ImGuiAppCommand* cmd, ImAppIndexSeq<Is...>) const { OnGetCommand(app, cmd, &_InstanceData->PersistData, &_InstanceData->TempData, GetData<DataDependencies>(Is)...); }
     template <size_t... Is> inline void ApplyUpdate(float dt, ImAppIndexSeq<Is...>) const                                      { OnUpdate(dt, &_InstanceData->PersistData, &_InstanceData->TempData, &_InstanceData->LastTempData, GetData<DataDependencies>(Is)...); }
-    template <size_t... Is> inline void ApplyDraw(ImAppIndexSeq<Is...>) const                                                  { OnDraw(&_InstanceData->PersistData, &_InstanceData->TempData, GetData<DataDependencies>(Is)...); }
 };
 
-// Live-mirror implementation over the adapter's pack: the ImGuiAppControlMirrorBase hooks,
-// compile-time erased from PersistDataT/TempDataT/DataDependencies. Machinery only -- user code
-// subclasses ImGuiAppControl<> below and never sees this layer.
-template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
-struct ImGuiAppControlMirrorAdapter : ImGuiAppInterfaceAdapter<ImGuiAppControlBase, PersistDataT, TempDataT, DataDependencies...>
+// Live-mirror implementation over the adapter's pack: the type-erased mirror hooks, compile-time
+// erased from PersistDataT/TempDataT/DataDependencies, for any node base. Machinery only -- user
+// code subclasses ImGuiAppControl<> / ImGuiAppTask<> below and never sees this layer.
+template <typename Base, typename PersistDataT, typename TempDataT, typename... DataDependencies>
+struct ImGuiAppNodeMirrorAdapter : ImGuiAppInterfaceAdapter<Base, PersistDataT, TempDataT, DataDependencies...>
 {
     // Instance-qualified storage keys -- the same keys app->Data uses. Dependency ids are the
     // RESOLVED producer keys (push-time routing), so mirrors draw the actual wiring.
@@ -1271,6 +1293,31 @@ struct ImGuiAppControlMirrorAdapter : ImGuiAppInterfaceAdapter<ImGuiAppControlBa
     }
 };
 
+// Display flavor: the draw-phase pair. The erased final zeroes TempData then runs the typed
+// OnDraw -- record and submit in one hook (this frame's input, consumed by next frame's OnUpdate).
+template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
+struct ImGuiAppControlMirrorAdapter : ImGuiAppNodeMirrorAdapter<ImGuiAppControlBase, PersistDataT, TempDataT, DataDependencies...>
+{
+    using DepSeq = typename ImGuiAppDependencySlots<DataDependencies...>::DepSeq;
+
+    virtual void OnDraw(const PersistDataT*, TempDataT*, const DataDependencies*...) const {}
+    virtual void OnDraw(const ImGuiApp* app) const override final { IM_UNUSED(app); this->_InstanceData->TempData = {}; ApplyDraw(DepSeq()); }
+    template <size_t... Is> inline void ApplyDraw(ImAppIndexSeq<Is...>) const { OnDraw(&this->_InstanceData->PersistData, &this->_InstanceData->TempData, this->template GetData<DataDependencies>(Is)...); }
+};
+
+// Task flavor: the poll-phase pair (D4/D5). OnPoll is OnDraw's TempData-recording half with no
+// submission: the Task layer's render pass runs it, and replay -- which drives UpdateApp only --
+// never does, so injected TempData survives.
+template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
+struct ImGuiAppTaskMirrorAdapter : ImGuiAppNodeMirrorAdapter<ImGuiAppTaskNodeBase, PersistDataT, TempDataT, DataDependencies...>
+{
+    using DepSeq = typename ImGuiAppDependencySlots<DataDependencies...>::DepSeq;
+
+    virtual void OnPoll(const PersistDataT*, TempDataT*, const DataDependencies*...) const {}
+    virtual void OnPoll(const ImGuiApp* app) const override final { IM_UNUSED(app); this->_InstanceData->TempData = {}; ApplyPoll(DepSeq()); }
+    template <size_t... Is> inline void ApplyPoll(ImAppIndexSeq<Is...>) const { OnPoll(&this->_InstanceData->PersistData, &this->_InstanceData->TempData, this->template GetData<DataDependencies>(Is)...); }
+};
+
 template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
 struct ImGuiAppControl : ImGuiAppControlMirrorAdapter<PersistDataT, TempDataT, DataDependencies...>
 {
@@ -1278,6 +1325,15 @@ struct ImGuiAppControl : ImGuiAppControlMirrorAdapter<PersistDataT, TempDataT, D
     using ControlInstanceDataType = ImGuiAppInterfaceAdapter<ImGuiAppControlBase, PersistDataT, TempDataT, DataDependencies...>::InstanceData;
 
     ImGuiAppControl() { ImGui::AppEnsureTypeRegistered<PersistDataT>(); ImGui::AppEnsureTypeRegistered<TempDataT>(); } // materialize both data manifests into the schema registry
+};
+
+template <typename PersistDataT, typename TempDataT, typename... DataDependencies>
+struct ImGuiAppTask : ImGuiAppTaskMirrorAdapter<PersistDataT, TempDataT, DataDependencies...>
+{
+    using ControlDataType         = PersistDataT;
+    using ControlInstanceDataType = ImGuiAppInterfaceAdapter<ImGuiAppTaskNodeBase, PersistDataT, TempDataT, DataDependencies...>::InstanceData;
+
+    ImGuiAppTask() { ImGui::AppEnsureTypeRegistered<PersistDataT>(); ImGui::AppEnsureTypeRegistered<TempDataT>(); } // materialize both data manifests into the schema registry
 };
 
 template <typename T>
@@ -1344,8 +1400,8 @@ namespace ImGui
         AppRegisterSidebar(app, sidebar, label, vp, dir, size, flags);
     }
 
-    // Shared body of PushAppControl / PushWindowControl / PushSidebarControl: generate the label, key the
-    // instance data by (control data type, instance), construct control T + its instance data, register its
+    // Shared body of PushAppTask / PushWindowControl / PushSidebarControl: generate the label, key the
+    // instance data by (node data type, instance), construct node T + its instance data, register its
     // storage (snapshottable when trivially copyable), wire _InstanceID/_InstanceData, resolve bindings.
     template <typename T>
     IMGUI_API inline T* AppControlCreate(ImGuiApp* app, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count, const char* host_kind, const char* host_label)
@@ -1374,11 +1430,11 @@ namespace ImGui
     }
 
     template <typename T>
-    IMGUI_API inline void PushAppControl(ImGuiApp* app, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count)
+    IMGUI_API inline void PushAppTask(ImGuiApp* app, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count)
     {
         IM_ASSERT(app);
-        IM_ASSERT(app->DisplayLayer != nullptr && "Push the Display layer before controls");
-        AppControlPush(app, &app->DisplayLayer->Children, AppControlCreate<T>(app, instance, binds, binds_count, nullptr, nullptr));
+        IM_ASSERT(app->TaskLayer != nullptr && "Push the Task layer before task nodes");
+        AppTaskPush(app, &app->TaskLayer->Children, AppControlCreate<T>(app, instance, binds, binds_count, nullptr, nullptr));
     }
 
     // Host a control inside a window: instance data registers in app->Data as usual, but the control joins
@@ -1399,13 +1455,18 @@ namespace ImGui
         AppControlPush(app, &sidebar->Children, AppControlCreate<T>(app, instance, binds, binds_count, "sidebar", sidebar->Label));
     }
 
-    // Visit every pushed control in update order: app-level, then sidebar-hosted, then window-hosted.
-    // visitor(control, host) with host == nullptr for app-level. The single shared enumeration of "all controls".
+    // Visit every pushed data node in composition order: task nodes, then app-level display controls,
+    // then sidebar-hosted, then window-hosted. visitor(node, host) with host == nullptr for un-hosted
+    // kinds. The single shared enumeration of "all data nodes".
     template <typename Visitor>
     IMGUI_API inline void ForEachAppNode(ImGuiApp* app, Visitor visitor)
     {
         IM_ASSERT(app);
-        if (app->DisplayLayer == nullptr)   // every data node is display-hosted until N4
+        if (app->TaskLayer != nullptr)
+            for (int i = 0; i < app->TaskLayer->Children.Size; i++)
+                if (app->TaskLayer->Children.Data[i]->Kind == ImGuiAppNodeKind_Task)
+                    visitor(app->TaskLayer->Children.Data[i], (ImGuiAppWindowBase*)nullptr);
+        if (app->DisplayLayer == nullptr)
             return;
         const ImVector<ImGuiAppNodeBase*>& nodes = app->DisplayLayer->Children;
         for (int i = 0; i < nodes.Size; i++)
@@ -1433,6 +1494,10 @@ namespace ImGui
     IMGUI_API inline void ForEachAppNode(const ImGuiApp* app, Visitor visitor)
     {
         IM_ASSERT(app);
+        if (app->TaskLayer != nullptr)
+            for (int i = 0; i < app->TaskLayer->Children.Size; i++)
+                if (app->TaskLayer->Children.Data[i]->Kind == ImGuiAppNodeKind_Task)
+                    visitor((const ImGuiAppNodeBase*)app->TaskLayer->Children.Data[i], (const ImGuiAppWindowBase*)nullptr);
         if (app->DisplayLayer == nullptr)
             return;
         const ImVector<ImGuiAppNodeBase*>& nodes = app->DisplayLayer->Children;

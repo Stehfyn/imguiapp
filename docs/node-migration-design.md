@@ -77,14 +77,21 @@ kinds — so the mirror becomes an isomorphism instead of a translation.
   labels + sidebar labels (kind-filtered passes, hash-order preserved); codegen emits
   cast-`Children.back()` accessors and the checked-in goldens match. IMGUIAPP_PREVIEW_ABI bumped.
 
+- **N4** — task nodes. `ImGuiAppTaskNodeBase` (no OnDraw, D5) + `ImGuiAppTask<>` over the shared
+  adapter stack via `ImGuiAppNodeMirrorAdapter`; OnPoll records TempData in the Task layer's render
+  pass (where display OnDraw records), so replay — which drives UpdateApp only — never runs it.
+  `PushAppTask`/`PopAppTask` added; free `PushAppControl`/`PopAppControl` and the display layer's
+  free-control draw pass removed; `app->TaskLayer` cache seated by OnAttach. Producers migrated
+  (ImAppTween/Timer/Spring/Pulse, test probes, interpreter stand-ins, FlowAccum); the Composer
+  control became window-hosted (its own Begin/End dropped). Model: `Kind_Task` first-class —
+  unhosted data nodes are tasks (`ImAppNodeKindIsData` generalizes the shared draft/wiring/codegen
+  machinery), Task-layer legality row is Task/Struct/Op, controls are hosted-only (validator
+  enforces); emitters pick `ImGuiAppTask`/OnPoll vs `ImGuiAppControl`/OnDraw by kind, bring-up
+  emits `PushAppTask`, import parses both bases, live mirror seeds runtime task nodes as Kind_Task.
+  OnPoll name and its render-phase seat are now pinned (was an open question). IMGUIAPP_PREVIEW_ABI
+  bumped; goldens regenerated.
+
 ## Phases (each lands green: build + 7 ctest suites incl. style/section/indent ratchets)
-- **N4 — task nodes.** Task-node base: no OnDraw (D5); Persist/Temp/deps via the same adapter
-  stack; an input-capture hook (working name OnPoll) runs where OnDraw's TempData-recording
-  half runs today — before OnUpdate consumes, skipped when replay injects — preserving the
-  record/replay nondeterminism boundary. `PushAppTask` added; free `PushAppControl` removed;
-  pure producers (ImAppTween/Timer/Spring/Pulse, test probes) migrate to task nodes;
-  self-windowed free controls become windows. Codegen: `ImGuiAppNodeKind_Task` appended,
-  palette legality row, bring-up line, live-mirror kind.
 - **N5 — child windows.** Window/sidebar-hosted controls become the display layer's child-window
   node kind. Resolve the sidebar quirk: sidebar-hosted controls currently render their own
   windows OUTSIDE the sidebar's Begin/End (imguiapp.cpp:747) — decide whether that stays a
@@ -97,6 +104,5 @@ kinds — so the mirror becomes an isomorphism instead of a translation.
 - Dynamic spawn: task nodes creating children at runtime bumps CompositionRevision per spawn and
   clears state history — record/replay degrades under churn. Decide when a driving use case
   exists; until then composition stays push/pop-time.
-- OnPoll naming + exact seat (pre-update phase vs display-phase sibling).
 - Whether `ImGuiAppSidebarBase : ImGuiAppWindowBase` survives N5 or sidebars become a display
   node kind beside windows.

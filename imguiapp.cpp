@@ -264,7 +264,7 @@ bool ImGuiApp::Initialize(const ImGuiAppConfig* config)
 
 void ImGuiApp::Shutdown()
 {
-    if (!Initialized && PlatformData == nullptr && Layers.empty() && DisplayLayer == nullptr && StorageEntries.empty())
+    if (!Initialized && PlatformData == nullptr && Layers.empty() && DisplayLayer == nullptr && TaskLayer == nullptr && StorageEntries.empty())
         return;
 
     // One paced app per process by design. The funcs' teardown hook releases its wait
@@ -434,25 +434,33 @@ const ImGuiAppTypeSchema* ImGui::AppFindTypeSchema(const char* type_name)
 
 void ImGuiAppTaskLayer::OnAttach(ImGuiApp* app) const
 {
-    IM_UNUSED(app);
+    IM_ASSERT(app->TaskLayer == nullptr && "Only one Task layer per app");
+    app->TaskLayer = (ImGuiAppTaskLayer*)this;
 }
 
 void ImGuiAppTaskLayer::OnDetach(ImGuiApp* app) const
 {
-    IM_UNUSED(app);
+    // Manual mid-run pop: whatever the app did not drain dies with its domain (full D7 bracket).
+    while (!app->TaskLayer->Children.empty())
+        ImGui::PopAppTask(app);
+    app->TaskLayer = nullptr;
 }
 
 void ImGuiAppTaskLayer::OnUpdate(ImGuiApp* app, float dt) const
 {
-    // The global data-node update walk is the root's job (UpdateApp), not this layer's; task
-    // nodes (external informational sources) arrive at N4.
+    // The global data-node update walk is the root's job (UpdateApp), not this layer's.
     IM_UNUSED(app);
     IM_UNUSED(dt);
 }
 
 void ImGuiAppTaskLayer::OnDraw(const ImGuiApp* app) const
 {
-    IM_UNUSED(app);
+    // The render phase is the task domain's poll pass: OnPoll records this frame's external
+    // observation into TempData exactly where display OnDraw records; replay drives UpdateApp
+    // only, so injected TempData is never overwritten.
+    for (ImGuiAppNodeBase* node : Children)
+        if (node->Kind == ImGuiAppNodeKind_Task)
+            ((ImGuiAppTaskNodeBase*)node)->OnPoll(app);
 }
 
 void ImGuiAppCommandLayer::OnAttach(ImGuiApp* app) const
@@ -710,7 +718,6 @@ void ImGuiAppDisplayLayer::OnDetach(ImGuiApp* app) const
         ImGui::PopAppSidebar(app);
     while (AppLastIndexOfKind(app->DisplayLayer->Children, ImGuiAppNodeKind_Window) >= 0)
         ImGui::PopAppWindow(app);
-    ImGui::ShutdownAppNodes(app, app->DisplayLayer->Children);   // only free controls remain
     app->DisplayLayer = nullptr;
 }
 
@@ -728,8 +735,8 @@ void ImGuiAppDisplayLayer::OnUpdate(ImGuiApp* app, float dt) const
 
 void ImGuiAppDisplayLayer::OnDraw(const ImGuiApp* app) const
 {
-    // Kind-phased passes over the generic Children: all sidebars, then all windows, then all free
-    // controls (draw order is a display contract, not push order).
+    // Kind-phased passes over the generic Children: all sidebars, then all windows (draw order is
+    // a display contract, not push order).
     for (ImGuiAppNodeBase* node : Children)
     {
         if (node->Kind != ImGuiAppNodeKind_Sidebar)
@@ -824,16 +831,6 @@ void ImGuiAppDisplayLayer::OnDraw(const ImGuiApp* app) const
 
         PopItemStyle(window_scope);
     }
-
-    for (ImGuiAppNodeBase* node : Children)
-    {
-        if (node->Kind != ImGuiAppNodeKind_Control)
-            continue;
-        ImGuiAppDisplayNodeBase* control = (ImGuiAppDisplayNodeBase*)node;
-        const ImGuiAppStyleScope control_scope = PushItemStyle(control);
-        control->OnDraw(app);
-        PopItemStyle(control_scope);
-    }
 }
 
 namespace ImGui
@@ -916,8 +913,10 @@ IMGUI_API void ShutdownApp(ImGuiApp* app)
             PopAppSidebar(app);
         while (AppLastIndexOfKind(app->DisplayLayer->Children, ImGuiAppNodeKind_Window) >= 0)
             PopAppWindow(app);
-        ShutdownAppNodes(app, app->DisplayLayer->Children);
     }
+    if (app->TaskLayer != nullptr)
+        while (!app->TaskLayer->Children.empty())
+            PopAppTask(app);
     while (!app->Layers.empty())
         PopAppLayer(app);
 
@@ -937,17 +936,23 @@ IMGUI_API void UpdateApp(ImGuiApp* app, float dt)
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Frame, "frame update begin");
 
     // Data nodes first, spanning every hosting layer: OnUpdate consumes the TempData recorded by
-    // last frame's OnDraw and mutates PersistData before any layer runs, so state updated this
-    // frame can emit a command the same frame (Command layer). Dependency order: every producer
-    // updates before its consumers, regardless of hosting order.
+    // last frame's OnDraw/OnPoll and mutates PersistData before any layer runs, so state updated
+    // this frame can emit a command the same frame (Command layer). Dependency order: every
+    // producer updates before its consumers, regardless of hosting order.
+    double t0 = AppClockNowSec();
     const ImVector<ImGuiAppNodeBase*>* order = AppRebuildUpdateOrder(app);
     for (int i = 0; i < order->Size; i++)
         order->Data[i]->OnUpdate(app, dt);
+    app->UpdateWalkSec = AppClockNowSec() - t0;
 
-    for (ImGuiAppNodeBase* layer : app->Layers)
+    app->LayerUpdateSec.resize(app->Layers.Size);
+    for (int i = 0; i < app->Layers.Size; i++)
     {
+        ImGuiAppLayerBase* layer = app->Layers.Data[i];
         AppWALWrite(app->WAL, ImGuiAppWALLevel_Frame, "update %s", layer->Label);
+        t0 = AppClockNowSec();
         layer->OnUpdate(app, dt);
+        app->LayerUpdateSec.Data[i] = AppClockNowSec() - t0;
     }
 }
 
@@ -956,10 +961,15 @@ IMGUI_API void RenderApp(const ImGuiApp* app)
     IM_ASSERT(app != nullptr && "NULL ImGuiApp!");
 
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Frame, "frame render begin");
-    for (ImGuiAppNodeBase* layer : app->Layers)
+    ImGuiApp* mutable_app = const_cast<ImGuiApp*>(app);   // timing slots only; the frame walk stays const
+    mutable_app->LayerDrawSec.resize(app->Layers.Size);
+    for (int i = 0; i < app->Layers.Size; i++)
     {
+        ImGuiAppLayerBase* layer = app->Layers.Data[i];
         AppWALWrite(app->WAL, ImGuiAppWALLevel_Frame, "render %s", layer->Label);
+        const double t0 = AppClockNowSec();
         layer->OnDraw(app);
+        mutable_app->LayerDrawSec.Data[i] = AppClockNowSec() - t0;
     }
 }
 
@@ -974,7 +984,7 @@ void PopAppLayer(ImGuiApp* app)
         return;
     }
 
-    ImGuiAppNodeBase* layer = app->Layers.back();
+    ImGuiAppLayerBase* layer = app->Layers.back();
     app->Layers.pop_back();
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "pop layer %s", layer->Label);
     layer->OnDetach(app);
@@ -1023,30 +1033,30 @@ void PopAppWindow(ImGuiApp* app)
     IM_DELETE(window);
 }
 
-void PopAppControl(ImGuiApp* app)
+void PopAppTask(ImGuiApp* app)
 {
     IM_ASSERT(app != nullptr && "NULL ImGuiApp!");
 
-    const int control_idx = app->DisplayLayer != nullptr ? AppLastIndexOfKind(app->DisplayLayer->Children, ImGuiAppNodeKind_Control) : -1;
-    if (control_idx < 0)
+    const int task_idx = app->TaskLayer != nullptr ? AppLastIndexOfKind(app->TaskLayer->Children, ImGuiAppNodeKind_Task) : -1;
+    if (task_idx < 0)
     {
-        IM_ASSERT_USER_ERROR(0, "Calling PopAppControl() too many times!");
-        AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "overpop: PopAppControl with none pushed");
+        IM_ASSERT_USER_ERROR(0, "Calling PopAppTask() too many times!");
+        AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "overpop: PopAppTask with none pushed");
         return;
     }
 
-    ImGuiAppNodeBase* control = app->DisplayLayer->Children.Data[control_idx];
-    app->DisplayLayer->Children.erase(app->DisplayLayer->Children.Data + control_idx);
+    ImGuiAppNodeBase* task = app->TaskLayer->Children.Data[task_idx];
+    app->TaskLayer->Children.erase(app->TaskLayer->Children.Data + task_idx);
     if (app->WAL != nullptr)
     {
         char dt[IM_LABEL_SIZE];
-        control->GetDataTypeName(dt, IM_ARRAYSIZE(dt));
-        AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "pop control <%s>", dt);
+        task->GetDataTypeName(dt, IM_ARRAYSIZE(dt));
+        AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "pop task <%s>", dt);
     }
-    control->OnDetach(app);
-    control->OnShutdown(app);
-    const ImGuiID data_id = control->GetDataID();   // read before delete; pop frees what push registered
-    IM_DELETE(control);
+    task->OnDetach(app);
+    task->OnShutdown(app);
+    const ImGuiID data_id = task->GetDataID();   // read before delete; pop frees what push registered
+    IM_DELETE(task);
     if (data_id != 0)
         UnregisterAppStorage(app, data_id);
 }
@@ -1129,7 +1139,7 @@ IMGUI_API void RegisterAppControlStorage(ImGuiApp* app, ImGuiID id, void* instan
                        destroy);
 }
 
-IMGUI_API void AppControlRegisterStorage(ImGuiApp* app, ImGuiAppControlBase* control, const char* name, ImGuiID data_type_id, ImGuiID instance, void* instance_data, bool snapshottable, int inst_size, int temp_offset, int temp_size, void (*destroy)(void*), const char* host_kind, const char* host_label)
+IMGUI_API void AppControlRegisterStorage(ImGuiApp* app, ImGuiAppNodeBase* node, const char* name, ImGuiID data_type_id, ImGuiID instance, void* instance_data, bool snapshottable, int inst_size, int temp_offset, int temp_size, void (*destroy)(void*), const char* host_kind, const char* host_label)
 {
     // Instance data is keyed by the instance-qualified data type id so dependents can resolve it.
     const ImGuiID id = ImAppHashType(data_type_id, instance);
@@ -1138,7 +1148,7 @@ IMGUI_API void AppControlRegisterStorage(ImGuiApp* app, ImGuiAppControlBase* con
         AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push control %s (instance %u)", name, (unsigned)instance);
     else
         AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push control %s (instance %u) into %s '%s'", name, (unsigned)instance, host_kind, host_label);
-    ImStrncpy(control->Label, name, sizeof(control->Label));
+    ImStrncpy(node->Label, name, sizeof(node->Label));
     app->Data.SetVoidPtr(id, instance_data);
     RegisterAppControlStorage(app, id, instance_data, snapshottable, inst_size, temp_offset, temp_size, destroy);
 }
@@ -1151,9 +1161,9 @@ IMGUI_API void AppControlPush(ImGuiApp* app, ImVector<ImGuiAppDisplayNodeBase*>*
     node->OnAttach(app);
 }
 
-IMGUI_API void AppControlPush(ImGuiApp* app, ImVector<ImGuiAppNodeBase*>* list, ImGuiAppNodeBase* node)
+IMGUI_API void AppTaskPush(ImGuiApp* app, ImVector<ImGuiAppNodeBase*>* list, ImGuiAppNodeBase* node)
 {
-    node->Kind = ImGuiAppNodeKind_Control;
+    node->Kind = ImGuiAppNodeKind_Task;
     list->push_back(node);
     node->OnInitialize(app);
     node->OnAttach(app);

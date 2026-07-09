@@ -668,7 +668,7 @@ struct GraphDocControl : ImGuiAppControl<ImGuiAppGraphDocData, ImGuiAppNoTempDat
             const ImGuiAppNode* n = &data->Graph.Nodes.Data[i];
             if (n->IsLive)
                 continue;
-            if (n->Kind == ImGuiAppNodeKind_Control)
+            if (ImAppNodeKindIsData(n->Kind))
             {
                 if (!n->IsPromoted)
                     unbuilt++;
@@ -1750,15 +1750,17 @@ struct ImGuiAppStatusStripControl : ImGuiAppControl<ImGuiAppStatusStripData, ImG
         if (data->HasMirror)
         {
             const ImGuiApp* a = doc->Mirror;
-            int nw = 0, ns = 0, nc = 0;
+            int nw = 0, ns = 0, nt = 0;
             if (a->DisplayLayer != nullptr)
                 for (const ImGuiAppNodeBase* node : a->DisplayLayer->Children)
                 {
                     nw += node->Kind == ImGuiAppNodeKind_Window;
                     ns += node->Kind == ImGuiAppNodeKind_Sidebar;
-                    nc += node->Kind == ImGuiAppNodeKind_Control;
                 }
-            ImFormatString(data->MirrorCounts, IM_ARRAYSIZE(data->MirrorCounts), "L%d W%d S%d C%d", a->Layers.Size, nw, ns, nc);
+            if (a->TaskLayer != nullptr)
+                for (const ImGuiAppNodeBase* node : a->TaskLayer->Children)
+                    nt += node->Kind == ImGuiAppNodeKind_Task;
+            ImFormatString(data->MirrorCounts, IM_ARRAYSIZE(data->MirrorCounts), "L%d W%d S%d T%d", a->Layers.Size, nw, ns, nt);
             data->MirrorInit = a->Layers.Size > 0;   // "composed"; Initialized is the platform flag
         }
 

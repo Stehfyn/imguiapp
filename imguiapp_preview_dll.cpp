@@ -380,7 +380,7 @@ bool AppPreviewDllReload(ImGuiAppPreviewDll* s, const ImGuiAppGraph* graph, char
     for (int i = 0; i < graph->Nodes.Size; i++)
     {
         const ImGuiAppNode* nd = &graph->Nodes.Data[i];
-        if (nd->Kind != ImGuiAppNodeKind_Control || nd->IsLive)
+        if (!ImAppNodeKindIsData(nd->Kind) || nd->IsLive)
             continue;
         ImGuiAppSavedControl sc;
         ImStrncpy(sc.Label, nd->Draft.Name, IM_ARRAYSIZE(sc.Label));

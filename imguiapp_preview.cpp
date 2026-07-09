@@ -716,13 +716,14 @@ struct ImGuiAppPreviewApp : ImGuiApp
     }
 };
 
-// One compiled control stands in for every interpreted control (design 3): its "type" is the manifest data
-// it carries. Const like every framework control; all mutation lands in the registered instance buffer.
-struct ImGuiAppPreviewControl : ImGuiAppControlBase
+// One compiled task node stands in for every interpreted control (design 3): its "type" is the manifest
+// data it carries. Const like every framework node; all mutation lands in the registered instance buffer.
+// Task-based (N4): app-level stand-ins never submit widgets of their own -- the poll pass records input,
+// and the surface (design 8.1) draws field panels into the composer's window when enabled.
+struct ImGuiAppPreviewControl : ImGuiAppTaskNodeBase
 {
     ImGuiAppPreview* Session = nullptr;
     ImGuiAppPvInstance*   Inst = nullptr;
-    bool             Hosted = false;   // window/sidebar-hosted -> render the field panel (design 4.6 / 8.1)
 
     virtual ImGuiID GetDataID() const override final { return Inst != nullptr ? Inst->DataTypeId : 0; }
 
@@ -831,7 +832,7 @@ struct ImGuiAppPreviewControl : ImGuiAppControlBase
         }
     }
 
-    virtual void OnDraw(const ImGuiApp* app) const override final;
+    virtual void OnPoll(const ImGuiApp* app) const override final;
 
 private:
     // Command value for an event's command name -- defined out-of-line (needs the session table).
@@ -943,12 +944,12 @@ int ImGuiAppPreviewControl::AppPvCommandValueForEvent(ImGuiAppPreview* s, const 
     return AppPvCommandValue(s, name);
 }
 
-void ImGuiAppPreviewControl::OnDraw(const ImGuiApp* app) const
+void ImGuiAppPreviewControl::OnPoll(const ImGuiApp* app) const
 {
     char* buffer = (char*)app->Data.GetVoidPtr(Inst->DataTypeId);
     if (buffer == nullptr) return;
 
-    // OnDraw records TempData: zero the Temp sub-buffer first (framework contract), then record input.
+    // OnPoll records TempData: zero the Temp sub-buffer first (framework contract), then record input.
     char* temp = buffer + Inst->PersistBytes + Inst->TempBytes;
     if (Inst->TempBytes > 0) memset(temp, 0, Inst->TempBytes);
 
@@ -960,10 +961,10 @@ void ImGuiAppPreviewControl::OnDraw(const ImGuiApp* app) const
         if (slot != nullptr) AppPvWriteSlot(temp, slot, Session->Scripts.Data[i].Value);
     }
 
-    // Real widget input on the composed window surface (design 8.1). Guarded to hosted/surface controls so the
-    // headless CORE (app-level controls, no window/NewFrame) makes no ImGui calls.
+    // Real widget input on the composed window surface (design 8.1). Guarded to surface mode so the
+    // headless CORE (no window/NewFrame) makes no ImGui calls; the composer's surface window is current.
 #ifndef IMGUIX_DISABLE_TOOLS   // TOOL: surface widget input (Phase A3) -- core->UI call site
-    if (Hosted || Session->Surface.Enabled)
+    if (Session->Surface.Enabled)
         AppPvDrawFields(Session, Inst, buffer, Label);
 #endif // IMGUIX_DISABLE_TOOLS
 }
@@ -974,8 +975,8 @@ void ImGuiAppPreviewControl::OnDraw(const ImGuiApp* app) const
 
 namespace
 {
-// Build one control instance (manifest + latches + bindings + deps + events) and register its store.
-void AppPvPushControl(ImGuiAppPreview* s, const ImGuiAppNode* n, ImGuiAppWindowBase* host)
+// Build one node instance (manifest + latches + bindings + deps + events) and register its store.
+void AppPvPushControl(ImGuiAppPreview* s, const ImGuiAppNode* n)
 {
     ImGuiApp* app = s->App;
     ImGuiAppPvInstance* inst = IM_NEW(ImGuiAppPvInstance)();
@@ -1020,7 +1021,7 @@ void AppPvPushControl(ImGuiAppPreview* s, const ImGuiAppNode* n, ImGuiAppWindowB
     for (int d = 0; d < deps.Size; d++)
     {
         const ImGuiAppNode* dn = AppPvFindNode(s->Graph, deps.Data[d]);
-        if (dn == nullptr || dn->Kind != ImGuiAppNodeKind_Control) continue;   // Struct/Field deps: no store of their own here
+        if (dn == nullptr || !ImAppNodeKindIsData(dn->Kind)) continue;   // Struct/Field deps: no store of their own here
         ImGuiAppPvDep dep;
         dep.ProducerNodeId = dn->Id;
         dep.ProducerDataTypeId = AppPvControlDataTypeId(dn);
@@ -1035,7 +1036,7 @@ void AppPvPushControl(ImGuiAppPreview* s, const ImGuiAppNode* n, ImGuiAppWindowB
         const int link_id = s->Graph->Links.Data[li].Id;
         const int prod_id = AppPvPortOwner(s->Graph, s->Graph->Links.Data[li].StartAttr);
         const ImGuiAppNode* prod = AppPvFindNode(s->Graph, prod_id);
-        if (prod == nullptr || prod->Kind != ImGuiAppNodeKind_Control) continue;
+        if (prod == nullptr || !ImAppNodeKindIsData(prod->Kind)) continue;
         const ImGuiAppPvInstance* pi = AppPvFindInstance(s, prod_id);
         if (pi == nullptr) continue;   // producer must be built first (topo order guarantees it)
         for (int bi = 0; bi < s->Graph->Bindings.Size; bi++)
@@ -1066,12 +1067,10 @@ void AppPvPushControl(ImGuiAppPreview* s, const ImGuiAppNode* n, ImGuiAppWindowB
     ImGuiAppPreviewControl* control = IM_NEW(ImGuiAppPreviewControl)();
     control->Session = s;
     control->Inst = inst;
-    control->Hosted = (host != nullptr);
     ImStrncpy(control->Label, n->Draft.Name, IM_ARRAYSIZE(control->Label));
 
-    control->Kind = ImGuiAppNodeKind_Control;
-    if (host != nullptr) host->Children.push_back(control);
-    else                 app->DisplayLayer->Children.push_back(control);
+    control->Kind = ImGuiAppNodeKind_Task;
+    app->TaskLayer->Children.push_back(control);
     control->OnInitialize(app);
 
     s->Instances.push_back(inst);
@@ -1086,8 +1085,9 @@ void AppPvBuildPopulation(ImGuiAppPreview* s, const ImVector<int>& order)
     app->Session = s;
     s->App = app;
 
-    // Task (mutate), Command (dispatch), Display (render app-level + hosted controls' OnDraw). Status is
-    // omitted -- it submits a real ImGui window; the surface hosts controls in the composer's own window.
+    // Task (hosts the interpreter stand-ins; its render pass is their poll), Command (dispatch),
+    // Display (foundation shape). Status is omitted -- it submits a real ImGui window; the surface
+    // draws field panels in the composer's own window (design 8.1).
     ImGui::PushAppLayer<ImGuiAppTaskLayer>(app);
     ImGui::PushAppLayer<ImGuiAppCommandLayer>(app);
     ImGui::PushAppLayer<ImGuiAppDisplayLayer>(app);
@@ -1096,7 +1096,7 @@ void AppPvBuildPopulation(ImGuiAppPreview* s, const ImVector<int>& order)
     {
         const ImGuiAppNode* n = AppPvFindNode(s->Graph, order.Data[i]);
         if (n == nullptr) continue;
-        AppPvPushControl(s, n, nullptr);
+        AppPvPushControl(s, n);
     }
 }
 

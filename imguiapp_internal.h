@@ -136,7 +136,7 @@ typedef int ImGuiAppTransportSource;   // -> enum ImGuiAppTransportSource_   // 
 #define IMGUIAPP_CONTROL_BODY_MAX 2048   // ImGuiAppNodeDraft per-method custom C++ body cap (fixed buffer -> draft stays memcpy-safe)
 
 #ifndef IMGUIAPP_PREVIEW_ABI
-#define IMGUIAPP_PREVIEW_ABI 20260711u   // host<->DLL preview ABI tag (F78); bump on any layout/vtable/signature change. Since 0.4.1 (July 2026, 401)
+#define IMGUIAPP_PREVIEW_ABI 20260712u   // host<->DLL preview ABI tag (F78); bump on any layout/vtable/signature change. Since 0.4.1 (July 2026, 401)
 #endif
 
 // Private command range: dispatch ids above the public ImGuiAppCommand_COUNT.
@@ -909,8 +909,8 @@ struct ImGuiAppEditorState
     int                            AppliedSel = -1;
     int                            OutlinerRename = -1;                // node id being renamed in the tree, -1 = none
     bool                           OutlinerRenameFocus = false;
-    bool                           OutlinerKindVis[ImGuiAppNodeKind_COUNT] = { true, true, true, true, true, true, true, true, true, true };
-    IM_STATIC_ASSERT(ImGuiAppNodeKind_COUNT == 10); // OutlinerKindVis initializer is hand-counted: extend it with the enum (9-entry form zero-filled Layout invisible)
+    bool                           OutlinerKindVis[ImGuiAppNodeKind_COUNT] = { true, true, true, true, true, true, true, true, true, true, true };
+    IM_STATIC_ASSERT(ImGuiAppNodeKind_COUNT == 11); // OutlinerKindVis initializer is hand-counted: extend it with the enum (shorter form zero-fills the tail invisible)
     ImGuiTextFilter                OutlinerFilter;
     bool                           OutputShowErr = true;               // Output panel severity filters
     bool                           OutputShowWarn = true;
@@ -1004,8 +1004,8 @@ struct ImGuiAppGraph
 //-----------------------------------------------------------------------------
 // [SECTION] Embeddable Composer control (generated-shell bootstrap)
 //-----------------------------------------------------------------------------
-// Composer packaged as an ImGuiAppControl: hosts the node editor in its own composition, owns its
-// graph, drives ShowAppGraphEditor. Host = the running app (live mirror); null = design-only.
+// Composer packaged as a window-hosted ImGuiAppControl: owns the graph it edits, drives
+// ShowAppGraphEditor inside its host window. Host = the running app (live mirror); null = design-only.
 struct ImGuiAppComposerControlData
 {
     ImGuiApp*     Host     = nullptr;
@@ -1025,8 +1025,8 @@ struct ImGuiAppComposerControl : ImGuiAppControl<ImGuiAppComposerControlData, Im
 //-----------------------------------------------------------------------------
 // [SECTION] Animation builtins (was imguiapp_anim.h)
 //-----------------------------------------------------------------------------
-// The dt-driven Task-phase animators; each a compiled ImGuiAppControl, accumulator in PersistData (so
-// snapshot/replay reproduces it). Registered via AppGraphAddBuiltin.
+// The dt-driven Task-phase animators; each a compiled ImGuiAppTask node (N4), accumulator in
+// PersistData (so snapshot/replay reproduces it). Registered via AppGraphAddBuiltin.
 
 // Ease selector for ImAppTween (no typedef pair: ImAppEase names the curve function below).
 enum ImAppEase_
@@ -1059,7 +1059,7 @@ struct ImAppTweenTempData
 {
     bool Trigger;    // rising edge restarts
 };
-struct ImAppTween : ImGuiAppControl<ImAppTweenData, ImAppTweenTempData>
+struct ImAppTween : ImGuiAppTask<ImAppTweenData, ImAppTweenTempData>
 {
     virtual void OnInitialize(ImGuiApp* app, ImAppTweenData* data) const override final;
     virtual void OnUpdate(float dt, ImAppTweenData* data, const ImAppTweenTempData* temp_data, const ImAppTweenTempData* last_temp_data) const override final;
@@ -1078,7 +1078,7 @@ struct ImAppTimerTempData
 {
     bool Trigger;    // rising edge restarts
 };
-struct ImAppTimer : ImGuiAppControl<ImAppTimerData, ImAppTimerTempData>
+struct ImAppTimer : ImGuiAppTask<ImAppTimerData, ImAppTimerTempData>
 {
     virtual void OnInitialize(ImGuiApp* app, ImAppTimerData* data) const override final;
     virtual void OnUpdate(float dt, ImAppTimerData* data, const ImAppTimerTempData* temp_data, const ImAppTimerTempData* last_temp_data) const override final;
@@ -1098,7 +1098,7 @@ struct ImAppSpringData
 struct ImAppSpringTempData
 {
 };
-struct ImAppSpring : ImGuiAppControl<ImAppSpringData, ImAppSpringTempData>
+struct ImAppSpring : ImGuiAppTask<ImAppSpringData, ImAppSpringTempData>
 {
     virtual void OnInitialize(ImGuiApp* app, ImAppSpringData* data) const override final;
     virtual void OnUpdate(float dt, ImAppSpringData* data, const ImAppSpringTempData* temp_data, const ImAppSpringTempData* last_temp_data) const override final;
@@ -1116,7 +1116,7 @@ struct ImAppPulseData
 struct ImAppPulseTempData
 {
 };
-struct ImAppPulse : ImGuiAppControl<ImAppPulseData, ImAppPulseTempData>
+struct ImAppPulse : ImGuiAppTask<ImAppPulseData, ImAppPulseTempData>
 {
     virtual void OnInitialize(ImGuiApp* app, ImAppPulseData* data) const override final;
     virtual void OnUpdate(float dt, ImAppPulseData* data, const ImAppPulseTempData* temp_data, const ImAppPulseTempData* last_temp_data) const override final;
