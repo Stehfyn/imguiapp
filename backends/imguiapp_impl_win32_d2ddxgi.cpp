@@ -574,8 +574,11 @@ static void ImGuiApp_ImplWin32D2DDXGI_PresentLadder(ImGuiApp_ImplWin32D2DDXGI_Da
 {
     if (bd->Swapchain == nullptr)
         return;
-    const UINT flags_first  = DXGI_PRESENT_ALLOW_TEARING | DXGI_PRESENT_DO_NOT_WAIT | (restart ? DXGI_PRESENT_RESTART : 0);
-    const UINT flags_second = (restart || vsync) ? DXGI_PRESENT_DO_NOT_SEQUENCE : (DXGI_PRESENT_ALLOW_TEARING | DXGI_PRESENT_DO_NOT_WAIT);
+    // Dirty-rect mode drops ALLOW_TEARING (invalid alongside partial-presentation parameters, and
+    // meaningless through the compositor).
+    const UINT tearing      = bd->PresentDirtyRects ? 0 : DXGI_PRESENT_ALLOW_TEARING;
+    const UINT flags_first  = tearing | DXGI_PRESENT_DO_NOT_WAIT | (restart ? DXGI_PRESENT_RESTART : 0);
+    const UINT flags_second = (restart || vsync) ? DXGI_PRESENT_DO_NOT_SEQUENCE : (tearing | DXGI_PRESENT_DO_NOT_WAIT);
     const UINT sync_second  = (restart || vsync) ? 1 : 0;
     HRESULT hr;
     if (bd->PresentDirtyRects)
@@ -588,9 +591,10 @@ static void ImGuiApp_ImplWin32D2DDXGI_PresentLadder(ImGuiApp_ImplWin32D2DDXGI_Da
             params.DirtyRectsCount = 1;
             params.pDirtyRects     = &dirty;
         }
+        DXGI_PRESENT_PARAMETERS full = {};   // the DO_NOT_SEQUENCE replace re-presents the SAME buffer; partial parameters are invalid there
         hr = bd->Swapchain->Present1(0, flags_first, &params);
         IM_ASSERT(SUCCEEDED(hr) || hr == DXGI_ERROR_WAS_STILL_DRAWING);
-        hr = bd->Swapchain->Present1(sync_second, flags_second, &params);
+        hr = bd->Swapchain->Present1(sync_second, flags_second, &full);
         IM_ASSERT(SUCCEEDED(hr) || hr == DXGI_ERROR_WAS_STILL_DRAWING);
     }
     else
