@@ -2025,6 +2025,7 @@ struct ImGuiAppCanvasState
     ImDrawList*        DrawList;
     ImDrawListSplitter Splitter; // ch0 = grid + wires, ch1 = node plates, ch2 = node content
     bool               InsideCanvas;
+    ImGuiID            InputId;  // the catch-all item's id (its hover must not count as a wheel-claiming widget)
 
     // Submission intent -- this canvas's per-frame TempData: latched by the CanvasNext* calls,
     // consumed by the next Begin*, reset there. Per instance, never file scope.

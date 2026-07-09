@@ -523,13 +523,16 @@ static void CanvasUpdateInput(ImGuiAppCanvasState* c, bool canvas_item_hovered, 
         c->NodeDblClickId = c->HoveredNode;
     }
 
-    // Wheel zoom, cursor-anchored: plain wheel on empty canvas only; Ctrl+wheel anywhere over the
-    // canvas (node widgets keep the plain wheel).
+    // Wheel zoom, cursor-anchored: plain wheel anywhere over the canvas, NODES INCLUDED -- only a
+    // hovered interactive widget claims the wheel for itself (spinners/inputs consume it; plain text
+    // rows and the catch-all publish no hover id). Widget hover completes at last frame's submission,
+    // so the gate reads the PREVIOUS frame's hovered id (deliberate T+1). Ctrl+wheel zooms always.
     if (c->IO.WheelZooms && io.MouseWheel != 0.0f
-      && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows)
-      && (io.KeyCtrl || (canvas_item_hovered && c->HoveredNode == -1)))
+      && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows))
     {
-        ImGui::CanvasSetZoom(c, c->Zoom * ImPow(1.15f, io.MouseWheel), mouse);
+        const ImGuiID hovered_item = GImGui->HoveredIdPreviousFrame;
+        if (io.KeyCtrl || hovered_item == 0 || hovered_item == c->InputId)
+            ImGui::CanvasSetZoom(c, c->Zoom * ImPow(1.15f, io.MouseWheel), mouse);
     }
 
     // LMB press hit priority: pin -> wire -> node -> empty. Pin and wire hover come from the last
@@ -777,6 +780,7 @@ void CanvasBegin(ImGuiAppCanvasState* c, const char* str_id, ImVec2 size)
     // gestures (plates are draw-list primitives, not items).
     SetNextItemAllowOverlap();
     InvisibleButton("##canvas_input", ImVec2(ImMax(1.0f, c->CanvasSize.x), ImMax(1.0f, c->CanvasSize.y)));
+    c->InputId = GetItemID();
     const bool item_hovered = IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
     const bool item_activated = IsItemActivated() || (item_hovered && (IsMouseClicked(ImGuiMouseButton_Left) || IsMouseClicked(ImGuiMouseButton_Right)));
     CanvasUpdateInput(c, item_hovered, item_activated);
