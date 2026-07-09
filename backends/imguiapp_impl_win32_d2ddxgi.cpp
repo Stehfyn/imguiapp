@@ -552,14 +552,16 @@ static void ImGuiApp_ImplWin32D2DDXGI_PresentLadder(ImGuiApp_ImplWin32D2DDXGI_Da
 
 // WndProc-driven repaint (resize/move/modal loops). Default = a full app Frame() with the present flavor
 // overridden to the reference's (fRestart, fVsync) pair for that path; render-only mode just re-presents.
-static void ImGuiApp_ImplWin32D2DDXGI_ModalRepaint(ImGuiApp* app, ImGuiApp_ImplWin32D2DDXGI_Data* bd, HWND hwnd, bool restart, bool vsync)
+// wait_for_vblank matches the reference per path: WM_NCCALCSIZE and the modal timer wait, WM_WINDOWPOSCHANGED
+// must NOT -- its repaint corrects an already-committed origin change and any delay flashes a shifted stale frame.
+static void ImGuiApp_ImplWin32D2DDXGI_ModalRepaint(ImGuiApp* app, ImGuiApp_ImplWin32D2DDXGI_Data* bd, HWND hwnd, bool restart, bool vsync, bool wait_for_vblank)
 {
     if (app == nullptr || bd == nullptr || bd->Swapchain == nullptr || bd->InModalRepaint || bd->InFrame || !app->IsInitialized())
         return;
     bd->InModalRepaint = true;
-    if (bd->FrameLatencyWaitableObject != nullptr)
+    if (wait_for_vblank && bd->FrameLatencyWaitableObject != nullptr)
         ::WaitForSingleObject(bd->FrameLatencyWaitableObject, 0);   // the reference's WaitForNextFrameResource: zero-timeout poll
-    if (!bd->NoWaitForVBlank)
+    if (wait_for_vblank && !bd->NoWaitForVBlank)
         ImGuiApp_ImplWin32D2DDXGI_WaitForVerticalBlank(bd, hwnd);
     if (bd->ModalRepaintRenderOnly)
     {
@@ -1318,7 +1320,7 @@ static LRESULT WINAPI ImGuiApp_ImplWin32D2DDXGI_WndProc(HWND hWnd, UINT msg, WPA
                 GUITHREADINFO gti = {};
                 gti.cbSize = sizeof(gti);
                 ::GetGUIThreadInfo(::GetCurrentThreadId(), &gti);
-                ImGuiApp_ImplWin32D2DDXGI_ModalRepaint(app, bd, hWnd, true, false);
+                ImGuiApp_ImplWin32D2DDXGI_ModalRepaint(app, bd, hWnd, true, false, true);
                 if (gti.hwndMoveSize != nullptr)
                     ::DwmFlush();
             }
@@ -1402,12 +1404,12 @@ static LRESULT WINAPI ImGuiApp_ImplWin32D2DDXGI_WndProc(HWND hWnd, UINT msg, WPA
     case WM_EXITSIZEMOVE:
     case WM_EXITMENULOOP:
         ::KillTimer(hWnd, 0x69);
-        ImGuiApp_ImplWin32D2DDXGI_ModalRepaint(app, bd, hWnd, false, true);
+        ImGuiApp_ImplWin32D2DDXGI_ModalRepaint(app, bd, hWnd, false, true, true);
         return 0;
     case WM_TIMER:
         if (wParam == 0x69)
         {
-            ImGuiApp_ImplWin32D2DDXGI_ModalRepaint(app, bd, hWnd, false, true);
+            ImGuiApp_ImplWin32D2DDXGI_ModalRepaint(app, bd, hWnd, false, true, true);
             if (bd != nullptr && !bd->Moving)
                 ::DwmFlush();
             return 0;
@@ -1415,9 +1417,11 @@ static LRESULT WINAPI ImGuiApp_ImplWin32D2DDXGI_WndProc(HWND hWnd, UINT msg, WPA
         break;
     case WM_WINDOWPOSCHANGED:
         // Not forwarded (no WM_SIZE/WM_MOVE generation), matching the reference; the repaint keeps the
-        // composition content glued to the window while it moves.
+        // composition content glued to the window while it moves. NO vblank wait here (reference parity):
+        // the origin already changed, and delaying this repaint flashes the stale frame at the new origin
+        // (visible as flicker on left/top/corner resizes that move the window origin).
         if (bd != nullptr && bd->Swapchain != nullptr && !bd->InModalRepaint)
-            ImGuiApp_ImplWin32D2DDXGI_ModalRepaint(app, bd, hWnd, true, true);
+            ImGuiApp_ImplWin32D2DDXGI_ModalRepaint(app, bd, hWnd, true, true, false);
         return 0;
     case WM_GETMINMAXINFO:
     {
