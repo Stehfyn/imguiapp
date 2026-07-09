@@ -7,7 +7,7 @@
 //  [X] Platform: never-resized desktop-sized swapchain; smooth resize via WM_NCCALCSIZE repaint + restart/no-sequence present ladder.
 //  [X] Multi-viewport: per-viewport DirectComposition swapchains + DComp targets; pacing-aware per-viewport present skip.
 //  [X] AV: synchronous staging-texture CaptureFrame (CopySubresourceRegion + Map; stalls the pipeline).
-//  [X] Platform: canonical D2D caption chrome (min/max/close + light/dark, Segoe Fluent Icons / MDL2 cached text layouts), self-hosted on the client seams; opt out via InitInfo::NoChrome.
+//  [X] Platform: canonical D2D caption chrome (min/max/close + light/dark, Segoe Fluent Icons / MDL2 cached text layouts; system icon + HTSYSMENU slot), self-hosted on the client seams; opt out via InitInfo::NoChrome.
 // Missing features:
 //  [ ] Headless modes (use win32-vulkan).
 
@@ -25,6 +25,7 @@
 
 // CHANGELOG
 // (minor and older changes stripped away, please see git history for details)
+//  2026-07-09: Platform: chrome caption system icon (Win32X DwfEnsureIcon): the window's icon rasterized once at native res into a D3D11 texture / D2D bitmap, drawn at the win32kfull DrawCaptionIcon slot; the caption-left square hittests HTSYSMENU (DefWindowProc: menu on click, close on double-click).
 //  2026-07-09: Platform: chrome conformed to Win32X dwmframex_v2 -- canonical glyph set (ChromeMinimize/Maximize/Restore/Close 0xE921-3/0xE8BB, light/dark 0xE706/0xE708) from Segoe Fluent Icons (MDL2 fallback) drawn as cached centered IDWriteTextLayouts; client-space hittest (buttons beat the top resize strip, HTLIGHTDARK replaces the HTMENU hack); capture-tracked button presses (press captures, release on the same button commits).
 //  2026-07-08: Platform: vblank pace thread -- posts coalesced refresh-rate ticks to the main window while a modal loop is live, so size/move/menu loops repaint at the monitor's refresh rate instead of the WM_TIMER ~64Hz floor (the timer stays as fallback).
 //  2026-07-08: Platform: default pacer platform seam (QPC clock, hybrid wait, per-monitor refresh queries) installed by InitPlatform when the client provided none -- ImGuiAppPacerMode_Target + TargetHz <= 0 now paces to the primary monitor's refresh rate; the run loop's canonical idle throttle defers to an active pacer.
@@ -1162,6 +1163,8 @@ struct ImGuiApp_ImplWin32D2DDXGI_ChromeData
     IDWriteTextFormat*     IconFormat;       // Segoe Fluent Icons / MDL2 fallback, centered both ways (Win32X DwfCreateIconFormat)
     IDWriteTextLayout*     GlyphLayouts[ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_COUNT]; // one cached layout per glyph, box = button cell
     UINT                   GlyphLayoutDpi;   // dpi the format + layouts were built at; a mismatch rebuilds them
+    ID2D1Bitmap1*          IconBitmap;       // cached high-res caption icon; DrawBitmap downscales (Win32X DwfEnsureIcon)
+    bool                   IconTried;        // attempted-once latch: a window with no icon stays iconless
     ID2D1SolidColorBrush*  Brush;            // light-mode surface / dark-mode text
     ID2D1SolidColorBrush*  RedBrush;         // close-button hot
     ID2D1SolidColorBrush*  BlackBrush;       // dark-mode surface / light-mode text
@@ -1220,8 +1223,20 @@ static bool ImGuiApp_ImplWin32D2DDXGI_ChromeEnsureGlyphLayouts(ImGuiApp_ImplWin3
     float size = (float)caption_height * 0.36f;
     if (size < 8.0f)
         size = 8.0f;
-    if (FAILED(chrome->DWriteFactory->CreateTextFormat(L"Segoe Fluent Icons", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size, L"", &chrome->IconFormat)))
-        chrome->DWriteFactory->CreateTextFormat(L"Segoe MDL2 Assets", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size, L"", &chrome->IconFormat);
+    // CreateTextFormat does NOT validate the family name (a missing one silently falls back per glyph
+    // and draws tofu), so probe the system collection: Segoe Fluent Icons ships on Win11 only, Segoe
+    // MDL2 Assets on Win10+ carries the same chrome codepoints.
+    const WCHAR* family = L"Segoe MDL2 Assets";
+    IDWriteFontCollection* fonts = nullptr;
+    if (SUCCEEDED(chrome->DWriteFactory->GetSystemFontCollection(&fonts, FALSE)))
+    {
+        UINT32 index  = 0;
+        BOOL   exists = FALSE;
+        if (SUCCEEDED(fonts->FindFamilyName(L"Segoe Fluent Icons", &index, &exists)) && exists)
+            family = L"Segoe Fluent Icons";
+        fonts->Release();
+    }
+    chrome->DWriteFactory->CreateTextFormat(family, nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size, L"", &chrome->IconFormat);
     if (chrome->IconFormat == nullptr)
         return false;
     chrome->IconFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
@@ -1232,6 +1247,101 @@ static bool ImGuiApp_ImplWin32D2DDXGI_ChromeEnsureGlyphLayouts(ImGuiApp_ImplWin3
         chrome->DWriteFactory->CreateTextLayout(&IMGUIAPP_WIN32D2DDXGI_CHROME_GLYPHS[i], 1, chrome->IconFormat, (float)button_width, (float)caption_height, &chrome->GlyphLayouts[i]);
     chrome->GlyphLayoutDpi = dpi;
     return true;
+}
+
+// Build the cached caption icon ONCE, high-res (Win32X DwfEnsureIcon): the window's big icon rasterized
+// at its native resolution into a premultiplied BGRA DIB, uploaded as a D3D11 texture, wrapped as a D2D
+// bitmap -- DrawBitmap downscales with linear filtering (crisp at any DPI, unlike the 16px small icon).
+static void ImGuiApp_ImplWin32D2DDXGI_ChromeEnsureIcon(ImGuiApp_ImplWin32D2DDXGI_Data* bd, ImGuiApp_ImplWin32D2DDXGI_ChromeData* chrome, HWND hwnd)
+{
+    if (chrome->IconBitmap != nullptr || chrome->IconTried || bd->D3DDevice == nullptr || bd->D2DDeviceContext == nullptr)
+        return;
+    chrome->IconTried = true;
+
+    HICON icon = (HICON)::SendMessage(hwnd, WM_GETICON, ICON_BIG, 0);
+    if (icon == nullptr) icon = (HICON)::SendMessage(hwnd, WM_GETICON, ICON_SMALL2, 0);
+    if (icon == nullptr) icon = (HICON)::GetClassLongPtr(hwnd, GCLP_HICON);
+    if (icon == nullptr) icon = (HICON)::GetClassLongPtr(hwnd, GCLP_HICONSM);
+    if (icon == nullptr) icon = ::LoadIcon(nullptr, IDI_APPLICATION);
+    if (icon == nullptr)
+        return;
+
+    // Native icon resolution (the highest available frame -> high-res source), clamped 16..256.
+    int n = 32;
+    ICONINFO ii = {};
+    if (::GetIconInfo(icon, &ii))
+    {
+        BITMAP bm;
+        if (ii.hbmColor != nullptr && ::GetObject(ii.hbmColor, sizeof(bm), &bm) != 0)
+            n = bm.bmWidth;
+        if (ii.hbmColor != nullptr) ::DeleteObject(ii.hbmColor);
+        if (ii.hbmMask != nullptr)  ::DeleteObject(ii.hbmMask);
+    }
+    n = n < 16 ? 16 : n > 256 ? 256 : n;
+
+    BITMAPINFO bi = {};
+    bi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth       = n;
+    bi.bmiHeader.biHeight      = -n;   // top-down
+    bi.bmiHeader.biPlanes      = 1;
+    bi.bmiHeader.biBitCount    = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+
+    void*   bits      = nullptr;
+    HDC     screen_dc = ::GetDC(nullptr);
+    HDC     mem_dc    = ::CreateCompatibleDC(screen_dc);
+    HBITMAP dib       = ::CreateDIBSection(screen_dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (screen_dc != nullptr)
+        ::ReleaseDC(nullptr, screen_dc);
+    if (mem_dc != nullptr && dib != nullptr && bits != nullptr)
+    {
+        HBITMAP old = (HBITMAP)::SelectObject(mem_dc, dib);
+        ::DrawIconEx(mem_dc, 0, 0, icon, n, n, 0, nullptr, DI_NORMAL);
+        ::GdiFlush();
+        ::SelectObject(mem_dc, old);
+
+        // DrawIconEx gives straight-alpha BGRA; premultiply for the premultiplied D2D bitmap.
+        BYTE* p = (BYTE*)bits;
+        for (int i = 0; i < n * n; i++, p += 4)
+        {
+            const UINT a = p[3];
+            p[0] = (BYTE)(((UINT)p[0] * a) / 255u);
+            p[1] = (BYTE)(((UINT)p[1] * a) / 255u);
+            p[2] = (BYTE)(((UINT)p[2] * a) / 255u);
+        }
+
+        D3D11_TEXTURE2D_DESC td = {};
+        td.Width            = (UINT)n;
+        td.Height           = (UINT)n;
+        td.MipLevels        = 1;
+        td.ArraySize        = 1;
+        td.Format           = DXGI_FORMAT_B8G8R8A8_UNORM;
+        td.SampleDesc.Count = 1;
+        td.Usage            = D3D11_USAGE_DEFAULT;
+        td.BindFlags        = D3D11_BIND_SHADER_RESOURCE;
+        D3D11_SUBRESOURCE_DATA sd = {};
+        sd.pSysMem     = bits;
+        sd.SysMemPitch = (UINT)(n * 4);
+        ID3D11Texture2D* tex = nullptr;
+        bd->D3DDevice->CreateTexture2D(&td, &sd, &tex);
+        IDXGISurface* surface = nullptr;
+        if (tex != nullptr)
+            tex->QueryInterface(__uuidof(IDXGISurface), (void**)&surface);
+        if (surface != nullptr)
+        {
+            D2D1_BITMAP_PROPERTIES1 bp = {};
+            bp.pixelFormat.format    = DXGI_FORMAT_B8G8R8A8_UNORM;
+            bp.pixelFormat.alphaMode = D2D1_ALPHA_MODE_PREMULTIPLIED;
+            bp.dpiX = 96.0f;
+            bp.dpiY = 96.0f;
+            bp.bitmapOptions = D2D1_BITMAP_OPTIONS_NONE;
+            bd->D2DDeviceContext->CreateBitmapFromDxgiSurface(surface, &bp, &chrome->IconBitmap);
+        }
+        if (surface != nullptr) surface->Release();
+        if (tex != nullptr)     tex->Release();
+    }
+    if (dib != nullptr)    ::DeleteObject(dib);
+    if (mem_dc != nullptr) ::DeleteDC(mem_dc);
 }
 
 // One caption button (Win32X DwfDrawButton, hot state only): hot fill (red for close, colorization for
@@ -1281,6 +1391,19 @@ static void ImGuiApp_ImplWin32D2DDXGI_ChromeDrawCallback(ImGuiApp* app)
     ImGuiApp_ImplWin32D2DDXGI_GetCaptionButtonRect(client, caption_height, button_width, 3, &lightdark_button);
 
     ID2D1DeviceContext* ctx = bd->D2DDeviceContext;
+
+    // High-res caption system icon, placed as win32kfull!DrawCaptionIcon does: SM_CXSMICON x SM_CYSMICON
+    // for the window dpi, centered in the caption-height square slot at the caption left.
+    if (chrome->IconBitmap != nullptr)
+    {
+        const int iw = ::GetSystemMetricsForDpi(SM_CXSMICON, dpi);
+        const int ih = ::GetSystemMetricsForDpi(SM_CYSMICON, dpi);
+        const float ix = (float)((caption_height - iw) / 2 + 1);
+        const float iy = (float)((caption_height - ih) / 2);
+        const D2D1_RECT_F ri = D2D1::RectF(ix, iy, ix + (float)iw, iy + (float)ih);
+        ctx->DrawBitmap(chrome->IconBitmap, &ri, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, nullptr);
+    }
+
     ID2D1SolidColorBrush* text = chrome->DarkMode ? chrome->Brush : chrome->BlackBrush;
     const int max_glyph = ::IsZoomed(hwnd) ? ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_Restore : ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_Maximize;
     const int ld_glyph  = chrome->DarkMode ? ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_Brightness : ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_QuietHours;
@@ -1319,6 +1442,12 @@ static int ImGuiApp_ImplWin32D2DDXGI_ChromeNCHitTest(ImGuiApp* app, int x, int y
     if (::PtInRect(&min_button, pt))       { chrome->HotButton = ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Min;       return HTMINBUTTON; }
     if (::PtInRect(&max_button, pt))       { chrome->HotButton = ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Max;       return HTMAXBUTTON; }
     if (::PtInRect(&close_button, pt))     { chrome->HotButton = ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Close;     return HTCLOSE; }
+
+    // System-menu icon slot (win32kfull DrawCaptionIcon: a caption-height square at the caption left).
+    // Checked before the resize ring like the buttons (Win32X DwfHitTest order); DefWindowProc answers
+    // HTSYSMENU with the system menu (click) and SC_CLOSE (double-click).
+    const RECT icon_slot = { 0, 0, caption_height, caption_height };
+    if (::PtInRect(&icon_slot, pt))        { chrome->HotButton = ImGuiApp_ImplWin32D2DDXGI_CaptionButton_None;      return HTSYSMENU; }
 
     const LRESULT hit = ImGuiApp_ImplWin32D2DDXGI_DefaultNCHitTest(bd, hwnd, x, y);
     chrome->HotButton = hit == HTCAPTION ? ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Caption : ImGuiApp_ImplWin32D2DDXGI_CaptionButton_None;
@@ -1388,6 +1517,7 @@ bool ImGuiApp_ImplWin32D2DDXGI_InstallChrome(ImGuiApp* app)
     }
 
     bd->Chrome = chrome;
+    ImGuiApp_ImplWin32D2DDXGI_ChromeEnsureIcon(bd, chrome, (HWND)bd->Hwnd);   // built once at install (reference parity)
     // Self-hosted on the public seams: any client callback installed later displaces the chrome's.
     ImGuiApp_ImplWin32D2DDXGI_SetDeviceDrawCallback(app, ImGuiApp_ImplWin32D2DDXGI_ChromeDrawCallback);
     ImGuiApp_ImplWin32D2DDXGI_SetNCHitTestCallback(app, ImGuiApp_ImplWin32D2DDXGI_ChromeNCHitTest);
@@ -1407,6 +1537,7 @@ void ImGuiApp_ImplWin32D2DDXGI_UninstallChrome(ImGuiApp* app)
 
     for (int i = 0; i < ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_COUNT; i++)
         if (chrome->GlyphLayouts[i] != nullptr)    { chrome->GlyphLayouts[i]->Release(); }
+    if (chrome->IconBitmap != nullptr)             { chrome->IconBitmap->Release(); }
     if (chrome->IconFormat != nullptr)             { chrome->IconFormat->Release(); }
     if (chrome->DWriteFactory != nullptr)          { chrome->DWriteFactory->Release(); }
     if (chrome->StrokeStyle != nullptr)            { chrome->StrokeStyle->Release(); }
