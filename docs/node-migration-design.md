@@ -100,9 +100,14 @@ kinds — so the mirror becomes an isomorphism instead of a translation.
   outside-render served pre-N4 self-windowed free controls. `ImGuiAppSidebarBase : ImGuiAppWindowBase`
   survives (Kind discriminates). IMGUIAPP_PREVIEW_ABI bumped.
 
-## Phases (each lands green: build + 7 ctest suites incl. style/section/indent ratchets)
-- **N6 — Composer parity.** Mirror recursion over Children, scene-hierarchy tree from the real
-  node tree, round-trip + prefabs over the new kinds.
+- **N6** — Composer parity. The live mirror's want-building is one generic walk over the runtime
+  node tree (every layer's kind-discriminated Children, hosts recursing into their hosted children;
+  new kinds join the dispatch, never a new scan loop). The outliner already derives from the same
+  containment (windows under the Display layer, tasks under the Task layer, hosted controls under
+  their hosts). Round-trip pinned over the new kinds: emit -> import reproduces Task/Control/Window
+  kinds, hosting containment and data edges (step65b); Kind_Task survives graph save/load (step15);
+  the starter prefabs stamp task producers (prefab step). Migration complete: N0a-N6 all landed
+  green (build + 7 ctest suites incl. style/section/indent ratchets).
 
 ## Open questions (deliberately unpinned)
 

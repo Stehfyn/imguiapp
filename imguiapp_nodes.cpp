@@ -15065,47 +15065,55 @@ void BuildAppLiveGraph(const ImGuiApp* app, ImGuiAppGraph* g)
             ImFormatString(w.Name, IM_ARRAYSIZE(w.Name), "%s", AppLayerNodeName(lt));
         want.push_back(w);
     }
-    // Windows / Sidebars: keyed by their unique Label. Each hosts its own controls (window->Children), mirrored
-    // right after the host so a live containment edge (control -> host) can be built below.
-    for (int i = 0; i < app->DisplayLayer->Children.Size; i++)
-    {
-        if (app->DisplayLayer->Children.Data[i]->Kind != ImGuiAppNodeKind_Window)
-            continue;
-        const ImGuiAppWindowBase* win = (const ImGuiAppWindowBase*)app->DisplayLayer->Children.Data[i];
-        const char* lbl = win->Label;
-        ImGuiID key = AppConstantHash(lbl[0] ? lbl : "Window");
-        ImGuiAppLiveWant w; w.Kind = ImGuiAppNodeKind_Window; w.Key = key;
-        w.DataId = 0; w.DepCount = 0; w.LayerType = ImGuiAppLayerType_Task; w.ParentKey = 0;
-        w.Flags = win->Flags; w.HasPlacement = win->HasInitialPlacement; w.InitialPos = win->InitialPos; w.InitialSize = win->InitialSize;
-        w.DockDir = ImGuiDir_None; w.DockSize = 0.0f;
-        w.Item = win;
-        ImStrncpy(w.Name, lbl[0] ? lbl : "Window", IM_ARRAYSIZE(w.Name));
-        want.push_back(w);
-        for (int c = 0; c < win->Children.Size; c++)
-            PushControlWant(win->Children.Data[c], ImGuiAppNodeKind_Control, key);
-    }
-    for (int i = 0; i < app->DisplayLayer->Children.Size; i++)
-    {
-        if (app->DisplayLayer->Children.Data[i]->Kind != ImGuiAppNodeKind_Sidebar)
-            continue;
-        const ImGuiAppSidebarBase* sb = (const ImGuiAppSidebarBase*)app->DisplayLayer->Children.Data[i];
-        const char* lbl = sb->Label;
-        ImGuiID key = AppConstantHash(lbl[0] ? lbl : "Sidebar") + 1u;
-        ImGuiAppLiveWant w; w.Kind = ImGuiAppNodeKind_Sidebar; w.Key = key;
-        w.DataId = 0; w.DepCount = 0; w.LayerType = ImGuiAppLayerType_Task; w.ParentKey = 0;
-        w.Flags = sb->Flags; w.HasPlacement = sb->HasInitialPlacement; w.InitialPos = sb->InitialPos; w.InitialSize = sb->InitialSize;
-        w.DockDir = sb->DockDir; w.DockSize = sb->Size;
-        w.Item = sb;
-        ImStrncpy(w.Name, lbl[0] ? lbl : "Sidebar", IM_ARRAYSIZE(w.Name));
-        want.push_back(w);
-        for (int c = 0; c < sb->Children.Size; c++)
-            PushControlWant(sb->Children.Data[c], ImGuiAppNodeKind_Control, key);
-    }
-    // Task nodes: keyed by runtime PersistData id; carry their dependency ids for edge discovery.
-    if (app->TaskLayer != nullptr)
-        for (int c = 0; c < app->TaskLayer->Children.Size; c++)
-            if (app->TaskLayer->Children.Data[c]->Kind == ImGuiAppNodeKind_Task)
-                PushControlWant(app->TaskLayer->Children.Data[c], ImGuiAppNodeKind_Task, 0);
+    // One generic walk over the runtime node tree (N6): every layer's kind-discriminated Children, a
+    // host recursing into its hosted children right after itself (so a live containment edge can be
+    // built below). New kinds join this dispatch, never a new scan loop. Windows key by their unique
+    // Label, sidebars by Label + 1, data nodes by their PersistData id (PushControlWant).
+    for (int li = 0; li < app->Layers.Size; li++)
+        for (int i = 0; i < app->Layers.Data[li]->Children.Size; i++)
+        {
+            const ImGuiAppNodeBase* node = app->Layers.Data[li]->Children.Data[i];
+            switch (node->Kind)
+            {
+            case ImGuiAppNodeKind_Window:
+            {
+                const ImGuiAppWindowBase* win = (const ImGuiAppWindowBase*)node;
+                const char* lbl = win->Label;
+                ImGuiID key = AppConstantHash(lbl[0] ? lbl : "Window");
+                ImGuiAppLiveWant w; w.Kind = ImGuiAppNodeKind_Window; w.Key = key;
+                w.DataId = 0; w.DepCount = 0; w.LayerType = ImGuiAppLayerType_Task; w.ParentKey = 0;
+                w.Flags = win->Flags; w.HasPlacement = win->HasInitialPlacement; w.InitialPos = win->InitialPos; w.InitialSize = win->InitialSize;
+                w.DockDir = ImGuiDir_None; w.DockSize = 0.0f;
+                w.Item = win;
+                ImStrncpy(w.Name, lbl[0] ? lbl : "Window", IM_ARRAYSIZE(w.Name));
+                want.push_back(w);
+                for (int c = 0; c < win->Children.Size; c++)
+                    PushControlWant(win->Children.Data[c], ImGuiAppNodeKind_Control, key);
+                break;
+            }
+            case ImGuiAppNodeKind_Sidebar:
+            {
+                const ImGuiAppSidebarBase* sb = (const ImGuiAppSidebarBase*)node;
+                const char* lbl = sb->Label;
+                ImGuiID key = AppConstantHash(lbl[0] ? lbl : "Sidebar") + 1u;
+                ImGuiAppLiveWant w; w.Kind = ImGuiAppNodeKind_Sidebar; w.Key = key;
+                w.DataId = 0; w.DepCount = 0; w.LayerType = ImGuiAppLayerType_Task; w.ParentKey = 0;
+                w.Flags = sb->Flags; w.HasPlacement = sb->HasInitialPlacement; w.InitialPos = sb->InitialPos; w.InitialSize = sb->InitialSize;
+                w.DockDir = sb->DockDir; w.DockSize = sb->Size;
+                w.Item = sb;
+                ImStrncpy(w.Name, lbl[0] ? lbl : "Sidebar", IM_ARRAYSIZE(w.Name));
+                want.push_back(w);
+                for (int c = 0; c < sb->Children.Size; c++)
+                    PushControlWant(sb->Children.Data[c], ImGuiAppNodeKind_Control, key);
+                break;
+            }
+            case ImGuiAppNodeKind_Task:
+                PushControlWant(node, ImGuiAppNodeKind_Task, 0);
+                break;
+            default:
+                break;
+            }
+        }
 
     // 2) Remove live nodes whose key is no longer wanted (collect ids first; removal mutates g->Nodes).
     ImVector<int> stale;
