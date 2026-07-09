@@ -1750,7 +1750,7 @@ struct ImGuiAppStatusStripControl : ImGuiAppControl<ImGuiAppStatusStripData, ImG
         if (data->HasMirror)
         {
             const ImGuiApp* a = doc->Mirror;
-            ImFormatString(data->MirrorCounts, IM_ARRAYSIZE(data->MirrorCounts), "L%d W%d S%d C%d", a->Children.Size, a->Windows.Size, a->Sidebars.Size, a->Controls.Size);
+            ImFormatString(data->MirrorCounts, IM_ARRAYSIZE(data->MirrorCounts), "L%d W%d S%d C%d", a->Children.Size, a->DisplayLayer->Windows.Size, a->DisplayLayer->Sidebars.Size, a->DisplayLayer->Controls.Size);
             data->MirrorInit = a->Children.Size > 0;   // "composed"; Initialized is the platform flag
         }
 
@@ -3283,9 +3283,9 @@ IMGUI_API void ShowAppDemo(bool* p_open, ImGuiApp* host)
     if (s_composed != app)
     {
         ImGuiViewport* vp = GetMainViewport();
-        // The Composer is ALWAYS the first window pushed: first in app->Windows, first to Begin.
+        // The Composer is ALWAYS the first window pushed: first in app->DisplayLayer->Windows, first to Begin.
         PushAppWindow<ComposerWindow>(app);
-        ImGuiAppWindowBase* metrics = app->Windows.back();
+        ImGuiAppWindowBase* metrics = app->DisplayLayer->Windows.back();
         metrics->HasInitialPlacement = true;
         metrics->InitialSize = ImVec2(vp->WorkSize.x * 0.66f, vp->WorkSize.y * 0.66f);
         metrics->InitialPos  = vp->WorkPos + ImVec2(vp->WorkSize.x * 0.10f, vp->WorkSize.y * 0.10f);
@@ -3295,7 +3295,7 @@ IMGUI_API void ShowAppDemo(bool* p_open, ImGuiApp* host)
         PushWindowControl<ImGuiAppStatusStripControl>(app, metrics);   // status bar renders LAST -> window bottom
 
         PushAppWindow<DemoPanelWindow>(app);
-        ImGuiAppWindowBase* panel = app->Windows.back();
+        ImGuiAppWindowBase* panel = app->DisplayLayer->Windows.back();
         panel->HasInitialPlacement = true;
         panel->InitialSize = ImVec2(vp->WorkSize.x * 0.30f, vp->WorkSize.y * 0.40f);
         panel->InitialPos  = vp->WorkPos + ImVec2(vp->WorkSize.x * 0.02f, vp->WorkSize.y * 0.04f);
@@ -3306,12 +3306,12 @@ IMGUI_API void ShowAppDemo(bool* p_open, ImGuiApp* host)
     // Chrome windows, by label (the vector reallocs as examples push/pop).
     ImGuiAppWindowBase* panel = nullptr;
     ImGuiAppWindowBase* metrics = nullptr;
-    for (int i = 0; i < app->Windows.Size; i++)
+    for (int i = 0; i < app->DisplayLayer->Windows.Size; i++)
     {
-        if (strcmp(app->Windows.Data[i]->Label, "ImGuiAppLayer Demo") == 0)
-            panel = app->Windows.Data[i];
-        else if (strcmp(app->Windows.Data[i]->Label, "ImGuiAppComposer") == 0)
-            metrics = app->Windows.Data[i];
+        if (strcmp(app->DisplayLayer->Windows.Data[i]->Label, "ImGuiAppLayer Demo") == 0)
+            panel = app->DisplayLayer->Windows.Data[i];
+        else if (strcmp(app->DisplayLayer->Windows.Data[i]->Label, "ImGuiAppComposer") == 0)
+            metrics = app->DisplayLayer->Windows.Data[i];
     }
     ImGuiAppDemoMenuData* st = GetDemoMenu(app);
     IM_ASSERT(panel != nullptr && metrics != nullptr && st != nullptr);
@@ -3349,7 +3349,7 @@ IMGUI_API void ShowAppDemo(bool* p_open, ImGuiApp* host)
         if (st->ShowBaseWindow)
         {
             PushAppWindow<BaseWindow>(app);
-            ImGuiAppWindowBase* w = app->Windows.back();
+            ImGuiAppWindowBase* w = app->DisplayLayer->Windows.back();
             w->HasInitialPlacement = true;
             w->InitialSize = ImVec2(em * 16.0f, em * 8.0f);
             w->InitialPos  = ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + em * 2.0f);
@@ -3362,7 +3362,7 @@ IMGUI_API void ShowAppDemo(bool* p_open, ImGuiApp* host)
         if (st->ShowRandomTime || st->ShowBreathing)
         {
             PushAppWindow<SampleWindow>(app);
-            ImGuiAppWindowBase* w = app->Windows.back();
+            ImGuiAppWindowBase* w = app->DisplayLayer->Windows.back();
             w->HasInitialPlacement = true;
             w->InitialSize = ImVec2(em * 18.0f, 0.0f);
             w->InitialPos  = ImVec2(vp->WorkPos.x + em * 2.0f, vp->WorkPos.y + vp->WorkSize.y * 0.55f);

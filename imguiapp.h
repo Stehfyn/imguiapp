@@ -933,6 +933,12 @@ struct ImGuiAppLayoutLayer : ImGuiAppLayer
 
 struct ImGuiAppDisplayLayer : ImGuiAppLayer
 {
+    // Display domain (N3): the layer hosts the app's display nodes; push/pop routes through the
+    // app->DisplayLayer cache (seated by OnAttach, cleared -- after draining -- by OnDetach).
+    ImVector<ImGuiAppWindowBase*>      Windows;
+    ImVector<ImGuiAppSidebarBase*>     Sidebars;
+    ImVector<ImGuiAppDisplayNodeBase*> Controls;   // free display controls (app-level push)
+
     virtual void OnAttach(ImGuiApp*)        const override final;
     virtual void OnDetach(ImGuiApp*)        const override final;
     virtual void OnUpdate(ImGuiApp*, float) const override final;
@@ -1004,9 +1010,7 @@ struct ImGuiApp : ImGuiAppBase
     ImGuiStorage                       Data;                          // id-keyed instance storage (controls' Persist/Temp blocks)
     ImVector<ImGuiAppStorageEntry>     StorageEntries;
     ImVector<ImGuiAppNodeBase*>        Children;                      // layer nodes, in stack order (the root node's children)
-    ImVector<ImGuiAppWindowBase*>      Windows;
-    ImVector<ImGuiAppSidebarBase*>     Sidebars;
-    ImVector<ImGuiAppDisplayNodeBase*> Controls;
+    ImGuiAppDisplayLayer*              DisplayLayer        = nullptr; // display-domain host (seated by its attach; null = no display layer composed)
     ImVector<ImGuiAppNodeBase*>        UpdateOrder;                   // dependency-sorted OnUpdate iteration (AppRebuildUpdateOrder)
     int                                CompositionRevision = 0;       // bumped by every storage register/unregister (pop+repush of the same type still advances it)
     int                                UpdateOrderRevision = -1;      // revision UpdateOrder + the cached dependency bindings were built at
@@ -1352,7 +1356,8 @@ namespace ImGui
     IMGUI_API inline void PushAppControl(ImGuiApp* app, ImGuiID instance, const ImGuiAppDataBinding* binds, int binds_count)
     {
         IM_ASSERT(app);
-        AppControlPush(app, &app->Controls, AppControlCreate<T>(app, instance, binds, binds_count, nullptr, nullptr));
+        IM_ASSERT(app->DisplayLayer != nullptr && "Push the Display layer before controls");
+        AppControlPush(app, &app->DisplayLayer->Controls, AppControlCreate<T>(app, instance, binds, binds_count, nullptr, nullptr));
     }
 
     // Host a control inside a window: instance data registers in app->Data as usual, but the control joins
@@ -1379,28 +1384,32 @@ namespace ImGui
     IMGUI_API inline void ForEachAppNode(ImGuiApp* app, Visitor visitor)
     {
         IM_ASSERT(app);
-        for (int i = 0; i < app->Controls.Size; i++)
-            visitor(app->Controls.Data[i], (ImGuiAppWindowBase*)nullptr);
-        for (int s = 0; s < app->Sidebars.Size; s++)
-            for (int i = 0; i < app->Sidebars.Data[s]->Children.Size; i++)
-                visitor(app->Sidebars.Data[s]->Children.Data[i], (ImGuiAppWindowBase*)app->Sidebars.Data[s]);
-        for (int w = 0; w < app->Windows.Size; w++)
-            for (int i = 0; i < app->Windows.Data[w]->Children.Size; i++)
-                visitor(app->Windows.Data[w]->Children.Data[i], app->Windows.Data[w]);
+        if (app->DisplayLayer == nullptr)   // every data node is display-hosted until N4
+            return;
+        for (int i = 0; i < app->DisplayLayer->Controls.Size; i++)
+            visitor(app->DisplayLayer->Controls.Data[i], (ImGuiAppWindowBase*)nullptr);
+        for (int s = 0; s < app->DisplayLayer->Sidebars.Size; s++)
+            for (int i = 0; i < app->DisplayLayer->Sidebars.Data[s]->Children.Size; i++)
+                visitor(app->DisplayLayer->Sidebars.Data[s]->Children.Data[i], (ImGuiAppWindowBase*)app->DisplayLayer->Sidebars.Data[s]);
+        for (int w = 0; w < app->DisplayLayer->Windows.Size; w++)
+            for (int i = 0; i < app->DisplayLayer->Windows.Data[w]->Children.Size; i++)
+                visitor(app->DisplayLayer->Windows.Data[w]->Children.Data[i], app->DisplayLayer->Windows.Data[w]);
     }
 
     template <typename Visitor>
     IMGUI_API inline void ForEachAppNode(const ImGuiApp* app, Visitor visitor)
     {
         IM_ASSERT(app);
-        for (int i = 0; i < app->Controls.Size; i++)
-            visitor((const ImGuiAppNodeBase*)app->Controls.Data[i], (const ImGuiAppWindowBase*)nullptr);
-        for (int s = 0; s < app->Sidebars.Size; s++)
-            for (int i = 0; i < app->Sidebars.Data[s]->Children.Size; i++)
-                visitor((const ImGuiAppNodeBase*)app->Sidebars.Data[s]->Children.Data[i], (const ImGuiAppWindowBase*)app->Sidebars.Data[s]);
-        for (int w = 0; w < app->Windows.Size; w++)
-            for (int i = 0; i < app->Windows.Data[w]->Children.Size; i++)
-                visitor((const ImGuiAppNodeBase*)app->Windows.Data[w]->Children.Data[i], (const ImGuiAppWindowBase*)app->Windows.Data[w]);
+        if (app->DisplayLayer == nullptr)
+            return;
+        for (int i = 0; i < app->DisplayLayer->Controls.Size; i++)
+            visitor((const ImGuiAppNodeBase*)app->DisplayLayer->Controls.Data[i], (const ImGuiAppWindowBase*)nullptr);
+        for (int s = 0; s < app->DisplayLayer->Sidebars.Size; s++)
+            for (int i = 0; i < app->DisplayLayer->Sidebars.Data[s]->Children.Size; i++)
+                visitor((const ImGuiAppNodeBase*)app->DisplayLayer->Sidebars.Data[s]->Children.Data[i], (const ImGuiAppWindowBase*)app->DisplayLayer->Sidebars.Data[s]);
+        for (int w = 0; w < app->DisplayLayer->Windows.Size; w++)
+            for (int i = 0; i < app->DisplayLayer->Windows.Data[w]->Children.Size; i++)
+                visitor((const ImGuiAppNodeBase*)app->DisplayLayer->Windows.Data[w]->Children.Data[i], (const ImGuiAppWindowBase*)app->DisplayLayer->Windows.Data[w]);
     }
 } // namespace ImGui
 

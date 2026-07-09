@@ -678,7 +678,8 @@ void ImGuiAppLayoutLayer::OnDraw(const ImGuiApp* app) const
 
 void ImGuiAppDisplayLayer::OnAttach(ImGuiApp* app) const
 {
-    IM_UNUSED(app);
+    IM_ASSERT(app->DisplayLayer == nullptr && "Only one Display layer per app");
+    app->DisplayLayer = (ImGuiAppDisplayLayer*)this;
 
     if (ImGui::FindSettingsHandler("AppDisplayLayer") != nullptr)
         return;
@@ -697,22 +698,28 @@ void ImGuiAppDisplayLayer::OnAttach(ImGuiApp* app) const
 
 void ImGuiAppDisplayLayer::OnDetach(ImGuiApp* app) const
 {
-    IM_UNUSED(app);
+    // Manual mid-run pop: whatever the app did not drain dies with its domain.
+    while (!app->DisplayLayer->Sidebars.empty())
+        ImGui::PopAppSidebar(app);
+    while (!app->DisplayLayer->Windows.empty())
+        ImGui::PopAppWindow(app);
+    ShutdownAppNodes(app, app->DisplayLayer->Controls);
+    app->DisplayLayer = nullptr;
 }
 
 void ImGuiAppDisplayLayer::OnUpdate(ImGuiApp* app, float dt) const
 {
     // Hosted controls update in the Task layer; hosts here always see this frame's control state.
-    for (ImGuiAppSidebarBase* sidebar : app->Sidebars)
+    for (ImGuiAppSidebarBase* sidebar : Sidebars)
         sidebar->OnUpdate(app, dt);
 
-    for (ImGuiAppWindowBase* window : app->Windows)
+    for (ImGuiAppWindowBase* window : Windows)
         window->OnUpdate(app, dt);
 }
 
 void ImGuiAppDisplayLayer::OnDraw(const ImGuiApp* app) const
 {
-    for (ImGuiAppSidebarBase* sidebar : app->Sidebars)
+    for (ImGuiAppSidebarBase* sidebar : Sidebars)
     {
         const ImGuiAppStyleScope sidebar_scope = PushItemStyle(sidebar);
 
@@ -753,7 +760,7 @@ void ImGuiAppDisplayLayer::OnDraw(const ImGuiApp* app) const
         }
     }
 
-    for (ImGuiAppWindowBase* window : app->Windows)
+    for (ImGuiAppWindowBase* window : Windows)
     {
         // Closed window: composition member stays (mirror, wiring), but nothing renders -- no Begin,
         // no OnDraw, no hosted controls. Reopen by writing Open (outliner eye / host UI).
@@ -799,7 +806,7 @@ void ImGuiAppDisplayLayer::OnDraw(const ImGuiApp* app) const
         PopItemStyle(window_scope);
     }
 
-    for (ImGuiAppDisplayNodeBase* control : app->Controls)
+    for (ImGuiAppDisplayNodeBase* control : Controls)
     {
         const ImGuiAppStyleScope control_scope = PushItemStyle(control);
         control->OnDraw(app);
@@ -881,11 +888,14 @@ IMGUI_API void ShutdownApp(ImGuiApp* app)
 
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "shutdown app");
 
-    while (!app->Sidebars.empty())
-        PopAppSidebar(app);
-    while (!app->Windows.empty())
-        PopAppWindow(app);
-    ShutdownAppNodes(app, app->Controls);
+    if (app->DisplayLayer != nullptr)
+    {
+        while (!app->DisplayLayer->Sidebars.empty())
+            PopAppSidebar(app);
+        while (!app->DisplayLayer->Windows.empty())
+            PopAppWindow(app);
+        ShutdownAppNodes(app, app->DisplayLayer->Controls);
+    }
     while (!app->Children.empty())
         PopAppLayer(app);
 
@@ -945,14 +955,14 @@ void PopAppSidebar(ImGuiApp* app)
 {
     IM_ASSERT(app != nullptr && "NULL ImGuiApp!");
 
-    if (app->Sidebars.empty())
+    if (app->DisplayLayer == nullptr || app->DisplayLayer->Sidebars.empty())
     {
         IM_ASSERT_USER_ERROR(0, "Calling PopAppSidebar() too many times!");
         AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "overpop: PopAppSidebar with none pushed");
         return;
     }
-    ImGuiAppSidebarBase* sidebar = app->Sidebars.back();
-    app->Sidebars.pop_back();
+    ImGuiAppSidebarBase* sidebar = app->DisplayLayer->Sidebars.back();
+    app->DisplayLayer->Sidebars.pop_back();
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "pop sidebar '%s'", sidebar->Label);
     ShutdownAppNodes(app, sidebar->Children);
     sidebar->OnDetach(app);
@@ -964,15 +974,15 @@ void PopAppWindow(ImGuiApp* app)
 {
     IM_ASSERT(app != nullptr && "NULL ImGuiApp!");
 
-    if (app->Windows.empty())
+    if (app->DisplayLayer == nullptr || app->DisplayLayer->Windows.empty())
     {
         IM_ASSERT_USER_ERROR(0, "Calling PopAppWindow() too many times!");
         AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "overpop: PopAppWindow with none pushed");
         return;
     }
 
-    ImGuiAppWindowBase* window = app->Windows.back();
-    app->Windows.pop_back();
+    ImGuiAppWindowBase* window = app->DisplayLayer->Windows.back();
+    app->DisplayLayer->Windows.pop_back();
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "pop window '%s'", window->Label);
     ShutdownAppNodes(app, window->Children);
     window->OnDetach(app);
@@ -984,15 +994,15 @@ void PopAppControl(ImGuiApp* app)
 {
     IM_ASSERT(app != nullptr && "NULL ImGuiApp!");
 
-    if (app->Controls.empty())
+    if (app->DisplayLayer == nullptr || app->DisplayLayer->Controls.empty())
     {
         IM_ASSERT_USER_ERROR(0, "Calling PopAppControl() too many times!");
         AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "overpop: PopAppControl with none pushed");
         return;
     }
 
-    ImGuiAppNodeBase* control = app->Controls.back();
-    app->Controls.pop_back();
+    ImGuiAppNodeBase* control = app->DisplayLayer->Controls.back();
+    app->DisplayLayer->Controls.pop_back();
     if (app->WAL != nullptr)
     {
         char dt[IM_LABEL_SIZE];
@@ -1014,10 +1024,13 @@ IMGUI_API ImGuiID GetAppCompositionID(const ImGuiApp* app)
         return 0;
 
     ImGuiID h = ImHashData(&app->Children.Size, sizeof(app->Children.Size), 0);
-    for (int i = 0; i < app->Windows.Size; i++)
-        h = ImHashStr(app->Windows.Data[i]->Label, 0, h);
-    for (int i = 0; i < app->Sidebars.Size; i++)
-        h = ImHashStr(app->Sidebars.Data[i]->Label, 0, h);
+    if (app->DisplayLayer != nullptr)
+    {
+        for (int i = 0; i < app->DisplayLayer->Windows.Size; i++)
+            h = ImHashStr(app->DisplayLayer->Windows.Data[i]->Label, 0, h);
+        for (int i = 0; i < app->DisplayLayer->Sidebars.Size; i++)
+            h = ImHashStr(app->DisplayLayer->Sidebars.Data[i]->Label, 0, h);
+    }
     ForEachAppNode(app, [&h](const ImGuiAppNodeBase* control, const ImGuiAppWindowBase* host)
                       {
         IM_UNUSED(host);
@@ -1172,10 +1185,11 @@ IMGUI_API void AppRegisterLayer(ImGuiApp* app, ImGuiAppLayerBase* layer, const c
 IMGUI_API void AppRegisterWindow(ImGuiApp* app, ImGuiAppWindowBase* window, const char* name)
 {
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push window %s", name);
+    IM_ASSERT(app->DisplayLayer != nullptr && "Push the Display layer before windows");
     if (window->Label[0] == 0) // default Label to the type name (the one labeling path: push formats, this tail stamps)
         ImStrncpy(window->Label, name, IM_ARRAYSIZE(window->Label));
-    AppDeduplicateItemLabel(window->Label, IM_ARRAYSIZE(window->Label), &app->Windows, &app->Sidebars);
-    app->Windows.push_back(window);
+    AppDeduplicateItemLabel(window->Label, IM_ARRAYSIZE(window->Label), &app->DisplayLayer->Windows, &app->DisplayLayer->Sidebars);
+    app->DisplayLayer->Windows.push_back(window);
     window->OnInitialize(app);
     window->OnAttach(app);
 }
@@ -1183,14 +1197,15 @@ IMGUI_API void AppRegisterWindow(ImGuiApp* app, ImGuiAppWindowBase* window, cons
 IMGUI_API void AppRegisterSidebar(ImGuiApp* app, ImGuiAppSidebarBase* sidebar, const char* name, ImGuiViewport* vp, ImGuiDir dir, float size, ImGuiWindowFlags flags)
 {
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Lifecycle, "push sidebar %s", name);
+    IM_ASSERT(app->DisplayLayer != nullptr && "Push the Display layer before sidebars");
     if (sidebar->Label[0] == 0) // default Label to the type name (the one labeling path: push formats, this tail stamps)
         ImStrncpy(sidebar->Label, name, IM_ARRAYSIZE(sidebar->Label));
-    AppDeduplicateItemLabel(sidebar->Label, IM_ARRAYSIZE(sidebar->Label), &app->Windows, &app->Sidebars);
+    AppDeduplicateItemLabel(sidebar->Label, IM_ARRAYSIZE(sidebar->Label), &app->DisplayLayer->Windows, &app->DisplayLayer->Sidebars);
     sidebar->Viewport = vp;
     sidebar->DockDir  = dir;
     sidebar->Size     = size;
     sidebar->Flags    = flags;
-    app->Sidebars.push_back(sidebar);
+    app->DisplayLayer->Sidebars.push_back(sidebar);
     sidebar->OnInitialize(app);
     sidebar->OnAttach(app);
 }

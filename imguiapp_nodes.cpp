@@ -8115,15 +8115,15 @@ static ImGuiAppDisplayNodeBase* AppGraphFindLiveItem(ImGuiApp* app, const ImGuiA
         return nullptr;
     if (n->Kind == ImGuiAppNodeKind_Window)
     {
-        for (int i = 0; i < app->Windows.Size; i++)
-            if (AppConstantHash(app->Windows.Data[i]->Label[0] ? app->Windows.Data[i]->Label : "Window") == n->LiveKey)
-                return app->Windows.Data[i];
+        for (int i = 0; i < app->DisplayLayer->Windows.Size; i++)
+            if (AppConstantHash(app->DisplayLayer->Windows.Data[i]->Label[0] ? app->DisplayLayer->Windows.Data[i]->Label : "Window") == n->LiveKey)
+                return app->DisplayLayer->Windows.Data[i];
     }
     else if (n->Kind == ImGuiAppNodeKind_Sidebar)
     {
-        for (int i = 0; i < app->Sidebars.Size; i++)
-            if (AppConstantHash(app->Sidebars.Data[i]->Label[0] ? app->Sidebars.Data[i]->Label : "Sidebar") + 1u == n->LiveKey)
-                return app->Sidebars.Data[i];
+        for (int i = 0; i < app->DisplayLayer->Sidebars.Size; i++)
+            if (AppConstantHash(app->DisplayLayer->Sidebars.Data[i]->Label[0] ? app->DisplayLayer->Sidebars.Data[i]->Label : "Sidebar") + 1u == n->LiveKey)
+                return app->DisplayLayer->Sidebars.Data[i];
     }
     else if (n->Kind == ImGuiAppNodeKind_Control)
     {
@@ -12170,7 +12170,7 @@ static void AppFloatLit(char* out, size_t out_size, float v)
 }
 
 // Emit the StyleMods/ColorMods fill lines for one just-pushed item; `expr` names the item (e.g.
-// "app->Windows.back()"). Emitted into SetupApp right after the push -- windows/sidebars/controls have no
+// "app->DisplayLayer->Windows.back()"). Emitted into SetupApp right after the push -- windows/sidebars/controls have no
 // generated classes, so bring-up is the one codegen site that can reach the runtime object.
 static void AppEmitStyleModLines(const ImGuiAppNode* n, const char* expr, const char* indent, ImGuiTextBuffer* out)
 {
@@ -12564,12 +12564,12 @@ void GenerateAppGraphCodeEx(const ImGuiAppGraph* g, ImGuiTextBuffer* out, ImVect
             char base[IM_LABEL_SIZE]; AppNodeBaseName(n, base, IM_ARRAYSIZE(base));
             out->appendf("  ImGui::PushAppWindow<%s>(app);\n", base);
             if (n->IsLive && n->Flags != 0)
-                out->appendf("  app->Windows.back()->Flags = (ImGuiWindowFlags)0x%X;\n", (unsigned)n->Flags);
+                out->appendf("  app->DisplayLayer->Windows.back()->Flags = (ImGuiWindowFlags)0x%X;\n", (unsigned)n->Flags);
             if (n->IsLive)
-                AppEmitLivePlacementLines(n, "app->Windows.back()", out);
-            AppEmitStyleModLines(n, "app->Windows.back()", "  ", out);
+                AppEmitLivePlacementLines(n, "app->DisplayLayer->Windows.back()", out);
+            AppEmitStyleModLines(n, "app->DisplayLayer->Windows.back()", "  ", out);
             if (AppGraphHasControl(g, n->Id))
-                out->appendf("  ImGuiAppWindowBase* win_%s = app->Windows.back();\n", base);   // name-based local: stable across import
+                out->appendf("  ImGuiAppWindowBase* win_%s = app->DisplayLayer->Windows.back();\n", base);   // name-based local: stable across import
             span(n->Id, begin);
         }
     }
@@ -12587,10 +12587,10 @@ void GenerateAppGraphCodeEx(const ImGuiAppGraph* g, ImGuiTextBuffer* out, ImVect
                 ImStrncpy(flags, "ImGuiWindowFlags_None", IM_ARRAYSIZE(flags));
             out->appendf("  ImGui::PushAppSidebar<%s>(app, vp, %s, %.1ff, %s);\n", base, AppDirEnumName(n->DockDir), n->DockSize, flags);
             if (n->IsLive)
-                AppEmitLivePlacementLines(n, "app->Sidebars.back()", out);
-            AppEmitStyleModLines(n, "app->Sidebars.back()", "  ", out);
+                AppEmitLivePlacementLines(n, "app->DisplayLayer->Sidebars.back()", out);
+            AppEmitStyleModLines(n, "app->DisplayLayer->Sidebars.back()", "  ", out);
             if (AppGraphHasControl(g, n->Id))
-                out->appendf("  ImGuiAppSidebarBase* sb_%s = app->Sidebars.back();\n", base);   // name-based local: stable across import
+                out->appendf("  ImGuiAppSidebarBase* sb_%s = app->DisplayLayer->Sidebars.back();\n", base);   // name-based local: stable across import
             span(n->Id, begin);
         }
     }
@@ -12623,7 +12623,7 @@ void GenerateAppGraphCodeEx(const ImGuiAppGraph* g, ImGuiTextBuffer* out, ImVect
         else
         {
             out->appendf("  ImGui::PushAppControl<%s>(app);\n", base);
-            AppEmitStyleModLines(n, "app->Controls.back()", "  ", out);
+            AppEmitStyleModLines(n, "app->DisplayLayer->Controls.back()", "  ", out);
         }
         span(n->Id, begin);
     }
@@ -12682,9 +12682,9 @@ void AppPreviewModuleCodeGenerate(const ImGuiAppGraph* g, ImGuiTextBuffer* out)
 
     // Locate a control's snapshottable storage entry by label (control -> data id -> entry).
     out->appendf("static ImGuiAppStorageEntry* ImGuiAppPreview_Entry(AppShell* app, const char* label)\n{\n");
-    out->appendf("  for (int i = 0; i < app->Controls.Size; i++)\n");
-    out->appendf("    if (strcmp(app->Controls[i]->Label, label) == 0)\n    {\n");
-    out->appendf("      ImGuiID id = app->Controls[i]->GetDataID();\n");
+    out->appendf("  for (int i = 0; i < app->DisplayLayer->Controls.Size; i++)\n");
+    out->appendf("    if (strcmp(app->DisplayLayer->Controls[i]->Label, label) == 0)\n    {\n");
+    out->appendf("      ImGuiID id = app->DisplayLayer->Controls[i]->GetDataID();\n");
     out->appendf("      for (int e = 0; e < app->StorageEntries.Size; e++)\n");
     out->appendf("        if (app->StorageEntries[e].ID == id) return &app->StorageEntries[e];\n");
     out->appendf("    }\n  return nullptr;\n}\n\n");
@@ -12833,14 +12833,14 @@ void AppNodeCodeGenerate(const ImGuiAppGraph* g, const ImGuiAppNode* n, ImGuiTex
             AppEmitLiveHostCode(n, out);
         out->appendf("// Window '%s' bring-up:\nImGui::PushAppWindow<%s>(app);\n", n->Draft.Name, base);
         if (n->IsLive && n->Flags != 0)
-            out->appendf("app->Windows.back()->Flags = (ImGuiWindowFlags)0x%X;\n", (unsigned)n->Flags);
+            out->appendf("app->DisplayLayer->Windows.back()->Flags = (ImGuiWindowFlags)0x%X;\n", (unsigned)n->Flags);
         if (n->IsLive && n->HasInitialPlacement)
         {
-            out->appendf("app->Windows.back()->HasInitialPlacement = true;\n");
-            out->appendf("app->Windows.back()->InitialPos = ImVec2(%.1ff, %.1ff);\n", n->InitialPos.x, n->InitialPos.y);
-            out->appendf("app->Windows.back()->InitialSize = ImVec2(%.1ff, %.1ff);\n", n->InitialSize.x, n->InitialSize.y);
+            out->appendf("app->DisplayLayer->Windows.back()->HasInitialPlacement = true;\n");
+            out->appendf("app->DisplayLayer->Windows.back()->InitialPos = ImVec2(%.1ff, %.1ff);\n", n->InitialPos.x, n->InitialPos.y);
+            out->appendf("app->DisplayLayer->Windows.back()->InitialSize = ImVec2(%.1ff, %.1ff);\n", n->InitialSize.x, n->InitialSize.y);
         }
-        AppEmitStyleModLines(n, "app->Windows.back()", "", out);
+        AppEmitStyleModLines(n, "app->DisplayLayer->Windows.back()", "", out);
         break;
     }
     case ImGuiAppNodeKind_Sidebar:
@@ -12856,11 +12856,11 @@ void AppNodeCodeGenerate(const ImGuiAppGraph* g, const ImGuiAppNode* n, ImGuiTex
         out->appendf("// Sidebar '%s' bring-up:\nImGui::PushAppSidebar<%s>(app, vp, %s, %.1ff, %s);\n", n->Draft.Name, base, AppDirEnumName(n->DockDir), n->DockSize, flags);
         if (n->IsLive && n->HasInitialPlacement)
         {
-            out->appendf("app->Sidebars.back()->HasInitialPlacement = true;\n");
-            out->appendf("app->Sidebars.back()->InitialPos = ImVec2(%.1ff, %.1ff);\n", n->InitialPos.x, n->InitialPos.y);
-            out->appendf("app->Sidebars.back()->InitialSize = ImVec2(%.1ff, %.1ff);\n", n->InitialSize.x, n->InitialSize.y);
+            out->appendf("app->DisplayLayer->Sidebars.back()->HasInitialPlacement = true;\n");
+            out->appendf("app->DisplayLayer->Sidebars.back()->InitialPos = ImVec2(%.1ff, %.1ff);\n", n->InitialPos.x, n->InitialPos.y);
+            out->appendf("app->DisplayLayer->Sidebars.back()->InitialSize = ImVec2(%.1ff, %.1ff);\n", n->InitialSize.x, n->InitialSize.y);
         }
-        AppEmitStyleModLines(n, "app->Sidebars.back()", "", out);
+        AppEmitStyleModLines(n, "app->DisplayLayer->Sidebars.back()", "", out);
         break;
     }
     case ImGuiAppNodeKind_Struct:
@@ -14980,9 +14980,9 @@ void BuildAppLiveGraph(const ImGuiApp* app, ImGuiAppGraph* g)
     }
     // Windows / Sidebars: keyed by their unique Label. Each hosts its own controls (window->Children), mirrored
     // right after the host so a live containment edge (control -> host) can be built below.
-    for (int i = 0; i < app->Windows.Size; i++)
+    for (int i = 0; i < app->DisplayLayer->Windows.Size; i++)
     {
-        const ImGuiAppWindowBase* win = app->Windows.Data[i];
+        const ImGuiAppWindowBase* win = app->DisplayLayer->Windows.Data[i];
         const char* lbl = win->Label;
         ImGuiID key = AppConstantHash(lbl[0] ? lbl : "Window");
         ImGuiAppLiveWant w; w.Kind = ImGuiAppNodeKind_Window; w.Key = key;
@@ -14995,9 +14995,9 @@ void BuildAppLiveGraph(const ImGuiApp* app, ImGuiAppGraph* g)
         for (int c = 0; c < win->Children.Size; c++)
             PushControlWant(win->Children.Data[c], key);
     }
-    for (int i = 0; i < app->Sidebars.Size; i++)
+    for (int i = 0; i < app->DisplayLayer->Sidebars.Size; i++)
     {
-        const ImGuiAppSidebarBase* sb = app->Sidebars.Data[i];
+        const ImGuiAppSidebarBase* sb = app->DisplayLayer->Sidebars.Data[i];
         const char* lbl = sb->Label;
         ImGuiID key = AppConstantHash(lbl[0] ? lbl : "Sidebar") + 1u;
         ImGuiAppLiveWant w; w.Kind = ImGuiAppNodeKind_Sidebar; w.Key = key;
@@ -15011,8 +15011,8 @@ void BuildAppLiveGraph(const ImGuiApp* app, ImGuiAppGraph* g)
             PushControlWant(sb->Children.Data[c], key);
     }
     // App-level controls: keyed by runtime PersistData id; carry their dependency ids for edge discovery.
-    for (int c = 0; c < app->Controls.Size; c++)
-        PushControlWant(app->Controls.Data[c], 0);
+    for (int c = 0; c < app->DisplayLayer->Controls.Size; c++)
+        PushControlWant(app->DisplayLayer->Controls.Data[c], 0);
 
     // 2) Remove live nodes whose key is no longer wanted (collect ids first; removal mutates g->Nodes).
     ImVector<int> stale;
