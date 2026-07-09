@@ -553,16 +553,6 @@ void ImGuiAppStatusLayer::OnDraw(const ImGuiApp* app) const
         ImGui::Text("App: %s", app_platform);
         ImGui::Text("Platform: %s", imgui_platform);
         ImGui::Text("Renderer: %s", renderer);
-
-        // Frame timings (captured by UpdateApp/RenderApp; layers at or after this one show last frame's draw).
-        ImGui::Separator();
-        ImGui::Text("%.0f fps | data-node walk %.3f ms", io.Framerate, app->UpdateWalkSec * 1000.0);
-        for (int i = 0; i < app->Layers.Size; i++)
-        {
-            const double u = i < app->LayerUpdateSec.Size ? app->LayerUpdateSec.Data[i] : 0.0;
-            const double d = i < app->LayerDrawSec.Size ? app->LayerDrawSec.Data[i] : 0.0;
-            ImGui::Text("%s: update %.3f ms, draw %.3f ms", app->Layers.Data[i]->Label, u * 1000.0, d * 1000.0);
-        }
     }
     ImGui::End();
 }

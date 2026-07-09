@@ -4357,6 +4357,31 @@ static ImU32 AppLayerAccent(ImGuiAppLayerType t)
     }
 }
 
+// Runtime stack index of the layer a layer node represents: core phases sit at their enum position
+// (the InitializeApp order BuildAppLiveGraph keys by), custom layers match by label. -1 = not running.
+static int AppLiveLayerIndex(const ImGuiApp* app, const ImGuiAppNode* n)
+{
+    if (app == nullptr || n->Kind != ImGuiAppNodeKind_Layer)
+        return -1;
+    if (n->LayerType != ImGuiAppLayerType_Custom)
+        return (int)n->LayerType < app->Layers.Size ? (int)n->LayerType : -1;
+    for (int i = 0; i < app->Layers.Size; i++)
+        if (strcmp(app->Layers.Data[i]->Label, n->Draft.Name) == 0)
+            return i;
+    return -1;
+}
+
+// The layer node's live frame cost, one muted line (blank when no live app or the layer is not
+// running). The layer IS a node: its measured phase time is that node's observable, mirrored where
+// the node renders -- not published on the Status layer (that channel is the APP's outward status).
+static void AppLayerTimingLine(const ImGuiApp* app, const ImGuiAppNode* n)
+{
+    const int idx = AppLiveLayerIndex(app, n);
+    if (idx < 0 || idx >= app->LayerUpdateSec.Size || idx >= app->LayerDrawSec.Size)
+        return;
+    TextDisabled(ICON_FA_STOPWATCH "  update %.3f ms, draw %.3f ms", app->LayerUpdateSec.Data[idx] * 1000.0, app->LayerDrawSec.Data[idx] * 1000.0);
+}
+
 // Font Awesome glyph per node kind (kind-only; layers get a generic layer-group glyph here).
 static const char* AppKindIcon(ImGuiAppNodeKind k)
 {
@@ -6106,6 +6131,8 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
             PopStyleColor();
             SameLine();
             TextDisabled("%s", AppLayerRole(lt));
+            if (g->LiveApp != nullptr)
+                AppLayerTimingLine(g->LiveApp, n);   // this node's measured phase cost, live-mirrored onto its card
 
             // Build-onto affordances: each foundation layer offers what you can build on top of it (the builder flow).
             // Shown even on a live foundation layer -- the pills AUTHOR new design nodes, they don't edit the layer.
@@ -8470,6 +8497,13 @@ void EditAppNodeInspectorEx(ImGuiAppGraph* g, int node_id, ImGuiApp* live_app)
     }
     case ImGuiAppNodeKind_Layer:
         TextDisabled("Layer: %s", AppLayerTypeName(n->LayerType));
+        if (live_app != nullptr)
+            AppLayerTimingLine(live_app, n);
+        break;
+    case ImGuiAppNodeKind_App:
+        // The dependency-sorted data-node walk is the root's update phase (D4/N3): its cost is the App node's.
+        if (live_app != nullptr)
+            TextDisabled(ICON_FA_STOPWATCH "  data-node walk %.3f ms", live_app->UpdateWalkSec * 1000.0);
         break;
     case ImGuiAppNodeKind_Op:
         TextDisabled("Op: %s  (%d operand%s -> result)", n->TypeName[0] ? n->TypeName : "?",
