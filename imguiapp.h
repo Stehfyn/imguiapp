@@ -869,6 +869,17 @@ struct ImGuiAppLayerBase : ImGuiAppNodeBase
     virtual void OnDraw(const ImGuiApp*) const = 0;
 };
 
+// How the display layer seats a hosted node's draw (N5): inline in the host's flow, or bracketed in
+// its own child window (a real clipping/scrolling region keyed by the node's label).
+typedef int ImGuiAppChildSizing;   // -> enum ImGuiAppChildSizing_
+enum ImGuiAppChildSizing_
+{
+    ImGuiAppChildSizing_Inline = 0,   // draw in the host's flow (no child window)
+    ImGuiAppChildSizing_Auto,         // child window, height fit to content
+    ImGuiAppChildSizing_Fill,         // child window, remaining height minus ChildHeight (0 = all of it)
+    ImGuiAppChildSizing_Fixed,        // child window, exactly ChildHeight pixels
+};
+
 // A display node: submits ImGui widgets during the draw phase. The display layer brackets each
 // node's submission with the authored style/color overrides below via ImGui::PushAppStyleMods/
 // PushAppColorMods + the matching Pop (imgui idiom: explicit push/pop around submission). Plain
@@ -877,6 +888,10 @@ struct ImGuiAppDisplayNodeBase : ImGuiAppNodeBase
 {
     ImVector<ImGuiAppStyleModDesc> StyleMods;
     ImVector<ImGuiAppColorModDesc> ColorMods;
+
+    // Hosted child-window slot (N5): the display layer's draw bracket for this node inside its host.
+    ImGuiAppChildSizing ChildSizing = ImGuiAppChildSizing_Inline;
+    float               ChildHeight = 0.0f;   // Fill: pixels reserved below; Fixed: the height
 
     virtual void OnDraw(const ImGuiApp*) const = 0;
 };

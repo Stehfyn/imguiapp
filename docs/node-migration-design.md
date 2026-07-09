@@ -91,11 +91,16 @@ kinds — so the mirror becomes an isomorphism instead of a translation.
   OnPoll name and its render-phase seat are now pinned (was an open question). IMGUIAPP_PREVIEW_ABI
   bumped; goldens regenerated.
 
+- **N5** — child windows. A hosted control is the display layer's child-window node: its draw seat
+  inside the host is `ImGuiAppChildSizing` on the display node base — Inline (default, the host's
+  flow; complex hosts like the demo Composer lay their hosted controls out themselves), or a real
+  child window (Auto fit / Fill remaining / Fixed height, keyed by the node's label; Auto uses
+  AlwaysAutoResize so OnDraw records TempData every presented frame). The sidebar quirk is dead:
+  sidebar-hosted controls render INSIDE the sidebar's Begin/End — containment means inside; the
+  outside-render served pre-N4 self-windowed free controls. `ImGuiAppSidebarBase : ImGuiAppWindowBase`
+  survives (Kind discriminates). IMGUIAPP_PREVIEW_ABI bumped.
+
 ## Phases (each lands green: build + 7 ctest suites incl. style/section/indent ratchets)
-- **N5 — child windows.** Window/sidebar-hosted controls become the display layer's child-window
-  node kind. Resolve the sidebar quirk: sidebar-hosted controls currently render their own
-  windows OUTSIDE the sidebar's Begin/End (imguiapp.cpp:747) — decide whether that stays a
-  sidebar-child contract or becomes plain windows.
 - **N6 — Composer parity.** Mirror recursion over Children, scene-hierarchy tree from the real
   node tree, round-trip + prefabs over the new kinds.
 

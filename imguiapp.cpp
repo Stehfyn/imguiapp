@@ -733,6 +733,35 @@ void ImGuiAppDisplayLayer::OnUpdate(ImGuiApp* app, float dt) const
             node->OnUpdate(app, dt);
 }
 
+// A hosted control's display slot inside its host's Begin/End (N5): inline in the host's flow by
+// default, or its own child window per the node's ChildSizing (a real clipping/scrolling region
+// keyed by the node's label). Auto uses AlwaysAutoResize: the child must measure (and OnDraw must
+// record TempData) every frame its host presents -- a plain auto-resize child returns false until
+// content is measured, which OnDraw itself produces.
+static void AppDrawChildWindow(const ImGuiApp* app, ImGuiAppDisplayNodeBase* control)
+{
+    const ImGuiAppStyleScope control_scope = PushItemStyle(control);
+    if (control->ChildSizing == ImGuiAppChildSizing_Inline)
+    {
+        control->OnDraw(app);
+    }
+    else
+    {
+        ImVec2 size(0.0f, 0.0f);
+        ImGuiChildFlags flags = ImGuiChildFlags_None;
+        if (control->ChildSizing == ImGuiAppChildSizing_Auto)
+            flags = ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysAutoResize;
+        else if (control->ChildSizing == ImGuiAppChildSizing_Fill)
+            size.y = -control->ChildHeight;
+        else if (control->ChildSizing == ImGuiAppChildSizing_Fixed)
+            size.y = control->ChildHeight;
+        if (ImGui::BeginChild(control->Label, size, flags))
+            control->OnDraw(app);
+        ImGui::EndChild();
+    }
+    PopItemStyle(control_scope);
+}
+
 void ImGuiAppDisplayLayer::OnDraw(const ImGuiApp* app) const
 {
     // Kind-phased passes over the generic Children: all sidebars, then all windows (draw order is
@@ -764,6 +793,11 @@ void ImGuiAppDisplayLayer::OnDraw(const ImGuiApp* app) const
             sidebar->Open = true;
             sidebar->Window = ImGui::GetCurrentWindow();
             sidebar->OnDraw(app);
+
+            // Hosted controls render INSIDE the sidebar, each in its own child window (N5): containment
+            // means inside -- the pre-N5 outside-the-Begin/End quirk served self-windowed free controls.
+            for (ImGuiAppDisplayNodeBase* control : sidebar->Children)
+                AppDrawChildWindow(app, control);
         }
         else
         {
@@ -772,14 +806,6 @@ void ImGuiAppDisplayLayer::OnDraw(const ImGuiApp* app) const
         ImGui::End();
 
         PopItemStyle(sidebar_scope);
-
-        // Controls render their own windows; submit them outside the sidebar's Begin/End.
-        for (ImGuiAppDisplayNodeBase* control : sidebar->Children)
-        {
-            const ImGuiAppStyleScope control_scope = PushItemStyle(control);
-            control->OnDraw(app);
-            PopItemStyle(control_scope);
-        }
     }
 
     for (ImGuiAppNodeBase* node : Children)
@@ -818,14 +844,9 @@ void ImGuiAppDisplayLayer::OnDraw(const ImGuiApp* app) const
             window->Window = ImGui::GetCurrentWindow();
             window->OnDraw(app);
 
-            // Hosted controls render INSIDE the host window (child regions, not their own Begin/End).
-            // Style mods bracket OnDraw only: they style the control's region but not its popups.
+            // Hosted controls render INSIDE the host window, each in its own child window (N5).
             for (ImGuiAppDisplayNodeBase* control : window->Children)
-            {
-                const ImGuiAppStyleScope control_scope = PushItemStyle(control);
-                control->OnDraw(app);
-                PopItemStyle(control_scope);
-            }
+                AppDrawChildWindow(app, control);
         }
         ImGui::End();
 
