@@ -7,7 +7,7 @@
 //  [X] Platform: never-resized desktop-sized swapchain; smooth resize via WM_NCCALCSIZE repaint + restart/no-sequence present ladder.
 //  [X] Multi-viewport: per-viewport DirectComposition swapchains + DComp targets; pacing-aware per-viewport present skip.
 //  [X] AV: synchronous staging-texture CaptureFrame (CopySubresourceRegion + Map; stalls the pipeline).
-//  [X] Platform: canonical D2D caption chrome (min/max/close + light/dark, Segoe MDL2 glyph runs), self-hosted on the client seams; opt out via InitInfo::NoChrome.
+//  [X] Platform: canonical D2D caption chrome (min/max/close + light/dark, Segoe Fluent Icons / MDL2 cached text layouts), self-hosted on the client seams; opt out via InitInfo::NoChrome.
 // Missing features:
 //  [ ] Headless modes (use win32-vulkan).
 
@@ -36,7 +36,11 @@ enum ImGuiApp_ImplWin32D2DDXGI_PresentMode
 // Client draw hooks around the imgui pass (reference: SetDevicePreDrawCallback/SetDeviceDrawCallback).
 typedef void (*ImGuiApp_ImplWin32D2DDXGI_DeviceDrawCallback)(ImGuiApp* app);
 // WM_NCHITTEST override: screen coords; return an HT* code, or -1 for the default immersive hittest.
+// Button codes (HTCLOSE/HTMINBUTTON/HTMAXBUTTON/HTLIGHTDARK) enter the WndProc's capture-tracked press
+// flow: press captures the mouse, release on the same button commits the action (Win32X dwmframex_v2).
 typedef int (*ImGuiApp_ImplWin32D2DDXGI_NCHitTestCallback)(ImGuiApp* app, int x, int y);
+// Hittest code for the chrome's light/dark caption button (Win32X HTLIGHTDARKBTN; outside the HT* range).
+#define IMGUIAPP_WIN32D2DDXGI_HTLIGHTDARK (0xB002)
 
 // Initialization data for ImGuiApp_ImplWin32D2DDXGI_Init().
 // Zero-clear = the canonical ImmersiveWindow.c behavior on every field.
@@ -97,10 +101,10 @@ IMGUI_API int  ImGuiApp_ImplWin32D2DDXGI_GetCaptionHeight(ImGuiApp* app); // cur
 // paces the app to the primary monitor's refresh rate out of the box.
 IMGUI_API const ImGuiAppPacerFuncs* ImGuiApp_ImplWin32D2DDXGI_GetPacerFuncs();
 
-// (Optional) The reference's D2D caption chrome (min/max/close + light/dark buttons, Segoe MDL2 glyph runs),
-// transcribed verbatim and self-hosted on this backend's own client seams (SetDeviceDrawCallback +
-// SetNCHitTestCallback -- installing your own callbacks displaces the chrome's). Init installs it by
-// default (InitInfo::NoChrome opts out); the caption light/dark button drives the uxtheme ladder.
+// (Optional) The D2D caption chrome (min/max/close + light/dark buttons; Win32X dwmframex_v2 glyphs,
+// hittest, and cached-text-layout positioning), self-hosted on this backend's own client seams
+// (SetDeviceDrawCallback + SetNCHitTestCallback -- installing your own callbacks displaces the chrome's).
+// Init installs it by default (InitInfo::NoChrome opts out); the light/dark button drives the uxtheme ladder.
 IMGUI_API bool ImGuiApp_ImplWin32D2DDXGI_InstallChrome(ImGuiApp* app);
 IMGUI_API void ImGuiApp_ImplWin32D2DDXGI_UninstallChrome(ImGuiApp* app);
 IMGUI_API bool ImGuiApp_ImplWin32D2DDXGI_GetChromeLightMode(ImGuiApp* app); // the caption light/dark toggle's current state (true = light)

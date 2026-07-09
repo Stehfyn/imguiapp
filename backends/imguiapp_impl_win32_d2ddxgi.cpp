@@ -7,7 +7,7 @@
 //  [X] Platform: never-resized desktop-sized swapchain; smooth resize via WM_NCCALCSIZE repaint + restart/no-sequence present ladder.
 //  [X] Multi-viewport: per-viewport DirectComposition swapchains + DComp targets; pacing-aware per-viewport present skip.
 //  [X] AV: synchronous staging-texture CaptureFrame (CopySubresourceRegion + Map; stalls the pipeline).
-//  [X] Platform: canonical D2D caption chrome (min/max/close + light/dark, Segoe MDL2 glyph runs), self-hosted on the client seams; opt out via InitInfo::NoChrome.
+//  [X] Platform: canonical D2D caption chrome (min/max/close + light/dark, Segoe Fluent Icons / MDL2 cached text layouts), self-hosted on the client seams; opt out via InitInfo::NoChrome.
 // Missing features:
 //  [ ] Headless modes (use win32-vulkan).
 
@@ -25,6 +25,7 @@
 
 // CHANGELOG
 // (minor and older changes stripped away, please see git history for details)
+//  2026-07-09: Platform: chrome conformed to Win32X dwmframex_v2 -- canonical glyph set (ChromeMinimize/Maximize/Restore/Close 0xE921-3/0xE8BB, light/dark 0xE706/0xE708) from Segoe Fluent Icons (MDL2 fallback) drawn as cached centered IDWriteTextLayouts; client-space hittest (buttons beat the top resize strip, HTLIGHTDARK replaces the HTMENU hack); capture-tracked button presses (press captures, release on the same button commits).
 //  2026-07-08: Platform: vblank pace thread -- posts coalesced refresh-rate ticks to the main window while a modal loop is live, so size/move/menu loops repaint at the monitor's refresh rate instead of the WM_TIMER ~64Hz floor (the timer stays as fallback).
 //  2026-07-08: Platform: default pacer platform seam (QPC clock, hybrid wait, per-monitor refresh queries) installed by InitPlatform when the client provided none -- ImGuiAppPacerMode_Target + TargetHz <= 0 now paces to the primary monitor's refresh rate; the run loop's canonical idle throttle defers to an active pacer.
 //  2026-07-08: Platform: opt-in dirty-rect presentation (InitInfo::PresentDirtyRects): FLIP_SEQUENTIAL swapchains + Present1 declaring the client rect as the only damage over the over-allocated buffers; full-frame present after every (re)creation per DXGI rules. See docs/dxgi-noflicker.md.
@@ -52,7 +53,7 @@
 #include <dcomp.h>    // DCompositionCreateDevice, IDCompositionDevice/Target/Visual
 #include <dwmapi.h>   // DwmExtendFrameIntoClientArea, DwmEnableBlurBehindWindow, DwmSetWindowAttribute, DwmFlush
 #include <uxtheme.h>  // SetWindowTheme
-#include <dwrite.h>   // DWriteCreateFactory, IDWriteFontFace::GetGlyphIndices (caption chrome glyphs)
+#include <dwrite.h>   // DWriteCreateFactory, IDWriteFactory::CreateTextFormat/CreateTextLayout (caption chrome glyphs)
 
 #ifdef _MSC_VER
 #pragma comment(lib, "d3d11")
@@ -198,6 +199,7 @@ struct ImGuiApp_ImplWin32D2DDXGI_Data
     // WndProc frame state
     bool Moving;                            // WM_MOVING seen since the last WM_ENTERSIZEMOVE
     bool Resizing;                          // WM_SIZING seen since the last WM_ENTERSIZEMOVE
+    int  NCPressedHit;                      // caption-button HT* code held by a capture-tracked press (Win32X xxxTrackCaptionButton); 0 = none
     bool InModalRepaint;                    // re-entrancy latch for the WndProc-driven repaint paths
     bool InFrame;                           // a frame is on the stack (NewFrame..PresentFrame): viewport create/destroy
                                             // inside it sends WM_WINDOWPOSCHANGED/WM_ACTIVATE synchronously to the main
@@ -296,23 +298,6 @@ static void ImGuiApp_ImplWin32D2DDXGI_GetWindowBorders(HWND hwnd, SIZE* out_size
     const LONG cxy_padding = ::GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
     out_size->cx = cx_frame + cxy_padding;
     out_size->cy = cy_frame + cxy_padding;
-}
-
-// Caption strip in SCREEN coords (like the reference: window rect inset by the borders, CaptionHeight tall).
-static bool ImGuiApp_ImplWin32D2DDXGI_GetCaptionRect(HWND hwnd, int caption_height, RECT* out_rect)
-{
-    const UINT dpi    = ::GetDpiForWindow(hwnd);
-    const int  height = ::MulDiv(caption_height, (int)dpi, 96);
-    if (!::GetWindowRect(hwnd, out_rect))
-        return false;
-    SIZE border;
-    ImGuiApp_ImplWin32D2DDXGI_GetWindowBorders(hwnd, &border);
-    const BOOL maximized = ::IsZoomed(hwnd);
-    out_rect->top    += (border.cy * !maximized);
-    out_rect->left   += (border.cx * !maximized);
-    out_rect->right  -= (border.cx * !maximized);
-    out_rect->bottom  = out_rect->top + height;
-    return true;
 }
 
 static void ImGuiApp_ImplWin32D2DDXGI_EnableBlurBehind(HWND hwnd)
@@ -1081,37 +1066,63 @@ void ImGuiApp_ImplWin32D2DDXGI_PresentFrame(ImGuiApp* app, const ImGuiAppFrameCo
 
 // Default immersive hittest: resize borders from the reference's clamp arithmetic, then the caption strip.
 // Button sub-rects are the client's business (imgui draws the caption widgets; override via the callback).
+// Win32X dwmframex_v2 DwfHitTest shape, in CLIENT coords: 3x3 resize ring from the window borders
+// (left/right/bottom borders sit OUTSIDE the client rect -- WM_NCCALCSIZE insets them; the top border
+// rides INSIDE it), then the caption strip, then client.
 static LRESULT ImGuiApp_ImplWin32D2DDXGI_DefaultNCHitTest(ImGuiApp_ImplWin32D2DDXGI_Data* bd, HWND hwnd, int x, int y)
 {
-    SIZE border;
-    ImGuiApp_ImplWin32D2DDXGI_GetWindowBorders(hwnd, &border);
-    const BOOL maximized = ::IsZoomed(hwnd);
-    const POINT cursor = { (LONG)x, (LONG)y + (!maximized * border.cy) + (-1 * !maximized) };
-    RECT rc = {};
-    ::GetWindowRect(hwnd, &rc);
-    const int hit_left   = (cursor.x >= rc.left && cursor.x <= rc.left + ((border.cx + 5) * !maximized)) ? 1 : 0;
-    const int hit_top    = (cursor.y >= rc.top - 2 && cursor.y <= rc.top + ((border.cy + 5) * !maximized)) ? 2 : 0;
-    const int hit_right  = (cursor.x >= rc.right - ((border.cx + 5) * !maximized) && cursor.x <= rc.right) ? 4 : 0;
-    const int hit_bottom = (cursor.y >= rc.bottom - 5 && cursor.y <= rc.bottom + border.cy) ? 8 : 0;
-    switch (hit_left | hit_top | hit_right | hit_bottom)
+    POINT pt = { (LONG)x, (LONG)y };
+    ::ScreenToClient(hwnd, &pt);
+    RECT client = {};
+    ::GetClientRect(hwnd, &client);
+    const bool maximized = ::IsZoomed(hwnd) != FALSE;
+    const bool sizable   = (::GetWindowLongPtr(hwnd, GWL_STYLE) & WS_THICKFRAME) != 0 && !maximized;
+    if (sizable)
     {
-    case 1:     return HTLEFT;
-    case 4:     return HTRIGHT;
-    case 8:     return HTBOTTOM;
-    case 2 | 1: return HTTOPLEFT;
-    case 2 | 4: return HTTOPRIGHT;
-    case 8 | 1: return HTBOTTOMLEFT;
-    case 8 | 4: return HTBOTTOMRIGHT;
-    case 2:     return HTTOP;
-    case 0:
+        SIZE border;
+        ImGuiApp_ImplWin32D2DDXGI_GetWindowBorders(hwnd, &border);
+        int row = 1, col = 1;
+        if (pt.y < border.cy)             row = 0;
+        else if (pt.y >= client.bottom)   row = 2;
+        if (pt.x < 0)                     col = 0;
+        else if (pt.x >= client.right)    col = 2;
+        if (row == 0) return col == 0 ? HTTOPLEFT    : col == 2 ? HTTOPRIGHT    : HTTOP;
+        if (row == 2) return col == 0 ? HTBOTTOMLEFT : col == 2 ? HTBOTTOMRIGHT : HTBOTTOM;
+        if (col == 0) return HTLEFT;
+        if (col == 2) return HTRIGHT;
+    }
+    const int caption = ::MulDiv(bd != nullptr ? bd->CaptionHeight : 30, (int)::GetDpiForWindow(hwnd), 96);
+    if (pt.y < caption)
+        return HTCAPTION;
+    return HTCLIENT;
+}
+
+// The WM_NCHITTEST resolution order (client callback seam, then the default), reused by the
+// capture-tracked press flow to re-test the hit at a screen point.
+static int ImGuiApp_ImplWin32D2DDXGI_NCHitTestAt(ImGuiApp* app, ImGuiApp_ImplWin32D2DDXGI_Data* bd, HWND hwnd, int x, int y)
+{
+    if (bd != nullptr && bd->NCHitTestCallback != nullptr)
     {
-        RECT caption;
-        if (ImGuiApp_ImplWin32D2DDXGI_GetCaptionRect(hwnd, bd != nullptr ? bd->CaptionHeight : 30, &caption) && ::PtInRect(&caption, cursor))
-            return HTCAPTION;
-        return HTCLIENT;
+        const int hit = bd->NCHitTestCallback(app, x, y);
+        if (hit != -1)
+            return hit;
     }
-    default:    return HTNOWHERE;
-    }
+    return (int)ImGuiApp_ImplWin32D2DDXGI_DefaultNCHitTest(bd, hwnd, x, y);
+}
+
+// Caption-button press start (Win32X xxxTrackCaptionButton shape): a button hit captures the mouse;
+// WM_MOUSEMOVE re-tests the hit while captured and WM_LBUTTONUP commits only if the release lands on
+// the pressed button. DefWindowProc never sees the press (HTCLOSE would get the classic NC button
+// behavior; the old HTMENU light/dark code entered a menu loop).
+static bool ImGuiApp_ImplWin32D2DDXGI_NCButtonPress(ImGuiApp_ImplWin32D2DDXGI_Data* bd, HWND hwnd, WPARAM hit)
+{
+    if (bd == nullptr)
+        return false;
+    if (hit != HTCLOSE && hit != HTMINBUTTON && hit != HTMAXBUTTON && hit != IMGUIAPP_WIN32D2DDXGI_HTLIGHTDARK)
+        return false;
+    bd->NCPressedHit = (int)hit;
+    ::SetCapture(hwnd);
+    return true;
 }
 
 //--------------------------------------------------------------------------------------------------------
@@ -1120,25 +1131,19 @@ static LRESULT ImGuiApp_ImplWin32D2DDXGI_DefaultNCHitTest(ImGuiApp_ImplWin32D2DD
 // through the same public setters any client would use.
 //--------------------------------------------------------------------------------------------------------
 
-// Segoe MDL2 Assets codepoints + the glyph-index-array slots the reference draws from.
-#define CP_MDL2_SETTINGS1  (0xE115)
-#define CP_MDL2_SETTINGS2  (0xE713)
-#define CP_MDL2_SETTINGS3  (0xF8B0)
-#define CP_MDL2_LIGHTMODE1 (0xE706)
-#define CP_MDL2_LIGHTMODE2 (0xED39)
-#define CP_MDL2_DARKMODE1  (0xE708)
-#define CP_MDL2_DARKMODE2  (0xEC46)
-#define CP_MDL2_DARKMODE3  (0xF0CE)
-#define CP_MDL2_LIGHTDARK1 (0xE793)
-#define CP_MDL2_LIGHTDARK2 (0xF08C)
-#define CP_MDL2_MINIMIZE   (0xE921)
-#define CP_MDL2_MAXIMIZE   (0xE922)
-#define CP_MDL2_RESTORE    (0xE923)
-#define CP_MDL2_CLOSE      (0xE947)
-#define CP_MDL2_FEEDBACK   (0xED15)
-#define CP_SYM_LIGHTMODE   (0x263C)
-#define CP_SYM_DARKMODE    (0xE28C)
-#define CP_SYM_LIGHTMODE2  (0xE706)
+// The canonical caption glyph set (Win32X dwmframex_v2 g_dwfGlyphCp): Segoe Fluent Icons / Segoe MDL2
+// Assets codepoints. Light mode shows QuietHours (moon), dark mode Brightness (sun) -- v1/v2 parity.
+enum ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph
+{
+    ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_QuietHours = 0,   // 0xE708: light/dark button in light mode
+    ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_Brightness,       // 0xE706: light/dark button in dark mode
+    ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_Minimize,         // 0xE921 ChromeMinimize
+    ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_Maximize,         // 0xE922 ChromeMaximize
+    ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_Restore,          // 0xE923 ChromeRestore
+    ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_Close,            // 0xE8BB ChromeClose
+    ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_COUNT,
+};
+static const WCHAR IMGUIAPP_WIN32D2DDXGI_CHROME_GLYPHS[ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_COUNT] = { 0xE708, 0xE706, 0xE921, 0xE922, 0xE923, 0xE8BB };
 
 // The reference's CAPTIONBUTTON hot-tracking states (only the drawn buttons kept).
 enum ImGuiApp_ImplWin32D2DDXGI_CaptionButton
@@ -1154,17 +1159,9 @@ enum ImGuiApp_ImplWin32D2DDXGI_CaptionButton
 struct ImGuiApp_ImplWin32D2DDXGI_ChromeData
 {
     IDWriteFactory*        DWriteFactory;
-    IDWriteFontCollection* FontCollection;
-    IDWriteFontFamily*     FontFamily;       // "Segoe MDL2 Assets"
-    IDWriteFont*           Font;
-    IDWriteFontFace*       FontFace;
-    IDWriteFontFamily*     FontFamily2;      // "Segoe UI Symbol" (created like the reference; the light/dark glyphs draw from MDL2)
-    IDWriteFont*           Font2;
-    IDWriteFontFace*       FontFace2;
-    UINT32                 CodePointsMDL2[15];
-    UINT16                 GlyphIndicesMDL2[15];
-    UINT32                 CodePointsSym[3];
-    UINT16                 GlyphIndicesSym[3];
+    IDWriteTextFormat*     IconFormat;       // Segoe Fluent Icons / MDL2 fallback, centered both ways (Win32X DwfCreateIconFormat)
+    IDWriteTextLayout*     GlyphLayouts[ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_COUNT]; // one cached layout per glyph, box = button cell
+    UINT                   GlyphLayoutDpi;   // dpi the format + layouts were built at; a mismatch rebuilds them
     ID2D1SolidColorBrush*  Brush;            // light-mode surface / dark-mode text
     ID2D1SolidColorBrush*  RedBrush;         // close-button hot
     ID2D1SolidColorBrush*  BlackBrush;       // dark-mode surface / light-mode text
@@ -1180,23 +1177,14 @@ struct ImGuiApp_ImplWin32D2DDXGI_ChromeData
     ImGuiApp_ImplWin32D2DDXGI_ChromeData() { memset((void*)this, 0, sizeof(*this)); }
 };
 
-static inline int  ImGuiApp_ImplWin32D2DDXGI_RectWidth(const RECT& rc)  { return labs(rc.right - rc.left); }
-static inline int  ImGuiApp_ImplWin32D2DDXGI_RectHeight(const RECT& rc) { return labs(rc.bottom - rc.top); }
-static inline void ImGuiApp_ImplWin32D2DDXGI_RectToLogical(RECT* rc)    { rc->right = ImGuiApp_ImplWin32D2DDXGI_RectWidth(*rc); rc->bottom = ImGuiApp_ImplWin32D2DDXGI_RectHeight(*rc); rc->left = 0; rc->top = 0; }
-static inline D2D1_RECT_F ImGuiApp_ImplWin32D2DDXGI_RectToRectF(const RECT& rc) { return D2D1::RectF((FLOAT)rc.left, (FLOAT)rc.top, (FLOAT)rc.right, (FLOAT)rc.bottom); }
-static inline FLOAT ImGuiApp_ImplWin32D2DDXGI_Roundf(FLOAT f)           { return (FLOAT)((INT)f > (INT)(f + 0.5f) ? (INT)f : (INT)(f + 0.5f)); } // the reference's MyRoundf
-
-// The reference's GetCaptionButtonRectFast: right-aligned 45*dpi-wide slots, index = buttons from the right
-// (0 = close, 1 = maximize, 2 = minimize, 3 = light/dark).
-static void ImGuiApp_ImplWin32D2DDXGI_GetCaptionButtonRect(const RECT& caption, int button_width, int slot, RECT* out_rect)
+// Right-aligned caption-button cells in CLIENT coords (Win32X DwfButtonRects): slot buttons from the
+// right (0 = close, 1 = maximize, 2 = minimize, 3 = light/dark), 47*dpi wide, caption-strip tall.
+static void ImGuiApp_ImplWin32D2DDXGI_GetCaptionButtonRect(const RECT& client, int caption_height, int button_width, int slot, RECT* out_rect)
 {
-    *out_rect = caption;
-    out_rect->left = (out_rect->right - button_width) + 1;
-    if (slot > 0)
-    {
-        out_rect->left  -= slot * button_width + 1;
-        out_rect->right -= slot * button_width + 1;
-    }
+    out_rect->right  = client.right - slot * button_width;
+    out_rect->left   = out_rect->right - button_width;
+    out_rect->top    = 0;
+    out_rect->bottom = caption_height;
 }
 
 // The reference's EnableLightMode ladder, call order preserved.
@@ -1214,114 +1202,62 @@ static void ImGuiApp_ImplWin32D2DDXGI_EnableLightMode(HWND hwnd)
     ::SetWindowTheme(hwnd, L"DarkMode_Explorer", L" ");
 }
 
-// DrawImmersiveCloseButton, verbatim geometry (glyph drawn twice, GDI_NATURAL, like the reference).
-static void ImGuiApp_ImplWin32D2DDXGI_ChromeDrawClose(ImGuiApp_ImplWin32D2DDXGI_ChromeData* chrome, ID2D1DeviceContext* ctx, ID2D1SolidColorBrush* text,
-                                                      DWRITE_GLYPH_RUN* run, int glyph_inset, int glyph_inset2, float font_size, RECT caption, RECT button)
+// (Re)build the icon text format + the cached per-glyph layouts at this dpi (Win32X DwfCreateIconFormat
+// + DfwRefreshMetrics): glyph size = 0.36 * caption height (min 8), layout box = one button cell with
+// center/center alignment, so DrawTextLayout at the cell origin centers the glyph -- no inset math,
+// no per-frame layout allocation.
+static bool ImGuiApp_ImplWin32D2DDXGI_ChromeEnsureGlyphLayouts(ImGuiApp_ImplWin32D2DDXGI_ChromeData* chrome, UINT dpi, int caption_height, int button_width)
 {
-    ImGuiApp_ImplWin32D2DDXGI_RectToLogical(&caption);
-    ImGuiApp_ImplWin32D2DDXGI_RectToLogical(&button);
-    ::OffsetRect(&button, (ImGuiApp_ImplWin32D2DDXGI_RectWidth(caption) - ImGuiApp_ImplWin32D2DDXGI_RectWidth(button)) - 1, 0);
-    D2D1_RECT_F rcf = ImGuiApp_ImplWin32D2DDXGI_RectToRectF(button);
+    if (chrome->DWriteFactory == nullptr)
+        return false;
+    if (chrome->IconFormat != nullptr && chrome->GlyphLayoutDpi == dpi)
+        return true;
 
-    if (chrome->HotButton == ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Close)
-    {
-        rcf.left  += 0.5f;
-        rcf.right += 0.5f;
-        ctx->DrawRectangle(&rcf, chrome->RedBrush, 1.0f, chrome->StrokeStyle);
-        ctx->FillRectangle(&rcf, chrome->RedBrush);
-    }
-    run->fontFace     = chrome->FontFace;
-    run->fontEmSize   = font_size * 1.25f;
-    run->glyphIndices = &chrome->GlyphIndicesMDL2[13]; // CP_MDL2_CLOSE
-    D2D1_POINT_2F pos;
-    pos.x = button.left + (0.5f * (ImGuiApp_ImplWin32D2DDXGI_RectWidth(button) - 1)) - glyph_inset;
-    pos.y = button.top + (0.5f * ImGuiApp_ImplWin32D2DDXGI_RectHeight(button)) + glyph_inset2 - 1;
-    ctx->DrawGlyphRun(pos, run, text, DWRITE_MEASURING_MODE_GDI_NATURAL);
-    ctx->DrawGlyphRun(pos, run, text, DWRITE_MEASURING_MODE_GDI_NATURAL);
+    for (int i = 0; i < ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_COUNT; i++)
+        if (chrome->GlyphLayouts[i] != nullptr) { chrome->GlyphLayouts[i]->Release(); chrome->GlyphLayouts[i] = nullptr; }
+    if (chrome->IconFormat != nullptr) { chrome->IconFormat->Release(); chrome->IconFormat = nullptr; }
+
+    float size = (float)caption_height * 0.36f;
+    if (size < 8.0f)
+        size = 8.0f;
+    if (FAILED(chrome->DWriteFactory->CreateTextFormat(L"Segoe Fluent Icons", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size, L"", &chrome->IconFormat)))
+        chrome->DWriteFactory->CreateTextFormat(L"Segoe MDL2 Assets", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size, L"", &chrome->IconFormat);
+    if (chrome->IconFormat == nullptr)
+        return false;
+    chrome->IconFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    chrome->IconFormat->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    chrome->IconFormat->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+
+    for (int i = 0; i < ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_COUNT; i++)
+        chrome->DWriteFactory->CreateTextLayout(&IMGUIAPP_WIN32D2DDXGI_CHROME_GLYPHS[i], 1, chrome->IconFormat, (float)button_width, (float)caption_height, &chrome->GlyphLayouts[i]);
+    chrome->GlyphLayoutDpi = dpi;
+    return true;
 }
 
-// DrawImmersiveMaximizeButton, verbatim geometry (including the reference's float-on-LONG bottom adjust).
-static void ImGuiApp_ImplWin32D2DDXGI_ChromeDrawMaximize(ImGuiApp_ImplWin32D2DDXGI_ChromeData* chrome, ID2D1DeviceContext* ctx, ID2D1SolidColorBrush* text,
-                                                         DWRITE_GLYPH_RUN* run, int glyph_inset, float font_size, UINT dpi, RECT caption, RECT button, bool maximized)
+// One caption button (Win32X DwfDrawButton, hot state only): hot fill (red for close, colorization for
+// the rest; the close glyph goes white over the red), then the cached glyph layout centered in the cell.
+static void ImGuiApp_ImplWin32D2DDXGI_ChromeDrawButton(ImGuiApp_ImplWin32D2DDXGI_ChromeData* chrome, ID2D1DeviceContext* ctx, ID2D1SolidColorBrush* text,
+                                                       const RECT& cell, int button, int glyph)
 {
-    ImGuiApp_ImplWin32D2DDXGI_RectToLogical(&button);
-    ::OffsetRect(&button, (ImGuiApp_ImplWin32D2DDXGI_RectWidth(caption) - (2 * ImGuiApp_ImplWin32D2DDXGI_RectWidth(button))) - 2, 0);
-    const D2D1_RECT_F rcf = ImGuiApp_ImplWin32D2DDXGI_RectToRectF(button);
-
-    ::InflateRect(&button, -::MulDiv(18, (int)dpi, 96), -::MulDiv(10, (int)dpi, 96)); // the reference's InsetRect
-    button.bottom = (LONG)(button.bottom - 1.5f);
-    button.right -= 1;
-    button.left  -= 1;
-
-    const bool hot = chrome->HotButton == ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Max;
+    const bool hot = chrome->HotButton == button;
+    ID2D1SolidColorBrush* glyph_brush = text;
     if (hot)
     {
-        ctx->DrawRectangle(&rcf, chrome->ColorizationBrush, 1.0f, chrome->StrokeStyle);
-        ctx->FillRectangle(&rcf, chrome->ColorizationBrush);
+        const bool close = button == ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Close;
+        ID2D1SolidColorBrush* fill = close ? chrome->RedBrush : chrome->ColorizationBrush;
+        const D2D1_RECT_F rcf = D2D1::RectF((FLOAT)cell.left, (FLOAT)cell.top, (FLOAT)cell.right, (FLOAT)cell.bottom);
+        ctx->DrawRectangle(&rcf, fill, 1.0f, chrome->StrokeStyle);
+        ctx->FillRectangle(&rcf, fill);
+        if (close)
+            glyph_brush = chrome->Brush;   // white over the red fill
     }
-    run->fontFace     = chrome->FontFace;
-    run->fontEmSize   = font_size;
-    run->glyphIndices = maximized ? &chrome->GlyphIndicesMDL2[12] : &chrome->GlyphIndicesMDL2[11]; // RESTORE : MAXIMIZE
-    D2D1_POINT_2F pos;
-    pos.x = (FLOAT)button.left;
-    pos.y = button.top + (0.5f * ImGuiApp_ImplWin32D2DDXGI_RectHeight(button)) + glyph_inset;
-    ctx->DrawGlyphRun(pos, run, text, DWRITE_MEASURING_MODE_NATURAL);
+    if (chrome->GlyphLayouts[glyph] != nullptr)
+        ctx->DrawTextLayout(D2D1::Point2F((FLOAT)cell.left, (FLOAT)cell.top), chrome->GlyphLayouts[glyph], glyph_brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
 }
 
-// DrawImmersiveMinimizeButton, verbatim geometry (the glyph centers on the PRE-inset button rect).
-static void ImGuiApp_ImplWin32D2DDXGI_ChromeDrawMinimize(ImGuiApp_ImplWin32D2DDXGI_ChromeData* chrome, ID2D1DeviceContext* ctx, ID2D1SolidColorBrush* text,
-                                                         DWRITE_GLYPH_RUN* run, int glyph_inset, float font_size, UINT dpi, RECT caption, RECT button)
-{
-    ImGuiApp_ImplWin32D2DDXGI_RectToLogical(&button);
-    ::OffsetRect(&button, (ImGuiApp_ImplWin32D2DDXGI_RectWidth(caption) - (3 * ImGuiApp_ImplWin32D2DDXGI_RectWidth(button))) - 3, 0);
-    const D2D1_RECT_F rcf = ImGuiApp_ImplWin32D2DDXGI_RectToRectF(button);
-
-    const int width_symbol = ::MulDiv(9, (int)dpi, 96);
-    ::InflateRect(&button,
-                  -(LONG)((0.5f * ::MulDiv(45, (int)dpi, 96)) - (0.5f * width_symbol)),
-                  -(LONG)(0.5f * ::MulDiv(30, (int)dpi, 96)));
-
-    run->fontFace     = chrome->FontFace;
-    run->fontEmSize   = font_size;
-    run->glyphIndices = &chrome->GlyphIndicesMDL2[10]; // CP_MDL2_MINIMIZE
-    D2D1_POINT_2F pos;
-    pos.x = rcf.left + (0.5f * (rcf.right - rcf.left)) - glyph_inset;
-    pos.y = rcf.top + (0.5f * (rcf.bottom - rcf.top)) + glyph_inset;
-    if (chrome->HotButton == ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Min)
-    {
-        ctx->DrawRectangle(&rcf, chrome->ColorizationBrush, 1.0f, chrome->StrokeStyle);
-        ctx->FillRectangle(&rcf, chrome->ColorizationBrush);
-    }
-    ctx->DrawGlyphRun(pos, run, text, DWRITE_MEASURING_MODE_NATURAL);
-}
-
-// DrawImmersiveLightDarkButton, verbatim geometry (hot state re-fills and re-draws the glyph, like the reference).
-static void ImGuiApp_ImplWin32D2DDXGI_ChromeDrawLightDark(ImGuiApp_ImplWin32D2DDXGI_ChromeData* chrome, ID2D1DeviceContext* ctx, ID2D1SolidColorBrush* text,
-                                                          DWRITE_GLYPH_RUN* run, int glyph_inset2, float font_size, RECT caption, RECT button)
-{
-    run->fontFace     = chrome->FontFace;
-    run->glyphIndices = chrome->LightMode ? &chrome->GlyphIndicesMDL2[7] : &chrome->GlyphIndicesMDL2[3]; // DARKMODE3 : LIGHTMODE1
-    run->fontEmSize   = font_size * 1.5f;
-
-    ImGuiApp_ImplWin32D2DDXGI_RectToLogical(&button);
-    ::OffsetRect(&button, (ImGuiApp_ImplWin32D2DDXGI_RectWidth(caption) - (4 * ImGuiApp_ImplWin32D2DDXGI_RectWidth(button))) - 2, 0);
-    const D2D1_RECT_F rcf = ImGuiApp_ImplWin32D2DDXGI_RectToRectF(button);
-
-    D2D1_POINT_2F pos;
-    pos.x = rcf.left + (0.5f * (rcf.right - rcf.left)) - glyph_inset2;
-    pos.y = rcf.top + (0.5f * (rcf.bottom - rcf.top)) + glyph_inset2;
-    ctx->DrawGlyphRun(pos, run, text, DWRITE_MEASURING_MODE_NATURAL);
-
-    if (chrome->HotButton == ImGuiApp_ImplWin32D2DDXGI_CaptionButton_LightDark)
-    {
-        ctx->DrawRectangle(&rcf, chrome->ColorizationBrush, 1.0f, chrome->StrokeStyle);
-        ctx->FillRectangle(&rcf, chrome->ColorizationBrush);
-        ctx->DrawGlyphRun(pos, run, text, DWRITE_MEASURING_MODE_NATURAL);
-    }
-}
-
-// The reference's BeginImmersivePaint drawing body, driven through the SetDeviceDrawCallback seam
-// (the backend's D2D bracket already applied the canonical transform + antialias state).
+// The caption chrome's draw pass, driven through the SetDeviceDrawCallback seam (the backend's D2D
+// bracket already applied the canonical transform + antialias state). Cells and glyphs conform to
+// Win32X dwmframex_v2 (DwfButtonRects + DwfDrawButton over cached layouts).
 static void ImGuiApp_ImplWin32D2DDXGI_ChromeDrawCallback(ImGuiApp* app)
 {
     ImGuiApp_ImplWin32D2DDXGI_Data* bd = ImGuiApp_ImplWin32D2DDXGI_GetBackendData(app);
@@ -1330,37 +1266,34 @@ static void ImGuiApp_ImplWin32D2DDXGI_ChromeDrawCallback(ImGuiApp* app)
         return;
     HWND hwnd = (HWND)bd->Hwnd;
 
-    const UINT  dpi          = ::GetDpiForWindow(hwnd);
-    const bool  maximized    = ::IsZoomed(hwnd) != FALSE;
-    const int   button_width = ::MulDiv(45, (int)dpi, 96);
-    const float font_size    = (float)::MulDiv(10, (int)dpi, 96);   // the reference's GetFontSizeFromWindowDpi
-    const int   glyph_inset  = (int)ImGuiApp_ImplWin32D2DDXGI_Roundf(0.5f * font_size);
-    const int   glyph_inset2 = (int)ImGuiApp_ImplWin32D2DDXGI_Roundf(0.5f * font_size * 1.5f);
-
-    RECT caption;
-    if (!ImGuiApp_ImplWin32D2DDXGI_GetCaptionRect(hwnd, bd->CaptionHeight, &caption))
+    const UINT dpi            = ::GetDpiForWindow(hwnd);
+    const int  button_width   = ::MulDiv(47, (int)dpi, 96);
+    const int  caption_height = ::MulDiv(bd->CaptionHeight, (int)dpi, 96);
+    RECT client = {};
+    ::GetClientRect(hwnd, &client);
+    if (!ImGuiApp_ImplWin32D2DDXGI_ChromeEnsureGlyphLayouts(chrome, dpi, caption_height, button_width))
         return;
+
     RECT close_button, max_button, min_button, lightdark_button;
-    ImGuiApp_ImplWin32D2DDXGI_GetCaptionButtonRect(caption, button_width, 0, &close_button);
-    ImGuiApp_ImplWin32D2DDXGI_GetCaptionButtonRect(caption, button_width, 1, &max_button);
-    ImGuiApp_ImplWin32D2DDXGI_GetCaptionButtonRect(caption, button_width, 2, &min_button);
-    ImGuiApp_ImplWin32D2DDXGI_GetCaptionButtonRect(caption, button_width, 3, &lightdark_button);
+    ImGuiApp_ImplWin32D2DDXGI_GetCaptionButtonRect(client, caption_height, button_width, 0, &close_button);
+    ImGuiApp_ImplWin32D2DDXGI_GetCaptionButtonRect(client, caption_height, button_width, 1, &max_button);
+    ImGuiApp_ImplWin32D2DDXGI_GetCaptionButtonRect(client, caption_height, button_width, 2, &min_button);
+    ImGuiApp_ImplWin32D2DDXGI_GetCaptionButtonRect(client, caption_height, button_width, 3, &lightdark_button);
 
-    const DWRITE_GLYPH_OFFSET glyph_offsets = {};
-    DWRITE_GLYPH_RUN glyph_run = {};
-    glyph_run.glyphCount   = 1;
-    glyph_run.glyphOffsets = &glyph_offsets;
-
+    ID2D1DeviceContext* ctx = bd->D2DDeviceContext;
     ID2D1SolidColorBrush* text = chrome->DarkMode ? chrome->Brush : chrome->BlackBrush;
+    const int max_glyph = ::IsZoomed(hwnd) ? ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_Restore : ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_Maximize;
+    const int ld_glyph  = chrome->DarkMode ? ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_Brightness : ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_QuietHours;
 
-    ImGuiApp_ImplWin32D2DDXGI_ChromeDrawClose(chrome, bd->D2DDeviceContext, text, &glyph_run, glyph_inset, glyph_inset2, font_size, caption, close_button);
-    ImGuiApp_ImplWin32D2DDXGI_ChromeDrawMaximize(chrome, bd->D2DDeviceContext, text, &glyph_run, glyph_inset, font_size, dpi, caption, max_button, maximized);
-    ImGuiApp_ImplWin32D2DDXGI_ChromeDrawMinimize(chrome, bd->D2DDeviceContext, text, &glyph_run, glyph_inset, font_size, dpi, caption, min_button);
-    ImGuiApp_ImplWin32D2DDXGI_ChromeDrawLightDark(chrome, bd->D2DDeviceContext, text, &glyph_run, glyph_inset2, font_size, caption, lightdark_button);
+    ImGuiApp_ImplWin32D2DDXGI_ChromeDrawButton(chrome, ctx, text, lightdark_button, ImGuiApp_ImplWin32D2DDXGI_CaptionButton_LightDark, ld_glyph);
+    ImGuiApp_ImplWin32D2DDXGI_ChromeDrawButton(chrome, ctx, text, min_button,       ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Min,       ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_Minimize);
+    ImGuiApp_ImplWin32D2DDXGI_ChromeDrawButton(chrome, ctx, text, max_button,       ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Max,       max_glyph);
+    ImGuiApp_ImplWin32D2DDXGI_ChromeDrawButton(chrome, ctx, text, close_button,     ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Close,     ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_Close);
 }
 
-// The reference's OnNCHittest client-area branch: borders from the default hittest, then the button
-// rects (hot-tracked) and the caption strip. Registered through the SetNCHitTestCallback seam.
+// Win32X FindNCHit order: caption buttons FIRST (they beat the top resize strip -- v2's DwfHitTest),
+// then the default ring/caption/client. Hot-tracks the button under the cursor for the draw callback.
+// Registered through the SetNCHitTestCallback seam.
 static int ImGuiApp_ImplWin32D2DDXGI_ChromeNCHitTest(ImGuiApp* app, int x, int y)
 {
     ImGuiApp_ImplWin32D2DDXGI_Data* bd = ImGuiApp_ImplWin32D2DDXGI_GetBackendData(app);
@@ -1369,35 +1302,26 @@ static int ImGuiApp_ImplWin32D2DDXGI_ChromeNCHitTest(ImGuiApp* app, int x, int y
         return -1;
     HWND hwnd = (HWND)bd->Hwnd;
 
+    POINT pt = { (LONG)x, (LONG)y };
+    ::ScreenToClient(hwnd, &pt);
+    RECT client = {};
+    ::GetClientRect(hwnd, &client);
+    const int button_width   = ::MulDiv(47, (int)::GetDpiForWindow(hwnd), 96);
+    const int caption_height = ::MulDiv(bd->CaptionHeight, (int)::GetDpiForWindow(hwnd), 96);
+
+    RECT close_button, max_button, min_button, lightdark_button;
+    ImGuiApp_ImplWin32D2DDXGI_GetCaptionButtonRect(client, caption_height, button_width, 0, &close_button);
+    ImGuiApp_ImplWin32D2DDXGI_GetCaptionButtonRect(client, caption_height, button_width, 1, &max_button);
+    ImGuiApp_ImplWin32D2DDXGI_GetCaptionButtonRect(client, caption_height, button_width, 2, &min_button);
+    ImGuiApp_ImplWin32D2DDXGI_GetCaptionButtonRect(client, caption_height, button_width, 3, &lightdark_button);
+
+    if (::PtInRect(&lightdark_button, pt)) { chrome->HotButton = ImGuiApp_ImplWin32D2DDXGI_CaptionButton_LightDark; return IMGUIAPP_WIN32D2DDXGI_HTLIGHTDARK; }
+    if (::PtInRect(&min_button, pt))       { chrome->HotButton = ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Min;       return HTMINBUTTON; }
+    if (::PtInRect(&max_button, pt))       { chrome->HotButton = ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Max;       return HTMAXBUTTON; }
+    if (::PtInRect(&close_button, pt))     { chrome->HotButton = ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Close;     return HTCLOSE; }
+
     const LRESULT hit = ImGuiApp_ImplWin32D2DDXGI_DefaultNCHitTest(bd, hwnd, x, y);
-    if (hit != HTCAPTION && hit != HTCLIENT)
-    {
-        chrome->HotButton = ImGuiApp_ImplWin32D2DDXGI_CaptionButton_None;
-        return (int)hit;
-    }
-
-    SIZE border;
-    ImGuiApp_ImplWin32D2DDXGI_GetWindowBorders(hwnd, &border);
-    const BOOL maximized = ::IsZoomed(hwnd);
-    const POINT cursor = { (LONG)x, (LONG)y + (!maximized * border.cy) + (-1 * !maximized) };
-
-    RECT caption;
-    if (ImGuiApp_ImplWin32D2DDXGI_GetCaptionRect(hwnd, bd->CaptionHeight, &caption))
-    {
-        const int button_width = ::MulDiv(45, (int)::GetDpiForWindow(hwnd), 96);
-        RECT close_button, max_button, min_button, lightdark_button;
-        ImGuiApp_ImplWin32D2DDXGI_GetCaptionButtonRect(caption, button_width, 0, &close_button);
-        ImGuiApp_ImplWin32D2DDXGI_GetCaptionButtonRect(caption, button_width, 1, &max_button);
-        ImGuiApp_ImplWin32D2DDXGI_GetCaptionButtonRect(caption, button_width, 2, &min_button);
-        ImGuiApp_ImplWin32D2DDXGI_GetCaptionButtonRect(caption, button_width, 3, &lightdark_button);
-
-        if (::PtInRect(&max_button, cursor))       { chrome->HotButton = ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Max;       return HTMAXBUTTON; }
-        if (::PtInRect(&min_button, cursor))       { chrome->HotButton = ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Min;       return HTMINBUTTON; }
-        if (::PtInRect(&close_button, cursor))     { chrome->HotButton = ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Close;     return HTCLOSE; }
-        if (::PtInRect(&lightdark_button, cursor)) { chrome->HotButton = ImGuiApp_ImplWin32D2DDXGI_CaptionButton_LightDark; return HTMENU; }
-        if (::PtInRect(&caption, cursor))          { chrome->HotButton = ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Caption;   return HTCAPTION; }
-    }
-    chrome->HotButton = ImGuiApp_ImplWin32D2DDXGI_CaptionButton_None;
+    chrome->HotButton = hit == HTCAPTION ? ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Caption : ImGuiApp_ImplWin32D2DDXGI_CaptionButton_None;
     return (int)hit;
 }
 
@@ -1452,44 +1376,9 @@ bool ImGuiApp_ImplWin32D2DDXGI_InstallChrome(ImGuiApp* app)
     };
     bd->D2DFactory->CreateStrokeStyle(stroke_props, nullptr, 0, &chrome->StrokeStyle);
 
-    // DWrite glyph ladder (OnInitD2D verbatim; base interfaces carry the same calls the reference's C macros hit).
-    bool fonts_ok = SUCCEEDED(::DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), (IUnknown**)&chrome->DWriteFactory)) &&
-                    SUCCEEDED(chrome->DWriteFactory->GetSystemFontCollection(&chrome->FontCollection, TRUE));
-    if (fonts_ok)
-    {
-        UINT32 index  = 0;
-        BOOL   exists = FALSE;
-        fonts_ok = SUCCEEDED(chrome->FontCollection->FindFamilyName(L"Segoe MDL2 Assets", &index, &exists)) && exists &&
-                   SUCCEEDED(chrome->FontCollection->GetFontFamily(index, &chrome->FontFamily)) &&
-                   SUCCEEDED(chrome->FontFamily->GetFirstMatchingFont(DWRITE_FONT_WEIGHT_THIN, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, &chrome->Font)) &&
-                   SUCCEEDED(chrome->Font->CreateFontFace(&chrome->FontFace));
-    }
-    if (fonts_ok)
-    {
-        const UINT32 codepoints[15] =
-        {
-            CP_MDL2_SETTINGS1, CP_MDL2_SETTINGS2, CP_MDL2_SETTINGS3, CP_MDL2_LIGHTMODE1, CP_MDL2_LIGHTMODE2,
-            CP_MDL2_DARKMODE1, CP_MDL2_DARKMODE2, CP_MDL2_DARKMODE3, CP_MDL2_LIGHTDARK1, CP_MDL2_LIGHTDARK2,
-            CP_MDL2_MINIMIZE, CP_MDL2_MAXIMIZE, CP_MDL2_RESTORE, CP_MDL2_CLOSE, CP_MDL2_FEEDBACK,
-        };
-        memcpy(chrome->CodePointsMDL2, codepoints, sizeof(codepoints));
-        fonts_ok = SUCCEEDED(chrome->FontFace->GetGlyphIndices(chrome->CodePointsMDL2, 15, chrome->GlyphIndicesMDL2));
-    }
-    if (fonts_ok)
-    {
-        // "Segoe UI Symbol" secondary face, created like the reference (the drawn glyphs come from MDL2).
-        UINT32 index  = 0;
-        BOOL   exists = FALSE;
-        if (SUCCEEDED(chrome->FontCollection->FindFamilyName(L"Segoe UI Symbol", &index, &exists)) && exists &&
-            SUCCEEDED(chrome->FontCollection->GetFontFamily(index, &chrome->FontFamily2)) &&
-            SUCCEEDED(chrome->FontFamily2->GetFirstMatchingFont(DWRITE_FONT_WEIGHT_THIN, DWRITE_FONT_STRETCH_UNDEFINED, DWRITE_FONT_STYLE_NORMAL, &chrome->Font2)) &&
-            SUCCEEDED(chrome->Font2->CreateFontFace(&chrome->FontFace2)))
-        {
-            const UINT32 sym_codepoints[3] = { CP_SYM_DARKMODE, CP_SYM_LIGHTMODE, CP_SYM_LIGHTMODE2 };
-            memcpy(chrome->CodePointsSym, sym_codepoints, sizeof(sym_codepoints));
-            chrome->FontFace2->GetGlyphIndices(chrome->CodePointsSym, 3, chrome->GlyphIndicesSym);
-        }
-    }
+    // DWrite factory only; the icon format + cached glyph layouts build lazily at the first draw
+    // (and rebuild on dpi change) in ChromeEnsureGlyphLayouts.
+    const bool fonts_ok = SUCCEEDED(::DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), (IUnknown**)&chrome->DWriteFactory));
 
     if (!fonts_ok || chrome->Brush == nullptr || chrome->StrokeStyle == nullptr)
     {
@@ -1516,13 +1405,9 @@ void ImGuiApp_ImplWin32D2DDXGI_UninstallChrome(ImGuiApp* app)
     if (bd->NCHitTestCallback == ImGuiApp_ImplWin32D2DDXGI_ChromeNCHitTest)
         ImGuiApp_ImplWin32D2DDXGI_SetNCHitTestCallback(app, nullptr);
 
-    if (chrome->FontFace2 != nullptr)              { chrome->FontFace2->Release(); }
-    if (chrome->Font2 != nullptr)                  { chrome->Font2->Release(); }
-    if (chrome->FontFamily2 != nullptr)            { chrome->FontFamily2->Release(); }
-    if (chrome->FontFace != nullptr)               { chrome->FontFace->Release(); }
-    if (chrome->Font != nullptr)                   { chrome->Font->Release(); }
-    if (chrome->FontFamily != nullptr)             { chrome->FontFamily->Release(); }
-    if (chrome->FontCollection != nullptr)         { chrome->FontCollection->Release(); }
+    for (int i = 0; i < ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_COUNT; i++)
+        if (chrome->GlyphLayouts[i] != nullptr)    { chrome->GlyphLayouts[i]->Release(); }
+    if (chrome->IconFormat != nullptr)             { chrome->IconFormat->Release(); }
     if (chrome->DWriteFactory != nullptr)          { chrome->DWriteFactory->Release(); }
     if (chrome->StrokeStyle != nullptr)            { chrome->StrokeStyle->Release(); }
     if (chrome->FadedColorizationBrush != nullptr) { chrome->FadedColorizationBrush->Release(); }
@@ -1619,7 +1504,15 @@ static LRESULT WINAPI ImGuiApp_ImplWin32D2DDXGI_WndProc(HWND hWnd, UINT msg, WPA
         }
         return ImGuiApp_ImplWin32D2DDXGI_DefaultNCHitTest(bd, hWnd, x, y);
     }
+    case WM_NCLBUTTONDOWN:
+        // Button codes come from the chrome's hittest (or a client callback); the default hittest never reports them.
+        if (ImGuiApp_ImplWin32D2DDXGI_NCButtonPress(bd, hWnd, wParam))
+            return 0;
+        break;
     case WM_NCLBUTTONDBLCLK:
+        // NC double-clicks arrive without CS_DBLCLKS: a fast second click on a button is still a press.
+        if (ImGuiApp_ImplWin32D2DDXGI_NCButtonPress(bd, hWnd, wParam))
+            return 0;
         if (wParam == HTCAPTION)
         {
             if (::IsZoomed(hWnd))
@@ -1629,22 +1522,34 @@ static LRESULT WINAPI ImGuiApp_ImplWin32D2DDXGI_WndProc(HWND hWnd, UINT msg, WPA
             return 0;
         }
         break;
-    case WM_NCLBUTTONUP:
-        // Button codes come from the chrome's hittest (or a client callback); the default hittest never reports them.
-        switch (wParam)
+    case WM_LBUTTONUP:
+        if (bd != nullptr && bd->NCPressedHit != 0)
         {
-        case HTCLOSE:     ::PostMessage(hWnd, WM_CLOSE, 0, 0); return 0;
-        case HTMINBUTTON: ::PostMessage(hWnd, WM_SYSCOMMAND, SC_MINIMIZE, 0); return 0;
-        case HTMAXBUTTON: ::PostMessage(hWnd, WM_SYSCOMMAND, ::IsZoomed(hWnd) ? SC_RESTORE : SC_MAXIMIZE, 0); return 0;
-        case HTMENU:
-            if (bd != nullptr && bd->Chrome != nullptr && bd->Chrome->HotButton == ImGuiApp_ImplWin32D2DDXGI_CaptionButton_LightDark)
+            const int pressed = bd->NCPressedHit;
+            bd->NCPressedHit  = 0;
+            ::ReleaseCapture();
+            POINT pt = { (LONG)(short)LOWORD(lParam), (LONG)(short)HIWORD(lParam) };
+            ::ClientToScreen(hWnd, &pt);
+            if (pressed == ImGuiApp_ImplWin32D2DDXGI_NCHitTestAt(app, bd, hWnd, pt.x, pt.y))
             {
-                ImGuiApp_ImplWin32D2DDXGI_ChromeToggleLightDark(bd->Chrome, hWnd);
-                return 0;
+                switch (pressed)
+                {
+                case HTCLOSE:     ::PostMessage(hWnd, WM_SYSCOMMAND, SC_CLOSE, 0); break;
+                case HTMINBUTTON: ::PostMessage(hWnd, WM_SYSCOMMAND, SC_MINIMIZE, 0); break;
+                case HTMAXBUTTON: ::PostMessage(hWnd, WM_SYSCOMMAND, ::IsZoomed(hWnd) ? SC_RESTORE : SC_MAXIMIZE, 0); break;
+                case IMGUIAPP_WIN32D2DDXGI_HTLIGHTDARK:
+                    if (bd->Chrome != nullptr)
+                        ImGuiApp_ImplWin32D2DDXGI_ChromeToggleLightDark(bd->Chrome, hWnd);
+                    break;
+                default: break;
+                }
             }
-            break;
-        default: break;
+            return 0;
         }
+        break;
+    case WM_CAPTURECHANGED:
+        if (bd != nullptr)
+            bd->NCPressedHit = 0;
         break;
     case WM_NCRBUTTONUP:
         if (wParam == HTCAPTION)
@@ -1741,7 +1646,7 @@ static LRESULT WINAPI ImGuiApp_ImplWin32D2DDXGI_WndProc(HWND hWnd, UINT msg, WPA
         SIZE border;
         ImGuiApp_ImplWin32D2DDXGI_GetWindowBorders(hWnd, &border);
         const UINT dpi          = ::GetDpiForWindow(hWnd);
-        const int  button_width = ::MulDiv(45, (int)dpi, 96);
+        const int  button_width = ::MulDiv(47, (int)dpi, 96);
         const int  caption      = ::MulDiv(bd != nullptr ? bd->CaptionHeight : 30, (int)dpi, 96);
         mmi->ptMinTrackSize.x = 5 * button_width + 2 * border.cy;
         mmi->ptMinTrackSize.y = caption + border.cy;
@@ -1793,6 +1698,13 @@ static LRESULT WINAPI ImGuiApp_ImplWin32D2DDXGI_WndProc(HWND hWnd, UINT msg, WPA
             ::PostMessage(hWnd, WM_MOUSEMOVE, 0, 0);
         break;
     case WM_MOUSEMOVE:
+        if (bd != nullptr && bd->NCPressedHit != 0)
+        {
+            // Captured press: re-test the hit so the chrome hot-tracks the button under the cursor.
+            POINT pt = { (LONG)(short)LOWORD(lParam), (LONG)(short)HIWORD(lParam) };
+            ::ClientToScreen(hWnd, &pt);
+            ImGuiApp_ImplWin32D2DDXGI_NCHitTestAt(app, bd, hWnd, pt.x, pt.y);
+        }
         return 0;   // reference swallows it (the imgui handler above already consumed the position)
     case WM_NCMOUSELEAVE:
     case WM_MOUSELEAVE:
