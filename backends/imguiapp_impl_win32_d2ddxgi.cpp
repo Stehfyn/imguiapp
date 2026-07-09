@@ -7,7 +7,7 @@
 //  [X] Platform: never-resized desktop-sized swapchain; smooth resize via WM_NCCALCSIZE repaint + restart/no-sequence present ladder.
 //  [X] Multi-viewport: per-viewport DirectComposition swapchains + DComp targets; pacing-aware per-viewport present skip.
 //  [X] AV: synchronous staging-texture CaptureFrame (CopySubresourceRegion + Map; stalls the pipeline).
-//  [X] Platform: canonical D2D caption chrome (min/max/close + light/dark, Segoe Fluent Icons / MDL2 cached text layouts; system icon + HTSYSMENU slot), self-hosted on the client seams; opt out via InitInfo::NoChrome.
+//  [X] Platform: canonical D2D caption chrome (min/max/close + light/dark, Segoe Fluent Icons / MDL2 cached text layouts; system icon + HTSYSMENU slot; caption title; 160ms theme/activation crossfade + hover fades), self-hosted on the client seams; opt out via InitInfo::NoChrome.
 // Missing features:
 //  [ ] Headless modes (use win32-vulkan).
 
@@ -25,6 +25,7 @@
 
 // CHANGELOG
 // (minor and older changes stripped away, please see git history for details)
+//  2026-07-09: Platform: non-client frame contract completed from Win32X dwmframex_v2 -- caption title (system caption font, cached IDWriteTextLayout, win32kfull placement, crossfaded + 60% inactive dim; WM_SETTEXT drops the cache), WM_NCACTIVATE tracks REAL activation with lParam -1 (always-active froze DWM's frame), WM_DPICHANGED snaps to the suggested rect.
 //  2026-07-09: Platform: GetChromeThemeBlend -- the chrome's animated dark->light position (0..1 across the 160ms crossfade), published so the app can lerp its own theme in step (the demo crossfades StyleColorsDark <-> StyleColorsLight with it).
 //  2026-07-09: Platform: chrome animation (Win32X DfwAdvance/DwfBeginTransition): one 160ms wall-clock timeline crossfades glyph colors on theme (light/dark toggle) and activation changes, and ramps per-button hover/press highlight opacity (v2 fill shades; close glyph fades to white as its red rises). Driven by the continuous render loop, no timer.
 //  2026-07-09: Platform: chrome caption system icon (Win32X DwfEnsureIcon): the window's icon rasterized once at native res into a D3D11 texture / D2D bitmap, drawn at the win32kfull DrawCaptionIcon slot; the caption-left square hittests HTSYSMENU (DefWindowProc: menu on click, close on double-click).
@@ -1167,6 +1168,9 @@ struct ImGuiApp_ImplWin32D2DDXGI_ChromeData
     UINT                   GlyphLayoutDpi;   // dpi the format + layouts were built at; a mismatch rebuilds them
     ID2D1Bitmap1*          IconBitmap;       // cached high-res caption icon; DrawBitmap downscales (Win32X DwfEnsureIcon)
     bool                   IconTried;        // attempted-once latch: a window with no icon stays iconless
+    IDWriteTextFormat*     TitleFormat;      // system caption font (lfCaptionFont) at the window dpi
+    IDWriteTextLayout*     TitleLayout;      // cached caption-title layout; dropped on WM_SETTEXT, rebuilt on dpi change
+    UINT                   TitleDpi;         // dpi the title format + layout were built at
     ID2D1SolidColorBrush*  AnimBrush;        // the ONE recolored brush for animated fills + glyphs (Win32X DwfBrush)
     bool                   WndActive;        // current (target) window-activation state
     bool                   DarkFrom;         // dark state at crossfade start (the "from" color set)
@@ -1208,6 +1212,15 @@ static inline D2D1_COLOR_F ImGuiApp_ImplWin32D2DDXGI_ChromeGlyphColor(bool dark,
 {
     return ImGuiApp_ImplWin32D2DDXGI_ChromeColor(active ? (dark ? RGB(255, 255, 255) : RGB(0, 0, 0))
                                                         : (dark ? RGB(0xAA, 0xAA, 0xAA) : RGB(0x64, 0x64, 0x64)));
+}
+
+// Caption-title text color for a (dark, active) state: inactive dims to 60% alpha, like the shell (Win32X DwfTextColor).
+static inline D2D1_COLOR_F ImGuiApp_ImplWin32D2DDXGI_ChromeTextColor(bool dark, bool active)
+{
+    D2D1_COLOR_F c = ImGuiApp_ImplWin32D2DDXGI_ChromeColor(dark ? RGB(255, 255, 255) : RGB(0, 0, 0));
+    if (!active)
+        c.a = 0.60f;
+    return c;
 }
 
 // Target highlight opacity for a button: 1 when pressed, or hot with no other press; else 0 (Win32X DwfBtnTarget).
@@ -1330,6 +1343,43 @@ static bool ImGuiApp_ImplWin32D2DDXGI_ChromeEnsureGlyphLayouts(ImGuiApp_ImplWin3
         chrome->DWriteFactory->CreateTextLayout(&IMGUIAPP_WIN32D2DDXGI_CHROME_GLYPHS[i], 1, chrome->IconFormat, (float)button_width, (float)caption_height, &chrome->GlyphLayouts[i]);
     chrome->GlyphLayoutDpi = dpi;
     return true;
+}
+
+// (Re)build the cached caption-title layout (Win32X DwfCreateTextFormat + DfwRefreshMetrics): the
+// system caption font (lfCaptionFont, the face uDWM's CDWriteText uses) at the window dpi, leading /
+// vertically centered / no-wrap. WM_SETTEXT drops the layout; a dpi change rebuilds format + layout.
+static void ImGuiApp_ImplWin32D2DDXGI_ChromeEnsureTitle(ImGuiApp_ImplWin32D2DDXGI_ChromeData* chrome, HWND hwnd, UINT dpi, int caption_height)
+{
+    if (chrome->DWriteFactory == nullptr || (chrome->TitleLayout != nullptr && chrome->TitleDpi == dpi))
+        return;
+    if (chrome->TitleLayout != nullptr) { chrome->TitleLayout->Release(); chrome->TitleLayout = nullptr; }
+
+    if (chrome->TitleFormat == nullptr || chrome->TitleDpi != dpi)
+    {
+        if (chrome->TitleFormat != nullptr) { chrome->TitleFormat->Release(); chrome->TitleFormat = nullptr; }
+        NONCLIENTMETRICSW ncm = {};
+        ncm.cbSize = sizeof(ncm);
+        if (!::SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0, dpi))
+            return;
+        float size = (float)(ncm.lfCaptionFont.lfHeight < 0 ? -ncm.lfCaptionFont.lfHeight : ncm.lfCaptionFont.lfHeight);
+        if (size < 1.0f)
+            size = 12.0f;
+        chrome->DWriteFactory->CreateTextFormat(ncm.lfCaptionFont.lfFaceName, nullptr, (DWRITE_FONT_WEIGHT)ncm.lfCaptionFont.lfWeight,
+                                                ncm.lfCaptionFont.lfItalic ? DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE_NORMAL,
+                                                DWRITE_FONT_STRETCH_NORMAL, size, L"", &chrome->TitleFormat);
+        if (chrome->TitleFormat == nullptr)
+            return;
+        chrome->TitleFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+        chrome->TitleFormat->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        chrome->TitleFormat->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+    }
+
+    WCHAR title[256];
+    int len = ::GetWindowTextW(hwnd, title, IM_ARRAYSIZE(title));
+    if (len < 0)
+        len = 0;
+    chrome->DWriteFactory->CreateTextLayout(title, (UINT32)len, chrome->TitleFormat, 8192.0f, (float)caption_height, &chrome->TitleLayout);
+    chrome->TitleDpi = dpi;
 }
 
 // Build the cached caption icon ONCE, high-res (Win32X DwfEnsureIcon): the window's big icon rasterized
@@ -1487,18 +1537,6 @@ static void ImGuiApp_ImplWin32D2DDXGI_ChromeDrawCallback(ImGuiApp* app)
 
     ID2D1DeviceContext* ctx = bd->D2DDeviceContext;
 
-    // High-res caption system icon, placed as win32kfull!DrawCaptionIcon does: SM_CXSMICON x SM_CYSMICON
-    // for the window dpi, centered in the caption-height square slot at the caption left.
-    if (chrome->IconBitmap != nullptr)
-    {
-        const int iw = ::GetSystemMetricsForDpi(SM_CXSMICON, dpi);
-        const int ih = ::GetSystemMetricsForDpi(SM_CYSMICON, dpi);
-        const float ix = (float)((caption_height - iw) / 2 + 1);
-        const float iy = (float)((caption_height - ih) / 2);
-        const D2D1_RECT_F ri = D2D1::RectF(ix, iy, ix + (float)iw, iy + (float)ih);
-        ctx->DrawBitmap(chrome->IconBitmap, &ri, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, nullptr);
-    }
-
     // Animation timeline + effective glyph color: during a crossfade, lerp between the (from) state
     // captured at transition start and the (to = current) state by AnimT -- one 160ms path serves the
     // theme (dark<->light) AND the activation (active<->inactive) transitions (Win32X DfwRenderEx).
@@ -1519,6 +1557,29 @@ static void ImGuiApp_ImplWin32D2DDXGI_ChromeDrawCallback(ImGuiApp* app)
     const float anim_t  = chrome->Anim ? chrome->AnimT      : 1.0f;
     const D2D1_COLOR_F glyph_col = ImGuiApp_ImplWin32D2DDXGI_ChromeLerp(ImGuiApp_ImplWin32D2DDXGI_ChromeGlyphColor(dark_1, activ_1),
                                                                         ImGuiApp_ImplWin32D2DDXGI_ChromeGlyphColor(dark, active), anim_t);
+
+    // High-res caption system icon, placed as win32kfull!DrawCaptionIcon does: SM_CXSMICON x SM_CYSMICON
+    // for the window dpi, centered in the caption-height square slot at the caption left.
+    if (chrome->IconBitmap != nullptr)
+    {
+        const int iw = ::GetSystemMetricsForDpi(SM_CXSMICON, dpi);
+        const int ih = ::GetSystemMetricsForDpi(SM_CYSMICON, dpi);
+        const float ix = (float)((caption_height - iw) / 2 + 1);
+        const float iy = (float)((caption_height - ih) / 2);
+        const D2D1_RECT_F ri = D2D1::RectF(ix, iy, ix + (float)iw, iy + (float)ih);
+        ctx->DrawBitmap(chrome->IconBitmap, &ri, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, nullptr);
+    }
+
+    // Caption title (win32kfull xxxDrawCaptionTemp: the text starts one caption-height in, after the
+    // icon slot), crossfaded like the glyphs and dimmed to 60% when inactive.
+    ImGuiApp_ImplWin32D2DDXGI_ChromeEnsureTitle(chrome, hwnd, dpi, caption_height);
+    if (chrome->TitleLayout != nullptr)
+    {
+        const D2D1_COLOR_F text_col = ImGuiApp_ImplWin32D2DDXGI_ChromeLerp(ImGuiApp_ImplWin32D2DDXGI_ChromeTextColor(dark_1, activ_1),
+                                                                           ImGuiApp_ImplWin32D2DDXGI_ChromeTextColor(dark, active), anim_t);
+        chrome->AnimBrush->SetColor(&text_col);
+        ctx->DrawTextLayout(D2D1::Point2F((FLOAT)caption_height, 0.0f), chrome->TitleLayout, chrome->AnimBrush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+    }
 
     const int max_glyph = ::IsZoomed(hwnd) ? ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_Restore : ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_Maximize;
     const int ld_glyph  = chrome->DarkMode ? ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_Brightness : ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_QuietHours;
@@ -1657,6 +1718,8 @@ void ImGuiApp_ImplWin32D2DDXGI_UninstallChrome(ImGuiApp* app)
 
     for (int i = 0; i < ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_COUNT; i++)
         if (chrome->GlyphLayouts[i] != nullptr)    { chrome->GlyphLayouts[i]->Release(); }
+    if (chrome->TitleLayout != nullptr)            { chrome->TitleLayout->Release(); }
+    if (chrome->TitleFormat != nullptr)            { chrome->TitleFormat->Release(); }
     if (chrome->IconBitmap != nullptr)             { chrome->IconBitmap->Release(); }
     if (chrome->AnimBrush != nullptr)              { chrome->AnimBrush->Release(); }
     if (chrome->IconFormat != nullptr)             { chrome->IconFormat->Release(); }
@@ -1966,7 +2029,35 @@ static LRESULT WINAPI ImGuiApp_ImplWin32D2DDXGI_WndProc(HWND hWnd, UINT msg, WPA
         ::ValidateRgn(hWnd, (HRGN)wParam);
         break;
     case WM_NCACTIVATE:
-        return ::DefWindowProc(hWnd, WM_NCACTIVATE, TRUE, 0);   // reference: always claim active (no dwm frame flash)
+        // Track REAL activation, propagated with lParam -1 (update the window's activation state, do
+        // NOT repaint the standard NC -- we own the caption) so DWM tracks activation and renders the
+        // correct frame. Always claiming active froze DWM's frame until the next real foreground
+        // change (Win32X: the "click the desktop to fix it" symptom).
+        if (bd != nullptr && bd->Chrome != nullptr)
+            ImGuiApp_ImplWin32D2DDXGI_ChromeBeginTransition(bd->Chrome, bd->Chrome->DarkMode, wParam != FALSE);
+        return ::DefWindowProc(hWnd, WM_NCACTIVATE, wParam, (LPARAM)-1);
+    case WM_SETTEXT:
+    {
+        // Let DefWindowProc store the new title, THEN drop the cached caption-title layout (rebuilt
+        // off the hot path at the next chrome draw).
+        const LRESULT result = ::DefWindowProc(hWnd, WM_SETTEXT, wParam, lParam);
+        if (bd != nullptr && bd->Chrome != nullptr && bd->Chrome->TitleLayout != nullptr)
+        {
+            bd->Chrome->TitleLayout->Release();
+            bd->Chrome->TitleLayout = nullptr;
+        }
+        return result;
+    }
+    case WM_DPICHANGED:
+    {
+        // Snap to the system's suggested rect; every dpi-scaled metric re-derives from the window's
+        // new dpi on the next frame (the chrome's cached layouts rebuild on their dpi key).
+        const RECT* suggested = (const RECT*)lParam;
+        if (suggested != nullptr)
+            ::SetWindowPos(hWnd, nullptr, suggested->left, suggested->top,
+                           suggested->right - suggested->left, suggested->bottom - suggested->top, SWP_NOZORDER | SWP_NOACTIVATE);
+        return 0;
+    }
     case WM_DWMNCRENDERINGCHANGED:
         if (wParam)
         {

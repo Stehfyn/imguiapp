@@ -7,7 +7,7 @@
 //  [X] Platform: never-resized desktop-sized swapchain; smooth resize via WM_NCCALCSIZE repaint + restart/no-sequence present ladder.
 //  [X] Multi-viewport: per-viewport DirectComposition swapchains + DComp targets; pacing-aware per-viewport present skip.
 //  [X] AV: synchronous staging-texture CaptureFrame (CopySubresourceRegion + Map; stalls the pipeline).
-//  [X] Platform: canonical D2D caption chrome (min/max/close + light/dark, Segoe Fluent Icons / MDL2 cached text layouts; system icon + HTSYSMENU slot), self-hosted on the client seams; opt out via InitInfo::NoChrome.
+//  [X] Platform: canonical D2D caption chrome (min/max/close + light/dark, Segoe Fluent Icons / MDL2 cached text layouts; system icon + HTSYSMENU slot; caption title; 160ms theme/activation crossfade + hover fades), self-hosted on the client seams; opt out via InitInfo::NoChrome.
 // Missing features:
 //  [ ] Headless modes (use win32-vulkan).
 
