@@ -35,58 +35,74 @@ Files: **N** = imguiapp_nodes.cpp · **D** = imguiapp_demo.cpp · **C** = imguia
 
 ## ST1 — Grammar closure + derive-and-update
 
-- [ ] **ST1.1** Literal color sweep → tables: D:1363–1365 (Generate triple), D:1423 (problems),
-      D:1470 (freeze amber), D:2116/2141/2144/2647/2728/2837/2928–2930/2944/2950/2972 (inspector/
-      console greens-ambers-reds), D:2550–2552 (frozen wash), D:2409–2422 (canvas theme block +
-      its `GridSpacing != 26.0f` sentinel — dies). New `ImGuiAppComposerStyle` rows: `HealthOk/
-      HealthStale/HealthBlocked/RunTint/RecordArmed` (H:745–795, seed N:322–367). Exit: literal
-      ratchet (grep `ImVec4(`/`IM_COL32(` in chrome sections == 0) joins the style-ratchet suite.
-- [ ] **ST1.2** One pill grammar: `ComposerStatusPill`/`ComposerPillColor` D:1650–1683 re-render
-      through the `AppBl*` family (N:454 pill, N:812 filter); delete the SmallButton idiom.
-- [ ] **ST1.3** One icon-button: promote `AppTreeRowIcon` N:15503–15521 → `AppBlIconButton`
-      (carries the `ImGuiHoveredFlags_ChildWindows|AllowWhenBlockedByActiveItem` rule); migrate
-      gizmo column N:7679–7788 + outliner rows N:15709–15776 call sites.
-- [ ] **ST1.4** Zoom pill: overlay beside minimap (`CanvasMiniMap` C:310); reads `CanvasGetZoom`
-      C:245–256; click = fit-all (cmd 11), right-click = 100%. Claims the §4.1 corner-stack rule.
-- [ ] **ST1.5** Status hint revival: `ImGuiAppStatusStripControl` D:1687–1935 left zone renders
-      `AppGraphStatusHint` N:4509 (composed at N:7647–7677); refused-link override keeps its 2.5 s
-      error window. Exit: T step asserting hint text per hover target.
-- [ ] **ST1.6** Keymap editor reachable: host `AppGraphShowKeymapEditor` N:10741–10808 in the
-      project inspector (`ShowComposerProjectInspector` D:2101–2214, new Shortcuts section) +
-      palette verb. Exit: extend `step92_keymap_rebind` T:7005 to drive the UI path.
-- [ ] **ST1.7** One outliner default: D:1815 `220.0f` → the em·16 default of D:2450.
-- [ ] **ST1.8** Derive-and-update pass (§3.7 law, F2's class structurally retired):
-  - [ ] **a** node plate sizes derived in update — new `AppDeriveNodePlateSize(g, n)` from row
-        model (fields/pins/labels) × type ladder (`ImGuiAppComposerMotion` H:807–810) × paddings
-        (`ImGuiAppCanvasStyle` H:1873–1918); seat before submission (N:5850–5854 path).
-  - [ ] **b** band/strip/chip metrics derived in update from the ladder (kills the class of
-        N:9963/10103 for good); `AppScopeCaption` row heights published as facts, not re-derived
-        per draw site.
-  - [ ] **c** `CanvasEndNode` measurement C:967–1013 demoted to verification: assert
-        `derived ≍ measured` (model-unit tolerance = existing `NOISE_M` deadband) under zoom acid.
-        Read-back stays authoritative ONLY for host-submitted arbitrary widget content (comment
-        the exception per §3.7).
-- [ ] **ST1.9** Grammar ratchets: literal grep (ST1.1), grammar dump test (style tables
-      serialized+diffed), type-ladder/quantum audit (off-ladder font size or off-quantum gap = fail).
+- [x] **ST1.1** Literal color sweep → tables: all listed demo.cpp chrome literals moved into
+      `ImGuiAppComposerStyle` rows (`StatusOk / HealthOk / HealthStale / HealthBlocked /
+      RunTintWash / RunTintBorder / RecordArmed`, seeded from `APP_HUE_*`); warn/err text unified
+      onto existing `SevWarn`/`ErrorText`; codegen chip onto `Gold`; the `GridSpacing != 26`
+      sentinel replaced by an editor-state applied flag (view-side — a doc flag would be a
+      render-phase model write). Remaining `ImVec4(0.` in demo.cpp = the 4-line DEMO host palette,
+      pinned by baseline. GREEN (`imguix-chrome-literal-tests`).
+- [x] **ST1.2** One pill grammar: `AppBlStatusPill` exported (draw-list AppBl family, "###id"
+      identity preserved so pill test addresses survive); `ComposerStatusPill` delegates; the
+      SmallButton idiom + local color triple deleted.
+- [x] **ST1.3** One icon-button: `AppTreeRowIcon` → `AppBlIconButton` (family member carrying the
+      ChildWindows/AllowWhenBlockedByActiveItem rule); outliner rows + gizmo column ride it.
+- [x] **ST1.4** Zoom pill: bottom-right, stacks above the minimap inset (corner-tenant rule);
+      honest readout, click = fit-all, right-click = 100%; rect republished (`ZoomPillRect`).
+      Exit: `step109_zoom_pill` GREEN.
+- [x] **ST1.5** Status hint revived — at the §4.1 altitude (one line inside the canvas bottom
+      edge, opaque plate, yields the corner to the minimap), not the strip: the strip keeps facts,
+      the canvas teaches. Error override arrives pre-colored via `AppGraphStatusHint` severity.
+      Exit: `step108_status_hint_line` GREEN.
+- [x] **ST1.6** Keymap editor reachable: project inspector **Shortcuts** section hosts
+      `AppGraphShowKeymapEditor`; palette verb "View: Rebind shortcuts…" (host cmd) empties the
+      selection + opens the inspector. `step92_keymap_rebind` already drives the editor UI.
+- [x] **ST1.7** One outliner default: strip reveal now uses the em·16 default.
+- [x] **ST1.8** Derive-and-update pass:
+  - [x] **a** `AppDeriveNodePlateSize(g, n)` — update-phase plate derivation in model units
+        (host metrics ÷ FontRatio; zoom never enters); `AppLayoutNodeSize`'s per-kind constants
+        deleted — the fallback IS the derivation, so first-frame estimate-vs-measure settle
+        flicker is structurally gone at all 16 call sites. Pin rows derived kind-agnostically
+        (op operands, struct providers, control deps — mirroring submission).
+  - [x] **b** `AppScopeChromeEm(g)` — ONE producer of the post-CanvasEnd chrome em formula
+        (strip + portals consume it; F2's class can't recompose per site).
+  - [x] **c** `step110_derived_size_matches_measured` — derived ≍ measured within the engine
+        noise band for window / control identity / op / drilled struct, and under zoom acid
+        (heights matched to 0.0–0.7 model units). Engine read-back stays authoritative for
+        arbitrary widget content, commented as the §3.7 exception.
+- [x] **ST1.9** Literal ratchet landed (`tests/style/chrome_literal_check.py` + baseline, ctest
+      `imguix-chrome-literal-tests`). Grammar-dump + ladder/quantum audits ride ST6's table-test
+      group (they want the final CUD-re-anchored tables).
 
 ## ST2 — One transport
 
-- [ ] **ST2.1** `AppBlTransportRail` widget: generalize `ComposerPlaybackTimeline` D:931–984
-      (notches: input faint / snapshot gold / command green / divergence error+⬢; cursor; step;
-      play/freeze; source badge). One widget, three renderings (toolbar compact / Replay full /
-      record armed).
-- [ ] **ST2.2** Toolbar App-time scrub D:1477–1492 (`SliderInt ###apptimescrub` + step buttons)
-      replaced by the compact rail; corner time badge (`edit −3 · run −47f`) unified.
-- [ ] **ST2.3** Replay docks: `ComposerRenderPlayback` window D:1055–1156 → bottom-panel tab
-      (tabs at D:2623–2985); joins `RevealPanel`/`ImGuiAppComposerPanel_` (D:327–339); "Open
-      run…" moves to Project tab + palette. Floating window dies.
-- [ ] **ST2.4** Identity gate single-source: inline re-check D:1014–1021 renders the core
-      verdict struct from `AppRunStateAtTick`/`ImGuiAppRunMeta` (av.cpp:1880–1886, H:229–239)
-      with severity glyphs — no second implementation.
-- [ ] **ST2.5** One RGBA upload helper: merge `ComposerSyncFrameTexture` D:851–890 +
-      `ComposerUploadRgbaTexture` D:895–926.
-- [ ] **ST2.6** Run artifacts in Project tab (rescan cadence D:2298–2326) with **Open in Replay**
-      riding the existing `AppRunOpen` reopen path D:778–792.
+- [x] **ST2.1** `AppBlTransportRail` exported (draw-list AppBl family): one notch grammar
+      (input faint / snapshot gold / command green / divergence error), cursor, click/drag scrub,
+      record-armed static dot; all colors from the style table. `ComposerPlaybackTimeline` now
+      builds marks and delegates. Exit: `step111_transport_rail` (compact + full renderings,
+      proportional click, exact edge landing) GREEN.
+- [x] **ST2.2** Toolbar App-time scrub: `SliderInt` replaced by the compact rail — LIVE and FILE
+      scrub through the same widget.
+- [x] **ST2.3** Replay docked: `ComposerRenderPlayback` window → `ComposerReplayTabBody` in the
+      bottom tab bar (`ImGuiAppComposerPanel_Replay`, RevealPanel-reachable, palette verb
+      "Panel: Replay"); toolbar FILE eye + source switch reveal the tab; `PlaybackOpen` deleted.
+      Tab bar wears FittingPolicyResizeDown (five tabs shrink, never scroll-hide). The floating
+      window is gone.
+- [x] **ST2.4** Identity gate single-sourced: `AppRunIdentityMatches` extracted in av.cpp,
+      used inside `AppRunStateAtTick` AND by the state-at-tick readout — the inline UI compare
+      is deleted.
+- [x] **ST2.5** One RGBA upload path: `ComposerSyncFrameTexture` delegates to
+      `ComposerUploadRgbaTexture` behind its tick guard (per-scrub upload preserved).
+- [x] **ST2.6** Project tab lists recorded takes (`.meta`/`.mp4` under the artifact dir) with
+      **Open in Replay** (opens via the one `ComposerOpenRun`/`AppRunOpen` road — which now also
+      opens raw `.meta` takes — sets FILE source, reveals the tab); Record→Stop in Preview also
+      reveals Replay (the handoff is visible, not implicit).
+
+Landed alongside (found by the suites): `APP_HUE_RUN_TINT` pinned to exact 210/150/40 255ths (the
+headless tint probe matches that RGB — a rounding drift left the app frozen mid-suite and cascaded
+six tests); the headless error-row probe now reads the style table's `ErrorText` instead of a
+hard-coded triple; ST1.8a hardened with a context-free per-kind floor (model-only callers run
+between frames where CalcTextSize has no baked font — caught by a core-test segfault stack).
 
 ## ST3 — Observe posture + WYSIWYG (interpreter)
 

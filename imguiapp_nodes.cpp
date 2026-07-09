@@ -300,6 +300,12 @@ static const ImVec4 APP_HUE_DOT_LIVE    = ImVec4(0.35f, 0.59f, 0.90f, 1.0f);   /
 static const ImVec4 APP_HUE_DOT_PROMOTED= ImVec4(0.43f, 0.78f, 0.47f, 1.0f);   // diff dots: promoted
 static const ImVec4 APP_HUE_DOT_DRIFT   = ImVec4(0.88f, 0.71f, 0.35f, 1.0f);   // diff dots: design-only drift
 static const ImVec4 APP_HUE_GOLD       = ImVec4(0.86f, 0.67f, 0.35f, 1.0f);   // overlay accents (gizmos, hint panels)
+static const ImVec4 APP_HUE_STATUS_OK  = ImVec4(0.45f, 0.85f, 0.45f, 1.0f);   // ok/fresh readout text
+static const ImVec4 APP_HUE_HEALTH_OK  = ImVec4(0.16f, 0.38f, 0.22f, 1.0f);   // primary-action fill: output matches the model
+static const ImVec4 APP_HUE_HEALTH_STALE= ImVec4(0.52f, 0.39f, 0.14f, 1.0f);   // primary-action fill: model changed / transport engaged
+static const ImVec4 APP_HUE_HEALTH_BLOCKED= ImVec4(0.55f, 0.21f, 0.18f, 1.0f); // primary-action fill: validation errors
+static const ImVec4 APP_HUE_RUN_TINT   = ImVec4(210.0f / 255.0f, 150.0f / 255.0f, 40.0f / 255.0f, 1.0f);   // frozen/replay wash + engaged border (exact: the tint probe matches this RGB)
+static const ImVec4 APP_HUE_RECORD     = ImVec4(0.88f, 0.35f, 0.35f, 1.0f);   // recording-armed dot
 
 // Alpha override on a packed style color; rgb kept.
 static ImU32 AppColWithAlpha(ImU32 col, float alpha)
@@ -362,6 +368,13 @@ void AppComposerStyleFromTheme(ImGuiAppComposerStyle* style)
     style->GroupOutline   = AppThemeNeutral(0.68f, 0.55f);
     style->GroupTitleBg   = AppThemeNeutral(0.09f);
     style->RailLine       = AppThemeNeutral(0.58f, 0.55f);
+    style->StatusOk       = AppThemeAccent(APP_HUE_STATUS_OK);
+    style->HealthOk       = AppThemeCol(APP_HUE_HEALTH_OK, 1.0f);
+    style->HealthStale    = AppThemeCol(APP_HUE_HEALTH_STALE, 1.0f);
+    style->HealthBlocked  = AppThemeCol(APP_HUE_HEALTH_BLOCKED, 1.0f);
+    style->RunTintWash    = AppThemeCol(APP_HUE_RUN_TINT, 0.12f);
+    style->RunTintBorder  = AppThemeCol(APP_HUE_RUN_TINT, 0.59f);
+    style->RecordArmed    = AppThemeAccent(APP_HUE_RECORD);
     if (style == AppComposerStyleStore())
         (*AppComposerStyleVersion())++;
 }
@@ -832,6 +845,89 @@ static bool AppBlFilterButton(const char* str_id, const char* icon, int count, b
     dl->AddText(ImVec2(mn.x + em * 0.35f, mn.y + (h - ts.y) * 0.5f), tc, lbl);
     if (hov) SetMouseCursor(ImGuiMouseCursor_Hand);
     return hov && IsMouseClicked(ImGuiMouseButton_Left);
+}
+
+// Status pill: tinted plate + state-colored label -- the one rounded pill grammar for strip facts
+// and health readouts (draw-list twin of the field family). The "###id" suffix keeps the widget's
+// identity while the visible label swings with state.
+bool AppBlStatusPill(const char* id, ImU32 col, const char* label)
+{
+    const float em = GetFontSize();
+    const ImVec2 ts = CalcTextSize(label);
+    const ImVec2 sz(ts.x + em * 1.0f, GetFrameHeight() * 0.86f);
+    const ImVec2 p = GetCursorScreenPos();
+    char bid[64];
+    ImFormatString(bid, IM_ARRAYSIZE(bid), "###%s", id);
+    const bool pressed = InvisibleButton(bid, sz);
+    const bool hovered = IsItemHovered();
+    const bool held = IsItemActive();
+    ImDrawList* dl = GetWindowDrawList();
+    dl->AddRectFilled(p, p + sz, AppColWithAlpha(col, held ? 0.40f : hovered ? 0.28f : 0.16f), sz.y * 0.5f);
+    dl->AddText(ImVec2(p.x + em * 0.5f, p.y + (sz.y - ts.y) * 0.5f), col, label);
+    if (hovered)
+        SetMouseCursor(ImGuiMouseCursor_Hand);
+    return pressed;
+}
+
+// Transport rail: THE scrub widget -- one notch grammar for every time surface (toolbar App-time
+// compact, Replay full, record-armed). Marks: input faint / snapshot gold / command green /
+// divergence error (+ glyph via height, never color alone). Returns true when *scrub moved.
+bool AppBlTransportRail(const char* id, ImVec2 size, int count, int* scrub,
+                        const ImGuiAppRailMark* marks, int mark_count, bool record_armed)
+{
+    IM_ASSERT(scrub != nullptr);
+    const float em = GetFontSize();
+    if (size.x <= 0.0f)
+        size.x = ImMax(em * 4.0f, GetContentRegionAvail().x);
+    if (size.y <= 0.0f)
+        size.y = em * 1.6f;
+    const ImVec2 p0 = GetCursorScreenPos();
+    InvisibleButton(id, size);
+    const bool active = IsItemActive();
+    ImDrawList* dl = GetWindowDrawList();
+    const ImGuiAppComposerStyle* cs = AppComposerGetStyle();
+    const float cy = p0.y + size.y * 0.5f;
+    dl->AddRectFilled(ImVec2(p0.x, cy - em * 0.09f), ImVec2(p0.x + size.x, cy + em * 0.09f),
+                      cs->FieldBg, em * 0.09f);
+
+    const float x0 = p0.x + em * 0.25f;
+    const float span = size.x - em * 0.5f;
+    auto tick_x = [&](int idx) { return x0 + (count > 1 ? (float)idx / (float)(count - 1) : 0.0f) * span; };
+
+    for (int m = 0; m < mark_count; m++)
+    {
+        const ImGuiAppRailMark* mk = &marks[m];
+        if (mk->Index < 0 || mk->Index >= count)
+            continue;
+        ImU32 col; float half;
+        switch (mk->Kind)
+        {
+        case ImGuiAppRailMark_Snapshot:   col = cs->Gold;      half = em * 0.55f; break;
+        case ImGuiAppRailMark_Command:    col = cs->StatusOk;  half = em * 0.42f; break;
+        case ImGuiAppRailMark_Divergence: col = cs->ErrorText; half = em * 0.60f; break;
+        default:                          col = cs->TextMuted; half = em * 0.30f; break;
+        }
+        const float x = tick_x(mk->Index);
+        dl->AddLine(ImVec2(x, cy - half), ImVec2(x, cy + half), AppColWithAlpha(col, 0.9f), ImMax(1.0f, em * 0.08f));
+    }
+    if (record_armed)   // static dot -- recording is a state, not an alarm (no pulse)
+        dl->AddCircleFilled(ImVec2(p0.x + size.x - em * 0.35f, p0.y + em * 0.35f), em * 0.22f, cs->RecordArmed);
+
+    const float cx = tick_x(ImClamp(*scrub, 0, ImMax(0, count - 1)));
+    dl->AddLine(ImVec2(cx, p0.y), ImVec2(cx, p0.y + size.y), cs->Gold, ImMax(1.5f, em * 0.12f));
+    dl->AddCircleFilled(ImVec2(cx, cy), em * 0.22f, cs->Gold);
+
+    if (active && count > 1)
+    {
+        const float rel = ImClamp((GetIO().MousePos.x - x0) / span, 0.0f, 1.0f);
+        const int picked = (int)(rel * (count - 1) + 0.5f);
+        if (picked != *scrub)
+        {
+            *scrub = picked;
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool AppBlDisclosure(const char* str_id, bool expanded)
@@ -2245,7 +2341,9 @@ static bool AppNodeModelSize(const ImGuiAppGraph* g, int node_id, ImVec2* out)
 static bool AppNodeModelSize(const ImGuiAppGraph*, int, ImVec2*) { return false; }
 #endif // IMGUIX_DISABLE_TOOLS
 
-// Model-unit footprint: last measurement, else the per-kind estimate.
+// Model-unit footprint: last measurement, else the update-phase derivation (derive, then update:
+// the fallback is exact by construction, so first-frame consumers never settle visibly).
+ImVec2 AppDeriveNodePlateSize(const ImGuiAppGraph* g, const ImGuiAppNode* n);   // fwd (exported: the derived-vs-measured step reads it)
 static ImVec2 AppLayoutNodeSize(const ImGuiAppGraph* g, const ImGuiAppNode* n)
 {
     {
@@ -2253,19 +2351,7 @@ static ImVec2 AppLayoutNodeSize(const ImGuiAppGraph* g, const ImGuiAppNode* n)
         if (AppNodeModelSize(g, n->Id, &m))
             return m;
     }
-    switch (n->Kind)
-    {
-    case ImGuiAppNodeKind_Layer:   return ImVec2(APP_GRAPH_LAYER_NODE_WIDTH, APP_GRAPH_LAYER_ROW_H);
-    case ImGuiAppNodeKind_Window:
-    case ImGuiAppNodeKind_Sidebar: return ImVec2(260.0f, 120.0f);
-    case ImGuiAppNodeKind_Control: return ImVec2(400.0f, 320.0f);
-    case ImGuiAppNodeKind_Struct:  return ImVec2(300.0f, 150.0f);
-    case ImGuiAppNodeKind_Field:   return ImVec2(250.0f, 85.0f);
-    case ImGuiAppNodeKind_Note:    return n->NoteSize;
-    case ImGuiAppNodeKind_Op:      return ImVec2(190.0f, 100.0f);
-    case ImGuiAppNodeKind_Layout:  return ImVec2(240.0f, 110.0f);
-    default:                       return ImVec2(300.0f, 140.0f);
-    }
+    return AppDeriveNodePlateSize(g, n);
 }
 
 // The x where free-standing (non-layer) content begins: right of the layer pipeline column + its frame gutter.
@@ -4147,6 +4233,12 @@ static float AppCanvasScale(const ImGuiAppGraph* g)
 {
     return CanvasGetScale(AppEditorCanvas(g));
 }
+// Post-CanvasEnd chrome screen em: ONE producer of the formula (GetFontSize() already carries
+// FontRatio, so only Zoom multiplies -- x Scale would square the ratio; ST0.2's class).
+static float AppScopeChromeEm(const ImGuiAppGraph* g)
+{
+    return GetFontSize() * AppCanvasZoom(g);
+}
 static ImVec2 AppCanvasNodePos(const ImGuiAppGraph* g, int node_id)
 {
     return CanvasNodePos(AppEditorCanvas(g), node_id);
@@ -4492,6 +4584,157 @@ static const char* AppNodeKindTag(ImGuiAppNodeKind k)
     }
 }
 
+static int AppScopeCurrent(const ImGuiAppGraph* g);   // fwd
+
+// Derive a node's plate size in MODEL units from the row model x the style tables -- the
+// derive-then-update law: no measurement, no frame crossing. Metrics are host-style values
+// divided by FontRatio (zoom never enters; model units are zoom-free). Faithful for the common
+// bodies (root identity cards, structs, fields, ops, layers, notes); drilled detail bodies keep
+// the identity approximation. The engine read-back remains the authority for arbitrary widget
+// content and VERIFIES this derivation (the derived-vs-measured step + the NOISE_M deadband).
+ImVec2 AppDeriveNodePlateSize(const ImGuiAppGraph* g, const ImGuiAppNode* n)
+{
+#ifdef IMGUIX_DISABLE_TOOLS
+    IM_UNUSED(g);
+    return n->Kind == ImGuiAppNodeKind_Note ? n->NoteSize : ImVec2(300.0f, 140.0f);   // lean: no canvas, sizes never render
+#else
+    // Model-only callers run between frames (no baked font -- CalcTextSize would crash): the
+    // context-free per-kind floor keeps placement math sane; frame callers get the exact rows.
+    ImGuiContext* imctx = GetCurrentContext();
+    if (imctx == nullptr || !imctx->WithinFrameScope)
+        switch (n->Kind)
+        {
+        case ImGuiAppNodeKind_Layer:   return ImVec2(APP_GRAPH_LAYER_NODE_WIDTH, APP_GRAPH_LAYER_ROW_H);
+        case ImGuiAppNodeKind_Note:    return n->NoteSize;
+        case ImGuiAppNodeKind_Struct:  return ImVec2(300.0f, 150.0f);
+        case ImGuiAppNodeKind_Field:   return ImVec2(250.0f, 85.0f);
+        case ImGuiAppNodeKind_Op:      return ImVec2(190.0f, 100.0f);
+        case ImGuiAppNodeKind_Window:
+        case ImGuiAppNodeKind_Sidebar: return ImVec2(260.0f, 120.0f);
+        default:                       return ImVec2(300.0f, 140.0f);
+        }
+
+    const ImGuiAppCanvasStyle* cst = CanvasGetStyle(AppEditorCanvas(g));
+    const ImGuiStyle& st = GetStyle();
+    const float ratio = st.FontSizeBase > 0.0f ? GetFontSize() / st.FontSizeBase : 1.0f;
+    const float em  = st.FontSizeBase;
+    const float fh  = GetFrameHeight() / ratio;
+    const float sp  = st.ItemSpacing.y / ratio;
+    const float isx = st.ItemSpacing.x / ratio;
+
+    int   rows = 0;
+    float body_h = 0.0f, body_w = 0.0f;
+    auto text_w = [&](const char* s) { return (s != nullptr && s[0]) ? CalcTextSize(s).x / ratio : 0.0f; };
+    auto row = [&](float h, float w) { rows++; body_h += h; body_w = ImMax(body_w, w); };
+    // One authored-field editor row: name slot 8em + type combo 5em + reorder/reorder/delete + gaps.
+    const float field_row_w = em * 13.0f + fh * 3.0f + isx * 4.0f;
+
+    // Data pin rows are KIND-AGNOSTIC in submission (op operands, struct providers, control deps
+    // all ride the same loop): every non-tie DataIn is a row ("deps" stacks one line per wired
+    // producer), every DataOut is a label row. Edge pins (containment) are row-less.
+    if (n->Kind != ImGuiAppNodeKind_Note)
+        for (int p = 0; p < n->Ports.Size; p++)
+        {
+            const ImGuiAppNodePort* port = &n->Ports.Data[p];
+            const bool is_tie = ImAppNodeKindIsData(n->Kind) && (strcmp(port->Name, "persist") == 0 || strcmp(port->Name, "temp") == 0);
+            if (is_tie)
+                continue;
+            if (port->Kind == ImGuiAppPortKind_DataIn)
+            {
+                int wired = 0;
+                for (int li = 0; li < g->Links.Size; li++)
+                    if (g->Links.Data[li].Kind == ImGuiAppEdgeKind_Data && g->Links.Data[li].EndAttr == port->Id)
+                        wired++;
+                row(em * (float)ImMax(1, wired), em * 8.0f);
+            }
+            else if (port->Kind == ImGuiAppPortKind_DataOut)
+                row(em, text_w(port->Name));
+        }
+
+    switch (n->Kind)
+    {
+    case ImGuiAppNodeKind_Note:
+        // Body is exactly Dummy(NoteSize); the plate adds title band + padding.
+        return ImVec2(n->NoteSize.x + cst->NodePadding.x * 2.0f,
+                      n->NoteSize.y + cst->NodePadding.y * 2.0f + fh + sp);
+    case ImGuiAppNodeKind_Layer:
+    {
+        row(em, text_w(AppLayerRole(n->LayerType)) + em * 3.0f);   // "n/N" + icon + role line
+        if (g->LiveApp != nullptr)
+            row(em, em * 12.0f);                                   // timing line
+        if (n->LayerType == ImGuiAppLayerType_Display || n->LayerType == ImGuiAppLayerType_Command || n->LayerType == ImGuiAppLayerType_Layout)
+            row(fh, em * 10.0f);                                   // build pills
+        else
+            row(em, em * 10.0f);                                   // domain hint line
+        // Plate width is the layer column's, never the node's own content.
+        return ImVec2(AppLayerUniformW(g) + cst->NodePadding.x * 2.0f,
+                      fh + cst->NodePadding.y * 2.0f + body_h + rows * sp);
+    }
+    case ImGuiAppNodeKind_Window:
+    case ImGuiAppNodeKind_Sidebar:
+        break;   // no body rows at the composition root (props render only drilled)
+    case ImGuiAppNodeKind_Field:
+        row(fh, em * 5.0f);                                        // type controls
+        break;
+    case ImGuiAppNodeKind_Op:
+        row(fh, text_w("op") + isx + em * 6.0f);                   // "op" label + operator enum slot
+        break;
+    case ImGuiAppNodeKind_Layout:
+        row(em, em * 6.0f);                                        // variant readout (root altitude)
+        break;
+    case ImGuiAppNodeKind_Struct:
+        if (AppGraphFieldNodeCount(g, n->Id, 0) > 0)
+            row(fh * 0.8f, em * 10.0f);                            // "fields (N, expanded)"
+        else
+        {
+            row(ImMax(fh * 0.8f, em), em * 3.0f);                  // disclosure + "fields" label
+            for (int i = 0; i < n->Draft.PersistFields.Size; i++)
+                row(fh, field_row_w);
+            row(fh, em * 6.0f);                                    // "Add field" pill
+        }
+        break;
+    default:   // data kinds (Control / Task) + App
+        if (n->IsBuiltin)
+            row(em, text_w(n->DataTypeName) + em * 3.5f);          // "data: X" / "builtin"
+        else if (AppScopeCurrent(g) >= 0)                          // detail altitude: tie rows + field lists
+        {
+            if (n->PersistStructId >= 0) row(fh * 0.8f, em * 11.0f);   // "PersistData -> struct" tie
+            else if (n->Draft.PersistFields.Size > 0)
+            {
+                row(ImMax(fh * 0.8f, em), em * 5.0f);
+                for (int i = 0; i < n->Draft.PersistFields.Size; i++)
+                    row(fh, field_row_w);
+                row(fh, em * 6.0f);
+            }
+            if (n->TempStructId >= 0)    row(fh * 0.8f, em * 11.0f);
+            else if (n->Draft.TempFields.Size > 0)
+            {
+                row(ImMax(fh * 0.8f, em), em * 5.0f);
+                for (int i = 0; i < n->Draft.TempFields.Size; i++)
+                    row(fh, field_row_w);
+                row(fh, em * 6.0f);
+            }
+        }
+        else if (n->Draft.PersistFields.Size + n->Draft.TempFields.Size + n->Events.Size + n->Commands.Size > 0)
+            row(em, em * 12.0f);                                   // root identity summary line
+        break;
+    }
+
+    // Title band participates in width: name + the muted kind word (badge/origin dot are
+    // scope/live dressing, excluded from the common-case derivation).
+    const char* title = n->Draft.Name[0] ? n->Draft.Name : AppNodeKindName(n->Kind);
+    if (n->Kind == ImGuiAppNodeKind_Layer && AppLayerIsCore(n->LayerType))
+        title = AppLayerNodeName(n->LayerType);
+    float title_need = text_w(title);
+    const char* tag = AppNodeKindTag(n->Kind);
+    if (tag != nullptr && tag[0])
+        title_need += text_w(tag) + em * 1.2f;
+
+    const float w = ImMax(ImMax(body_w, em * 2.0f), title_need) + cst->NodePadding.x * 2.0f;
+    return ImVec2(w, fh + cst->NodePadding.y * 2.0f + body_h + rows * sp);
+#endif // IMGUIX_DISABLE_TOOLS
+}
+
 // Node ids the editor submitted on the last completed frame -- the set whose geometry queries are
 // meaningful (the engine keeps last-known geometry for evicted nodes, but decorations must not frame
 // nodes that are currently hidden). Single editor instance, same assumption as the other statics.
@@ -4504,7 +4747,7 @@ static bool AppEditorNodeIsSubmitted(const ImGuiAppGraph* g, int node_id)
     return false;
 }
 
-static bool AppTreeRowIcon(const char* icon, ImVec2 center, float r, ImU32 col, ImDrawList* dl_override = nullptr);   // fwd (defined with the outliner)
+static bool AppBlIconButton(const char* icon, ImVec2 center, float r, ImU32 col, ImDrawList* dl_override = nullptr);   // fwd (defined with the outliner)
 static bool AppNodeIsHiddenByCollapse(const ImGuiAppGraph* g, int id);                                                  // fwd (defined with the scope helpers)
 
 // Status hint written by ShowAppGraphEditor, rendered by the host's status bar (AppGraphStatusHint).
@@ -7681,7 +7924,7 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
 
     // Viewport gizmo cluster (top-right overlay column): VIEW verbs only; document verbs belong to the
     // host toolbar. Nothing here mutates the model except Tidy. Draw-list buttons: hit-tests follow the
-    // overlay rule (AllowWhenBlockedByActiveItem, see AppTreeRowIcon).
+    // overlay rule (AllowWhenBlockedByActiveItem, see AppBlIconButton).
     {
         const float em = GetFontSize();
         const float r = em * 0.72f;
@@ -7725,7 +7968,7 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
                 AppGraphEditorState(g)->GizmoCenters[AppGraphEditorState(g)->GizmoCount++] = c;
             if (on)
                 dl->AddCircleFilled(c, r, (lit & 0x00FFFFFF) | ((ImU32)(0x38 * ov_a) << 24));
-            const bool pressed = AppTreeRowIcon(icon, c, r, on ? lit : dim, dl);
+            const bool pressed = AppBlIconButton(icon, c, r, on ? lit : dim, dl);
             const ImVec2 m = GetIO().MousePos;
             const float dx = m.x - c.x, dy = m.y - c.y;
             if (IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && dx * dx + dy * dy <= r * r)
@@ -7788,6 +8031,67 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
             EndPopup();
         }
         dl->PopClipRect();
+    }
+
+    // Zoom pill: the camera's one readout, stacked into the minimap's corner (a second corner tenant
+    // stacks into its owner, never beside it). Click fits all; right-click returns to 1:1.
+    {
+        ImGuiAppEditorState* ed = AppGraphEditorState(g);
+        const float em_zp = GetFontSize();
+        char zl[16];
+        ImFormatString(zl, IM_ARRAYSIZE(zl), "%d%%", (int)(CanvasGetZoom(cv) * 100.0f + 0.5f));
+        const ImVec2 ts = CalcTextSize(zl);
+        const ImVec2 sz(ts.x + em_zp * 0.8f, em_zp * 1.4f);
+        ImVec2 br(editor_min.x + editor_size.x - em_zp * 0.75f, editor_min.y + editor_size.y - em_zp * 1.75f);
+        if (AppGraphViewState(g)->OvMinimap && cv->MiniRectMin.y > editor_min.y)
+            br = ImVec2(cv->MiniRectMax.x, cv->MiniRectMin.y - em_zp * 0.25f);   // stack above the minimap inset
+        const ImVec2 mn(br.x - sz.x, br.y - sz.y);
+        ed->ZoomPillRect = ImVec4(mn.x, mn.y, br.x, br.y);
+        const ImVec2 mp = GetIO().MousePos;
+        const bool hov = IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)
+                      && mp.x >= mn.x && mp.x < br.x && mp.y >= mn.y && mp.y < br.y;
+        const ImGuiAppComposerMotion* mo_zp = AppComposerGetMotion();
+        const float a_zp = hov ? mo_zp->OverlayHover : mo_zp->OverlayRest;
+        ImDrawList* dl_zp = CanvasAnnotationDrawList(cv);
+        dl_zp->PushClipRect(editor_min, editor_min + editor_size, true);
+        dl_zp->AddRectFilled(mn, br, AppColWithAlpha(AppThemeNeutral(0.04f, 1.0f), 0.99f * a_zp), sz.y * 0.3f);
+        dl_zp->AddText(ImVec2(mn.x + em_zp * 0.4f, mn.y + (sz.y - ts.y) * 0.5f),
+                       GetColorU32(ImGuiCol_Text, (hov ? 0.95f : 0.65f) * a_zp), zl);
+        dl_zp->PopClipRect();
+        if (hov)
+        {
+            SetMouseCursor(ImGuiMouseCursor_Hand);
+            SetTooltip("Zoom %s -- click: fit all (Home) / right-click: 100%%", zl);
+            if (IsMouseClicked(ImGuiMouseButton_Left))
+                fit_all();
+            if (IsMouseClicked(ImGuiMouseButton_Right))
+                CanvasSetZoom(cv, 1.0f, editor_min + editor_size * 0.5f);
+        }
+    }
+
+    // Status hint line (gen-1 T2, revived): the keymap teacher -- what the mouse does NOW, one line
+    // inside the canvas bottom edge. Refused-link errors arrive pre-colored through the hint compose.
+    // Chrome is opaque; the plate yields the corner to the minimap (corner tenants are owned).
+    {
+        int hint_sev = 0;
+        const char* hint = AppGraphStatusHint(g, &hint_sev);
+        if (hint != nullptr && hint[0] != 0)
+        {
+            const float em_h = GetFontSize();
+            const float hh = em_h * 1.45f;
+            const ImVec2 mx_h(editor_min.x + editor_size.x, editor_min.y + editor_size.y);
+            ImVec2 mn_h(editor_min.x, mx_h.y - hh);
+            float right = mx_h.x;
+            if (AppGraphViewState(g)->OvMinimap && cv->MiniRectMin.y > editor_min.y && cv->MiniRectMin.y < mx_h.y)
+                right = ImMin(right, cv->MiniRectMin.x - em_h * 0.25f);
+            ImDrawList* dl_h = CanvasAnnotationDrawList(cv);
+            dl_h->PushClipRect(editor_min, editor_min + editor_size, true);
+            dl_h->AddRectFilled(mn_h, ImVec2(right, mx_h.y), AppThemeNeutral(0.045f, 0.988f));
+            dl_h->AddLine(mn_h, ImVec2(right, mn_h.y), AppThemeNeutral(0.22f, 0.9f));
+            dl_h->AddText(ImVec2(mn_h.x + em_h * 0.6f, mn_h.y + (hh - GetTextLineHeight()) * 0.5f),
+                          hint_sev > 0 ? AppComposerGetStyle()->ErrorText : AppComposerGetStyle()->TextMuted, hint);
+            dl_h->PopClipRect();
+        }
     }
 
     // Quick inspector (N): a floating, self-sized inspector beside the primary selection. Pin (thumbtack)
@@ -9964,7 +10268,7 @@ static void AppDrawScopeOrderStrip(ImGuiAppGraph* g, ImVec2 editor_min, ImVec2 e
 
     ImGuiAppCanvasState* cv = AppEditorCanvas(g);
     const float z = AppCanvasScale(g);
-    const float em = GetFontSize() * AppCanvasZoom(g);   // Zoom only: GetFontSize() already carries FontRatio
+    const float em = AppScopeChromeEm(g);
     ImDrawList* dl = CanvasAnnotationDrawList(cv);
     dl->PushClipRect(editor_min, editor_min + editor_size, true);
     const bool win_hovered = IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
@@ -10103,7 +10407,7 @@ static void AppDrawScopePortals(ImGuiAppGraph* g, ImVec2 editor_min, ImVec2 edit
         return;
 
     ImGuiAppCanvasState* cv = AppEditorCanvas(g);
-    const float em = GetFontSize() * AppCanvasZoom(g);   // Zoom only: GetFontSize() already carries FontRatio
+    const float em = AppScopeChromeEm(g);
     ImDrawList* dl = CanvasAnnotationDrawList(cv);
     dl->PushClipRect(editor_min, editor_min + editor_size, true);
     const bool win_hovered = IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
@@ -15508,7 +15812,7 @@ static void AppTreeClick(ImGuiAppGraph* g, ImGuiAppNode* n, ImGuiAppTreeCtx* c)
 // A small flat icon "button" for the outliner row's eye + hover actions, drawn ENTIRELY on the draw list with a
 // manual hit-test (no ImGui item / no SetCursorScreenPos -- those would extend the tree window's boundaries and
 // trip ImGui's cursor-boundary assert). Returns true on a left click within the icon's circle.
-static bool AppTreeRowIcon(const char* icon, ImVec2 center, float r, ImU32 col, ImDrawList* dl_override)
+static bool AppBlIconButton(const char* icon, ImVec2 center, float r, ImU32 col, ImDrawList* dl_override)
 {
     // AllowWhenBlockedByActiveItem: the icon overlays the row's TreeNode item and the press makes that item
     // active BEFORE this hit-test runs -- plain IsWindowHovered() is false on exactly the click frame.
@@ -15732,7 +16036,7 @@ static void AppTreeDrawNode(ImGuiAppGraph* g, int node_id, ImGuiAppTreeCtx* c)
             const bool visible = !row_off;
             const char* eye_icon = visible ? ICON_FA_EYE : ICON_FA_EYE_SLASH;
             const ImU32 eye_col = !visible ? AppComposerGetStyle()->LayerCommand : GetColorU32(ImGuiCol_Text, row_hovered ? 0.85f : 0.3f);
-            if (AppTreeRowIcon(eye_icon, ImVec2(x, cy), r, eye_col))
+            if (AppBlIconButton(eye_icon, ImVec2(x, cy), r, eye_col))
             {
                 if (live_win != nullptr)
                     live_win->Open = !live_win->Open;
@@ -15747,7 +16051,7 @@ static void AppTreeDrawNode(ImGuiAppGraph* g, int node_id, ImGuiAppTreeCtx* c)
 
         if (row_hovered && !n->IsLive)
         {
-            if (AppTreeRowIcon(ICON_FA_TRASH, ImVec2(x, cy), r, AppComposerGetStyle()->Danger))
+            if (AppBlIconButton(ICON_FA_TRASH, ImVec2(x, cy), r, AppComposerGetStyle()->Danger))
             {
                 c->Act = 1;
                 c->ActNode = n->Id;
@@ -15757,14 +16061,14 @@ static void AppTreeDrawNode(ImGuiAppGraph* g, int node_id, ImGuiAppTreeCtx* c)
             if (n->Kind != ImGuiAppNodeKind_Layer)
             {
                 const ImU32 ac = GetColorU32(ImGuiCol_Text, 0.7f);
-                if (AppTreeRowIcon(ICON_FA_CLONE, ImVec2(x, cy), r, ac))
+                if (AppBlIconButton(ICON_FA_CLONE, ImVec2(x, cy), r, ac))
                 {
                     c->Act = 2;
                     c->ActNode = n->Id;
                     icon_clicked = true;
                 }
                 x -= r * 2.0f + rem * 0.05f;
-                if (AppTreeRowIcon(ICON_FA_PEN, ImVec2(x, cy), r, ac))
+                if (AppBlIconButton(ICON_FA_PEN, ImVec2(x, cy), r, ac))
                 {
                     *c->RenameNode = n->Id;
                     *c->RenameFocus = true;

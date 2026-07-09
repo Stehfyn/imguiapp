@@ -319,6 +319,20 @@ enum ImGuiAppTransportSource_
     ImGuiAppTransportSource_FileRun,        // a recorded run opened by AppRunOpen (this file's index)
 };
 
+// Transport rail marks (the ONE notch grammar across every time surface; AppBlTransportRail).
+enum ImGuiAppRailMark_
+{
+    ImGuiAppRailMark_Input = 0,     // faint: an input frame exists at this tick
+    ImGuiAppRailMark_Snapshot,      // gold: state snapshot (restore point)
+    ImGuiAppRailMark_Command,       // green: command dispatch (WAL-correlated)
+    ImGuiAppRailMark_Divergence,    // error: first recording-integrity divergence
+};
+struct ImGuiAppRailMark
+{
+    int Index = 0;                  // tick index (0..count-1)
+    int Kind  = ImGuiAppRailMark_Input;
+};
+
 // Per-backend single-frame decode (the seam: this core header never names a provider). Fills
 // out_rgba with tightly packed RGBA8 for frame_ordinal (mp4 sample / QOI NNNNNN). The QOI
 // provider is ImGuiApp_ImplQoi_DecodeFrame; the caller adapts it to this signature.
@@ -792,6 +806,14 @@ struct ImGuiAppComposerStyle
     ImU32 GroupOutline;
     ImU32 GroupTitleBg; // opaque: grid must not bleed through text
     ImU32 RailLine;
+    // Toolbar health + run-state chrome
+    ImU32 StatusOk;      // ok/fresh readout text (pairs with SevWarn / ErrorText)
+    ImU32 HealthOk;      // primary-action fill: produced output matches the model
+    ImU32 HealthStale;   // primary-action fill: model changed / transport engaged
+    ImU32 HealthBlocked; // primary-action fill: validation errors
+    ImU32 RunTintWash;   // frozen/replay viewport wash (alpha baked)
+    ImU32 RunTintBorder; // frozen/replay engaged border (alpha baked)
+    ImU32 RecordArmed;   // recording-state dot
 };
 
 // Composer chrome scalar idiom -- one table for the motion (F38) and type/space ladders (F39). Not
@@ -881,6 +903,8 @@ struct ImGuiAppEditorState
     ImVec2                         EditorRectMax = ImVec2(0.0f, 0.0f);
     ImVec2                         GizmoCenters[8] = {};               // F40: viewport gizmo centres (screen), in draw order, for the click-path test
     int                            GizmoCount = 0;
+    ImVec4                         ZoomPillRect = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);   // zoom readout pill rect (screen), republished per frame for the click-path test
+    bool                           HostCanvasThemed = false;           // host applied its canvas re-skin (view-side applied flag; zero-inert)
     const ImGuiAppEditorCommand*   HostCmds = nullptr;                 // registered per frame; host-owned (Source_Host entries)
     int                            HostCmdCount = 0;
     int                            HostCmdPicked = -1;
@@ -1301,6 +1325,7 @@ IMGUI_API const ImGuiAppRunTick* AppRunTickAt(const ImGuiAppRunIndex* run, int i
 // recon_app, then AppInputReplay forward to it. On success recon_app's storage holds the app AT that tick;
 // false (out->Reconstructed false) when the identity gate fails or no snapshot/input reaches N. out may be null.
 IMGUI_API bool                   AppRunStateAtTick(ImGuiApp* recon_app, const ImGuiAppRunIndex* run, int tick_index, ImGuiAppRunState* out);
+IMGUI_API bool                   AppRunIdentityMatches(const ImGuiApp* app, const ImGuiAppRunIndex* run);   // the section-5.1 gate, single-sourced for UI readouts
 
 // Correlate the sibling <name>.wal's command dispatches to ticks: parse "[tick:N] ... execute command %d"
 // lines, fill run->Commands tick-sorted, set each tick's WalFirst/WalCount slice. Optional -- the recording
@@ -1681,6 +1706,19 @@ IMGUI_API ImGuiAppComposerStyle*              AppComposerGetStyle();
 IMGUI_API void                                AppComposerStyleFromTheme(ImGuiAppComposerStyle* style);
 
 IMGUI_API ImGuiAppComposerMotion*             AppComposerGetMotion();
+
+// One rounded pill grammar for strip facts and health readouts (draw-list AppBl family). "###id"
+// keeps widget identity while the visible label swings with state.
+IMGUI_API bool                                AppBlStatusPill(const char* id, ImU32 col, const char* label);
+
+// THE scrub widget: toolbar App-time (compact), Replay (full), record-armed. Returns true when
+// *scrub moved via click/drag; size.x <= 0 fills the available width, size.y <= 0 = 1.6 em.
+IMGUI_API bool                                AppBlTransportRail(const char* id, ImVec2 size, int count, int* scrub, const ImGuiAppRailMark* marks, int mark_count, bool record_armed);
+
+// Update-phase plate-size derivation in MODEL units (derive, then update). The engine measurement
+// stays authoritative for arbitrary widget content; tests assert derived == measured within the
+// engine's NOISE_M deadband for the common bodies.
+IMGUI_API ImVec2                              AppDeriveNodePlateSize(const ImGuiAppGraph* g, const ImGuiAppNode* n);
 
 // F38 read-backs: the animated overlay alpha this frame, and the last-drawn gizmo cluster / editor
 // canvas rects (screen). Exposed so the motion ladder is on-camera verifiable.

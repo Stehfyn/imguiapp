@@ -67,6 +67,10 @@ static const ImVec4 DEMO_RED    = ImVec4(0.90f, 0.45f, 0.42f, 1.0f);   // errors
 static const ImVec4 DEMO_YELLOW = ImVec4(0.90f, 0.75f, 0.35f, 1.0f);   // warnings
 static const ImVec4 DEMO_GREEN  = ImVec4(0.50f, 0.75f, 0.50f, 1.0f);   // healthy
 
+// Composer chrome colors come from the one style table (docs/composer-studio-design.md 3.6:
+// zero color literals outside it); this converts a row for the ImVec4-taking widget calls.
+static ImVec4 ComposerCol(ImU32 row) { return ImGui::ColorConvertU32ToFloat4(row); }
+
 static void RenderTextT(const char* text, ImVec2 text_size, ImVec2 pos, ImVec2 avail, float t_value)
 {
     // Draws into the window draw list; must not move the layout cursor (SetCursorScreenPos past
@@ -320,6 +324,7 @@ enum ImGuiAppComposerPanel_
     ImGuiAppComposerPanel_Code,
     ImGuiAppComposerPanel_Project,
     ImGuiAppComposerPanel_Preview,
+    ImGuiAppComposerPanel_Replay,
     ImGuiAppComposerPanel_Output,
 };
 
@@ -336,6 +341,8 @@ enum ImGuiAppComposerHostCmd_
     ImGuiAppComposerHostCmd_PanelPreview,
     ImGuiAppComposerHostCmd_PanelOutput,
     ImGuiAppComposerHostCmd_ToggleLive,
+    ImGuiAppComposerHostCmd_Shortcuts,
+    ImGuiAppComposerHostCmd_PanelReplay,
 };
 
 // App-time transport (F29): a per-frame snapshot ring of the mirror's snapshottable (trivially-copyable)
@@ -350,12 +357,12 @@ struct ImGuiAppComposerTransport
     // FILE source (F63). One transport, two sources: LIVE restores bytes into the mirror; FILE decodes
     // the recorded frame image at a tick and blits it. All FILE state rides this object -- no TU globals.
     int                  Source = ImGuiAppTransportSource_LiveRing;
-    bool                 PlaybackOpen = false;                 // the FILE playback timeline window is showing
     ImGuiAppRunIndex*    Run = nullptr;                        // the opened run (owned; AppRunClose on close/reopen)
     ImGuiAppRunView      FileView;                             // run index + decoder behind Count()/Show(int)
     ImVector<ImU64>      CommandTicks;                         // ticks with a WAL "execute command" dispatch (marker source)
     ImTextureData*       FrameTex = nullptr;                   // GPU texture holding the decoded frame (lazy)
     int                  FrameTexTick = -1;                    // tick uploaded to FrameTex (decode/upload cache)
+    int                  FrameTexW = 0, FrameTexH = 0;         // upload-helper size cache (one blit path, ST2.5)
     char                 RunName[256] = "headless-artifacts/composer-headless";  // recording path (QOI take directory)
     char                 RunDir[256]  = "";                    // resolved directory handed to the decoder
     char                 OpenErr[160] = "";                    // last open failure, shown in the window
@@ -805,6 +812,33 @@ static void ComposerOpenRun(ImGuiAppComposerTransport* tr)
     tr->OpenErr[0] = 0;
     ComposerCloseRun(tr);
 
+    // A .meta path is a meta-only take (tick scrub, no frame images): the file IS the container.
+    if (const char* ext = strrchr(tr->RunName, '.'); ext != nullptr && strcmp(ext, ".meta") == 0)
+    {
+        size_t raw_size = 0;
+        void* raw = ImFileLoadToMemory(tr->RunName, "rb", &raw_size);
+        if (raw == nullptr)
+        {
+            ImFormatString(tr->OpenErr, IM_ARRAYSIZE(tr->OpenErr), "No take at '%s'.", tr->RunName);
+            return;
+        }
+        tr->Run = ImGui::AppRunOpen((const char*)raw, (int)raw_size);
+        IM_FREE(raw);
+        if (tr->Run == nullptr)
+        {
+            ImFormatString(tr->OpenErr, IM_ARRAYSIZE(tr->OpenErr), "Meta stream in '%s' rejected (bad/absent header).", tr->RunName);
+            return;
+        }
+        tr->FileView.Run = tr->Run;
+        tr->FileView.Decode = nullptr;
+        tr->FileView.DecodeUser = nullptr;
+        tr->FileView.Scrub = 0;
+        tr->FrameTexTick = -1;
+        ComposerLoadWalCommandTicks(tr);
+        ImGui::AppRunViewShow(&tr->FileView, 0);
+        return;
+    }
+
     const int embed_rows = ImGuiAppAVEncodeConfig().EmbedRows;   // the take's default strip depth
     ImVector<char> meta;
     bool is_mp4 = false;
@@ -846,46 +880,22 @@ static void ComposerOpenRun(ImGuiAppComposerTransport* tr)
     ImGui::AppRunViewShow(&tr->FileView, 0);   // land on the first tick
 }
 
-// Upload the FILE view's decoded RGBA into the transport's GPU texture (created once per run size,
-// then full-rect updated on each scrub). Returns true when FrameTex holds tick-current pixels.
+static ImTextureRef ComposerUploadRgbaTexture(ImTextureData** tex, int* tw, int* th, const unsigned char* rgba, int w, int h);   // fwd
+
+// Upload the FILE view's decoded RGBA into the transport's GPU texture. ONE blit path (shared with
+// the DLL preview frame): the tick guard keeps it a per-scrub upload, never per-frame.
 static bool ComposerSyncFrameTexture(ImGuiAppComposerTransport* tr)
 {
     const ImGuiAppRunView* v = &tr->FileView;
     const int need = v->Width * v->Height * 4;
     if (v->ShownImage < 0 || v->Width <= 0 || v->Height <= 0 || v->Pixels.Size < need)
         return false;
-    // Size change (differently-sized run reopened): hand the old texture back, take a fresh object.
     if (tr->FrameTex != nullptr && tr->FrameTex->Status != ImTextureStatus_Destroyed
-        && (tr->FrameTex->Width != v->Width || tr->FrameTex->Height != v->Height))
-    {
-        tr->FrameTex->WantDestroyNextFrame = true;   // backend frees the GPU side next frame
-        tr->FrameTex = nullptr;
-        tr->FrameTexTick = -1;
-    }
-    if (tr->FrameTex == nullptr)
-    {
-        tr->FrameTex = IM_NEW(ImTextureData)();
-        ImGui::RegisterUserTexture(tr->FrameTex);   // processed by the renderer backend while registered
-    }
-    ImTextureData* tex = tr->FrameTex;
-    if (tex->Status == ImTextureStatus_Destroyed)
-    {
-        tex->Create(ImTextureFormat_RGBA32, v->Width, v->Height);
-        memcpy(tex->GetPixels(), v->Pixels.Data, (size_t)need);
-        tr->FrameTexTick = (int)v->ShownTick;
-        return true;
-    }
-    if (tr->FrameTexTick != (int)v->ShownTick)
-    {
-        memcpy(tex->GetPixels(), v->Pixels.Data, (size_t)need);
-        tex->UpdateRect.x = 0;
-        tex->UpdateRect.y = 0;
-        tex->UpdateRect.w = (unsigned short)v->Width;
-        tex->UpdateRect.h = (unsigned short)v->Height;
-        tex->UsedRect = tex->UpdateRect;
-        tex->SetStatus(ImTextureStatus_WantUpdates);
-        tr->FrameTexTick = (int)v->ShownTick;
-    }
+        && tr->FrameTexTick == (int)v->ShownTick && tr->FrameTexW == v->Width && tr->FrameTexH == v->Height)
+        return true;   // tick-current pixels already on the GPU
+    ComposerUploadRgbaTexture(&tr->FrameTex, &tr->FrameTexW, &tr->FrameTexH,
+                              (const unsigned char*)v->Pixels.Data, v->Width, v->Height);
+    tr->FrameTexTick = (int)v->ShownTick;
     return true;
 }
 
@@ -925,62 +935,39 @@ static ImTextureRef ComposerUploadRgbaTexture(ImTextureData** tex, int* tw, int*
     return t->GetTexRef();
 }
 
-// Timeline strip: the F29 slider widened into a marked rail. Per-tick markers from the F62 index (snapshot
-// points, opt-in input frames, chain divergence) plus WAL command dispatches; the scrub cursor rides the
-// current tick; click/drag scrubs. Returns picked scrub index (-1 = unchanged). The addressable SliderInt is for tests.
+// FILE marks -> the ONE transport rail (ST2.1): per-tick markers from the F62 index (snapshot
+// points, opt-in input frames, chain divergence) plus WAL command dispatches. Returns picked
+// scrub index (-1 = unchanged); the rail owns hit-testing and the notch grammar.
 static int ComposerPlaybackTimeline(ImGuiAppComposerTransport* tr, float em, const ImGuiStyle& style)
 {
+    IM_UNUSED(style);
     const int count = ImGui::AppRunViewCount(&tr->FileView);
     if (count <= 0)
         return -1;
     const ImGuiAppRunIndex* run = tr->Run;
     const ImU64 first_tick = run->Ticks.Data[0].Tick;
 
-    int picked = -1;
-    const float strip_h = em * 1.6f;
-    const ImVec2 p0 = ImGui::GetCursorScreenPos();
-    const float strip_w = ImMax(em * 8.0f, ImGui::GetContentRegionAvail().x);
-    ImGui::InvisibleButton("###filestrip", ImVec2(strip_w, strip_h));
-    const bool active = ImGui::IsItemActive();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImVec2 rail_min = ImVec2(p0.x, p0.y + strip_h * 0.5f - em * 0.09f);
-    const ImVec2 rail_max = ImVec2(p0.x + strip_w, p0.y + strip_h * 0.5f + em * 0.09f);
-    dl->AddRectFilled(rail_min, rail_max, DemoThemeCol(style.Colors[ImGuiCol_FrameBg], 1.0f), em * 0.09f);
-
-    auto tick_x = [&](int idx) -> float
+    ImVector<ImGuiAppRailMark> marks;
+    auto mark = [&](int idx, int kind)
     {
-        const float t = count > 1 ? (float)idx / (float)(count - 1) : 0.0f;
-        return p0.x + em * 0.25f + t * (strip_w - em * 0.5f);
+        ImGuiAppRailMark m;
+        m.Index = idx;
+        m.Kind = kind;
+        marks.push_back(m);
     };
-    auto mark = [&](int idx, const ImVec4& col, float half_h)
-    {
-        if (idx < 0 || idx >= count)
-            return;
-        const float x = tick_x(idx);
-        dl->AddLine(ImVec2(x, p0.y + strip_h * 0.5f - half_h), ImVec2(x, p0.y + strip_h * 0.5f + half_h), DemoThemeCol(col, 0.9f), ImMax(1.0f, em * 0.08f));
-    };
-
-    // Input ticks (opt-in InputFrame): faint. Snapshot points: gold. Command dispatch: green.
     for (int i = 0; i < count; i++)
         if (run->Ticks.Data[i].InputOffset >= 0)
-            mark(i, style.Colors[ImGuiCol_TextDisabled], em * 0.30f);
+            mark(i, ImGuiAppRailMark_Input);
     for (int s = 0; s < run->SnapshotTicks.Size; s++)
-        mark(run->SnapshotTicks.Data[s], DEMO_GOLD, em * 0.55f);
+        mark(run->SnapshotTicks.Data[s], ImGuiAppRailMark_Snapshot);
     for (int c = 0; c < tr->CommandTicks.Size; c++)
-        mark((int)(tr->CommandTicks.Data[c] - first_tick), ImVec4(0.45f, 0.85f, 0.45f, 1.0f), em * 0.42f);
+        mark((int)(tr->CommandTicks.Data[c] - first_tick), ImGuiAppRailMark_Command);
     if (run->Stats.ChainDivergesAt >= 0)   // first recording-integrity divergence (io-frame ordinal == tick index)
-        mark(run->Stats.ChainDivergesAt, ImVec4(0.92f, 0.45f, 0.45f, 1.0f), em * 0.6f);
+        mark(run->Stats.ChainDivergesAt, ImGuiAppRailMark_Divergence);
 
-    // Scrub cursor + rail hit-test.
-    const float cx = tick_x(tr->FileView.Scrub);
-    dl->AddLine(ImVec2(cx, p0.y), ImVec2(cx, p0.y + strip_h), DemoThemeCol(DEMO_GOLD, 1.0f), ImMax(1.5f, em * 0.12f));
-    dl->AddCircleFilled(ImVec2(cx, p0.y + strip_h * 0.5f), em * 0.22f, DemoThemeCol(DEMO_GOLD, 1.0f));
-    if (active && count > 1)
-    {
-        const float rel = ImClamp((ImGui::GetIO().MousePos.x - (p0.x + em * 0.25f)) / (strip_w - em * 0.5f), 0.0f, 1.0f);
-        picked = (int)(rel * (count - 1) + 0.5f);
-    }
-    return picked;
+    int scrub = tr->FileView.Scrub;
+    return ImGui::AppBlTransportRail("###filestrip", ImVec2(ImMax(em * 8.0f, ImGui::GetContentRegionAvail().x), em * 1.6f),
+                                     count, &scrub, marks.Data, marks.Size, false) ? scrub : -1;
 }
 
 // FILE playback window: open/close a run, timeline strip, exact-tick step + slider, decoded frame + per-tick
@@ -1010,11 +997,9 @@ static void ComposerRenderStateAtTick(ImGuiAppComposerTransport* tr, ImGuiApp* m
         ImGui::TextDisabled("dispatch: (none this tick)");
     }
 
-    // Value reconstruction: identity gate first, then restore-nearest(+replay). Live-mirror only.
-    const bool identity_ok = mirror != nullptr
-                          && ImGui::GetAppCompositionID(mirror) == run->Identity.CompositionID
-                          && ImGui::AppStateSchemaHash(mirror) == run->Identity.SchemaHash;
-    if (!identity_ok)
+    // Value reconstruction: the core's own identity gate first (ST2.4: one verdict source), then
+    // restore-nearest(+replay). Live-mirror only.
+    if (!ImGui::AppRunIdentityMatches(mirror, run))
     {
         ImGui::TextDisabled("values: composition/schema differ from this build -- reconstruction refused");
         return;
@@ -1052,17 +1037,10 @@ static void ComposerRenderStateAtTick(ImGuiAppComposerTransport* tr, ImGuiApp* m
         ImGui::TextDisabled("values: reconstruction unavailable at this tick");
 }
 
-static void ComposerRenderPlayback(ImGuiAppComposerTransport* tr, ImGuiApp* mirror, float em, const ImGuiStyle& style)
+// Replay tab body (ST2.3: docked panel under the contract, never a floating window): open/close a
+// run, the transport rail, exact-tick stepping, per-tick readout, F64 state-at-tick, frame blit.
+static void ComposerReplayTabBody(ImGuiAppComposerTransport* tr, ImGuiApp* mirror, float em, const ImGuiStyle& style)
 {
-    if (!tr->PlaybackOpen)
-        return;
-    ImGui::SetNextWindowSize(ImVec2(em * 34.0f, em * 30.0f), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin(ICON_FA_FILM "  Playback (FILE)###ComposerPlayback", &tr->PlaybackOpen))
-    {
-        ImGui::End();
-        return;
-    }
-
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Run");
     ImGui::SameLine();
@@ -1079,12 +1057,11 @@ static void ComposerRenderPlayback(ImGuiAppComposerTransport* tr, ImGuiApp* mirr
             ComposerCloseRun(tr);
     }
     if (tr->OpenErr[0])
-        ImGui::TextColored(ImVec4(0.92f, 0.45f, 0.45f, 1.0f), "%s", tr->OpenErr);
+        ImGui::TextColored(ComposerCol(ImGui::AppComposerGetStyle()->ErrorText), "%s", tr->OpenErr);
 
     if (tr->Run == nullptr)
     {
-        ImGui::TextDisabled("No run open. Enter a recording path and Open.");
-        ImGui::End();
+        ImGui::TextDisabled("No run open. Enter a recording path and Open (or record a preview take).");
         return;
     }
 
@@ -1097,16 +1074,11 @@ static void ComposerRenderPlayback(ImGuiAppComposerTransport* tr, ImGuiApp* mirr
                 tr->Run->Stats.ChainOk ? "ok" : "BROKEN",
                 tr->Run->Stats.DigestState == 0 ? "ok" : tr->Run->Stats.DigestState == 1 ? "missing" : "MISMATCH");
 
-    // Step-back | slider | step-forward -- integer tick indices, so every landing is an exact tick.
+    // Step-back | rail | step-forward -- integer tick indices, so every landing is an exact tick.
     int scrub = tr->FileView.Scrub;
     if (ImGui::Button(ICON_FA_BACKWARD_STEP "###filescrubback"))
         scrub = ImMax(0, scrub - 1);
     ImGui::SetItemTooltip("Step back one tick");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(em * 14.0f);
-    if (ImGui::SliderInt("###filescrub", &scrub, 0, count > 0 ? count - 1 : 0, "frame %d"))
-        scrub = ImClamp(scrub, 0, count - 1);
-    ImGui::SetItemTooltip("Scrub the recorded run (frame index; tick shown below)");
     ImGui::SameLine();
     if (ImGui::Button(ICON_FA_FORWARD_STEP "###filescrubfwd"))
         scrub = count > 0 ? ImMin(count - 1, scrub + 1) : 0;
@@ -1150,7 +1122,6 @@ static void ComposerRenderPlayback(ImGuiAppComposerTransport* tr, ImGuiApp* mirr
     {
         ImGui::TextDisabled("(no frame image at this tick)");
     }
-    ImGui::End();
 }
 
 //-----------------------------------------------------------------------------
@@ -1172,6 +1143,7 @@ struct ImGuiAppToolbarTempData
     bool ToggleLive;     // Live-eye toggle clicked this frame (OnUpdate derives the new state)
     bool ToggleTree;     // outliner sidebar toggle clicked this frame
     bool ToggleInsp;     // Inspector sidebar toggle clicked this frame
+    bool OpenShortcuts;  // reveal the project inspector's Shortcuts section (palette verb)
     bool Undo;           // undo / redo edit-intents (applied in OnUpdate)
     bool Redo;
     bool Diff;           // diff current graph's codegen vs the saved-on-disk graph -> clipboard
@@ -1207,6 +1179,13 @@ struct ImGuiAppToolbarControl : ImGuiAppControl<ImGuiAppToolbarData, ImGuiAppToo
         }
         if (temp_data->WriteHeader)
             ComposerGenerateHeader(doc);
+        if (temp_data->OpenShortcuts)
+        {
+            // The Shortcuts section lives on the project inspector: empty the selection so it shows.
+            ImGui::AppGraphViewState(&doc->Graph)->InspOpen = true;
+            doc->Selection = 0;
+            doc->Graph.Selection.resize(0);
+        }
         if (temp_data->ToggleCode)
         {
             doc->CodeH = (doc->CodeH > 0.0f) ? 0.0f : ImGui::GetFontSize() * 12.0f;
@@ -1360,9 +1339,9 @@ struct ImGuiAppToolbarControl : ImGuiAppControl<ImGuiAppToolbarData, ImGuiAppToo
             // Stable ### id: the visible label swings Generate/Generated with health, but the widget keeps one
             // identity (no focus/press churn across states; test-addressable).
             const char* gen_label = nerr > 0 ? ICON_FA_TRIANGLE_EXCLAMATION "  Generate###generate" : fresh ? ICON_FA_CHECK "  Generated###generate" : ICON_FA_FILE_EXPORT "  Generate###generate";
-            ImGui::PushStyleColor(ImGuiCol_Button, nerr > 0 ? ImVec4(0.55f, 0.21f, 0.18f, 1.0f)
-                                             : fresh    ? ImVec4(0.16f, 0.38f, 0.22f, 1.0f)
-                                                        : ImVec4(0.52f, 0.39f, 0.14f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Button, nerr > 0 ? ComposerCol(ImGui::AppComposerGetStyle()->HealthBlocked)
+                                             : fresh    ? ComposerCol(ImGui::AppComposerGetStyle()->HealthOk)
+                                                        : ComposerCol(ImGui::AppComposerGetStyle()->HealthStale));
             temp_data->WriteHeader = ImGui::Button(gen_label);
             ImGui::PopStyleColor();
             if (nerr > 0)
@@ -1389,7 +1368,7 @@ struct ImGuiAppToolbarControl : ImGuiAppControl<ImGuiAppToolbarData, ImGuiAppToo
             if (doc->CodegenWarnCount > 0)
             {
                 ImGui::SameLine(0.0f, ImMax(1.0f, em * 0.25f));
-                ImGui::PushStyleColor(ImGuiCol_Text, ImLerp(DEMO_GOLD, style.Colors[ImGuiCol_Text], 0.15f));
+                ImGui::PushStyleColor(ImGuiCol_Text, ComposerCol(ImGui::AppComposerGetStyle()->Gold));
                 char warn_lbl[48];
                 ImFormatString(warn_lbl, IM_ARRAYSIZE(warn_lbl), ICON_FA_TRIANGLE_EXCLAMATION "  %d###codegenwarn", doc->CodegenWarnCount);
                 const bool open_warn = ImGui::Button(warn_lbl);
@@ -1420,7 +1399,7 @@ struct ImGuiAppToolbarControl : ImGuiAppControl<ImGuiAppToolbarData, ImGuiAppToo
                 if (nprob > 0)
                 {
                     ImGui::SameLine(0.0f, ImMax(1.0f, em * 0.25f));
-                    ImGui::PushStyleColor(ImGuiCol_Button, nerr > 0 ? ImVec4(0.55f, 0.21f, 0.18f, 1.0f) : ImVec4(0.52f, 0.39f, 0.14f, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_Button, ComposerCol(nerr > 0 ? ImGui::AppComposerGetStyle()->HealthBlocked : ImGui::AppComposerGetStyle()->HealthStale));
                     char prob_lbl[48];
                     ImFormatString(prob_lbl, IM_ARRAYSIZE(prob_lbl), ICON_FA_TRIANGLE_EXCLAMATION "  %d###problems", nprob);
                     if (ImGui::Button(prob_lbl))
@@ -1447,14 +1426,14 @@ struct ImGuiAppToolbarControl : ImGuiAppControl<ImGuiAppToolbarData, ImGuiAppToo
                 const bool file_src = tr->Source == ImGuiAppTransportSource_FileRun;
                 EditorToolSep(em);
                 // Source switch (icon-only to keep the flow row narrow, so the right-aligned observe cluster
-                // does not shift): toggle LIVE ring <-> a recorded FILE run; FILE opens the playback window.
+                // does not shift): toggle LIVE ring <-> a recorded FILE run; FILE reveals the Replay panel.
                 if (file_src)
                     ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonActive]);
                 if (ImGui::Button(file_src ? ICON_FA_FILM "###apptimesrc" : ICON_FA_TOWER_BROADCAST "###apptimesrc"))
                 {
                     tr->Source = file_src ? ImGuiAppTransportSource_LiveRing : ImGuiAppTransportSource_FileRun;
                     if (tr->Source == ImGuiAppTransportSource_FileRun)
-                        tr->PlaybackOpen = true;
+                        temp_data->RevealPanel = ImGuiAppComposerPanel_Replay;
                 }
                 if (file_src)
                     ImGui::PopStyleColor();
@@ -1467,7 +1446,7 @@ struct ImGuiAppToolbarControl : ImGuiAppControl<ImGuiAppToolbarData, ImGuiAppToo
                     const int frames = tr->History.Count;
                     const bool was_frozen = tr->Frozen;   // capture: the button click below flips Frozen mid-Push/Pop
                     if (was_frozen)
-                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.52f, 0.39f, 0.14f, 1.0f));   // amber: app time engaged
+                        ImGui::PushStyleColor(ImGuiCol_Button, ComposerCol(ImGui::AppComposerGetStyle()->HealthStale));   // amber: app time engaged
                     if (ImGui::Button(was_frozen ? ICON_FA_PLAY "###apptime" : ICON_FA_PAUSE "###apptime"))
                         tr->Frozen = !tr->Frozen;
                     if (was_frozen)
@@ -1480,11 +1459,11 @@ struct ImGuiAppToolbarControl : ImGuiAppControl<ImGuiAppToolbarData, ImGuiAppToo
                             tr->Frame = ImMax(0, tr->Frame - 1);
                         ImGui::SetItemTooltip("Step back one frame");
                         ImGui::SameLine();
-                        ImGui::SetNextItemWidth(em * 8.0f);
-                        int f = frames > 0 ? tr->Frame : 0;
-                        if (ImGui::SliderInt("###apptimescrub", &f, 0, frames > 0 ? frames - 1 : 0, "f %d"))
+                        // The ONE transport rail, compact rendering (ST2.2): same widget as Replay's.
+                        int f = frames > 0 ? ImClamp(tr->Frame, 0, frames - 1) : 0;
+                        if (ImGui::AppBlTransportRail("###apptimescrub", ImVec2(em * 8.0f, ImGui::GetFrameHeight()), frames, &f, nullptr, 0, false))
                             tr->Frame = f;
-                        ImGui::SetItemTooltip("Scrub App-time frame (0 = oldest, %d = newest)", frames > 0 ? frames - 1 : 0);
+                        ImGui::SetItemTooltip("Scrub App-time frame %d / %d (0 = oldest)", f, frames > 0 ? frames - 1 : 0);
                         ImGui::SameLine();
                         if (ImGui::Button(ICON_FA_FORWARD_STEP "###apptimefwd"))
                             tr->Frame = frames > 0 ? ImMin(frames - 1, tr->Frame + 1) : 0;
@@ -1494,9 +1473,9 @@ struct ImGuiAppToolbarControl : ImGuiAppControl<ImGuiAppToolbarData, ImGuiAppToo
                 else
                 {
                     ImGui::SameLine();
-                    if (ImGui::Button(tr->PlaybackOpen ? ICON_FA_EYE "###apptimefile" : ICON_FA_EYE_SLASH "###apptimefile"))
-                        tr->PlaybackOpen = !tr->PlaybackOpen;
-                    ImGui::SetItemTooltip("Show / hide the FILE playback timeline window");
+                    if (ImGui::Button(ICON_FA_FILM "###apptimefile"))
+                        temp_data->RevealPanel = ImGuiAppComposerPanel_Replay;
+                    ImGui::SetItemTooltip("Open the Replay panel (recorded-run transport)");
                 }
             }
 
@@ -1618,6 +1597,8 @@ struct ImGuiAppToolbarControl : ImGuiAppControl<ImGuiAppToolbarData, ImGuiAppToo
             case ImGuiAppComposerHostCmd_PanelPreview: temp_data->RevealPanel = ImGuiAppComposerPanel_Preview; break;
             case ImGuiAppComposerHostCmd_PanelOutput:  temp_data->RevealPanel = ImGuiAppComposerPanel_Output; break;
             case ImGuiAppComposerHostCmd_ToggleLive:   temp_data->ToggleLive = true; break;
+            case ImGuiAppComposerHostCmd_Shortcuts:    temp_data->OpenShortcuts = true; break;
+            case ImGuiAppComposerHostCmd_PanelReplay:  temp_data->RevealPanel = ImGuiAppComposerPanel_Replay; break;
             default: break;
             }
 
@@ -1636,10 +1617,6 @@ struct ImGuiAppToolbarControl : ImGuiAppControl<ImGuiAppToolbarData, ImGuiAppToo
             }
         }
         ImGui::EndChild();
-
-        // F63 FILE-mode playback timeline window (a top-level window, opened by the transport source switch).
-        if (doc->Transport != nullptr)
-            ComposerRenderPlayback(doc->Transport, doc->Mirror, em, style);
     }
 };
 
@@ -1652,34 +1629,24 @@ struct ImGuiAppToolbarControl : ImGuiAppControl<ImGuiAppToolbarData, ImGuiAppToo
 typedef int ImGuiAppComposerPillState;
 enum ImGuiAppComposerPillState_ { ImGuiAppComposerPillState_Neutral, ImGuiAppComposerPillState_Ok, ImGuiAppComposerPillState_Warn, ImGuiAppComposerPillState_Err };
 
-static ImVec4 ComposerPillColor(ImGuiAppComposerPillState s)
+// State -> style-table row: the pill palette is the one chrome table, never a local triple.
+static ImU32 ComposerPillRow(ImGuiAppComposerPillState s)
 {
     switch (s)
     {
-    case ImGuiAppComposerPillState_Ok:   return ImVec4(0.42f, 0.74f, 0.47f, 1.0f);
-    case ImGuiAppComposerPillState_Warn: return ImVec4(0.85f, 0.68f, 0.35f, 1.0f);
-    case ImGuiAppComposerPillState_Err:  return ImVec4(0.90f, 0.42f, 0.38f, 1.0f);
-    default:                return ImGui::GetStyle().Colors[ImGuiCol_TextDisabled];
+    case ImGuiAppComposerPillState_Ok:   return ImGui::AppComposerGetStyle()->StatusOk;
+    case ImGuiAppComposerPillState_Warn: return ImGui::AppComposerGetStyle()->SevWarn;
+    case ImGuiAppComposerPillState_Err:  return ImGui::AppComposerGetStyle()->ErrorText;
+    default:                return ImGui::GetColorU32(ImGuiCol_TextDisabled);
     }
 }
 
-// A small rounded pill: tinted background + state-coloured label. `id` keeps a stable widget identity
-// while the label swings. Returns true on click.
+static ImVec4 ComposerPillColor(ImGuiAppComposerPillState s) { return ComposerCol(ComposerPillRow(s)); }
+
+// The shared draw-list pill (AppBl family): one rounded grammar across strip facts and readouts.
 static bool ComposerStatusPill(const char* id, ImGuiAppComposerPillState s, const char* label)
 {
-    const ImVec4 col = ComposerPillColor(s);
-    const float  em  = ImGui::GetFontSize();
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, em * 0.9f);
-    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(col.x, col.y, col.z, 0.16f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(col.x, col.y, col.z, 0.28f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(col.x, col.y, col.z, 0.40f));
-    ImGui::PushStyleColor(ImGuiCol_Text, col);
-    char buf[144];
-    ImFormatString(buf, IM_ARRAYSIZE(buf), "%s###%s", label, id);
-    const bool pressed = ImGui::SmallButton(buf);
-    ImGui::PopStyleColor(4);
-    ImGui::PopStyleVar();
-    return pressed;
+    return ImGui::AppBlStatusPill(id, ComposerPillRow(s), label);
 }
 
 // Rendered last -> window bottom. Keymap hints left, document counts right; all right-side text is
@@ -1812,7 +1779,7 @@ struct ImGuiAppStatusStripControl : ImGuiAppControl<ImGuiAppStatusStripData, ImG
             }
         }
         if (temp_data->RevealTree)
-            doc->TreeW = doc->TreeW > 0.0f ? 0.0f : 220.0f;   // show / hide the outliner column
+            doc->TreeW = doc->TreeW > 0.0f ? 0.0f : ImGui::GetFontSize() * 16.0f;   // show / hide the outliner column (EditorBody's default width)
         if (temp_data->ToggleLive)
             doc->ShowLive = !doc->ShowLive;
         if (temp_data->Generate)
@@ -2070,6 +2037,8 @@ struct ImGuiAppEditorBodyData
     // Project tab: the document's files on disk, rescanned on a slow cadence in OnUpdate.
     struct ImGuiAppProjFile { char Name[160]; unsigned long long Size; bool IsGraph; bool IsHeader; };
     ImVector<ImGuiAppProjFile> ProjFiles;
+    struct ImGuiAppProjRun { char Name[224]; };   // recorded takes (.meta / .mp4) under the artifact dir
+    ImVector<ImGuiAppProjRun>  ProjRuns;
     float              ProjRescan; // seconds until the next directory scan
 };
 // Raw input recorded by OnDraw (the only place ImGui item geometry exists), consumed by OnUpdate.
@@ -2091,6 +2060,7 @@ struct ImGuiAppEditorBodyTempData
     float BodyMaxX;          // body row right edge (screen) -- the inspector width derives from it
     bool  ProjLoadGraph;     // Project tab: load the graph file
     bool  OpenOutput;        // viewport status strip clicked -> reveal + select the Output tab
+    bool  RevealReplay;      // a run was opened/recorded -> reveal + select the Replay tab
     bool  AckReveal;         // the bottom tab bar consumed the one-shot RevealPanel intent this frame
     bool  ClearLog;          // Output tab: clear the document log
     bool  ToggleDiffMode;    // Code tab header: flip whole-program <-> diff-vs-saved
@@ -2113,7 +2083,7 @@ static void ShowComposerProjectInspector(ImGuiAppGraphDocData* doc, ImGuiAppGrap
         ImGui::SameLine(label_w);
         ImGui::TextUnformatted(doc->HeaderPath);
         ImGui::SameLine();
-        ImGui::TextColored(fresh ? ImVec4(0.45f, 0.85f, 0.45f, 1.0f) : ImVec4(0.90f, 0.75f, 0.35f, 1.0f),
+        ImGui::TextColored(fresh ? ComposerCol(ImGui::AppComposerGetStyle()->StatusOk) : ComposerCol(ImGui::AppComposerGetStyle()->SevWarn),
                            fresh ? ICON_FA_CHECK : ICON_FA_TRIANGLE_EXCLAMATION);
         ImGui::SetItemTooltip(fresh ? "header matches the graph" : "graph changed since the last Generate");
         int design = 0, live = 0;
@@ -2138,10 +2108,10 @@ static void ShowComposerProjectInspector(ImGuiAppGraphDocData* doc, ImGuiAppGrap
     {
         const int nerr = doc->NumErrors, nwarn = doc->NumWarnings;
         if (nerr + nwarn == 0)
-            ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f), ICON_FA_CHECK "  No configuration problems.");
+            ImGui::TextColored(ComposerCol(ImGui::AppComposerGetStyle()->StatusOk), ICON_FA_CHECK "  No configuration problems.");
         else
         {
-            ImGui::TextColored(nerr > 0 ? ImVec4(0.92f, 0.45f, 0.45f, 1.0f) : ImVec4(0.92f, 0.80f, 0.40f, 1.0f),
+            ImGui::TextColored(nerr > 0 ? ComposerCol(ImGui::AppComposerGetStyle()->ErrorText) : ComposerCol(ImGui::AppComposerGetStyle()->SevWarn),
                                "%d error(s), %d warning(s)", nerr, nwarn);
             if (ImGui::SmallButton("Open Output"))
                 temp_data->OpenOutput = true;
@@ -2166,6 +2136,14 @@ static void ShowComposerProjectInspector(ImGuiAppGraphDocData* doc, ImGuiAppGrap
         ImGui::TextDisabled("path");
         ImGui::SameLine(label_w);
         ImGui::TextUnformatted(wal != nullptr && wal->Path[0] ? wal->Path : "(none)");
+        ImGui::Spacing();
+    }
+
+    // F75's rebind editor, finally reachable: every chord surface (menus, palette, gizmo tooltips,
+    // status hints) renders the effective chord, so a rebind here echoes everywhere.
+    if (ImGui::AppInspectorSection("##psec_keys", ICON_FA_KEYBOARD, "Shortcuts", nullptr, nullptr))
+    {
+        ImGui::AppGraphShowKeymapEditor(graph);
         ImGui::Spacing();
     }
 
@@ -2273,6 +2251,8 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
         // Revealing a bottom tab opens the bar if collapsed -- an intent must never land on a closed panel.
         if (temp_data->OpenOutput)
             doc->RevealPanel = ImGuiAppComposerPanel_Output;
+        if (temp_data->RevealReplay)
+            doc->RevealPanel = ImGuiAppComposerPanel_Replay;
         if (doc->RevealPanel != ImGuiAppComposerPanel_None && doc->CodeH <= 0.0f)
             doc->CodeH = ImGui::GetFontSize() * 12.0f;
         if (temp_data->AckReveal)
@@ -2323,6 +2303,28 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
             };
             ProjScan scan = { data, doc->GraphPath, doc->HeaderPath };
             ImGui::AppFileSystemFuncs()->ScanDirFn(".", ProjScan::Visit, &scan);
+
+            // Recorded takes under the artifact dir (.meta tick-only / .mp4 full) -- ST2.6.
+            data->ProjRuns.resize(0);
+            struct RunScan
+            {
+                ImGuiAppEditorBodyData* Data;
+                static void Visit(const char* name, ImU64 size_bytes, void* user_data)
+                {
+                    IM_UNUSED(size_bytes);
+                    RunScan* scan = (RunScan*)user_data;
+                    if (scan->Data->ProjRuns.Size >= 16)
+                        return;
+                    const char* ext = strrchr(name, '.');
+                    if (ext == nullptr || (strcmp(ext, ".meta") != 0 && strcmp(ext, ".mp4") != 0))
+                        return;
+                    ImGuiAppEditorBodyData::ImGuiAppProjRun r;
+                    ImFormatString(r.Name, IM_ARRAYSIZE(r.Name), "headless-artifacts/%s", name);
+                    scan->Data->ProjRuns.push_back(r);
+                }
+            };
+            RunScan rscan = { data };
+            ImGui::AppFileSystemFuncs()->ScanDirFn("headless-artifacts", RunScan::Visit, &rscan);
         }
 
         if (temp_data->SelectionChanged)
@@ -2404,11 +2406,14 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
         ImGuiApp*      app   = doc->Mirror;                    // non-const: the viewer/canvas APIs edit through it
         ImGuiAppGraph* graph = &doc->Graph;
 
-        // Canvas theme rides the graph's canvas; GridSpacing doubles as the applied sentinel.
+        // Canvas theme rides the graph's canvas; an explicit applied flag on the editor's view
+        // state (zero-inert, view-side -- no doc write from a draw path), never a metric doubling
+        // as a sentinel.
         {
             ImGuiAppCanvasStyle* cs = ImGui::CanvasGetStyle(ImGui::AppGraphEditorCanvas(graph));
-            if (cs->GridSpacing != 26.0f)
+            if (!ImGui::AppGraphEditorState(graph)->HostCanvasThemed)
             {
+                ImGui::AppGraphEditorState(graph)->HostCanvasThemed = true;
                 const ImVec4 wire_ink = ImGui::GetStyleColorVec4(ImGuiCol_Text);
                 cs->WireHovered    = DemoThemeCol(ImLerp(DEMO_GOLD, wire_ink, 0.10f), 1.0f);
                 cs->WireSelected   = DemoThemeCol(ImLerp(DEMO_GOLD, wire_ink, 0.18f), 1.0f);
@@ -2534,6 +2539,8 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
                     { ImGuiAppComposerHostCmd_PanelPreview, "",  "Panel: Preview",                   "",       ImGuiKey_None, 0,             ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT,  ImGuiAppCommandSource_Host },
                     { ImGuiAppComposerHostCmd_PanelOutput,  "",  "Panel: Output",                    "",       ImGuiKey_None, 0,             ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT,  ImGuiAppCommandSource_Host },
                     { ImGuiAppComposerHostCmd_ToggleLive,   "",  "View: Toggle live mirror",         "",       ImGuiKey_None, 0,             ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT,  ImGuiAppCommandSource_Host },
+                    { ImGuiAppComposerHostCmd_Shortcuts,    "",  "View: Rebind shortcuts...",        "",       ImGuiKey_None, 0,             ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT,  ImGuiAppCommandSource_Host },
+                    { ImGuiAppComposerHostCmd_PanelReplay,  "",  "Panel: Replay",                    "",       ImGuiKey_None, 0,             ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT,  ImGuiAppCommandSource_Host },
                 };
                 ImGui::AppGraphSetHostCommands(graph, host_cmds, IM_ARRAYSIZE(host_cmds));
 
@@ -2547,9 +2554,9 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
                     ImDrawList*  dl   = ImGui::GetWindowDrawList();
                     const ImVec2 vmin = ImGui::GetWindowPos();
                     const ImVec2 vmax = ImVec2(vmin.x + ImGui::GetWindowSize().x, vmin.y + ImGui::GetWindowSize().y);
-                    dl->AddRectFilled(vmin, vmax, IM_COL32(210, 150, 40, 30));                       // amber wash
+                    dl->AddRectFilled(vmin, vmax, ImGui::AppComposerGetStyle()->RunTintWash);        // amber wash
                     dl->AddRect(ImVec2(vmin.x + 1.0f, vmin.y + 1.0f), ImVec2(vmax.x - 1.0f, vmax.y - 1.0f),
-                                IM_COL32(210, 150, 40, 150), 0.0f, 0, ImMax(2.0f, em * 0.15f));      // engaged border
+                                ImGui::AppComposerGetStyle()->RunTintBorder, 0.0f, 0, ImMax(2.0f, em * 0.15f));   // engaged border
                 }
 
                 // Viewport overlays (health readout bottom-left, transport bottom-center): real ImGui
@@ -2622,7 +2629,7 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
 
                 if (ImGui::BeginChild("##CodePanel", ImVec2(col_w, code_h), ImGuiChildFlags_Borders))
                 {
-                    if (ImGui::BeginTabBar("##bottomtabs"))
+                    if (ImGui::BeginTabBar("##bottomtabs", ImGuiTabBarFlags_FittingPolicyResizeDown))   // five tabs: shrink, never scroll-hide
                     {
                         temp_data->ToggleDiffMode = false;
                         if (ImGui::BeginTabItem("Code", nullptr, doc->RevealPanel == ImGuiAppComposerPanel_Code ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
@@ -2644,7 +2651,7 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
                             if (doc->WriteMsg[0])
                             {
                                 ImGui::SameLine();
-                                ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f), "%s", doc->WriteMsg);
+                                ImGui::TextColored(ComposerCol(ImGui::AppComposerGetStyle()->StatusOk), "%s", doc->WriteMsg);
                             }
                             {
                                 const float right = ImGui::GetContentRegionMax().x;
@@ -2725,7 +2732,7 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
                                     }
                                     else if (f.IsHeader)
                                     {
-                                        ImGui::TextColored(fresh ? ImVec4(0.45f, 0.85f, 0.45f, 1.0f) : ImVec4(0.90f, 0.75f, 0.35f, 1.0f),
+                                        ImGui::TextColored(fresh ? ComposerCol(ImGui::AppComposerGetStyle()->StatusOk) : ComposerCol(ImGui::AppComposerGetStyle()->SevWarn),
                                                            fresh ? ICON_FA_CHECK "  matches graph" : ICON_FA_TRIANGLE_EXCLAMATION "  stale");
                                     }
                                     else
@@ -2735,6 +2742,32 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
                                     ImGui::PopID();
                                 }
                                 ImGui::EndTable();
+                            }
+
+                            // Recorded runs (ST2.6): takes are document artifacts; the handoff into
+                            // Replay is visible here instead of implicit.
+                            ImGui::Spacing();
+                            ImGui::TextDisabled("Recorded runs");
+                            if (data->ProjRuns.Size == 0)
+                                ImGui::TextDisabled("No takes yet -- Record in the Preview tab (or a headless capture).");
+                            for (int i = 0; i < data->ProjRuns.Size; i++)
+                            {
+                                ImGui::PushID(1000 + i);
+                                ImGui::AlignTextToFramePadding();
+                                ImGui::Text(ICON_FA_FILM "  %s", data->ProjRuns.Data[i].Name);
+                                ImGui::SameLine();
+                                if (ImGui::SmallButton("Open in Replay") && doc->Transport != nullptr)
+                                {
+                                    ImGuiAppComposerTransport* rtr = doc->Transport;
+                                    ImStrncpy(rtr->RunName, data->ProjRuns.Data[i].Name, sizeof(rtr->RunName));
+                                    if (char* mp4 = (char*)strstr(rtr->RunName, ".mp4"))
+                                        *mp4 = 0;   // ComposerOpenRun re-appends the provider extension
+                                    ComposerOpenRun(rtr);
+                                    rtr->Source = ImGuiAppTransportSource_FileRun;
+                                    temp_data->RevealReplay = true;
+                                }
+                                ImGui::SetItemTooltip("Open this take as the transport's FILE source");
+                                ImGui::PopID();
                             }
                             ImGui::EndTabItem();
                         }
@@ -2819,6 +2852,7 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
                                 if (pv_recording)
                                 {
                                     ComposerPreviewRecordStop(ed, doc->Transport);
+                                    temp_data->RevealReplay = true;   // the take opened as the FILE source: show it (ST2.6 handoff)
                                 }
                                 else
                                 {
@@ -2834,9 +2868,9 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
                             ImGui::SameLine();
                             const bool dll_active = ed->PreviewUseDll && dll_toolset && ed->PreviewDll != nullptr;
                             if (ed->PreviewUseDll && dll_toolset && ed->PreviewDllErr[0] != 0)
-                                ImGui::TextColored(ImVec4(0.92f, 0.45f, 0.45f, 1.0f), ICON_FA_TRIANGLE_EXCLAMATION "  %s", ed->PreviewDllErr);
+                                ImGui::TextColored(ComposerCol(ImGui::AppComposerGetStyle()->ErrorText), ICON_FA_TRIANGLE_EXCLAMATION "  %s", ed->PreviewDllErr);
                             else if (pverr[0] != 0)
-                                ImGui::TextColored(ImVec4(0.92f, 0.45f, 0.45f, 1.0f), ICON_FA_TRIANGLE_EXCLAMATION "  %s", pverr);
+                                ImGui::TextColored(ComposerCol(ImGui::AppComposerGetStyle()->ErrorText), ICON_FA_TRIANGLE_EXCLAMATION "  %s", pverr);
                             else if (dll_active)
                                 ImGui::TextDisabled("Compiled DLL -- the real program, rendered in-panel (recompiles on edit)");
                             else
@@ -2930,8 +2964,8 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
                                     ImGui::SameLine();
                                 };
                                 ImGuiAppEditorState* ed = ImGui::AppGraphEditorState(&doc->Graph);
-                                sev_toggle("err",  &ed->OutputShowErr,  ImVec4(0.92f, 0.45f, 0.45f, 1.0f));
-                                sev_toggle("warn", &ed->OutputShowWarn, ImVec4(0.92f, 0.80f, 0.40f, 1.0f));
+                                sev_toggle("err",  &ed->OutputShowErr,  ComposerCol(ImGui::AppComposerGetStyle()->ErrorText));
+                                sev_toggle("warn", &ed->OutputShowWarn, ComposerCol(ImGui::AppComposerGetStyle()->SevWarn));
                                 sev_toggle("info", &ed->OutputShowInfo, ImGui::GetStyle().Colors[ImGuiCol_Text]);
                                 ImGui::SetNextItemWidth(em * 9.0f);
                                 ed->OutputFilter.Draw("##outfilter");
@@ -2946,13 +2980,13 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
                             {
                                 ImGuiAppEditorState* ed = ImGui::AppGraphEditorState(&doc->Graph);
                                 if (data->Issues.Size == 0 && ed->OutputShowErr && ed->OutputShowWarn)
-                                    ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f), ICON_FA_CHECK "  No configuration problems.");
+                                    ImGui::TextColored(ComposerCol(ImGui::AppComposerGetStyle()->StatusOk), ICON_FA_CHECK "  No configuration problems.");
                                 for (int i = 0; i < data->Issues.Size; i++)
                                 {
                                     const ImGuiAppGraphIssue& it = data->Issues.Data[i];
                                     if ((it.Severity >= 2 && !ed->OutputShowErr) || (it.Severity < 2 && !ed->OutputShowWarn) || !ed->OutputFilter.PassFilter(it.Text))
                                         continue;
-                                    const ImVec4 col = (it.Severity >= 2) ? ImVec4(0.92f, 0.45f, 0.45f, 1.0f) : ImVec4(0.92f, 0.80f, 0.40f, 1.0f);
+                                    const ImVec4 col = (it.Severity >= 2) ? ComposerCol(ImGui::AppComposerGetStyle()->ErrorText) : ComposerCol(ImGui::AppComposerGetStyle()->SevWarn);
                                     ImGui::PushID(i);
                                     ImGui::PushStyleColor(ImGuiCol_Text, col);
                                     char row[288];
@@ -2974,13 +3008,24 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
                                     if ((ln.Severity >= 2 && !ed->OutputShowErr) || (ln.Severity == 1 && !ed->OutputShowWarn) || (ln.Severity == 0 && !ed->OutputShowInfo)
                         || !ed->OutputFilter.PassFilter(ln.Text))
                                         continue;
-                                    const ImVec4 lcol = ln.Severity >= 2 ? ImVec4(0.92f, 0.45f, 0.45f, 1.0f)
-                                      : ln.Severity == 1 ? ImVec4(0.92f, 0.80f, 0.40f, 1.0f)
+                                    const ImVec4 lcol = ln.Severity >= 2 ? ComposerCol(ImGui::AppComposerGetStyle()->ErrorText)
+                                      : ln.Severity == 1 ? ComposerCol(ImGui::AppComposerGetStyle()->SevWarn)
                                                          : ImGui::GetStyle().Colors[ImGuiCol_TextDisabled];
                                     ImGui::TextColored(lcol, "%s", ln.Text);
                                 }
                             }
                             ImGui::EndChild();
+                            ImGui::EndTabItem();
+                        }
+
+                        // Replay (ST2.3): the FILE-mode playback debugger, docked under the panel
+                        // contract like every other surface -- the floating window died with it.
+                        if (ImGui::BeginTabItem(ICON_FA_FILM " Replay###replay", nullptr, doc->RevealPanel == ImGuiAppComposerPanel_Replay ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
+                        {
+                            if (doc->Transport != nullptr)
+                                ComposerReplayTabBody(doc->Transport, doc->Mirror, em, lay_style);
+                            else
+                                ImGui::TextDisabled("(no transport -- the mirror is not running)");
                             ImGui::EndTabItem();
                         }
                         ImGui::EndTabBar();

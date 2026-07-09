@@ -1860,6 +1860,15 @@ static int RunInputCountBefore(const ImGuiAppRunIndex* run, int k)
     return n;
 }
 
+// The identity gate, single-sourced (section 5.1): reconstruction is legal only for the recorded
+// composition + schema. UI readouts render THIS verdict, never a re-implemented compare.
+IMGUI_API bool AppRunIdentityMatches(const ImGuiApp* app, const ImGuiAppRunIndex* run)
+{
+    return app != nullptr && run != nullptr
+        && GetAppCompositionID(app) == run->Identity.CompositionID
+        && AppStateSchemaHash(app) == run->Identity.SchemaHash;
+}
+
 IMGUI_API bool AppRunStateAtTick(ImGuiApp* recon_app, const ImGuiAppRunIndex* run, int tick_index, ImGuiAppRunState* out)
 {
     ImGuiAppRunState st;
@@ -1876,9 +1885,7 @@ IMGUI_API bool AppRunStateAtTick(ImGuiApp* recon_app, const ImGuiAppRunIndex* ru
     st.CmdFirst = tN.WalFirst;
     st.CmdCount = tN.WalCount;
 
-    // Identity gate (section 5.1): reconstruction is legal only for the recorded composition + schema.
-    if (GetAppCompositionID(recon_app) != run->Identity.CompositionID
-      || AppStateSchemaHash(recon_app) != run->Identity.SchemaHash)
+    if (!AppRunIdentityMatches(recon_app, run))
     {
         if (out != nullptr)
             *out = st;
