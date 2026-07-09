@@ -25,6 +25,8 @@
 
 // CHANGELOG
 // (minor and older changes stripped away, please see git history for details)
+//  2026-07-08: Platform: opt-in dirty-rect presentation (InitInfo::PresentDirtyRects): FLIP_SEQUENTIAL swapchains + Present1 declaring the client rect as the only damage over the over-allocated buffers; full-frame present after every (re)creation per DXGI rules. See docs/dxgi-noflicker.md.
+//  2026-07-08: [Viewports] No-flicker design ported to secondary viewports: grow-only over-allocated swapchains (ResizeBuffers only on growth, deferred to just before render), imgui's two-transaction move+resize coalesced via wrapped Platform_SetWindowPos/SetWindowSize + flushed right before render, per-viewport content pin/unpin on the viewport's DComp visual. See docs/dxgi-noflicker.md.
 //  2026-07-08: Platform: self-healing content pin -- when a resize moves the window origin ahead of the presented content, a compensating DComp visual offset pins the content at its render-time screen position (no rendering); every present unpins in the same compositor latch. Origin-moving edge resizes can no longer show translated content, independent of render latency. See docs/dxgi-noflicker.md.
 //  2026-07-08: Platform: modal repaints serialized to the compositor clock (GetFrameStatistics coalescing to one rendered present per compositor frame; WM_NCCALCSIZE latches content via Commit + WaitForCommitCompletion before the geometry commit). See docs/dxgi-noflicker.md.
 //  2026-07-08: Inputs: ESC closes the window when foreground (the reference's WM_KEYUP behavior, EndTask softened to WM_CLOSE).
@@ -173,11 +175,13 @@ struct ImGuiApp_ImplWin32D2DDXGI_Data
     // Options resolved from InitInfo (zero = canonical)
     int  CaptionHeight;                     // 96-dpi units
     int  PresentMode;
+    bool PresentDirtyRects;                 // FLIP_SEQUENTIAL + Present1 client-rect dirty presentation
     bool NoWaitForVBlank;
     bool ModalRepaintRenderOnly;
     bool EnableClear;
     bool NoBlurBehind;
     bool NoDarkModeLadder;
+    bool PresentedOnce;                     // dirty-rect rule: the first present of a swapchain must be full-frame
 
     // Client seams
     ImGuiApp_ImplWin32D2DDXGI_DeviceDrawCallback PreDrawCallback; // before the imgui pass (raw D3D)
@@ -224,6 +228,11 @@ struct ImGuiApp_ImplWin32D2DDXGI_Data
     // Per-viewport pacing (secondary platform windows): decided ONCE per viewport per frame in
     // Platform_RenderWindow, consumed by the render + present hooks. A skipped viewport keeps its last contents.
     ImGuiStorage VpSkip;                    // viewport ID -> skip present this frame
+
+    // Underlying imgui_impl_win32 platform hooks, wrapped so secondary-viewport geometry can be deferred
+    // and flushed as one transaction right before that viewport renders (see Platform_RenderWindow).
+    void (*UnderlyingPlatformSetWindowPos)(ImGuiViewport*, ImVec2);
+    void (*UnderlyingPlatformSetWindowSize)(ImGuiViewport*, ImVec2);
 
     // Frame capture (AV readback): synchronous staging copy of the client-rect region of buffer 0.
     ID3D11Texture2D* CaptureStaging;
@@ -390,7 +399,7 @@ static DXGI_SWAP_CHAIN_DESC1 ImGuiApp_ImplWin32D2DDXGI_GetSwapchainDescription(c
     DXGI_SWAP_CHAIN_DESC1 desc = {};
     desc.BufferUsage        = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     desc.Format             = DXGI_FORMAT_B8G8R8A8_UNORM;
-    desc.SwapEffect         = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    desc.SwapEffect         = init_info->PresentDirtyRects ? DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL : DXGI_SWAP_EFFECT_FLIP_DISCARD;
     desc.AlphaMode          = DXGI_ALPHA_MODE_PREMULTIPLIED;
     desc.Scaling            = DXGI_SCALING_STRETCH;
     desc.SampleDesc.Count   = 1;
@@ -558,19 +567,40 @@ static void ImGuiApp_ImplWin32D2DDXGI_DestroyDeviceObjects(ImGuiApp_ImplWin32D2D
 //--------------------------------------------------------------------------------------------------------
 
 // The reference's two-step present: flush the front buffer immediately (optionally cancelling queued frames),
-// then either replace it in sync (DO_NOT_SEQUENCE) or queue the next immediate present.
+// then either replace it in sync (DO_NOT_SEQUENCE) or queue the next immediate present. In dirty-rect mode
+// (FLIP_SEQUENTIAL) each step is a Present1 declaring the client rect as the only damage -- the compositor
+// recomposes just that sub-rect of the desktop-sized buffer. The first present must be full-frame (DXGI rule).
 static void ImGuiApp_ImplWin32D2DDXGI_PresentLadder(ImGuiApp_ImplWin32D2DDXGI_Data* bd, bool restart, bool vsync)
 {
     if (bd->Swapchain == nullptr)
         return;
+    const UINT flags_first  = DXGI_PRESENT_ALLOW_TEARING | DXGI_PRESENT_DO_NOT_WAIT | (restart ? DXGI_PRESENT_RESTART : 0);
+    const UINT flags_second = (restart || vsync) ? DXGI_PRESENT_DO_NOT_SEQUENCE : (DXGI_PRESENT_ALLOW_TEARING | DXGI_PRESENT_DO_NOT_WAIT);
+    const UINT sync_second  = (restart || vsync) ? 1 : 0;
     HRESULT hr;
-    hr = bd->Swapchain->Present(0, DXGI_PRESENT_ALLOW_TEARING | DXGI_PRESENT_DO_NOT_WAIT | (restart ? DXGI_PRESENT_RESTART : 0));
-    IM_ASSERT(SUCCEEDED(hr) || hr == DXGI_ERROR_WAS_STILL_DRAWING);
-    if (restart || vsync)
-        hr = bd->Swapchain->Present(1, DXGI_PRESENT_DO_NOT_SEQUENCE);   // present the current buffer ahead and instead of the would-be next back buffer
+    if (bd->PresentDirtyRects)
+    {
+        RECT dirty = {};
+        ::GetClientRect((HWND)bd->Hwnd, &dirty);
+        DXGI_PRESENT_PARAMETERS params = {};
+        if (bd->PresentedOnce && dirty.right > 0 && dirty.bottom > 0)
+        {
+            params.DirtyRectsCount = 1;
+            params.pDirtyRects     = &dirty;
+        }
+        hr = bd->Swapchain->Present1(0, flags_first, &params);
+        IM_ASSERT(SUCCEEDED(hr) || hr == DXGI_ERROR_WAS_STILL_DRAWING);
+        hr = bd->Swapchain->Present1(sync_second, flags_second, &params);
+        IM_ASSERT(SUCCEEDED(hr) || hr == DXGI_ERROR_WAS_STILL_DRAWING);
+    }
     else
-        hr = bd->Swapchain->Present(0, DXGI_PRESENT_ALLOW_TEARING | DXGI_PRESENT_DO_NOT_WAIT);
-    IM_ASSERT(SUCCEEDED(hr) || hr == DXGI_ERROR_WAS_STILL_DRAWING);
+    {
+        hr = bd->Swapchain->Present(0, flags_first);
+        IM_ASSERT(SUCCEEDED(hr) || hr == DXGI_ERROR_WAS_STILL_DRAWING);
+        hr = bd->Swapchain->Present(sync_second, flags_second);   // DO_NOT_SEQUENCE: the current buffer, ahead and instead of the would-be next one
+        IM_ASSERT(SUCCEEDED(hr) || hr == DXGI_ERROR_WAS_STILL_DRAWING);
+    }
+    bd->PresentedOnce = true;
 }
 
 // True when the last modal repaint already produced content for the UPCOMING compositor frame at the
@@ -769,6 +799,7 @@ bool ImGuiApp_ImplWin32D2DDXGI_Init(ImGuiApp* app, const ImGuiApp_ImplWin32D2DDX
     bd->Hwnd = init_info->Hwnd;
     bd->CaptionHeight         = init_info->CaptionHeight > 0 ? init_info->CaptionHeight : 30;
     bd->PresentMode           = init_info->PresentMode;
+    bd->PresentDirtyRects     = init_info->PresentDirtyRects;
     bd->NoWaitForVBlank       = init_info->NoWaitForVBlank;
     bd->ModalRepaintRenderOnly = init_info->ModalRepaintRenderOnly;
     bd->EnableClear           = init_info->EnableClear;
@@ -1639,16 +1670,42 @@ static LRESULT WINAPI ImGuiApp_ImplWin32D2DDXGI_WndProc(HWND hWnd, UINT msg, WPA
 //--------------------------------------------------------------------------------------------------------
 
 // Helper structure we store in the void* RendererUserData field of each ImGuiViewport to easily retrieve our backend data.
+// Secondary viewports replicate the main window's no-flicker design at small scale (docs/dxgi-noflicker.md):
+// an over-allocated grow-only swapchain (the window clips the unused region, so most resizes need no
+// ResizeBuffers at all), geometry deferred + flushed as one transaction right before render, and a
+// per-viewport content pin on the viewport's own DComp visual.
 struct ImGuiApp_ImplWin32D2DDXGI_ViewportData
 {
     IDXGISwapChain1*        Swapchain;
     ID3D11RenderTargetView* RTView;
     IDCompositionTarget*    DCompTarget;
     IDCompositionVisual*    DCompVisual;
+    int                     CapacityWidth;      // allocated buffer size (grow-only, 256px granularity)
+    int                     CapacityHeight;
+    bool                    PendingGrow;        // capacity grew: ResizeBuffers right before the next render
+    bool                    HasPendingPos;      // deferred Platform_SetWindowPos/SetWindowSize, flushed in
+    bool                    HasPendingSize;     // Platform_RenderWindow as one back-to-back transaction
+    ImVec2                  PendingPos;
+    ImVec2                  PendingSize;
+    int                     ContentOriginX;     // window-origin screen position of the last presented frame
+    int                     ContentOriginY;
+    int                     ContentWidth;       // client size of the last presented frame
+    int                     ContentHeight;
+    bool                    ContentOriginValid;
+    bool                    VisualOffsetActive; // a compensating offset is currently committed on DCompVisual
+    bool                    PresentedOnce;      // dirty-rect rule: full-frame present required after (re)creation
 
-    ImGuiApp_ImplWin32D2DDXGI_ViewportData()  { Swapchain = nullptr; RTView = nullptr; DCompTarget = nullptr; DCompVisual = nullptr; }
+    ImGuiApp_ImplWin32D2DDXGI_ViewportData()  { memset((void*)this, 0, sizeof(*this)); }
     ~ImGuiApp_ImplWin32D2DDXGI_ViewportData() { IM_ASSERT(Swapchain == nullptr && RTView == nullptr && DCompTarget == nullptr && DCompVisual == nullptr); }
 };
+
+// Grow-only capacity granularity: over-allocate so interactive resizes stay within capacity (no
+// ResizeBuffers, no content loss); the window clips the unused buffer region, exactly like the main
+// swapchain's desktop-sized buffer.
+static inline int ImGuiApp_ImplWin32D2DDXGI_RoundUpCapacity(int v)
+{
+    return (v + 255) & ~255;
+}
 
 static void ImGuiApp_ImplWin32D2DDXGI_Renderer_CreateWindow(ImGuiViewport* viewport)
 {
@@ -1663,17 +1720,19 @@ static void ImGuiApp_ImplWin32D2DDXGI_Renderer_CreateWindow(ImGuiViewport* viewp
     ImGuiApp_ImplWin32D2DDXGI_ViewportData* vd = IM_NEW(ImGuiApp_ImplWin32D2DDXGI_ViewportData)();
     viewport->RendererUserData = vd;
 
-    // Secondary viewports get their own composition swapchain: sized to the viewport (resized on demand,
-    // unlike the main one), no tearing/waitable flags -- they present through the compositor.
+    // Secondary viewports get their own composition swapchain, over-allocated + grow-only (the window
+    // clips the unused region); no tearing/waitable flags -- they present through the compositor.
+    vd->CapacityWidth  = ImGuiApp_ImplWin32D2DDXGI_RoundUpCapacity((int)viewport->Size.x);
+    vd->CapacityHeight = ImGuiApp_ImplWin32D2DDXGI_RoundUpCapacity((int)viewport->Size.y);
     DXGI_SWAP_CHAIN_DESC1 desc = {};
     desc.BufferUsage        = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     desc.Format             = DXGI_FORMAT_B8G8R8A8_UNORM;
-    desc.SwapEffect         = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    desc.SwapEffect         = bd->PresentDirtyRects ? DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL : DXGI_SWAP_EFFECT_FLIP_DISCARD;
     desc.AlphaMode          = DXGI_ALPHA_MODE_PREMULTIPLIED;
     desc.Scaling            = DXGI_SCALING_STRETCH;
     desc.SampleDesc.Count   = 1;
-    desc.Width              = (UINT)viewport->Size.x;
-    desc.Height             = (UINT)viewport->Size.y;
+    desc.Width              = (UINT)vd->CapacityWidth;
+    desc.Height             = (UINT)vd->CapacityHeight;
     desc.BufferCount        = 3;
 
     HRESULT hr = bd->DXGIFactory->CreateSwapChainForComposition(bd->DXGIDevice, &desc, nullptr, &vd->Swapchain);
@@ -1713,36 +1772,91 @@ static void ImGuiApp_ImplWin32D2DDXGI_Renderer_DestroyWindow(ImGuiViewport* view
     viewport->RendererUserData = nullptr;
 }
 
+// Grow-only: a size within capacity needs NO ResizeBuffers (the old presented content survives, and the
+// window clips the unused region). Growth is deferred to right before the next render so the content-less
+// window between buffer loss and the fresh present is as small as possible.
 static void ImGuiApp_ImplWin32D2DDXGI_Renderer_SetWindowSize(ImGuiViewport* viewport, ImVec2 size)
+{
+    ImGuiApp_ImplWin32D2DDXGI_ViewportData* vd = (ImGuiApp_ImplWin32D2DDXGI_ViewportData*)viewport->RendererUserData;
+    if (vd == nullptr || vd->Swapchain == nullptr)
+        return;
+    if ((int)size.x > vd->CapacityWidth || (int)size.y > vd->CapacityHeight)
+    {
+        vd->CapacityWidth  = ImGuiApp_ImplWin32D2DDXGI_RoundUpCapacity((int)size.x > vd->CapacityWidth ? (int)size.x : vd->CapacityWidth);
+        vd->CapacityHeight = ImGuiApp_ImplWin32D2DDXGI_RoundUpCapacity((int)size.y > vd->CapacityHeight ? (int)size.y : vd->CapacityHeight);
+        vd->PendingGrow    = true;
+    }
+}
+
+// Deferred platform geometry: imgui applies a secondary viewport's move + resize as two separate OS
+// transactions (SetWindowPos then SetWindowSize) early in UpdatePlatformWindows, a full render away from
+// the matching present. Record both here; Platform_RenderWindow flushes them back-to-back and pins.
+static void ImGuiApp_ImplWin32D2DDXGI_Platform_SetWindowPos(ImGuiViewport* viewport, ImVec2 pos)
 {
     ImGuiApp_ImplWin32D2DDXGI_Data* bd = ImGuiApp_ImplWin32D2DDXGI_GetBackendData(ImGuiApp_ImplWin32D2DDXGI_GetApp());
     ImGuiApp_ImplWin32D2DDXGI_ViewportData* vd = (ImGuiApp_ImplWin32D2DDXGI_ViewportData*)viewport->RendererUserData;
-    if (bd == nullptr || vd == nullptr || vd->Swapchain == nullptr)
-        return;
-    if (vd->RTView != nullptr)
+    if (bd == nullptr || vd == nullptr)
     {
-        vd->RTView->Release();
-        vd->RTView = nullptr;
-    }
-    vd->Swapchain->ResizeBuffers(0, (UINT)size.x, (UINT)size.y, DXGI_FORMAT_UNKNOWN, 0);
-    ID3D11Texture2D* back_buffer = nullptr;
-    vd->Swapchain->GetBuffer(0, IID_PPV_ARGS(&back_buffer));
-    if (back_buffer == nullptr)
-    {
-        IMGUIAPP_ERROR_PRINTF("imguiapp_impl_win32_d2ddxgi: viewport ResizeBuffers failed.\n");
+        if (bd != nullptr && bd->UnderlyingPlatformSetWindowPos != nullptr)
+            bd->UnderlyingPlatformSetWindowPos(viewport, pos);
         return;
     }
-    bd->D3DDevice->CreateRenderTargetView(back_buffer, nullptr, &vd->RTView);
-    back_buffer->Release();
+    vd->PendingPos    = pos;
+    vd->HasPendingPos = true;
 }
 
-// Per-viewport pacing: the decision is made ONCE per viewport per frame here (the first per-viewport hook
-// RenderPlatformWindowsDefault runs) and consumed by the render + present hooks below.
+static void ImGuiApp_ImplWin32D2DDXGI_Platform_SetWindowSize(ImGuiViewport* viewport, ImVec2 size)
+{
+    ImGuiApp_ImplWin32D2DDXGI_Data* bd = ImGuiApp_ImplWin32D2DDXGI_GetBackendData(ImGuiApp_ImplWin32D2DDXGI_GetApp());
+    ImGuiApp_ImplWin32D2DDXGI_ViewportData* vd = (ImGuiApp_ImplWin32D2DDXGI_ViewportData*)viewport->RendererUserData;
+    if (bd == nullptr || vd == nullptr)
+    {
+        if (bd != nullptr && bd->UnderlyingPlatformSetWindowSize != nullptr)
+            bd->UnderlyingPlatformSetWindowSize(viewport, size);
+        return;
+    }
+    vd->PendingSize    = size;
+    vd->HasPendingSize = true;
+}
+
+// First per-viewport hook RenderPlatformWindowsDefault runs. Three jobs, in order:
+// 1. Flush deferred geometry as one back-to-back transaction (pos then size, upstream order).
+// 2. Self-heal: if the geometry outran the presented content (a resize moved the origin), pin the
+//    content at its render-time screen position on THIS viewport's visual (same mechanism as the main
+//    window's R6, docs/dxgi-noflicker.md); the present in Renderer_SwapBuffers unpins it.
+// 3. Make the pacing decision ONCE per viewport per frame, consumed by the render + present hooks below.
 static void ImGuiApp_ImplWin32D2DDXGI_Platform_RenderWindow(ImGuiViewport* viewport, void*)
 {
     ImGuiApp_ImplWin32D2DDXGI_Data* bd = ImGuiApp_ImplWin32D2DDXGI_GetBackendData(ImGuiApp_ImplWin32D2DDXGI_GetApp());
     if (bd == nullptr)
         return;
+
+    if (ImGuiApp_ImplWin32D2DDXGI_ViewportData* vd = (ImGuiApp_ImplWin32D2DDXGI_ViewportData*)viewport->RendererUserData)
+    {
+        if (vd->HasPendingPos && bd->UnderlyingPlatformSetWindowPos != nullptr)
+            bd->UnderlyingPlatformSetWindowPos(viewport, vd->PendingPos);
+        if (vd->HasPendingSize && bd->UnderlyingPlatformSetWindowSize != nullptr)
+            bd->UnderlyingPlatformSetWindowSize(viewport, vd->PendingSize);
+        const bool resized = vd->HasPendingSize;
+        vd->HasPendingPos  = false;
+        vd->HasPendingSize = false;
+
+        HWND hwnd = viewport->PlatformHandleRaw ? (HWND)viewport->PlatformHandleRaw : (HWND)viewport->PlatformHandle;
+        RECT window_rect = {};
+        if (resized && vd->ContentOriginValid && vd->DCompVisual != nullptr && ::GetWindowRect(hwnd, &window_rect))
+        {
+            const int dx = vd->ContentOriginX - window_rect.left;
+            const int dy = vd->ContentOriginY - window_rect.top;
+            if (dx != 0 || dy != 0 || vd->VisualOffsetActive)
+            {
+                vd->DCompVisual->SetOffsetX((float)dx);
+                vd->DCompVisual->SetOffsetY((float)dy);
+                bd->DCompDevice->Commit();
+                vd->VisualOffsetActive = (dx != 0 || dy != 0);
+            }
+        }
+    }
+
     const bool present = ImGui::AppPacerViewportShouldPresent(bd->App, viewport);
     bd->VpSkip.SetBool(viewport->ID, !present);
 }
@@ -1753,8 +1867,34 @@ static void ImGuiApp_ImplWin32D2DDXGI_Renderer_RenderWindow(ImGuiViewport* viewp
     if (bd == nullptr || bd->VpSkip.GetBool(viewport->ID))
         return;
     ImGuiApp_ImplWin32D2DDXGI_ViewportData* vd = (ImGuiApp_ImplWin32D2DDXGI_ViewportData*)viewport->RendererUserData;
-    if (vd == nullptr || vd->RTView == nullptr)
+    if (vd == nullptr || vd->Swapchain == nullptr)
         return;
+
+    // Deferred capacity growth: the only ResizeBuffers a secondary viewport ever runs, placed directly
+    // before its render + present so the buffer is content-less for the smallest possible window.
+    if (vd->PendingGrow)
+    {
+        vd->PendingGrow = false;
+        if (vd->RTView != nullptr)
+        {
+            vd->RTView->Release();
+            vd->RTView = nullptr;
+        }
+        vd->Swapchain->ResizeBuffers(0, (UINT)vd->CapacityWidth, (UINT)vd->CapacityHeight, DXGI_FORMAT_UNKNOWN, 0);
+        vd->PresentedOnce = false;   // dirty-rect rule: full-frame present after buffer recreation
+        ID3D11Texture2D* back_buffer = nullptr;
+        vd->Swapchain->GetBuffer(0, IID_PPV_ARGS(&back_buffer));
+        if (back_buffer == nullptr)
+        {
+            IMGUIAPP_ERROR_PRINTF("imguiapp_impl_win32_d2ddxgi: viewport ResizeBuffers failed.\n");
+            return;
+        }
+        bd->D3DDevice->CreateRenderTargetView(back_buffer, nullptr, &vd->RTView);
+        back_buffer->Release();
+    }
+    if (vd->RTView == nullptr)
+        return;
+
     bd->D3DDeviceContext->OMSetRenderTargets(1, &vd->RTView, nullptr);
     if ((viewport->Flags & ImGuiViewportFlags_NoRendererClear) == 0)
     {
@@ -1769,24 +1909,67 @@ static void ImGuiApp_ImplWin32D2DDXGI_Renderer_SwapBuffers(ImGuiViewport* viewpo
     ImGuiApp_ImplWin32D2DDXGI_Data* bd = ImGuiApp_ImplWin32D2DDXGI_GetBackendData(ImGuiApp_ImplWin32D2DDXGI_GetApp());
     if (bd == nullptr || bd->VpSkip.GetBool(viewport->ID))
         return;
-    if (ImGuiApp_ImplWin32D2DDXGI_ViewportData* vd = (ImGuiApp_ImplWin32D2DDXGI_ViewportData*)viewport->RendererUserData)
-        if (vd->Swapchain != nullptr)
-            vd->Swapchain->Present(0, 0);
+    ImGuiApp_ImplWin32D2DDXGI_ViewportData* vd = (ImGuiApp_ImplWin32D2DDXGI_ViewportData*)viewport->RendererUserData;
+    if (vd == nullptr || vd->Swapchain == nullptr)
+        return;
+    HWND hwnd = viewport->PlatformHandleRaw ? (HWND)viewport->PlatformHandleRaw : (HWND)viewport->PlatformHandle;
+    if (bd->PresentDirtyRects)
+    {
+        // Client-rect damage over the over-allocated buffer; first present after (re)creation is full-frame.
+        RECT dirty = {};
+        ::GetClientRect(hwnd, &dirty);
+        DXGI_PRESENT_PARAMETERS params = {};
+        if (vd->PresentedOnce && dirty.right > 0 && dirty.bottom > 0)
+        {
+            params.DirtyRectsCount = 1;
+            params.pDirtyRects     = &dirty;
+        }
+        vd->Swapchain->Present1(0, 0, &params);
+    }
+    else
+    {
+        vd->Swapchain->Present(0, 0);
+    }
+    vd->PresentedOnce = true;
+
+    // Unpin + re-anchor in the same compositor latch as the present (the main window's UnpinContent, per viewport).
+    if (vd->VisualOffsetActive && vd->DCompVisual != nullptr)
+    {
+        vd->DCompVisual->SetOffsetX(0.0f);
+        vd->DCompVisual->SetOffsetY(0.0f);
+        bd->DCompDevice->Commit();
+        vd->VisualOffsetActive = false;
+    }
+    RECT window_rect = {};
+    RECT client_rect = {};
+    if (::GetWindowRect(hwnd, &window_rect) && ::GetClientRect(hwnd, &client_rect))
+    {
+        vd->ContentOriginX     = window_rect.left;
+        vd->ContentOriginY     = window_rect.top;
+        vd->ContentWidth       = client_rect.right - client_rect.left;
+        vd->ContentHeight      = client_rect.bottom - client_rect.top;
+        vd->ContentOriginValid = true;
+    }
 }
 
 // REPLACES the hooks imgui_impl_dx11 installed (its per-hwnd blt swapchains would fight the composition
-// tree); teardown rides the wrapped backends' Shutdown (they call ClearPlatformHandlers/ClearRendererHandlers).
+// tree) and WRAPS imgui_impl_win32's SetWindowPos/SetWindowSize (deferred-geometry flush, see
+// Platform_RenderWindow); teardown rides the wrapped backends' Shutdown (ClearPlatformHandlers/ClearRendererHandlers).
 static void ImGuiApp_ImplWin32D2DDXGI_InitMultiViewportSupport(ImGuiApp_ImplWin32D2DDXGI_Data* bd)
 {
-    IM_UNUSED(bd);
     ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
     IM_ASSERT(platform_io.Platform_RenderWindow == nullptr);
+    IM_ASSERT(platform_io.Platform_SetWindowPos != nullptr && platform_io.Platform_SetWindowSize != nullptr);
     platform_io.Renderer_CreateWindow  = ImGuiApp_ImplWin32D2DDXGI_Renderer_CreateWindow;
     platform_io.Renderer_DestroyWindow = ImGuiApp_ImplWin32D2DDXGI_Renderer_DestroyWindow;
     platform_io.Renderer_SetWindowSize = ImGuiApp_ImplWin32D2DDXGI_Renderer_SetWindowSize;
     platform_io.Renderer_RenderWindow  = ImGuiApp_ImplWin32D2DDXGI_Renderer_RenderWindow;
     platform_io.Renderer_SwapBuffers   = ImGuiApp_ImplWin32D2DDXGI_Renderer_SwapBuffers;
     platform_io.Platform_RenderWindow  = ImGuiApp_ImplWin32D2DDXGI_Platform_RenderWindow;
+    bd->UnderlyingPlatformSetWindowPos  = platform_io.Platform_SetWindowPos;
+    bd->UnderlyingPlatformSetWindowSize = platform_io.Platform_SetWindowSize;
+    platform_io.Platform_SetWindowPos  = ImGuiApp_ImplWin32D2DDXGI_Platform_SetWindowPos;
+    platform_io.Platform_SetWindowSize = ImGuiApp_ImplWin32D2DDXGI_Platform_SetWindowSize;
 }
 
 //--------------------------------------------------------------------------------------------------------

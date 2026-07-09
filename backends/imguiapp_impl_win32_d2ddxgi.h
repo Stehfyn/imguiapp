@@ -61,6 +61,7 @@ struct ImGuiApp_ImplWin32D2DDXGI_InitInfo
     int          MaxFrameLatency;        // 0 = do not call SetMaximumFrameLatency (canonical); > 0 = call with this value
     // Presentation + pacing
     int          PresentMode;            // ImGuiApp_ImplWin32D2DDXGI_PresentMode_; 0 = canonical restart ladder
+    bool         PresentDirtyRects;      // true = FLIP_SEQUENTIAL swapchains + Present1 dirty-rect presentation (client rect only; see docs/dxgi-noflicker.md §7)
     bool         NoWaitForVBlank;        // true = skip the D3DKMT vertical-blank wait in the run loop
     bool         ModalRepaintRenderOnly; // true = WM_NCCALCSIZE/WM_TIMER repaints re-present the last frame instead of running a full app Frame()
     bool         EnableClear;            // false = canonical no-clear; true = clear the target with the frame config's ClearColor (honors NoClear)

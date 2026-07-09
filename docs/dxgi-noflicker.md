@@ -200,22 +200,51 @@ Secondary (multi-viewport) windows each get their **own** composition swapchain 
 the hooks the wrapped imgui renderer backend installed (its per-hwnd blt swapchains would fight the
 composition tree). One shared `IDCompositionDevice`; per-viewport `IDCompositionTarget` + visual.
 
+Secondary windows have their own flicker anatomy. imgui resizes them itself from
+`UpdatePlatformWindows` — there is no Win32 modal size loop and none of §4's messages fire on our WndProc.
+Three separate defects make a naive implementation flicker on origin-moving edge resizes:
+
+1. imgui applies a move+resize as **two separate OS transactions** (`Platform_SetWindowPos`, then
+   `Platform_SetWindowSize`) — a compositor latch between them shows a moved window at the old size;
+2. both run **early in the frame**, a full render+present away from the content that matches them;
+3. an eager `ResizeBuffers` in `Renderer_SetWindowSize` **destroys the presented content** the compositor
+   may still need to sample until the fresh present lands.
+
+The cure is the main window's design, scaled down — over-allocation instead of desktop-sizing, and hook
+wrapping instead of WndProc handling:
+
+- **Grow-only over-allocated swapchains.** Create the swapchain rounded UP to a 256-px granularity;
+  `Renderer_SetWindowSize` never calls `ResizeBuffers` while the size fits capacity (the window clips the
+  unused buffer region — the same reason the main window's desktop-sized buffer works). Only growth beyond
+  capacity reallocates, and that is *deferred* to `Renderer_RenderWindow`, immediately before the render +
+  present, so the buffer is content-less for the smallest possible window. Never shrink.
+- **Coalesced, late geometry.** Wrap `Platform_SetWindowPos`/`Platform_SetWindowSize` (chain to the
+  platform backend's originals): the wrappers only *record* the pending pos/size. The flush runs
+  back-to-back (pos, then size — upstream order) at the top of `Platform_RenderWindow`, adjacent to the
+  render + present that produce the matching content, instead of a frame-phase away.
+- **Per-viewport content pin (R6, per viewport).** After flushing a geometry change that included a
+  RESIZE, compare the window's new origin against the origin recorded at that viewport's last present; if
+  it moved, `SetOffsetX/Y(delta)` + `Commit()` on the viewport's own visual. `Renderer_SwapBuffers` unpins
+  (offsets to 0 + `Commit()`) right after its `Present(0, 0)` — same-latch coupling — and re-anchors the
+  recorded origin/size. Pure moves record no pin (content travels with the window).
+
 Per-viewport lifecycle (installed on `ImGuiPlatformIO` after the wrapped renderer's Init):
 
-- **`Renderer_CreateWindow`**: `CreateSwapChainForComposition` sized to `viewport->Size` — BGRA8
+- **`Renderer_CreateWindow`**: `CreateSwapChainForComposition` at rounded-up capacity — BGRA8
   premultiplied, `FLIP_DISCARD`, BufferCount 3, **flags 0** (no tearing, no waitable: secondary windows
   present through the compositor; tearing flags are meaningless and the waitable adds nothing). Then RTV of
   buffer 0, `CreateTargetForHwnd(viewport_hwnd, TRUE)`, `CreateVisual`, `SetContent(swapchain)`, `SetRoot`,
   `Commit()`. HWND comes from `viewport->PlatformHandleRaw ? PlatformHandleRaw : PlatformHandle`.
-- **`Renderer_SetWindowSize`**: secondary swapchains DO resize (they are small; the main-swapchain rule
-  does not extend to them): release the RTV, `ResizeBuffers(0, w, h, UNKNOWN, 0)`, recreate the RTV. No
-  re-`Commit` needed — the visual's content reference survives the resize.
+- **`Renderer_SetWindowSize`**: capacity bookkeeping only (grow-only; mark pending growth).
+- **`Platform_SetWindowPos` / `Platform_SetWindowSize`** (wrappers): record pending geometry; chain the
+  originals directly for viewports without renderer data.
 - **`Platform_RenderWindow`** (wrapper; the first per-viewport hook `RenderPlatformWindowsDefault` runs):
-  make the pacing decision ONCE per viewport per frame (`AppPacerViewportShouldPresent`) into a
-  viewport-ID-keyed skip map.
-- **`Renderer_RenderWindow`**: honor the skip; bind the viewport RTV, clear unless
+  flush pending geometry → content pin if the resize moved the origin → make the pacing decision ONCE per
+  viewport per frame (`AppPacerViewportShouldPresent`) into a viewport-ID-keyed skip map.
+- **`Renderer_RenderWindow`**: honor the skip; apply pending capacity growth (release RTV,
+  `ResizeBuffers` to capacity, recreate RTV); bind the viewport RTV, clear unless
   `ImGuiViewportFlags_NoRendererClear`, render the viewport's draw data.
-- **`Renderer_SwapBuffers`**: honor the skip; plain `Present(0, 0)`.
+- **`Renderer_SwapBuffers`**: honor the skip; `Present(0, 0)`; unpin + re-anchor the content origin/size.
 - **`Renderer_DestroyWindow`**: release visual, target, RTV, swapchain; main viewport's RendererUserData is
   null by contract (the app owns it).
 
@@ -229,15 +258,59 @@ Known-correct caveats:
   `ImGui::NewFrame` and synchronously activates the main window. This is the reason the `InFrame` latch in
   §4 exists; without it the main window's repaint paths re-enter the frame. Regression:
   `tests/imguiapp_d2ddxgi_viewport_tests.cpp` (programmatic outside/inside churn, 6 create/destroy cycles).
-- **No modal protocol for secondaries**: imgui moves/sizes these windows itself from
-  `UpdatePlatformWindows` — present-then-move within one compositor frame interval — so they need none of
-  §4. Their swapchains being compositor-presented is what makes them flicker-free for free.
+- **Deferred geometry visibility**: between a wrapper call and its flush, `Platform_GetWindowPos/Size`
+  report the not-yet-flushed values for at most the remainder of the same frame; imgui re-reads window
+  state at the next `NewFrame`, after the flush. Minimized viewports skip `Platform_RenderWindow`, so
+  their pending geometry flushes on the next visible frame.
+- **OS-decorated secondary viewports** (`ImGuiConfigFlags`/window flags yielding real thick frames) resize
+  through a Win32 modal loop on imgui's *platform* WndProc, not ours — §4's protocol does not run for
+  them. The default imgui configuration (undecorated secondaries, imgui-drawn borders) is the supported
+  no-flicker path.
 
-## 7. Verification checklist
+## 7. Dirty-rect presentation (the FLIP_SEQUENTIAL variant)
+
+`ImGuiApp_ImplWin32D2DDXGI_InitInfo::PresentDirtyRects = true` switches every swapchain (main +
+secondary viewports) from `FLIP_DISCARD` full-frame presents to `FLIP_SEQUENTIAL` + `Present1` with an
+explicit damage region. Nothing in §§2–6 changes — the present ladder keeps its flags and step structure,
+the pin/coalesce/latch machinery is orthogonal — each `Present` call simply becomes a `Present1` carrying
+`DXGI_PRESENT_PARAMETERS`.
+
+Why this pairs perfectly with the never-resized/over-allocated buffer design: the buffers are much larger
+than the visible window, and a full-frame present tells the compositor the whole desktop-sized surface
+changed. Declaring the client rect as the only dirty region lets the compositor recompose just that
+sub-rect. The swap effect must be `FLIP_SEQUENTIAL` because dirty rects are a promise about the rest of
+the buffer, and only SEQUENTIAL preserves buffer contents across presents.
+
+The DXGI rules a port must honor:
+
+- **The outside-the-dirty-rects contract.** Everything outside the declared rects must be unchanged
+  relative to the *previously presented* frame. This backend redraws the full client rect every frame
+  (imgui always re-renders), so "client rect" IS the frame's damage. Beyond the client rect the buffers
+  hold their creation-time contents (DXGI zero-initializes: transparent premultiplied black) in every
+  buffer, so the contract holds there trivially.
+- **First present is full-frame.** After swapchain creation — and after every `ResizeBuffers` — present
+  once with `DirtyRectsCount = 0` (full frame) before any dirty-rect present (`PresentedOnce` /
+  per-viewport `PresentedOnce` flags). The main swapchain never resizes, so it pays this exactly once;
+  secondary viewports pay it after each capacity growth.
+- **Buffer staleness under SEQUENTIAL.** With BufferCount N, the buffer you receive after a present holds
+  the frame from N presents ago. A future *sub-client* damage strategy (per-imgui-window rects, damage
+  diffing) must render the union of the last N−1 frames' damage into each buffer — the classic
+  flip-sequential accumulation rule — while still *declaring* only this frame's damage to `Present1`.
+  The current implementation sidesteps this entirely by re-rendering the whole client rect; the client
+  rect is therefore both the render region and the declared damage.
+- **Ladder interaction.** Both ladder steps pass the same parameters; `DXGI_PRESENT_RESTART` /
+  `DO_NOT_SEQUENCE` / `ALLOW_TEARING` / `DO_NOT_WAIT` combine with `Present1` unchanged. The R6 pin needs
+  no adjustment: dirty rects are buffer-space, the pin is a visual-space transform.
+
+## 8. Verification checklist
 
 - Live-resize each edge/corner; then again with rapid, erratic mouse movement. Left/top/bottomleft/topleft
   must never show content translated by the origin delta (the R6 pin); the worst permitted artifact is a
   transient backdrop strip at the growing edge while a slow re-render catches up.
+- Undock a window (secondary viewport) and repeat the edge/corner resize matrix on it, dragging its
+  imgui-drawn borders rapidly: same standard — no translated content, no black flash on growth (grow-only
+  capacity means `ResizeBuffers` fires only when crossing a 256-px capacity boundary, adjacent to the
+  fresh present).
 - Drag the window rapidly (pure move): content glued, no repaint storm (R4 coalescing active).
 - Undock a window past the main viewport edge (secondary viewport spawns), redock it (viewport destroyed):
   no crash, no frame hitch (`InFrame` latch; run the regression test).
