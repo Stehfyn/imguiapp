@@ -25,6 +25,7 @@
 
 // CHANGELOG
 // (minor and older changes stripped away, please see git history for details)
+//  2026-07-09: Platform: WM_GETMINMAXINFO corrected -- maximize/max-track = the work area EXACTLY at its work origin (the reference's +1/-1 fudges shifted maximized windows down a row and left a 1px desktop line beneath); min width tracks the real caption anatomy (icon slot + four buttons); border.cx (not cy) pads the X min.
 //  2026-07-09: Platform: non-client frame contract completed from Win32X dwmframex_v2 -- caption title (system caption font, cached IDWriteTextLayout, win32kfull placement, crossfaded + 60% inactive dim; WM_SETTEXT drops the cache), WM_NCACTIVATE tracks REAL activation with lParam -1 (always-active froze DWM's frame), WM_DPICHANGED snaps to the suggested rect.
 //  2026-07-09: Platform: GetChromeThemeBlend -- the chrome's animated dark->light position (0..1 across the 160ms crossfade), published so the app can lerp its own theme in step (the demo crossfades StyleColorsDark <-> StyleColorsLight with it).
 //  2026-07-09: Platform: chrome animation (Win32X DfwAdvance/DwfBeginTransition): one 160ms wall-clock timeline crossfades glyph colors on theme (light/dark toggle) and activation changes, and ramps per-button hover/press highlight opacity (v2 fill shades; close glyph fades to white as its red rises). Driven by the continuous render loop, no timer.
@@ -1990,26 +1991,31 @@ static LRESULT WINAPI ImGuiApp_ImplWin32D2DDXGI_WndProc(HWND hWnd, UINT msg, WPA
         return 0;
     case WM_GETMINMAXINFO:
     {
+        // Min track keeps the caption anatomy intact (icon slot + light/dark/min/max/close). Maximize
+        // and max track are EXACTLY the nearest monitor's work area, positioned at its work origin --
+        // the maximized window rect then agrees with the zoomed WM_NCCALCSIZE client (mi.rcWork) to
+        // the pixel. The reference's +1/-1 offsets shifted every maximized window down a row and left
+        // a 1px desktop line beneath it.
         MINMAXINFO* mmi = (MINMAXINFO*)lParam;
         SIZE border;
         ImGuiApp_ImplWin32D2DDXGI_GetWindowBorders(hWnd, &border);
         const UINT dpi          = ::GetDpiForWindow(hWnd);
         const int  button_width = ::MulDiv(47, (int)dpi, 96);
         const int  caption      = ::MulDiv(bd != nullptr ? bd->CaptionHeight : 30, (int)dpi, 96);
-        mmi->ptMinTrackSize.x = 5 * button_width + 2 * border.cy;
+        mmi->ptMinTrackSize.x = caption + 4 * button_width + 2 * border.cx;
         mmi->ptMinTrackSize.y = caption + border.cy;
         GUITHREADINFO gti = {};
         gti.cbSize = sizeof(gti);
         if (::GetGUIThreadInfo(::GetCurrentThreadId(), &gti) && gti.hwndMoveSize == hWnd)
-            return 0;
+            return 0;   // mid move-size loop: leave the max fields alone (reference behavior)
         MONITORINFO mi = {};
         mi.cbSize = sizeof(mi);
         if (::GetMonitorInfo(::MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST), &mi))
         {
-            mmi->ptMaxPosition.x  = labs(mi.rcMonitor.left - mi.rcWork.left);
-            mmi->ptMaxPosition.y  = labs(mi.rcMonitor.top - mi.rcWork.top) + 1;
+            mmi->ptMaxPosition.x  = mi.rcWork.left - mi.rcMonitor.left;    // work inset, monitor-relative:
+            mmi->ptMaxPosition.y  = mi.rcWork.top - mi.rcMonitor.top;      // correct for any taskbar edge
             mmi->ptMaxTrackSize.x = mi.rcWork.right - mi.rcWork.left;
-            mmi->ptMaxTrackSize.y = (mi.rcWork.bottom - mi.rcWork.top) - 1;
+            mmi->ptMaxTrackSize.y = mi.rcWork.bottom - mi.rcWork.top;
             mmi->ptMaxSize        = mmi->ptMaxTrackSize;
         }
         return 0;
