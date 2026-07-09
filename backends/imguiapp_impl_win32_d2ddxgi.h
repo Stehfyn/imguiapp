@@ -92,6 +92,11 @@ IMGUI_API void ImGuiApp_ImplWin32D2DDXGI_SetDeviceDrawCallback(ImGuiApp* app, Im
 IMGUI_API void ImGuiApp_ImplWin32D2DDXGI_SetNCHitTestCallback(ImGuiApp* app, ImGuiApp_ImplWin32D2DDXGI_NCHitTestCallback callback);
 IMGUI_API int  ImGuiApp_ImplWin32D2DDXGI_GetCaptionHeight(ImGuiApp* app); // current caption strip height in window pixels (dpi-scaled)
 
+// (Optional) Pacer platform seam (QPC clock, hybrid sleep/spin wait, per-monitor refresh queries).
+// InitPlatform installs it when app->Pacer.Funcs is null, so ImGuiAppPacerMode_Target with TargetHz <= 0
+// paces the app to the primary monitor's refresh rate out of the box.
+IMGUI_API const ImGuiAppPacerFuncs* ImGuiApp_ImplWin32D2DDXGI_GetPacerFuncs();
+
 // (Optional) The reference's D2D caption chrome (min/max/close + light/dark buttons, Segoe MDL2 glyph runs),
 // transcribed verbatim and self-hosted on this backend's own client seams (SetDeviceDrawCallback +
 // SetNCHitTestCallback -- installing your own callbacks displaces the chrome's). Init installs it by

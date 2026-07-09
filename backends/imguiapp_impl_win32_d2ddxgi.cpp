@@ -25,6 +25,7 @@
 
 // CHANGELOG
 // (minor and older changes stripped away, please see git history for details)
+//  2026-07-08: Platform: default pacer platform seam (QPC clock, hybrid wait, per-monitor refresh queries) installed by InitPlatform when the client provided none -- ImGuiAppPacerMode_Target + TargetHz <= 0 now paces to the primary monitor's refresh rate; the run loop's canonical idle throttle defers to an active pacer.
 //  2026-07-08: Platform: opt-in dirty-rect presentation (InitInfo::PresentDirtyRects): FLIP_SEQUENTIAL swapchains + Present1 declaring the client rect as the only damage over the over-allocated buffers; full-frame present after every (re)creation per DXGI rules. See docs/dxgi-noflicker.md.
 //  2026-07-08: [Viewports] No-flicker design ported to secondary viewports: grow-only over-allocated swapchains (ResizeBuffers only on growth, deferred to just before render), imgui's two-transaction move+resize coalesced via wrapped Platform_SetWindowPos/SetWindowSize + flushed right before render, per-viewport content pin/unpin on the viewport's DComp visual. See docs/dxgi-noflicker.md.
 //  2026-07-08: Platform: self-healing content pin -- when a resize moves the window origin ahead of the presented content, a compensating DComp visual offset pins the content at its render-time screen position (no rendering); every present unpins in the same compositor latch. Origin-moving edge resizes can no longer show translated content, independent of render latency. See docs/dxgi-noflicker.md.
@@ -2020,6 +2021,72 @@ int ImGuiApp_ImplWin32D2DDXGI_GetCaptionHeight(ImGuiApp* app)
 }
 
 //--------------------------------------------------------------------------------------------------------
+// Pacer platform seam (QPC clock, hybrid sleep/spin wait, per-monitor refresh queries)
+//--------------------------------------------------------------------------------------------------------
+
+static double ImGuiApp_ImplWin32D2DDXGI_PacerNow()
+{
+    static LONGLONG qpc_hz = 0;
+    if (qpc_hz == 0)
+    {
+        LARGE_INTEGER freq;
+        ::QueryPerformanceFrequency(&freq);
+        qpc_hz = freq.QuadPart;
+    }
+    LARGE_INTEGER now;
+    ::QueryPerformanceCounter(&now);
+    return (double)now.QuadPart / (double)qpc_hz;
+}
+
+static void ImGuiApp_ImplWin32D2DDXGI_PacerWaitUntil(double time_sec, float sleep_slack_ms)
+{
+    for (;;)
+    {
+        const double remaining_ms = (time_sec - ImGuiApp_ImplWin32D2DDXGI_PacerNow()) * 1000.0;
+        if (remaining_ms <= 0.0)
+            return;
+        if (remaining_ms > (double)sleep_slack_ms)
+            ::Sleep(1);
+        // else: spin the slack window (OS sleep granularity guard)
+    }
+}
+
+static float ImGuiApp_ImplWin32D2DDXGI_PacerPrimaryRefreshHz()
+{
+    DEVMODEW dm = {};
+    dm.dmSize = sizeof(dm);
+    if (::EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &dm) && dm.dmDisplayFrequency > 1)
+        return (float)dm.dmDisplayFrequency;
+    return 0.0f;   // pacer assumes 60
+}
+
+static float ImGuiApp_ImplWin32D2DDXGI_PacerViewportRefreshHz(const ImGuiViewport* viewport)
+{
+    if (viewport == nullptr || viewport->PlatformHandle == nullptr)
+        return 0.0f;   // pacer falls back to primary
+    MONITORINFOEXW mi = {};
+    mi.cbSize = sizeof(mi);
+    if (!::GetMonitorInfoW(::MonitorFromWindow((HWND)viewport->PlatformHandle, MONITOR_DEFAULTTONEAREST), &mi))
+        return 0.0f;
+    DEVMODEW dm = {};
+    dm.dmSize = sizeof(dm);
+    if (::EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm) && dm.dmDisplayFrequency > 1)
+        return (float)dm.dmDisplayFrequency;
+    return 0.0f;
+}
+
+static const ImGuiAppPacerFuncs ImGuiApp_ImplWin32D2DDXGI_PacerFuncs =
+{
+    ImGuiApp_ImplWin32D2DDXGI_PacerNow,
+    ImGuiApp_ImplWin32D2DDXGI_PacerWaitUntil,
+    nullptr,   // no wait machinery to release
+    ImGuiApp_ImplWin32D2DDXGI_PacerPrimaryRefreshHz,
+    ImGuiApp_ImplWin32D2DDXGI_PacerViewportRefreshHz,
+};
+
+const ImGuiAppPacerFuncs* ImGuiApp_ImplWin32D2DDXGI_GetPacerFuncs() { return &ImGuiApp_ImplWin32D2DDXGI_PacerFuncs; }
+
+//--------------------------------------------------------------------------------------------------------
 // Platform lifecycle + run loop
 //--------------------------------------------------------------------------------------------------------
 
@@ -2095,6 +2162,11 @@ bool ImGuiApp_ImplWin32D2DDXGI_InitPlatform(ImGuiApp* app, ImGuiAppConfig& confi
     app->PlatformWindowHandle = state->Hwnd;
     ::SetWindowLongPtr(state->Hwnd, GWLP_USERDATA, (LONG_PTR)app);
 
+    // Default pacer platform seam: with it installed, ImGuiAppPacerMode_Target + TargetHz <= 0 paces
+    // the app to the primary monitor's refresh rate (a client-installed seam wins).
+    if (app->Pacer.Funcs == nullptr)
+        app->Pacer.Funcs = ImGuiApp_ImplWin32D2DDXGI_GetPacerFuncs();
+
     // The first WM_ACTIVATE fired before the backend existed; apply the window dressing now.
     ImGuiApp_ImplWin32D2DDXGI_ApplyWindowDressing(bd, state->Hwnd);
     return true;
@@ -2159,7 +2231,9 @@ int ImGuiApp_ImplWin32D2DDXGI_RunLoop(ImGuiApp* app)
         if (bd != nullptr && !bd->NoWaitForVBlank)
             ImGuiApp_ImplWin32D2DDXGI_WaitForVerticalBlank(bd, hwnd);
         app->Frame();
-        if (!::GetInputState())   // canonical idle tail: sync composition, then wait for events or ~one timer tick
+        // Canonical idle tail (sync composition + wait for events or ~one timer tick) ONLY when no pacer
+        // owns the cadence: with an active pacer it would throttle the frame rate below the paced target.
+        if (app->Pacer.Mode == ImGuiAppPacerMode_Off && !::GetInputState())
         {
             ::DwmFlush();
             ::MsgWaitForMultipleObjects(0, nullptr, FALSE, USER_TIMER_MINIMUM - 1, QS_ALLEVENTS);

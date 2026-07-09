@@ -298,9 +298,13 @@ The DXGI rules a port must honor:
   flip-sequential accumulation rule — while still *declaring* only this frame's damage to `Present1`.
   The current implementation sidesteps this entirely by re-rendering the whole client rect; the client
   rect is therefore both the render region and the declared damage.
-- **Ladder interaction.** Both ladder steps pass the same parameters; `DXGI_PRESENT_RESTART` /
-  `DO_NOT_SEQUENCE` / `ALLOW_TEARING` / `DO_NOT_WAIT` combine with `Present1` unchanged. The R6 pin needs
-  no adjustment: dirty rects are buffer-space, the pin is a visual-space transform.
+- **Ladder interaction (validated against the runtime).** `DXGI_PRESENT_ALLOW_TEARING` is INVALID
+  alongside partial-presentation parameters — dirty-rect mode drops it from the present flags (it is
+  meaningless through the compositor anyway). The `DO_NOT_SEQUENCE` replace step re-presents the SAME
+  buffer and rejects partial parameters — it passes an empty (full-frame) `DXGI_PRESENT_PARAMETERS`;
+  only the first ladder step declares the damage. `RESTART` and `DO_NOT_WAIT` combine with `Present1`
+  unchanged. The R6 pin needs no adjustment: dirty rects are buffer-space, the pin is a visual-space
+  transform.
 
 ## 8. Verification checklist
 
