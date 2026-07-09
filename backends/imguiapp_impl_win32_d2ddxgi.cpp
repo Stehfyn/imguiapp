@@ -25,6 +25,8 @@
 
 // CHANGELOG
 // (minor and older changes stripped away, please see git history for details)
+//  2026-07-08: Platform: self-healing content pin -- when a resize moves the window origin ahead of the presented content, a compensating DComp visual offset pins the content at its render-time screen position (no rendering); every present unpins in the same compositor latch. Origin-moving edge resizes can no longer show translated content, independent of render latency. See docs/dxgi-noflicker.md.
+//  2026-07-08: Platform: modal repaints serialized to the compositor clock (GetFrameStatistics coalescing to one rendered present per compositor frame; WM_NCCALCSIZE latches content via Commit + WaitForCommitCompletion before the geometry commit). See docs/dxgi-noflicker.md.
 //  2026-07-08: Inputs: ESC closes the window when foreground (the reference's WM_KEYUP behavior, EndTask softened to WM_CLOSE).
 //  2026-07-08: Platform: canonical D2D caption chrome (min/max/close + light/dark glyph buttons) transcribed and self-hosted on the SetDeviceDrawCallback/SetNCHitTestCallback seams; installed by Init unless InitInfo::NoChrome.
 //  2026-07-08: Initial version: immersive window + D3D11/D2D/DXGI-composition/DComp creation ladder transcribed from ImmersiveWindow.c; composes imgui_impl_win32 + imgui_impl_dx11; per-viewport composition swapchains; synchronous CaptureFrame.
@@ -193,6 +195,27 @@ struct ImGuiApp_ImplWin32D2DDXGI_Data
     bool ModalPresentActive;                // PresentFrame override while a modal repaint frame runs
     bool ModalPresentRestart;
     bool ModalPresentVsync;
+
+    // Compositor-clock latch for the modal repaint paths: the DirectComposition engine consumes all pending
+    // presents/batches atomically at each frame start (one frame per vblank), so at most ONE rendered present
+    // per compositor frame is useful -- extra ones just churn the queue and let a stale present pair with a
+    // newer geometry commit (the rapid-resize flicker). Records the frame a repaint targeted + the client
+    // size it drew, so the timer/WM_WINDOWPOSCHANGED paths can skip redundant repaints within that frame.
+    LONGLONG ModalLatchedFrameTime;         // DCOMPOSITION_FRAME_STATISTICS::nextEstimatedFrameTime the last modal repaint targeted
+    int      ModalLatchedWidth;             // client size that repaint drew
+    int      ModalLatchedHeight;
+
+    // Content pin (self-healing): geometry commits and content presents are independent compositor inputs,
+    // and a re-render can never be guaranteed to beat the next compositor latch. When a SIZE change moves
+    // the window origin ahead of the presented content (left/top-edge resizes), a compensating visual
+    // offset pins the old content at the screen position it was rendered for -- microseconds, no rendering
+    // -- and every present unpins it in the same batch. No compositor frame can show translated content.
+    int  ContentOriginX;                    // window-origin screen position of the last presented frame
+    int  ContentOriginY;
+    int  ContentWidth;                      // client size of the last presented frame
+    int  ContentHeight;
+    bool ContentOriginValid;
+    bool VisualOffsetActive;                // a compensating offset is currently committed on DCompVisual
 
     // D3DKMT vertical-blank wait (the reference's WaitForVerticalBlank; first call only opens the adapter)
     D3DKMT_HANDLE VBlankAdapter;
@@ -550,6 +573,67 @@ static void ImGuiApp_ImplWin32D2DDXGI_PresentLadder(ImGuiApp_ImplWin32D2DDXGI_Da
     IM_ASSERT(SUCCEEDED(hr) || hr == DXGI_ERROR_WAS_STILL_DRAWING);
 }
 
+// True when the last modal repaint already produced content for the UPCOMING compositor frame at the
+// window's CURRENT client size -- another repaint before that frame starts would be pure queue churn.
+static bool ImGuiApp_ImplWin32D2DDXGI_ModalContentCurrent(ImGuiApp_ImplWin32D2DDXGI_Data* bd, HWND hwnd)
+{
+    if (bd->DCompDevice == nullptr)
+        return false;
+    DCOMPOSITION_FRAME_STATISTICS stats = {};
+    if (FAILED(bd->DCompDevice->GetFrameStatistics(&stats)))
+        return false;
+    if (stats.nextEstimatedFrameTime.QuadPart != bd->ModalLatchedFrameTime)
+        return false;
+    RECT rect = {};
+    if (!::GetClientRect(hwnd, &rect))
+        return false;
+    return (rect.right - rect.left) == bd->ModalLatchedWidth && (rect.bottom - rect.top) == bd->ModalLatchedHeight;
+}
+
+// Content pin (see the ImGuiApp_ImplWin32D2DDXGI_Data fields): geometry outran the presented content --
+// pin the content at the screen position it was rendered for via a compensating visual offset. Cheap
+// enough (one batched property + Commit) to run inside WM_WINDOWPOSCHANGED with no repaint at all.
+static void ImGuiApp_ImplWin32D2DDXGI_PinContent(ImGuiApp_ImplWin32D2DDXGI_Data* bd, HWND hwnd)
+{
+    if (bd->DCompVisual == nullptr || bd->DCompDevice == nullptr || !bd->ContentOriginValid)
+        return;
+    RECT rect = {};
+    if (!::GetWindowRect(hwnd, &rect))
+        return;
+    const int dx = bd->ContentOriginX - rect.left;
+    const int dy = bd->ContentOriginY - rect.top;
+    if (dx == 0 && dy == 0 && !bd->VisualOffsetActive)
+        return;
+    bd->DCompVisual->SetOffsetX((float)dx);
+    bd->DCompVisual->SetOffsetY((float)dy);
+    bd->DCompDevice->Commit();
+    bd->VisualOffsetActive = (dx != 0 || dy != 0);
+}
+
+// Unpin + re-anchor, called right after every main-swapchain present: the offset reset rides the same
+// compositor latch as the present (both pending together), so fresh content never shows pre-translated.
+static void ImGuiApp_ImplWin32D2DDXGI_UnpinContent(ImGuiApp_ImplWin32D2DDXGI_Data* bd)
+{
+    HWND hwnd = (HWND)bd->Hwnd;
+    if (bd->VisualOffsetActive && bd->DCompVisual != nullptr && bd->DCompDevice != nullptr)
+    {
+        bd->DCompVisual->SetOffsetX(0.0f);
+        bd->DCompVisual->SetOffsetY(0.0f);
+        bd->DCompDevice->Commit();
+        bd->VisualOffsetActive = false;
+    }
+    RECT window_rect = {};
+    RECT client_rect = {};
+    if (::GetWindowRect(hwnd, &window_rect) && ::GetClientRect(hwnd, &client_rect))
+    {
+        bd->ContentOriginX     = window_rect.left;
+        bd->ContentOriginY     = window_rect.top;
+        bd->ContentWidth       = client_rect.right - client_rect.left;
+        bd->ContentHeight      = client_rect.bottom - client_rect.top;
+        bd->ContentOriginValid = true;
+    }
+}
+
 // WndProc-driven repaint (resize/move/modal loops). Default = a full app Frame() with the present flavor
 // overridden to the reference's (fRestart, fVsync) pair for that path; render-only mode just re-presents.
 // wait_for_vblank matches the reference per path: WM_NCCALCSIZE and the modal timer wait, WM_WINDOWPOSCHANGED
@@ -563,9 +647,22 @@ static void ImGuiApp_ImplWin32D2DDXGI_ModalRepaint(ImGuiApp* app, ImGuiApp_ImplW
         ::WaitForSingleObject(bd->FrameLatencyWaitableObject, 0);   // the reference's WaitForNextFrameResource: zero-timeout poll
     if (wait_for_vblank && !bd->NoWaitForVBlank)
         ImGuiApp_ImplWin32D2DDXGI_WaitForVerticalBlank(bd, hwnd);
+
+    // Stamp the compositor frame this repaint targets + the client size it draws (see ModalContentCurrent).
+    DCOMPOSITION_FRAME_STATISTICS stats = {};
+    if (bd->DCompDevice != nullptr && SUCCEEDED(bd->DCompDevice->GetFrameStatistics(&stats)))
+        bd->ModalLatchedFrameTime = stats.nextEstimatedFrameTime.QuadPart;
+    RECT rect = {};
+    if (::GetClientRect(hwnd, &rect))
+    {
+        bd->ModalLatchedWidth  = rect.right - rect.left;
+        bd->ModalLatchedHeight = rect.bottom - rect.top;
+    }
+
     if (bd->ModalRepaintRenderOnly)
     {
         ImGuiApp_ImplWin32D2DDXGI_PresentLadder(bd, restart, vsync);
+        ImGuiApp_ImplWin32D2DDXGI_UnpinContent(bd);   // the full-frame path unpins in PresentFrame
     }
     else
     {
@@ -807,6 +904,7 @@ void ImGuiApp_ImplWin32D2DDXGI_PresentFrame(ImGuiApp* app, const ImGuiAppFrameCo
         }
     }
     ImGuiApp_ImplWin32D2DDXGI_PresentLadder(bd, restart, vsync);
+    ImGuiApp_ImplWin32D2DDXGI_UnpinContent(bd);   // offset reset rides the same compositor latch as this present
 }
 
 //--------------------------------------------------------------------------------------------------------
@@ -1314,15 +1412,24 @@ static LRESULT WINAPI ImGuiApp_ImplWin32D2DDXGI_WndProc(HWND hWnd, UINT msg, WPA
                 return 0;
             }
             // The load-bearing smooth-resize trick: repaint + restart-present from INSIDE the resize
-            // calculation, then flush composition, so the never-resized swapchain tracks the frame.
+            // calculation -- BEFORE the window manager commits the new frame -- then wait until the
+            // composition engine has consumed the update (Commit + WaitForCommitCompletion: batches and
+            // presents are latched atomically at the compositor's next frame start). Content is therefore
+            // strictly ordered before geometry; the geometry commit can never pair with a stale present.
             if (bd != nullptr && bd->Swapchain != nullptr && !bd->Moving)
             {
                 GUITHREADINFO gti = {};
                 gti.cbSize = sizeof(gti);
                 ::GetGUIThreadInfo(::GetCurrentThreadId(), &gti);
-                ImGuiApp_ImplWin32D2DDXGI_ModalRepaint(app, bd, hWnd, true, false, true);
-                if (gti.hwndMoveSize != nullptr)
-                    ::DwmFlush();
+                // Render at most once per compositor frame (a previous tick's post-commit repaint may
+                // already have latched this frame's content); the ordering wait below runs regardless.
+                if (!ImGuiApp_ImplWin32D2DDXGI_ModalContentCurrent(bd, hWnd))
+                    ImGuiApp_ImplWin32D2DDXGI_ModalRepaint(app, bd, hWnd, true, false, true);
+                if (gti.hwndMoveSize != nullptr && bd->DCompDevice != nullptr)
+                {
+                    bd->DCompDevice->Commit();
+                    bd->DCompDevice->WaitForCommitCompletion();
+                }
             }
             SIZE border;
             ImGuiApp_ImplWin32D2DDXGI_GetWindowBorders(hWnd, &border);
@@ -1409,19 +1516,37 @@ static LRESULT WINAPI ImGuiApp_ImplWin32D2DDXGI_WndProc(HWND hWnd, UINT msg, WPA
     case WM_TIMER:
         if (wParam == 0x69)
         {
-            ImGuiApp_ImplWin32D2DDXGI_ModalRepaint(app, bd, hWnd, false, true, true);
-            if (bd != nullptr && !bd->Moving)
-                ::DwmFlush();
+            // One rendered present per compositor frame: skip when this frame's content is already queued
+            // at the current size (the resize tick's repaints own the cadence during a live resize).
+            if (bd != nullptr && !ImGuiApp_ImplWin32D2DDXGI_ModalContentCurrent(bd, hWnd))
+            {
+                ImGuiApp_ImplWin32D2DDXGI_ModalRepaint(app, bd, hWnd, false, true, true);
+                if (!bd->Moving)
+                    ::DwmFlush();
+            }
             return 0;
         }
         break;
     case WM_WINDOWPOSCHANGED:
-        // Not forwarded (no WM_SIZE/WM_MOVE generation), matching the reference; the repaint keeps the
-        // composition content glued to the window while it moves. NO vblank wait here (reference parity):
-        // the origin already changed, and delaying this repaint flashes the stale frame at the new origin
-        // (visible as flicker on left/top/corner resizes that move the window origin).
+        // Not forwarded (no WM_SIZE/WM_MOVE generation), matching the reference. NO vblank wait here:
+        // the geometry already committed. Order of operations is the flicker guarantee:
+        // 1. Self-heal: if this change RESIZED the window, the presented content's origin may have moved
+        //    out from under it (left/top edges) -- pin the content at its render-time screen position
+        //    (microseconds, no rendering). A pure move needs no pin: content correctly travels along.
+        // 2. Repaint at the new size, coalesced to one rendered present per compositor frame; its present
+        //    unpins the content in the same compositor latch.
         if (bd != nullptr && bd->Swapchain != nullptr && !bd->InModalRepaint)
-            ImGuiApp_ImplWin32D2DDXGI_ModalRepaint(app, bd, hWnd, true, true, false);
+        {
+            RECT client_rect = {};
+            ::GetClientRect(hWnd, &client_rect);
+            const bool size_changed = bd->ContentOriginValid &&
+                ((client_rect.right - client_rect.left) != bd->ContentWidth ||
+                 (client_rect.bottom - client_rect.top) != bd->ContentHeight);
+            if (size_changed)
+                ImGuiApp_ImplWin32D2DDXGI_PinContent(bd, hWnd);
+            if (!ImGuiApp_ImplWin32D2DDXGI_ModalContentCurrent(bd, hWnd))
+                ImGuiApp_ImplWin32D2DDXGI_ModalRepaint(app, bd, hWnd, true, true, false);
+        }
         return 0;
     case WM_GETMINMAXINFO:
     {
