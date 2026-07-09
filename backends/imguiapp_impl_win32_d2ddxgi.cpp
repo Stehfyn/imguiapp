@@ -25,6 +25,7 @@
 
 // CHANGELOG
 // (minor and older changes stripped away, please see git history for details)
+//  2026-07-08: Platform: vblank pace thread -- posts coalesced refresh-rate ticks to the main window while a modal loop is live, so size/move/menu loops repaint at the monitor's refresh rate instead of the WM_TIMER ~64Hz floor (the timer stays as fallback).
 //  2026-07-08: Platform: default pacer platform seam (QPC clock, hybrid wait, per-monitor refresh queries) installed by InitPlatform when the client provided none -- ImGuiAppPacerMode_Target + TargetHz <= 0 now paces to the primary monitor's refresh rate; the run loop's canonical idle throttle defers to an active pacer.
 //  2026-07-08: Platform: opt-in dirty-rect presentation (InitInfo::PresentDirtyRects): FLIP_SEQUENTIAL swapchains + Present1 declaring the client rect as the only damage over the over-allocated buffers; full-frame present after every (re)creation per DXGI rules. See docs/dxgi-noflicker.md.
 //  2026-07-08: [Viewports] No-flicker design ported to secondary viewports: grow-only over-allocated swapchains (ResizeBuffers only on growth, deferred to just before render), imgui's two-transaction move+resize coalesced via wrapped Platform_SetWindowPos/SetWindowSize + flushed right before render, per-viewport content pin/unpin on the viewport's DComp visual. See docs/dxgi-noflicker.md.
@@ -65,6 +66,10 @@
 #endif
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+// Pace tick posted by the vblank thread: dispatched by MODAL loops (size/move, menus), where the run
+// loop's pacing cannot run; keeps repaints at the monitor's refresh rate through them.
+#define IMGUIAPP_WIN32D2DDXGI_WM_PACE (WM_APP + 0x69)
 
 // SDK back-fill: not present in every dwmapi/dxgi header vintage.
 #ifndef DWMWA_PASSIVE_UPDATE_MODE
@@ -225,6 +230,15 @@ struct ImGuiApp_ImplWin32D2DDXGI_Data
     // D3DKMT vertical-blank wait (the reference's WaitForVerticalBlank; first call only opens the adapter)
     D3DKMT_HANDLE VBlankAdapter;
     UINT          VBlankSourceId;
+
+    // Pace thread: blocks on its OWN D3DKMT vblank wait and posts IMGUIAPP_WIN32D2DDXGI_WM_PACE to the
+    // main window while a modal loop is live (PaceModalLive), so modal resizes/moves/menus keep repainting
+    // at the monitor's refresh rate instead of the WM_TIMER floor. PacePending coalesces to one queued
+    // tick (a stalled main thread must not fill the message queue).
+    HANDLE        PaceThread;
+    volatile bool PaceThreadStop;
+    volatile bool PaceModalLive;
+    volatile LONG PacePending;
 
     // Per-viewport pacing (secondary platform windows): decided ONCE per viewport per frame in
     // Platform_RenderWindow, consumed by the render + present hooks. A skipped viewport keeps its last contents.
@@ -387,6 +401,52 @@ static bool ImGuiApp_ImplWin32D2DDXGI_WaitForVerticalBlank(ImGuiApp_ImplWin32D2D
         status = D3DKMTGetScanLine(&gsl);
     } while ((status != 0 || gsl.InVerticalBlank) && ++guard < 100000);
     return true;
+}
+
+// Pace thread body: per-thread D3DKMT adapter (its blocking vblank waits must not share the render
+// thread's handle), one coalesced posted tick per vblank while a modal loop is live. Falls back to a
+// refresh-period sleep when the adapter cannot be opened (remote/indirect displays).
+static DWORD WINAPI ImGuiApp_ImplWin32D2DDXGI_PaceThreadProc(LPVOID param)
+{
+    ImGuiApp_ImplWin32D2DDXGI_Data* bd = (ImGuiApp_ImplWin32D2DDXGI_Data*)param;
+    HWND hwnd = (HWND)bd->Hwnd;
+
+    D3DKMT_OPENADAPTERFROMHDC oa = {};
+    oa.hDc = ::GetDC(hwnd);
+    const LONG open_status = D3DKMTOpenAdapterFromHdc(&oa);
+    ::ReleaseDC(hwnd, oa.hDc);
+
+    while (!bd->PaceThreadStop)
+    {
+        if (!bd->PaceModalLive)
+        {
+            ::Sleep(50);   // parked: the run loop paces itself outside modal loops
+            continue;
+        }
+        if (open_status == 0)
+        {
+            D3DKMT_WAITFORVERTICALBLANKEVENT vbe = {};
+            vbe.hAdapter      = oa.hAdapter;
+            vbe.VidPnSourceId = oa.VidPnSourceId;
+            if (D3DKMTWaitForVerticalBlankEvent(&vbe) != 0)
+                ::Sleep(8);
+        }
+        else
+        {
+            ::Sleep(8);
+        }
+        if (bd->PaceThreadStop)
+            break;
+        if (bd->PaceModalLive && ::InterlockedCompareExchange(&bd->PacePending, 1, 0) == 0)
+            ::PostMessage(hwnd, IMGUIAPP_WIN32D2DDXGI_WM_PACE, 0, 0);
+    }
+
+    if (open_status == 0)
+    {
+        D3DKMT_CLOSEADAPTER close = { oa.hAdapter };
+        D3DKMTCloseAdapter(&close);
+    }
+    return 0;
 }
 
 //--------------------------------------------------------------------------------------------------------
@@ -831,6 +891,9 @@ bool ImGuiApp_ImplWin32D2DDXGI_Init(ImGuiApp* app, const ImGuiApp_ImplWin32D2DDX
     }
     bd->RendererBackendInitialized = true;
 
+    // Modal-loop pacing: keeps repaints at monitor refresh rate through size/move/menu loops.
+    bd->PaceThread = ::CreateThread(nullptr, 0, ImGuiApp_ImplWin32D2DDXGI_PaceThreadProc, bd, 0, nullptr);
+
     if (!init_info->NoChrome)
         ImGuiApp_ImplWin32D2DDXGI_InstallChrome(app);   // canonical caption chrome; failure (fonts absent) just leaves it off
     return true;
@@ -842,6 +905,14 @@ void ImGuiApp_ImplWin32D2DDXGI_Shutdown(ImGuiApp* app)
     IM_ASSERT(bd != nullptr && "No platform backend to shutdown, or already shutdown?");
     if (bd == nullptr)
         return;
+
+    if (bd->PaceThread != nullptr)
+    {
+        bd->PaceThreadStop = true;   // the thread wakes within one vblank (or its parked sleep)
+        ::WaitForSingleObject(bd->PaceThread, 2000);
+        ::CloseHandle(bd->PaceThread);
+        bd->PaceThread = nullptr;
+    }
 
     ImGuiApp_ImplWin32D2DDXGI_UninstallChrome(app);   // chrome brushes/fonts ride the D2D context released below
 
@@ -1539,15 +1610,28 @@ static LRESULT WINAPI ImGuiApp_ImplWin32D2DDXGI_WndProc(HWND hWnd, UINT msg, WPA
     case WM_ENTERMENULOOP:
         if (bd != nullptr)
         {
-            bd->Moving   = false;
-            bd->Resizing = false;
+            bd->Moving        = false;
+            bd->Resizing      = false;
+            bd->PaceModalLive = true;   // vblank pace thread starts posting refresh-rate ticks
         }
-        ::SetTimer(hWnd, 0x69, USER_TIMER_MINIMUM, nullptr);
+        ::SetTimer(hWnd, 0x69, USER_TIMER_MINIMUM, nullptr);   // fallback cadence (pace thread may lack a vblank source)
         return 0;
     case WM_EXITSIZEMOVE:
     case WM_EXITMENULOOP:
+        if (bd != nullptr)
+            bd->PaceModalLive = false;
         ::KillTimer(hWnd, 0x69);
         ImGuiApp_ImplWin32D2DDXGI_ModalRepaint(app, bd, hWnd, false, true, true);
+        return 0;
+    case IMGUIAPP_WIN32D2DDXGI_WM_PACE:
+        // Refresh-rate modal tick from the pace thread. The thread already supplied the vblank phase, so
+        // the repaint runs waitless; compositor-frame coalescing dedupes against the resize-tick repaints.
+        if (bd != nullptr)
+        {
+            ::InterlockedExchange(&bd->PacePending, 0);
+            if (bd->PaceModalLive && !ImGuiApp_ImplWin32D2DDXGI_ModalContentCurrent(bd, hWnd))
+                ImGuiApp_ImplWin32D2DDXGI_ModalRepaint(app, bd, hWnd, false, true, false);
+        }
         return 0;
     case WM_TIMER:
         if (wParam == 0x69)
