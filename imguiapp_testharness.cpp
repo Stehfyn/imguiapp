@@ -58,6 +58,15 @@
 // Default ImGuiAppFileSystemFuncs: platform libc mkdir/remove + std::filesystem scan --
 // the only place std::filesystem may appear (docs/house-style-audit.md Δ2).
 #ifndef IMGUIAPP_DISABLE_DEFAULT_FILESYSTEM_FUNCS
+#ifdef __EMSCRIPTEN__
+// Web builds link -sNO_FILESYSTEM=1: any filesystem syscall aborts the wasm runtime, so the
+// platform default is INERT (a scan visits nothing). A host with a virtual FS registers its own
+// funcs via SetAppFileSystemFuncs.
+static bool AppFsCreateDirRecursiveDefault(const char*) { return false; }
+static bool AppFsRemoveFileDefault(const char*)         { return false; }
+static bool AppFsRemoveDirDefault(const char*)          { return false; }
+static void AppFsScanDirDefault(const char*, void (*)(const char* name, ImU64 size_bytes, void* user_data), void*) { }
+#else
 static bool AppFsMkdirOneDefault(const char* path)
 {
 #ifdef _WIN32
@@ -107,6 +116,7 @@ static void AppFsScanDirDefault(const char* dir, void (*visit)(const char* name,
         visit(entry.path().filename().string().c_str(), (ImU64)entry.file_size(fs_ec), user_data);
     }
 }
+#endif // #ifdef __EMSCRIPTEN__
 
 static const ImGuiAppFileSystemFuncs GAppFileSystemFuncsDefault =
 {

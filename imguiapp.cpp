@@ -1795,7 +1795,9 @@ IMGUI_API void AppWALWriteV(ImGuiAppWAL* wal, ImGuiAppWALLevel level, const char
                      (unsigned long long)wal->FrameID->FrameIndex, (unsigned long long)wal->FrameID->Tsc, msg);
     else
         ImFilePrintf(f, "[%06d f%05d] %s\n", wal->Seq++, frame, msg);
-    fflush(f);   // write-ahead guarantee
+#ifndef IMGUI_DISABLE_FILE_FUNCTIONS
+    fflush(f);   // write-ahead guarantee (stubbed ImFileOpen never yields a handle, so this arm never runs)
+#endif
 }
 
 IMGUI_API void AppWALWrite(ImGuiAppWAL* wal, ImGuiAppWALLevel level, const char* fmt, ...)
