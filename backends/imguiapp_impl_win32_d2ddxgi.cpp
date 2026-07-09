@@ -25,6 +25,8 @@
 
 // CHANGELOG
 // (minor and older changes stripped away, please see git history for details)
+//  2026-07-09: [Viewports] ConfigDockingTransparentPayload defaulted ON: imgui otherwise draws a SECOND copy of the dock-preview indicators into the dragged viewport's foreground; that copy rides a window whose OS position changes the same frame, and geometry/content are separate DWM channels -- any latch split lands the two copies a drag-delta apart (the dock indicators "shaking"). Target-viewport-only preview removes the moving copy.
+//  2026-07-09: [Viewports] Whole-frame latch alignment: secondary-viewport geometry AND presents are deferred to PresentFrame (FlushViewports), emitted back-to-back with the main present ladder so ONE compositor latch takes the entire frame -- emitting them mid-frame let a latch pair a moved viewport window with the main window's previous frame (dock visuals "shaking" during viewport drags over a dockspace). Pending geometry also overrides the per-viewport pacing skip (old content must never pair with new geometry), and z-order/activation-only WM_WINDOWPOSCHANGED no longer triggers a main-window repaint.
 //  2026-07-09: Platform: WM_GETMINMAXINFO corrected -- maximize/max-track = the work area EXACTLY at its work origin (the reference's +1/-1 fudges shifted maximized windows down a row and left a 1px desktop line beneath); min width tracks the real caption anatomy (icon slot + four buttons); border.cx (not cy) pads the X min.
 //  2026-07-09: Platform: non-client frame contract completed from Win32X dwmframex_v2 -- caption title (system caption font, cached IDWriteTextLayout, win32kfull placement, crossfaded + 60% inactive dim; WM_SETTEXT drops the cache), WM_NCACTIVATE tracks REAL activation with lParam -1 (always-active froze DWM's frame), WM_DPICHANGED snaps to the suggested rect.
 //  2026-07-09: Platform: GetChromeThemeBlend -- the chrome's animated dark->light position (0..1 across the 160ms crossfade), published so the app can lerp its own theme in step (the demo crossfades StyleColorsDark <-> StyleColorsLight with it).
@@ -916,6 +918,14 @@ bool ImGuiApp_ImplWin32D2DDXGI_Init(ImGuiApp* app, const ImGuiApp_ImplWin32D2DDX
     }
     bd->PlatformBackendInitialized = true;
 
+    // Docking preview on the TARGET viewport only. Without this, imgui draws a SECOND copy of the
+    // dock indicators into the dragged viewport's own foreground: that copy rides inside a window
+    // whose OS position changes the same frame, and window geometry vs swapchain content are separate
+    // DWM channels that no ordering can pair transactionally -- whenever a latch splits them, the two
+    // overlay copies land one drag-delta apart and the dock visuals "shake". Clients may override
+    // after Init if they also disable multi-viewports.
+    ImGui::GetIO().ConfigDockingTransparentPayload = true;
+
     if (!ImGuiApp_ImplWin32D2DDXGI_CreateDeviceObjects(bd, init_info))
     {
         ImGuiApp_ImplWin32D2DDXGI_Shutdown(app);
@@ -1035,6 +1045,8 @@ void ImGuiApp_ImplWin32D2DDXGI_RenderDrawData(ImGuiApp* app, ImDrawData* draw_da
 
 // Present phase: the encode phase runs between RenderDrawData and this, reading
 // back the frame just rendered before it goes on screen.
+static void ImGuiApp_ImplWin32D2DDXGI_FlushViewports(ImGuiApp_ImplWin32D2DDXGI_Data* bd);   // deferred secondary geometry + presents (defined with the viewport hooks)
+
 void ImGuiApp_ImplWin32D2DDXGI_PresentFrame(ImGuiApp* app, const ImGuiAppFrameConfig* config)
 {
     ImGuiApp_ImplWin32D2DDXGI_Data* bd = ImGuiApp_ImplWin32D2DDXGI_GetBackendData(app);
@@ -1042,7 +1054,10 @@ void ImGuiApp_ImplWin32D2DDXGI_PresentFrame(ImGuiApp* app, const ImGuiAppFrameCo
         return;
     bd->InFrame = false;   // the frame ends here regardless of the present decision below
     if ((config->Flags & ImGuiAppFrameFlags_NoPresent) != 0)
+    {
+        ImGuiApp_ImplWin32D2DDXGI_FlushViewports(bd);   // secondaries own their swapchains; starving their geometry would freeze window moves
         return;
+    }
 
     bool restart = false;
     bool vsync   = false;
@@ -1063,6 +1078,11 @@ void ImGuiApp_ImplWin32D2DDXGI_PresentFrame(ImGuiApp* app, const ImGuiAppFrameCo
     }
     ImGuiApp_ImplWin32D2DDXGI_PresentLadder(bd, restart, vsync);
     ImGuiApp_ImplWin32D2DDXGI_UnpinContent(bd);   // offset reset rides the same compositor latch as this present
+    // Secondary-viewport geometry + presents, emitted back-to-back with the main present above: one
+    // compositor latch takes the WHOLE frame. Emitting them mid-frame (where imgui's hooks run) let a
+    // latch land between them and pair a moved viewport window with the main window's PREVIOUS frame --
+    // the dock visuals "shaking" while dragging a viewport across a dockspace.
+    ImGuiApp_ImplWin32D2DDXGI_FlushViewports(bd);
 }
 
 //--------------------------------------------------------------------------------------------------------
@@ -1976,6 +1996,14 @@ static LRESULT WINAPI ImGuiApp_ImplWin32D2DDXGI_WndProc(HWND hWnd, UINT msg, WPA
         //    (microseconds, no rendering). A pure move needs no pin: content correctly travels along.
         // 2. Repaint at the new size, coalesced to one rendered present per compositor frame; its present
         //    unpins the content in the same compositor latch.
+        // Z-order / activation churn (secondary-viewport drags juggle focus and z) changes no
+        // geometry: repainting on it injects out-of-band frames between the run loop's -- skip.
+        if (lParam != 0)
+        {
+            const WINDOWPOS* wp = (const WINDOWPOS*)lParam;
+            if ((wp->flags & SWP_NOMOVE) != 0 && (wp->flags & SWP_NOSIZE) != 0)
+                return 0;
+        }
         if (bd != nullptr && bd->Swapchain != nullptr && !bd->InModalRepaint)
         {
             RECT client_rect = {};
@@ -2127,7 +2155,8 @@ struct ImGuiApp_ImplWin32D2DDXGI_ViewportData
     int                     CapacityHeight;
     bool                    PendingGrow;        // capacity grew: ResizeBuffers right before the next render
     bool                    HasPendingPos;      // deferred Platform_SetWindowPos/SetWindowSize, flushed in
-    bool                    HasPendingSize;     // Platform_RenderWindow as one back-to-back transaction
+    bool                    HasPendingSize;     // PresentFrame's FlushViewports as one back-to-back transaction
+    bool                    PendingPresent;     // rendered this frame; the present rides FlushViewports too
     ImVec2                  PendingPos;
     ImVec2                  PendingSize;
     int                     ContentOriginX;     // window-origin screen position of the last presented frame
@@ -2233,7 +2262,8 @@ static void ImGuiApp_ImplWin32D2DDXGI_Renderer_SetWindowSize(ImGuiViewport* view
 
 // Deferred platform geometry: imgui applies a secondary viewport's move + resize as two separate OS
 // transactions (SetWindowPos then SetWindowSize) early in UpdatePlatformWindows, a full render away from
-// the matching present. Record both here; Platform_RenderWindow flushes them back-to-back and pins.
+// the matching present. Record both here; PresentFrame's FlushViewports emits them back-to-back with
+// the viewport's present AND the main present, inside one compositor-latch window.
 static void ImGuiApp_ImplWin32D2DDXGI_Platform_SetWindowPos(ImGuiViewport* viewport, ImVec2 pos)
 {
     ImGuiApp_ImplWin32D2DDXGI_Data* bd = ImGuiApp_ImplWin32D2DDXGI_GetBackendData(ImGuiApp_ImplWin32D2DDXGI_GetApp());
@@ -2262,45 +2292,20 @@ static void ImGuiApp_ImplWin32D2DDXGI_Platform_SetWindowSize(ImGuiViewport* view
     vd->HasPendingSize = true;
 }
 
-// First per-viewport hook RenderPlatformWindowsDefault runs. Three jobs, in order:
-// 1. Flush deferred geometry as one back-to-back transaction (pos then size, upstream order).
-// 2. Self-heal: if the geometry outran the presented content (a resize moved the origin), pin the
-//    content at its render-time screen position on THIS viewport's visual (same mechanism as the main
-//    window's R6, docs/dxgi-noflicker.md); the present in Renderer_SwapBuffers unpins it.
-// 3. Make the pacing decision ONCE per viewport per frame, consumed by the render + present hooks below.
+// First per-viewport hook RenderPlatformWindowsDefault runs. Deferred geometry is NOT applied here:
+// PresentFrame's FlushViewports emits it back-to-back with this viewport's present AND the main
+// window's present, so one compositor latch takes the whole frame. This hook only makes the pacing
+// decision ONCE per viewport per frame -- and pending geometry overrides it: skipping that present
+// would pair OLD content with NEW geometry (the mispairing docs/dxgi-noflicker.md 6 forbids).
+// ShouldPresent still runs first so the deadline chain advances.
 static void ImGuiApp_ImplWin32D2DDXGI_Platform_RenderWindow(ImGuiViewport* viewport, void*)
 {
     ImGuiApp_ImplWin32D2DDXGI_Data* bd = ImGuiApp_ImplWin32D2DDXGI_GetBackendData(ImGuiApp_ImplWin32D2DDXGI_GetApp());
     if (bd == nullptr)
         return;
-
-    if (ImGuiApp_ImplWin32D2DDXGI_ViewportData* vd = (ImGuiApp_ImplWin32D2DDXGI_ViewportData*)viewport->RendererUserData)
-    {
-        if (vd->HasPendingPos && bd->UnderlyingPlatformSetWindowPos != nullptr)
-            bd->UnderlyingPlatformSetWindowPos(viewport, vd->PendingPos);
-        if (vd->HasPendingSize && bd->UnderlyingPlatformSetWindowSize != nullptr)
-            bd->UnderlyingPlatformSetWindowSize(viewport, vd->PendingSize);
-        const bool resized = vd->HasPendingSize;
-        vd->HasPendingPos  = false;
-        vd->HasPendingSize = false;
-
-        HWND hwnd = viewport->PlatformHandleRaw ? (HWND)viewport->PlatformHandleRaw : (HWND)viewport->PlatformHandle;
-        RECT window_rect = {};
-        if (resized && vd->ContentOriginValid && vd->DCompVisual != nullptr && ::GetWindowRect(hwnd, &window_rect))
-        {
-            const int dx = vd->ContentOriginX - window_rect.left;
-            const int dy = vd->ContentOriginY - window_rect.top;
-            if (dx != 0 || dy != 0 || vd->VisualOffsetActive)
-            {
-                vd->DCompVisual->SetOffsetX((float)dx);
-                vd->DCompVisual->SetOffsetY((float)dy);
-                bd->DCompDevice->Commit();
-                vd->VisualOffsetActive = (dx != 0 || dy != 0);
-            }
-        }
-    }
-
-    const bool present = ImGui::AppPacerViewportShouldPresent(bd->App, viewport);
+    ImGuiApp_ImplWin32D2DDXGI_ViewportData* vd = (ImGuiApp_ImplWin32D2DDXGI_ViewportData*)viewport->RendererUserData;
+    const bool geometry_changed = vd != nullptr && (vd->HasPendingPos || vd->HasPendingSize);
+    const bool present = ImGui::AppPacerViewportShouldPresent(bd->App, viewport) || geometry_changed;
     bd->VpSkip.SetBool(viewport->ID, !present);
 }
 
@@ -2349,49 +2354,96 @@ static void ImGuiApp_ImplWin32D2DDXGI_Renderer_RenderWindow(ImGuiViewport* viewp
 
 static void ImGuiApp_ImplWin32D2DDXGI_Renderer_SwapBuffers(ImGuiViewport* viewport, void*)
 {
+    // The present itself is deferred to PresentFrame's FlushViewports (one compositor latch for the
+    // whole frame); this hook only records that the viewport rendered and wants one.
     ImGuiApp_ImplWin32D2DDXGI_Data* bd = ImGuiApp_ImplWin32D2DDXGI_GetBackendData(ImGuiApp_ImplWin32D2DDXGI_GetApp());
     if (bd == nullptr || bd->VpSkip.GetBool(viewport->ID))
         return;
     ImGuiApp_ImplWin32D2DDXGI_ViewportData* vd = (ImGuiApp_ImplWin32D2DDXGI_ViewportData*)viewport->RendererUserData;
     if (vd == nullptr || vd->Swapchain == nullptr)
         return;
-    HWND hwnd = viewport->PlatformHandleRaw ? (HWND)viewport->PlatformHandleRaw : (HWND)viewport->PlatformHandle;
-    if (bd->PresentDirtyRects)
-    {
-        // Client-rect damage over the over-allocated buffer; first present after (re)creation is full-frame.
-        RECT dirty = {};
-        ::GetClientRect(hwnd, &dirty);
-        DXGI_PRESENT_PARAMETERS params = {};
-        if (vd->PresentedOnce && dirty.right > 0 && dirty.bottom > 0)
-        {
-            params.DirtyRectsCount = 1;
-            params.pDirtyRects     = &dirty;
-        }
-        vd->Swapchain->Present1(0, 0, &params);
-    }
-    else
-    {
-        vd->Swapchain->Present(0, 0);
-    }
-    vd->PresentedOnce = true;
+    vd->PendingPresent = true;
+}
 
-    // Unpin + re-anchor in the same compositor latch as the present (the main window's UnpinContent, per viewport).
-    if (vd->VisualOffsetActive && vd->DCompVisual != nullptr)
+// Deferred secondary-viewport flush, called from PresentFrame right after the main present ladder:
+// per viewport, geometry (pos then size, upstream order, one back-to-back transaction), the resize
+// content pin (geometry ahead of content -- pin the presented content at its render-time origin,
+// docs/dxgi-noflicker.md 6/R6), then the present, whose unpin + re-anchor ride the same latch.
+static void ImGuiApp_ImplWin32D2DDXGI_FlushViewports(ImGuiApp_ImplWin32D2DDXGI_Data* bd)
+{
+    if (bd == nullptr)
+        return;
+    ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
+    for (int i = 1; i < platform_io.Viewports.Size; i++)   // 0 = the main viewport (PresentFrame's ladder)
     {
-        vd->DCompVisual->SetOffsetX(0.0f);
-        vd->DCompVisual->SetOffsetY(0.0f);
-        bd->DCompDevice->Commit();
-        vd->VisualOffsetActive = false;
-    }
-    RECT window_rect = {};
-    RECT client_rect = {};
-    if (::GetWindowRect(hwnd, &window_rect) && ::GetClientRect(hwnd, &client_rect))
-    {
-        vd->ContentOriginX     = window_rect.left;
-        vd->ContentOriginY     = window_rect.top;
-        vd->ContentWidth       = client_rect.right - client_rect.left;
-        vd->ContentHeight      = client_rect.bottom - client_rect.top;
-        vd->ContentOriginValid = true;
+        ImGuiViewport* viewport = platform_io.Viewports[i];
+        ImGuiApp_ImplWin32D2DDXGI_ViewportData* vd = (ImGuiApp_ImplWin32D2DDXGI_ViewportData*)viewport->RendererUserData;
+        if (vd == nullptr)
+            continue;
+        HWND hwnd = viewport->PlatformHandleRaw ? (HWND)viewport->PlatformHandleRaw : (HWND)viewport->PlatformHandle;
+
+        if (vd->HasPendingPos && bd->UnderlyingPlatformSetWindowPos != nullptr)
+            bd->UnderlyingPlatformSetWindowPos(viewport, vd->PendingPos);
+        if (vd->HasPendingSize && bd->UnderlyingPlatformSetWindowSize != nullptr)
+            bd->UnderlyingPlatformSetWindowSize(viewport, vd->PendingSize);
+        const bool resized = vd->HasPendingSize;
+        vd->HasPendingPos  = false;
+        vd->HasPendingSize = false;
+
+        RECT window_rect = {};
+        if (resized && vd->ContentOriginValid && vd->DCompVisual != nullptr && ::GetWindowRect(hwnd, &window_rect))
+        {
+            const int dx = vd->ContentOriginX - window_rect.left;
+            const int dy = vd->ContentOriginY - window_rect.top;
+            if (dx != 0 || dy != 0 || vd->VisualOffsetActive)
+            {
+                vd->DCompVisual->SetOffsetX((float)dx);
+                vd->DCompVisual->SetOffsetY((float)dy);
+                bd->DCompDevice->Commit();
+                vd->VisualOffsetActive = (dx != 0 || dy != 0);
+            }
+        }
+
+        if (!vd->PendingPresent || vd->Swapchain == nullptr)
+            continue;
+        vd->PendingPresent = false;
+        if (bd->PresentDirtyRects)
+        {
+            // Client-rect damage over the over-allocated buffer; first present after (re)creation is full-frame.
+            RECT dirty = {};
+            ::GetClientRect(hwnd, &dirty);
+            DXGI_PRESENT_PARAMETERS params = {};
+            if (vd->PresentedOnce && dirty.right > 0 && dirty.bottom > 0)
+            {
+                params.DirtyRectsCount = 1;
+                params.pDirtyRects     = &dirty;
+            }
+            vd->Swapchain->Present1(0, 0, &params);
+        }
+        else
+        {
+            vd->Swapchain->Present(0, 0);
+        }
+        vd->PresentedOnce = true;
+
+        // Unpin + re-anchor in the same compositor latch as the present (the main window's UnpinContent, per viewport).
+        if (vd->VisualOffsetActive && vd->DCompVisual != nullptr)
+        {
+            vd->DCompVisual->SetOffsetX(0.0f);
+            vd->DCompVisual->SetOffsetY(0.0f);
+            bd->DCompDevice->Commit();
+            vd->VisualOffsetActive = false;
+        }
+        RECT anchor_rect = {};
+        RECT client_rect = {};
+        if (::GetWindowRect(hwnd, &anchor_rect) && ::GetClientRect(hwnd, &client_rect))
+        {
+            vd->ContentOriginX     = anchor_rect.left;
+            vd->ContentOriginY     = anchor_rect.top;
+            vd->ContentWidth       = client_rect.right - client_rect.left;
+            vd->ContentHeight      = client_rect.bottom - client_rect.top;
+            vd->ContentOriginValid = true;
+        }
     }
 }
 
