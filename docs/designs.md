@@ -4077,10 +4077,24 @@ still names the idea). Design docs cite these; this file is the union.
 - Shneiderman's mantra — *overview first, zoom and filter, details on demand* ("The Eyes Have It", 1996).
 - Norman, *The Design of Everyday Things* — gulfs of execution/evaluation; every action needs a visible next step and result.
 - Fitts's law (targets at the cursor beat targets at the edge) · Hick's law (filtered palettes beat full palettes) · Gestalt common region/similarity (group boxes, phase bands, kind accents).
+- [Keystroke-Level Model — Card, Moran & Newell 1980](https://dl.acm.org/doi/10.1145/358886.358895) (*CACM* 23(7)) — flows budgeted in K/P/H/M operators. → gen-3 flow economy.
+- [Proximity compatibility principle — Wickens & Carswell 1995](https://doi.org/10.1518/001872095779064560) (*Human Factors* 37(3)) — related info lives together; eye travel is a budget. → fixed echo zones, quick inspector.
+- [WCAG 2.2](https://www.w3.org/TR/WCAG22/) + [APCA contrast](https://git.apcacontrast.com/) — accessibility acceptance criteria; Lc targets for alpha-composited text rungs. → gen-3 §7.
+- [Color Universal Design — Okabe & Ito 2008](https://jfly.uni-koeln.de/color/) — CVD-safe hue anchors. → semantic hue re-anchor.
+- Bertin, *Semiology of Graphics* (1967/1983) — visual variables; every semantic gets ≥ 2 channels. → double-encoding rule.
+
+### Local mirrors
+
+[media/README.md](media/README.md) — offline copies, organized for quick referencing:
+`media/grabs/{unity,unreal,blender}/` curated native-resolution editor screenshots (full editors,
+3D + orthographic viewports, UMG / UI Builder 2D authoring, Blueprint compile states, the Unity
+lifecycle flowchart); `media/pages/` page snapshots (`.html` + pulled `css/` + `.render.png`
+rendering alongside each); `media/mock/` our mocks (`composer-gen3-endgoal.html`).
 
 ### Design docs using these
 
 - [composer-ui-design](#composer-ui-design) — gen 1: lateral ties, viewport chrome.
 - [composer-workbench-design](#composer-workbench-design) — gen 2: workbench hardening/expansion.
+- `composer-studio-design.md` (live, docs/) — gen 3: one studio for Author/Observe/Replay, WYSIWYG previewer, KLM/PCP flow economy, WCAG 2.2 program.
 - [metrics-debugger-coherence-design](#metrics-debugger-coherence-design) — status/health coherence.
 - [node-editor-upgrade-design](#node-editor-upgrade-design) — canvas/editor upgrade.
