@@ -107,7 +107,8 @@ IMGUI_API const ImGuiAppPacerFuncs* ImGuiApp_ImplWin32D2DDXGI_GetPacerFuncs();
 // Init installs it by default (InitInfo::NoChrome opts out); the light/dark button drives the uxtheme ladder.
 IMGUI_API bool ImGuiApp_ImplWin32D2DDXGI_InstallChrome(ImGuiApp* app);
 IMGUI_API void ImGuiApp_ImplWin32D2DDXGI_UninstallChrome(ImGuiApp* app);
-IMGUI_API bool ImGuiApp_ImplWin32D2DDXGI_GetChromeLightMode(ImGuiApp* app); // the caption light/dark toggle's current state (true = light)
+IMGUI_API bool  ImGuiApp_ImplWin32D2DDXGI_GetChromeLightMode(ImGuiApp* app);  // the caption light/dark toggle's current state (true = light)
+IMGUI_API float ImGuiApp_ImplWin32D2DDXGI_GetChromeThemeBlend(ImGuiApp* app); // 0 = dark .. 1 = light, animated across the chrome's 160ms crossfade -- lerp your app theme with it
 
 // This host's seam vtable; the app's wiring hands it to the app layer as ImGuiAppGetPlatformBackend().
 IMGUI_API const ImGuiAppPlatformBackend* ImGuiApp_ImplWin32D2DDXGI_GetPlatformBackend();

@@ -25,6 +25,8 @@
 
 // CHANGELOG
 // (minor and older changes stripped away, please see git history for details)
+//  2026-07-09: Platform: GetChromeThemeBlend -- the chrome's animated dark->light position (0..1 across the 160ms crossfade), published so the app can lerp its own theme in step (the demo crossfades StyleColorsDark <-> StyleColorsLight with it).
+//  2026-07-09: Platform: chrome animation (Win32X DfwAdvance/DwfBeginTransition): one 160ms wall-clock timeline crossfades glyph colors on theme (light/dark toggle) and activation changes, and ramps per-button hover/press highlight opacity (v2 fill shades; close glyph fades to white as its red rises). Driven by the continuous render loop, no timer.
 //  2026-07-09: Platform: chrome caption system icon (Win32X DwfEnsureIcon): the window's icon rasterized once at native res into a D3D11 texture / D2D bitmap, drawn at the win32kfull DrawCaptionIcon slot; the caption-left square hittests HTSYSMENU (DefWindowProc: menu on click, close on double-click).
 //  2026-07-09: Platform: chrome conformed to Win32X dwmframex_v2 -- canonical glyph set (ChromeMinimize/Maximize/Restore/Close 0xE921-3/0xE8BB, light/dark 0xE706/0xE708) from Segoe Fluent Icons (MDL2 fallback) drawn as cached centered IDWriteTextLayouts; client-space hittest (buttons beat the top resize strip, HTLIGHTDARK replaces the HTMENU hack); capture-tracked button presses (press captures, release on the same button commits).
 //  2026-07-08: Platform: vblank pace thread -- posts coalesced refresh-rate ticks to the main window while a modal loop is live, so size/move/menu loops repaint at the monitor's refresh rate instead of the WM_TIMER ~64Hz floor (the timer stays as fallback).
@@ -1165,6 +1167,15 @@ struct ImGuiApp_ImplWin32D2DDXGI_ChromeData
     UINT                   GlyphLayoutDpi;   // dpi the format + layouts were built at; a mismatch rebuilds them
     ID2D1Bitmap1*          IconBitmap;       // cached high-res caption icon; DrawBitmap downscales (Win32X DwfEnsureIcon)
     bool                   IconTried;        // attempted-once latch: a window with no icon stays iconless
+    ID2D1SolidColorBrush*  AnimBrush;        // the ONE recolored brush for animated fills + glyphs (Win32X DwfBrush)
+    bool                   WndActive;        // current (target) window-activation state
+    bool                   DarkFrom;         // dark state at crossfade start (the "from" color set)
+    bool                   ActiveFrom;       // window-active state at crossfade start
+    bool                   Anim;             // a 160ms crossfade is running
+    float                  AnimT;            // crossfade progress 0..1
+    ULONGLONG              AnimStartMs;
+    ULONGLONG              LastTickMs;       // previous animation tick (per-button opacity ramp step)
+    float                  BtnOpacity[6];    // per-button highlight opacity, indexed by ImGuiApp_ImplWin32D2DDXGI_CaptionButton_
     ID2D1SolidColorBrush*  Brush;            // light-mode surface / dark-mode text
     ID2D1SolidColorBrush*  RedBrush;         // close-button hot
     ID2D1SolidColorBrush*  BlackBrush;       // dark-mode surface / light-mode text
@@ -1179,6 +1190,78 @@ struct ImGuiApp_ImplWin32D2DDXGI_ChromeData
 
     ImGuiApp_ImplWin32D2DDXGI_ChromeData() { memset((void*)this, 0, sizeof(*this)); }
 };
+
+#define IMGUIAPP_WIN32D2DDXGI_CHROME_ANIM_MS (160.0f)   // uDWM's shared crossfade timeline (Win32X DWF_ANIM_DURATION)
+
+static inline D2D1_COLOR_F ImGuiApp_ImplWin32D2DDXGI_ChromeColor(COLORREF cr)
+{
+    return D2D1::ColorF(GetRValue(cr) / 255.0f, GetGValue(cr) / 255.0f, GetBValue(cr) / 255.0f, 1.0f);
+}
+
+static inline D2D1_COLOR_F ImGuiApp_ImplWin32D2DDXGI_ChromeLerp(const D2D1_COLOR_F& a, const D2D1_COLOR_F& b, float t)
+{
+    return D2D1::ColorF(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, a.a + (b.a - a.a) * t);
+}
+
+// Caption-button glyph color for a (dark, active) state (Win32X DwfGlyphColor).
+static inline D2D1_COLOR_F ImGuiApp_ImplWin32D2DDXGI_ChromeGlyphColor(bool dark, bool active)
+{
+    return ImGuiApp_ImplWin32D2DDXGI_ChromeColor(active ? (dark ? RGB(255, 255, 255) : RGB(0, 0, 0))
+                                                        : (dark ? RGB(0xAA, 0xAA, 0xAA) : RGB(0x64, 0x64, 0x64)));
+}
+
+// Target highlight opacity for a button: 1 when pressed, or hot with no other press; else 0 (Win32X DwfBtnTarget).
+static inline float ImGuiApp_ImplWin32D2DDXGI_ChromeBtnTarget(const ImGuiApp_ImplWin32D2DDXGI_ChromeData* chrome, int pressed, int button)
+{
+    if (pressed == button)
+        return 1.0f;
+    if (chrome->HotButton == button && pressed == ImGuiApp_ImplWin32D2DDXGI_CaptionButton_None)
+        return 1.0f;
+    return 0.0f;
+}
+
+// Advance the crossfade + per-button opacities by wall-clock (Win32X DfwAdvance): the continuous render
+// loop calls the draw callback every frame, so the timeline is driven here, not by a timer.
+static void ImGuiApp_ImplWin32D2DDXGI_ChromeAdvance(ImGuiApp_ImplWin32D2DDXGI_ChromeData* chrome, int pressed)
+{
+    const ULONGLONG now = ::GetTickCount64();
+    const float dt = (float)(now - chrome->LastTickMs) / IMGUIAPP_WIN32D2DDXGI_CHROME_ANIM_MS;
+    chrome->LastTickMs = now;
+    if (chrome->Anim)
+    {
+        float t = (float)(now - chrome->AnimStartMs) / IMGUIAPP_WIN32D2DDXGI_CHROME_ANIM_MS;
+        if (t >= 1.0f) { t = 1.0f; chrome->Anim = false; }
+        chrome->AnimT = t;
+    }
+    else
+    {
+        chrome->AnimT = 1.0f;
+    }
+    for (int i = ImGuiApp_ImplWin32D2DDXGI_CaptionButton_LightDark; i <= ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Close; i++)
+    {
+        const float target = ImGuiApp_ImplWin32D2DDXGI_ChromeBtnTarget(chrome, pressed, i);
+        float cur = chrome->BtnOpacity[i];
+        if (cur < target)      { cur += dt; if (cur > target) cur = target; }
+        else if (cur > target) { cur -= dt; if (cur < target) cur = target; }
+        chrome->BtnOpacity[i] = cur;
+    }
+}
+
+// Start a color crossfade toward (dark_to, active_to): capture the current shown state as the origin,
+// arm the 160ms timeline (Win32X DwfBeginTransition). No-op when the target already matches -- the
+// duplicate NCACTIVATE+ACTIVATE pair must not restart it. The caller owns flipping DarkMode itself.
+static void ImGuiApp_ImplWin32D2DDXGI_ChromeBeginTransition(ImGuiApp_ImplWin32D2DDXGI_ChromeData* chrome, bool dark_to, bool active_to)
+{
+    if (chrome->DarkMode == dark_to && chrome->WndActive == active_to)
+        return;
+    chrome->DarkFrom    = chrome->DarkMode;   // current shown colors become the crossfade origin
+    chrome->ActiveFrom  = chrome->WndActive;
+    chrome->WndActive   = active_to;
+    chrome->AnimStartMs = ::GetTickCount64();
+    chrome->AnimT       = 0.0f;
+    chrome->Anim        = true;
+    chrome->LastTickMs  = chrome->AnimStartMs;
+}
 
 // Right-aligned caption-button cells in CLIENT coords (Win32X DwfButtonRects): slot buttons from the
 // right (0 = close, 1 = maximize, 2 = minimize, 3 = light/dark), 47*dpi wide, caption-strip tall.
@@ -1344,25 +1427,37 @@ static void ImGuiApp_ImplWin32D2DDXGI_ChromeEnsureIcon(ImGuiApp_ImplWin32D2DDXGI
     if (mem_dc != nullptr) ::DeleteDC(mem_dc);
 }
 
-// One caption button (Win32X DwfDrawButton, hot state only): hot fill (red for close, colorization for
-// the rest; the close glyph goes white over the red), then the cached glyph layout centered in the cell.
-static void ImGuiApp_ImplWin32D2DDXGI_ChromeDrawButton(ImGuiApp_ImplWin32D2DDXGI_ChromeData* chrome, ID2D1DeviceContext* ctx, ID2D1SolidColorBrush* text,
-                                                       const RECT& cell, int button, int glyph)
+// One caption button (Win32X DwfDrawButton): the highlight fill is alpha-faded by the button's 160ms
+// opacity so hover/press cross-fade instead of snapping; the fill shade switches by press state, the
+// alpha animates. glyph_col is the crossfaded normal-state glyph color; Close's glyph cross-fades to
+// white as its red highlight rises.
+static void ImGuiApp_ImplWin32D2DDXGI_ChromeDrawButton(ImGuiApp_ImplWin32D2DDXGI_ChromeData* chrome, ID2D1DeviceContext* ctx,
+                                                       const RECT& cell, int button, int glyph, int pressed_button, bool dark, D2D1_COLOR_F glyph_col)
 {
-    const bool hot = chrome->HotButton == button;
-    ID2D1SolidColorBrush* glyph_brush = text;
-    if (hot)
+    const bool  pressed = pressed_button == button;
+    const float hover   = chrome->BtnOpacity[button];
+    COLORREF fill;
+    if (button == ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Close)
     {
-        const bool close = button == ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Close;
-        ID2D1SolidColorBrush* fill = close ? chrome->RedBrush : chrome->ColorizationBrush;
-        const D2D1_RECT_F rcf = D2D1::RectF((FLOAT)cell.left, (FLOAT)cell.top, (FLOAT)cell.right, (FLOAT)cell.bottom);
-        ctx->DrawRectangle(&rcf, fill, 1.0f, chrome->StrokeStyle);
-        ctx->FillRectangle(&rcf, fill);
-        if (close)
-            glyph_brush = chrome->Brush;   // white over the red fill
+        fill      = pressed ? RGB(0xC8, 0x3C, 0x2F) : RGB(0xC4, 0x2B, 0x1C);
+        glyph_col = ImGuiApp_ImplWin32D2DDXGI_ChromeLerp(glyph_col, ImGuiApp_ImplWin32D2DDXGI_ChromeColor(RGB(255, 255, 255)), hover);
     }
+    else
+    {
+        fill = pressed ? (dark ? RGB(0x50, 0x50, 0x50) : RGB(0xCC, 0xCC, 0xCC))
+                       : (dark ? RGB(0x3D, 0x3D, 0x3D) : RGB(0xE9, 0xE9, 0xE9));
+    }
+    if (hover > 0.001f)
+    {
+        D2D1_COLOR_F cf = ImGuiApp_ImplWin32D2DDXGI_ChromeColor(fill);
+        cf.a = hover;   // fade the highlight in/out over the timeline
+        chrome->AnimBrush->SetColor(&cf);
+        const D2D1_RECT_F rcf = D2D1::RectF((FLOAT)cell.left, (FLOAT)cell.top, (FLOAT)cell.right, (FLOAT)cell.bottom);
+        ctx->FillRectangle(&rcf, chrome->AnimBrush);
+    }
+    chrome->AnimBrush->SetColor(&glyph_col);
     if (chrome->GlyphLayouts[glyph] != nullptr)
-        ctx->DrawTextLayout(D2D1::Point2F((FLOAT)cell.left, (FLOAT)cell.top), chrome->GlyphLayouts[glyph], glyph_brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        ctx->DrawTextLayout(D2D1::Point2F((FLOAT)cell.left, (FLOAT)cell.top), chrome->GlyphLayouts[glyph], chrome->AnimBrush, D2D1_DRAW_TEXT_OPTIONS_NONE);
 }
 
 // The caption chrome's draw pass, driven through the SetDeviceDrawCallback seam (the backend's D2D
@@ -1404,14 +1499,34 @@ static void ImGuiApp_ImplWin32D2DDXGI_ChromeDrawCallback(ImGuiApp* app)
         ctx->DrawBitmap(chrome->IconBitmap, &ri, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, nullptr);
     }
 
-    ID2D1SolidColorBrush* text = chrome->DarkMode ? chrome->Brush : chrome->BlackBrush;
+    // Animation timeline + effective glyph color: during a crossfade, lerp between the (from) state
+    // captured at transition start and the (to = current) state by AnimT -- one 160ms path serves the
+    // theme (dark<->light) AND the activation (active<->inactive) transitions (Win32X DfwRenderEx).
+    int pressed = ImGuiApp_ImplWin32D2DDXGI_CaptionButton_None;
+    switch (bd->NCPressedHit)
+    {
+    case HTCLOSE:                            pressed = ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Close;     break;
+    case HTMAXBUTTON:                        pressed = ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Max;       break;
+    case HTMINBUTTON:                        pressed = ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Min;       break;
+    case IMGUIAPP_WIN32D2DDXGI_HTLIGHTDARK:  pressed = ImGuiApp_ImplWin32D2DDXGI_CaptionButton_LightDark; break;
+    default:                                 break;
+    }
+    ImGuiApp_ImplWin32D2DDXGI_ChromeAdvance(chrome, pressed);
+    const bool  dark    = chrome->DarkMode;
+    const bool  active  = chrome->WndActive;
+    const bool  dark_1  = chrome->Anim ? chrome->DarkFrom   : dark;
+    const bool  activ_1 = chrome->Anim ? chrome->ActiveFrom : active;
+    const float anim_t  = chrome->Anim ? chrome->AnimT      : 1.0f;
+    const D2D1_COLOR_F glyph_col = ImGuiApp_ImplWin32D2DDXGI_ChromeLerp(ImGuiApp_ImplWin32D2DDXGI_ChromeGlyphColor(dark_1, activ_1),
+                                                                        ImGuiApp_ImplWin32D2DDXGI_ChromeGlyphColor(dark, active), anim_t);
+
     const int max_glyph = ::IsZoomed(hwnd) ? ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_Restore : ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_Maximize;
     const int ld_glyph  = chrome->DarkMode ? ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_Brightness : ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_QuietHours;
 
-    ImGuiApp_ImplWin32D2DDXGI_ChromeDrawButton(chrome, ctx, text, lightdark_button, ImGuiApp_ImplWin32D2DDXGI_CaptionButton_LightDark, ld_glyph);
-    ImGuiApp_ImplWin32D2DDXGI_ChromeDrawButton(chrome, ctx, text, min_button,       ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Min,       ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_Minimize);
-    ImGuiApp_ImplWin32D2DDXGI_ChromeDrawButton(chrome, ctx, text, max_button,       ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Max,       max_glyph);
-    ImGuiApp_ImplWin32D2DDXGI_ChromeDrawButton(chrome, ctx, text, close_button,     ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Close,     ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_Close);
+    ImGuiApp_ImplWin32D2DDXGI_ChromeDrawButton(chrome, ctx, lightdark_button, ImGuiApp_ImplWin32D2DDXGI_CaptionButton_LightDark, ld_glyph,  pressed, dark, glyph_col);
+    ImGuiApp_ImplWin32D2DDXGI_ChromeDrawButton(chrome, ctx, min_button,       ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Min,       ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_Minimize, pressed, dark, glyph_col);
+    ImGuiApp_ImplWin32D2DDXGI_ChromeDrawButton(chrome, ctx, max_button,       ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Max,       max_glyph, pressed, dark, glyph_col);
+    ImGuiApp_ImplWin32D2DDXGI_ChromeDrawButton(chrome, ctx, close_button,     ImGuiApp_ImplWin32D2DDXGI_CaptionButton_Close,     ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_Close,    pressed, dark, glyph_col);
 }
 
 // Win32X FindNCHit order: caption buttons FIRST (they beat the top resize strip -- v2's DwfHitTest),
@@ -1460,6 +1575,8 @@ static void ImGuiApp_ImplWin32D2DDXGI_ChromeToggleLightDark(ImGuiApp_ImplWin32D2
     const ULONGLONG now = ::GetTickCount64();
     if (now - chrome->LastLightDarkChangeMs <= 150)
         return;
+    // Crossfade origin = the currently shown theme; the flips below set the target state.
+    ImGuiApp_ImplWin32D2DDXGI_ChromeBeginTransition(chrome, !chrome->DarkMode, chrome->WndActive);
     if (chrome->LightMode)
     {
         chrome->DarkMode  = true;
@@ -1485,7 +1602,9 @@ bool ImGuiApp_ImplWin32D2DDXGI_InstallChrome(ImGuiApp* app)
         return true;
 
     ImGuiApp_ImplWin32D2DDXGI_ChromeData* chrome = IM_NEW(ImGuiApp_ImplWin32D2DDXGI_ChromeData)();
-    chrome->DarkMode = true;   // the reference's OnCreate default
+    chrome->DarkMode   = true;   // the reference's OnCreate default
+    chrome->WndActive  = true;   // foreground on first show; WM_ACTIVATE corrects it
+    chrome->LastTickMs = ::GetTickCount64();
 
     // Brushes (colors verbatim from OnInitD2D).
     ID2D1DeviceContext* ctx = bd->D2DDeviceContext;
@@ -1497,6 +1616,7 @@ bool ImGuiApp_ImplWin32D2DDXGI_InstallChrome(ImGuiApp* app)
     ctx->CreateSolidColorBrush(D2D1::ColorF(GetRValue(inactive_ref) / 255.0f, GetGValue(inactive_ref) / 255.0f, GetBValue(inactive_ref) / 255.0f, 1.0f), &chrome->InactiveBrush);
     ctx->CreateSolidColorBrush(D2D1::ColorF(GetRValue(colorization_ref) / 255.0f, GetGValue(colorization_ref) / 255.0f, GetBValue(colorization_ref) / 255.0f, 1.0f), &chrome->ColorizationBrush);
     ctx->CreateSolidColorBrush(D2D1::ColorF(GetRValue(colorization_ref) / 255.0f, GetGValue(colorization_ref) / 255.0f, GetBValue(colorization_ref) / 255.0f, 0.1f), &chrome->FadedColorizationBrush);
+    ctx->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 1.0f), &chrome->AnimBrush);   // recolored per fill/glyph (Win32X DwfBrush)
 
     const D2D1_STROKE_STYLE_PROPERTIES1 stroke_props =
     {
@@ -1509,7 +1629,7 @@ bool ImGuiApp_ImplWin32D2DDXGI_InstallChrome(ImGuiApp* app)
     // (and rebuild on dpi change) in ChromeEnsureGlyphLayouts.
     const bool fonts_ok = SUCCEEDED(::DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), (IUnknown**)&chrome->DWriteFactory));
 
-    if (!fonts_ok || chrome->Brush == nullptr || chrome->StrokeStyle == nullptr)
+    if (!fonts_ok || chrome->Brush == nullptr || chrome->AnimBrush == nullptr || chrome->StrokeStyle == nullptr)
     {
         bd->Chrome = chrome;   // let Uninstall release whatever was created
         ImGuiApp_ImplWin32D2DDXGI_UninstallChrome(app);
@@ -1538,6 +1658,7 @@ void ImGuiApp_ImplWin32D2DDXGI_UninstallChrome(ImGuiApp* app)
     for (int i = 0; i < ImGuiApp_ImplWin32D2DDXGI_ChromeGlyph_COUNT; i++)
         if (chrome->GlyphLayouts[i] != nullptr)    { chrome->GlyphLayouts[i]->Release(); }
     if (chrome->IconBitmap != nullptr)             { chrome->IconBitmap->Release(); }
+    if (chrome->AnimBrush != nullptr)              { chrome->AnimBrush->Release(); }
     if (chrome->IconFormat != nullptr)             { chrome->IconFormat->Release(); }
     if (chrome->DWriteFactory != nullptr)          { chrome->DWriteFactory->Release(); }
     if (chrome->StrokeStyle != nullptr)            { chrome->StrokeStyle->Release(); }
@@ -1555,6 +1676,20 @@ bool ImGuiApp_ImplWin32D2DDXGI_GetChromeLightMode(ImGuiApp* app)
 {
     ImGuiApp_ImplWin32D2DDXGI_Data* bd = ImGuiApp_ImplWin32D2DDXGI_GetBackendData(app);
     return bd != nullptr && bd->Chrome != nullptr && bd->Chrome->LightMode;
+}
+
+float ImGuiApp_ImplWin32D2DDXGI_GetChromeThemeBlend(ImGuiApp* app)
+{
+    ImGuiApp_ImplWin32D2DDXGI_Data* bd = ImGuiApp_ImplWin32D2DDXGI_GetBackendData(app);
+    ImGuiApp_ImplWin32D2DDXGI_ChromeData* chrome = bd != nullptr ? bd->Chrome : nullptr;
+    if (chrome == nullptr)
+        return 0.0f;
+    // An activation-only crossfade keeps DarkFrom == DarkMode, so the blend holds steady through it.
+    const float to = chrome->DarkMode ? 0.0f : 1.0f;
+    if (!chrome->Anim)
+        return to;
+    const float from = chrome->DarkFrom ? 0.0f : 1.0f;
+    return from + (to - from) * chrome->AnimT;
 }
 
 static LRESULT WINAPI ImGuiApp_ImplWin32D2DDXGI_WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -1625,6 +1760,8 @@ static LRESULT WINAPI ImGuiApp_ImplWin32D2DDXGI_WndProc(HWND hWnd, UINT msg, WPA
         ::SetWindowPos(hWnd, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
         break;
     case WM_ACTIVATE:
+        if (bd != nullptr && bd->Chrome != nullptr)   // activation crossfade (Win32X: BeginTransition in response to WM_ACTIVATE)
+            ImGuiApp_ImplWin32D2DDXGI_ChromeBeginTransition(bd->Chrome, bd->Chrome->DarkMode, LOWORD(wParam) != WA_INACTIVE);
         if (bd != nullptr && HIWORD(wParam) == 0 && !bd->InFrame)   // not minimized; viewport churn mid-frame also lands here
             ImGuiApp_ImplWin32D2DDXGI_ApplyWindowDressing(bd, hWnd);
         break;
