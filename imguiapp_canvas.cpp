@@ -990,16 +990,23 @@ void CanvasEndNode(ImGuiAppCanvasState* c)
     }
     ImVec2 fresh((content_px.x + c->Style.NodePadding.x * z * 2.0f) / z,
                  (content_px.y + c->Style.NodePadding.y * z * 2.0f + title_h) / z);
-    n->NeededW = fresh.x;
-    if (n->FixedWidth > 0.0f)
-        fresh.x = n->FixedWidth;
-    // Deadband (NOISE_M): zoom perturbs glyph rasterization and pixel snapping, so the px/scale round-trip
-    // re-measures a hair differently per wheel tick. The stored model size moves only past the noise bound --
-    // consumers read a zoom-idempotent size; genuine content growth still propagates in one frame (docs/bug-classes.md 1b).
-    const float NOISE_M = 2.0f;
-    if (n->Size.x <= 0.0f || n->Size.y <= 0.0f
-        || ImFabs(fresh.x - n->Size.x) > NOISE_M || ImFabs(fresh.y - n->Size.y) > NOISE_M)
-        n->Size = fresh;
+    // A skipped child window (degenerate canvas mid-resize) laid out nothing: the group extent is
+    // not a measurement. Publishing it would collapse sizes for a frame and feed the host's width
+    // ratchets noise (docs/bug-classes.md 1b) -- keep last frame's record.
+    if (!GetCurrentWindow()->SkipItems)
+    {
+        n->NeededW = fresh.x;
+        if (n->FixedWidth > 0.0f)
+            fresh.x = n->FixedWidth;
+        // Deadband (NOISE_M): zoom perturbs glyph rasterization and pixel snapping, so the px/scale round-trip
+        // re-measures a hair differently per wheel tick. The noise is PIXEL-domain, so the model-unit bound
+        // widens as the camera zooms out (2px/scale, floor 2 model units) -- a zoomed-out camera must not read
+        // sub-pixel wobble as content growth; genuine growth still propagates in one frame (docs/bug-classes.md 1b).
+        const float NOISE_M = ImMax(2.0f, 2.0f / z);
+        if (n->Size.x <= 0.0f || n->Size.y <= 0.0f
+            || ImFabs(fresh.x - n->Size.x) > NOISE_M || ImFabs(fresh.y - n->Size.y) > NOISE_M)
+            n->Size = fresh;
+    }
 
     // Pin anchors resolve NOW, with the final node size known; model units, this frame. Left/Right sit on
     // a vertical edge at their row's center (y already set by CanvasEndPin). Top/Bottom are edge-centered

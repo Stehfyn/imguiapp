@@ -5288,19 +5288,24 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
     if (AppGraphEditorState(g)->AutoLayoutCountdown > 0 && --AppGraphEditorState(g)->AutoLayoutCountdown == 0)
         AppGraphAutoLayout(g, show_live);
 
-    // One normalized card width: grows to the widest measured need, deadbanded against
-    // zoom-tick re-measures.
+    // One normalized card width: tracks the widest measured need BOTH ways -- grow fast, shrink once
+    // the widest need falls past the band (the ratchet's 1b fixed point; a grow-only ratchet turns any
+    // transient wide measurement into a permanent one). The band covers pixel-domain re-measure noise,
+    // which widens in model units as the camera zooms out. Notes stay out on both sides: they own
+    // their authored width (NoteSize) and must not push the shared one.
     {
         float& uw = AppGraphEditorState(g)->UniformCardW;
+        const float band = ImMax(2.0f, 2.0f / AppCanvasScale(g));
+        float widest = 0.0f;
         for (int i = 0; i < g->Nodes.Size; i++)
         {
             const ImGuiAppNode* n = &g->Nodes.Data[i];
-            if (n->Kind == ImGuiAppNodeKind_Layer)
+            if (n->Kind == ImGuiAppNodeKind_Layer || n->Kind == ImGuiAppNodeKind_Note)
                 continue;
-            const float need = CanvasNodeNeededWidth(cv, n->Id);
-            if (need > uw + 2.0f)
-                uw = need;
+            widest = ImMax(widest, CanvasNodeNeededWidth(cv, n->Id));
         }
+        if (widest > 0.0f && (widest > uw + band || widest < uw - band))
+            uw = widest;
     }
 
     // Drill-down scope upkeep: repair dangling entries; on any scope change re-seat every now-visible node at its
@@ -5865,8 +5870,12 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
 
         // Kind silhouette (design page: rounded acts, squared hosts, rail is a phase, pill is an
         // atom). Model-unit constants; the engine scales. Every non-layer plate takes the ONE
-        // normalized width.
-        if (n->Kind != ImGuiAppNodeKind_Layer && n->Kind != ImGuiAppNodeKind_Note && AppGraphEditorState(g)->UniformCardW > 0.0f)
+        // normalized width; every layer plate takes the shared column width AS a fixed width --
+        // a width-claiming Dummy in the body would feed the measurement back into the ratchet
+        // (docs/bug-classes.md 1b: the loop must not measure its own applied value).
+        if (n->Kind == ImGuiAppNodeKind_Layer)
+            CanvasNextNodeWidth(cv, AppLayerUniformW(g) + CanvasGetStyle(cv)->NodePadding.x * 2.0f);
+        else if (n->Kind != ImGuiAppNodeKind_Note && AppGraphEditorState(g)->UniformCardW > 0.0f)
             CanvasNextNodeWidth(cv, AppGraphEditorState(g)->UniformCardW);   // notes own their authored width (NoteSize)
         switch (n->Kind)
         {
@@ -6208,9 +6217,9 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
             }
             if (lt == ImGuiAppLayerType_Command)
                 EditAppNodeCommands(n, false);   // list the commands (the "+ Command" adder lives in the build row above)
-            // Uniform layer-column width: every layer stretches to the SAME shared width (widest content wins,
-            // model units x zoom) -- flush column at any zoom, never per-node ragged, never fixed pixels.
-            Dummy(ImVec2(AppLayerUniformW(g) * AppCanvasScale(g), 1.0f));
+            // Uniform layer-column width comes from the plate's fixed width (CanvasNextNodeWidth above),
+            // NOT a width-claiming Dummy: the body must measure content only, or the shared width
+            // measures itself back and the ratchet can never shrink (docs/bug-classes.md 1b).
         }
         else if (n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar)
         {
@@ -6588,18 +6597,22 @@ void ShowAppGraphEditor(ImGuiApp* app, ImGuiAppGraph* g, int* selected_node_id, 
     {
         // Update stack, dependency order, consuming this frame's read-back: width -> pack -> seat -> stick.
         {
+            // Widest layer CONTENT need (NeededW excludes the plate's fixed width, so the shared width
+            // never measures itself back). Grow fast, shrink past the band -- the ratchet's 1b fixed
+            // point; the band covers pixel-domain re-measure noise, wider in model units zoomed out.
             const float pad2 = CanvasGetStyle(cv)->NodePadding.x * 2.0f;   // model units, like the sizes
+            const float band = ImMax(2.0f, 2.0f / AppCanvasScale(g));
             float w = APP_GRAPH_LAYER_NODE_WIDTH;
             for (int i = 0; i < g->Nodes.Size; i++)
             {
                 const ImGuiAppNode* n = &g->Nodes.Data[i];
                 if (n->Kind != ImGuiAppNodeKind_Layer || (!show_live && n->IsLive))
                     continue;
-                ImVec2 m;
-                if (AppNodeModelSize(g, n->Id, &m))
-                    w = ImMax(w, m.x - pad2);
+                const float need = CanvasNodeNeededWidth(cv, n->Id);
+                if (need > 0.0f)
+                    w = ImMax(w, need - pad2);
             }
-            if (w > AppLayerUniformW(g) + 2.0f)   // deadband: docs/bug-classes.md 1b
+            if (w > AppLayerUniformW(g) + band || w < AppLayerUniformW(g) - band)
                 g->_LayerUniformW = w;
         }
         AppGraphConstrainLayerColumn(g, show_live, moved_layer_id, moved_layer_id != 0 ? &moved_layer_pos : nullptr);

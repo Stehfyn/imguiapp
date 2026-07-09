@@ -1428,11 +1428,57 @@ bool ImGuiApp_ImplWin32D2DDXGI_GetChromeLightMode(ImGuiApp* app)
 
 static LRESULT WINAPI ImGuiApp_ImplWin32D2DDXGI_WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
-        return true;
-
     ImGuiApp* app = (ImGuiApp*)::GetWindowLongPtr(hWnd, GWLP_USERDATA);
     ImGuiApp_ImplWin32D2DDXGI_Data* bd = ImGuiApp_ImplWin32D2DDXGI_GetBackendData(app);
+
+    // A capture-tracked caption-button press owns the mouse stream BEFORE the imgui handler sees it:
+    // imgui never saw the NC button down, so its WM_LBUTTONUP path would ReleaseCapture (zero buttons
+    // tracked) and the synchronous WM_CAPTURECHANGED would cancel the press before the commit ran.
+    if (bd != nullptr && bd->NCPressedHit != 0)
+    {
+        switch (msg)
+        {
+        case WM_MOUSEMOVE:
+        {
+            // Re-test the hit so the chrome hot-tracks the button under the cursor.
+            POINT pt = { (LONG)(short)LOWORD(lParam), (LONG)(short)HIWORD(lParam) };
+            ::ClientToScreen(hWnd, &pt);
+            ImGuiApp_ImplWin32D2DDXGI_NCHitTestAt(app, bd, hWnd, pt.x, pt.y);
+            return 0;
+        }
+        case WM_LBUTTONUP:
+        {
+            const int pressed = bd->NCPressedHit;
+            bd->NCPressedHit  = 0;
+            ::ReleaseCapture();
+            POINT pt = { (LONG)(short)LOWORD(lParam), (LONG)(short)HIWORD(lParam) };
+            ::ClientToScreen(hWnd, &pt);
+            if (pressed == ImGuiApp_ImplWin32D2DDXGI_NCHitTestAt(app, bd, hWnd, pt.x, pt.y))
+            {
+                switch (pressed)
+                {
+                case HTCLOSE:     ::PostMessage(hWnd, WM_SYSCOMMAND, SC_CLOSE, 0); break;
+                case HTMINBUTTON: ::PostMessage(hWnd, WM_SYSCOMMAND, SC_MINIMIZE, 0); break;
+                case HTMAXBUTTON: ::PostMessage(hWnd, WM_SYSCOMMAND, ::IsZoomed(hWnd) ? SC_RESTORE : SC_MAXIMIZE, 0); break;
+                case IMGUIAPP_WIN32D2DDXGI_HTLIGHTDARK:
+                    if (bd->Chrome != nullptr)
+                        ImGuiApp_ImplWin32D2DDXGI_ChromeToggleLightDark(bd->Chrome, hWnd);
+                    break;
+                default: break;
+                }
+            }
+            return 0;
+        }
+        case WM_CAPTURECHANGED:   // something genuinely stole the capture: cancel the press
+            bd->NCPressedHit = 0;
+            return 0;
+        default:
+            break;
+        }
+    }
+
+    if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
+        return true;
 
     switch (msg)
     {
@@ -1521,35 +1567,6 @@ static LRESULT WINAPI ImGuiApp_ImplWin32D2DDXGI_WndProc(HWND hWnd, UINT msg, WPA
                 ::PostMessage(hWnd, WM_SYSCOMMAND, SC_MAXIMIZE, 0);
             return 0;
         }
-        break;
-    case WM_LBUTTONUP:
-        if (bd != nullptr && bd->NCPressedHit != 0)
-        {
-            const int pressed = bd->NCPressedHit;
-            bd->NCPressedHit  = 0;
-            ::ReleaseCapture();
-            POINT pt = { (LONG)(short)LOWORD(lParam), (LONG)(short)HIWORD(lParam) };
-            ::ClientToScreen(hWnd, &pt);
-            if (pressed == ImGuiApp_ImplWin32D2DDXGI_NCHitTestAt(app, bd, hWnd, pt.x, pt.y))
-            {
-                switch (pressed)
-                {
-                case HTCLOSE:     ::PostMessage(hWnd, WM_SYSCOMMAND, SC_CLOSE, 0); break;
-                case HTMINBUTTON: ::PostMessage(hWnd, WM_SYSCOMMAND, SC_MINIMIZE, 0); break;
-                case HTMAXBUTTON: ::PostMessage(hWnd, WM_SYSCOMMAND, ::IsZoomed(hWnd) ? SC_RESTORE : SC_MAXIMIZE, 0); break;
-                case IMGUIAPP_WIN32D2DDXGI_HTLIGHTDARK:
-                    if (bd->Chrome != nullptr)
-                        ImGuiApp_ImplWin32D2DDXGI_ChromeToggleLightDark(bd->Chrome, hWnd);
-                    break;
-                default: break;
-                }
-            }
-            return 0;
-        }
-        break;
-    case WM_CAPTURECHANGED:
-        if (bd != nullptr)
-            bd->NCPressedHit = 0;
         break;
     case WM_NCRBUTTONUP:
         if (wParam == HTCAPTION)
@@ -1698,13 +1715,6 @@ static LRESULT WINAPI ImGuiApp_ImplWin32D2DDXGI_WndProc(HWND hWnd, UINT msg, WPA
             ::PostMessage(hWnd, WM_MOUSEMOVE, 0, 0);
         break;
     case WM_MOUSEMOVE:
-        if (bd != nullptr && bd->NCPressedHit != 0)
-        {
-            // Captured press: re-test the hit so the chrome hot-tracks the button under the cursor.
-            POINT pt = { (LONG)(short)LOWORD(lParam), (LONG)(short)HIWORD(lParam) };
-            ::ClientToScreen(hWnd, &pt);
-            ImGuiApp_ImplWin32D2DDXGI_NCHitTestAt(app, bd, hWnd, pt.x, pt.y);
-        }
         return 0;   // reference swallows it (the imgui handler above already consumed the position)
     case WM_NCMOUSELEAVE:
     case WM_MOUSELEAVE:
