@@ -1,0 +1,297 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Previewer WYSIWYG — gen 3 end-goal mock: Observe posture, Edit mode</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { width:1920px; height:1200px; background:#141619; color:#c9ccd1; font:13px/1.4 "Segoe UI",system-ui,sans-serif; overflow:hidden; }
+  .app { display:grid; width:100%; height:100%;
+         grid-template-rows: 40px 1fr 210px 26px;
+         grid-template-columns: 250px 1fr 430px; }
+
+  /* ---------- document toolbar (identical grammar to composer mock) ---------- */
+  .toolbar { grid-column:1/4; background:#1e2126; border-bottom:1px solid #0c0d0f;
+             display:flex; align-items:center; gap:6px; padding:0 10px; }
+  .tb-group { display:flex; align-items:center; gap:4px; position:relative; padding:2px 8px 10px 8px; }
+  .tb-group .cap { position:absolute; bottom:-1px; left:50%; transform:translateX(-50%);
+                   font-size:8.5px; color:#5a5f66; letter-spacing:.08em; }
+  .btn { background:#2a2e34; border:1px solid #383d44; border-radius:4px; padding:3px 10px;
+         color:#c9ccd1; font-size:12px; white-space:nowrap; }
+  .btn.primary { background:#1f3a24; border-color:#2f6b3a; color:#8fd99b; font-weight:600; }
+  .btn.split::after { content:" ▾"; color:#7a8087; }
+  .btn.lit { background:#26313f; border-color:#3d5a7a; color:#8fc1f2; }
+  .btn.rec { background:#3a2224; border-color:#7a3d42; color:#f28f96; }
+  .sep { width:1px; height:20px; background:#383d44; }
+  .spacer { flex:1; }
+  .count { color:#e0a04a; font-size:12px; }
+
+  /* transport rail — ONE widget, compact rendering (kills the bare SliderInt) */
+  .rail2 { width:230px; height:14px; background:#22252a; border:1px solid #33373e; border-radius:4px; position:relative; }
+  .rail2 i { position:absolute; top:3px; width:2px; height:8px; }
+  .n-input { background:#3a3f47; }
+  .n-snap { background:#e0a04a; }
+  .n-cmd { background:#79c879; }
+  .n-cursor { background:#8fc1f2; width:3px !important; top:1px !important; height:12px !important; }
+  .rail2 .recdot { position:absolute; right:4px; top:4px; width:6px; height:6px; border-radius:50%; background:#e05a5a; }
+  .railbadge { font:600 10px Consolas,monospace; color:#8fc1f2; padding-left:6px; }
+
+  /* ---------- outliner (same grammar) ---------- */
+  .outliner { background:#191c20; border-right:1px solid #0c0d0f; display:flex; flex-direction:column; }
+  .ol-tabs { display:flex; border-bottom:1px solid #2a2e34; }
+  .ol-tabs div { padding:5px 14px; font-size:11.5px; color:#7a8087; }
+  .ol-tabs .on { color:#c9ccd1; border-bottom:2px solid #8fc1f2; }
+  .tree { flex:1; padding:6px 0; font-size:12px; }
+  .row { display:flex; align-items:center; gap:6px; padding:2.5px 10px; }
+  .row .dot { width:7px; height:7px; border-radius:2px; flex:none; }
+  .row.sel { background:#26313f; }
+  .row.halo { outline:1px solid #3d5a7a; outline-offset:-1px; }
+  .ind1 { padding-left:24px; } .ind2 { padding-left:38px; } .ind3 { padding-left:52px; }
+  .band-label { font-size:9px; letter-spacing:.14em; color:#5a5f66; padding:8px 10px 2px; border-top:1px solid #24272c; margin-top:6px; }
+  .k-app{background:#c9ccd1} .k-layer{background:#e0a04a} .k-window{background:#5b9bd5}
+  .k-sidebar{background:#7fc4c9} .k-control{background:#79c879} .k-struct{background:#b58ad4} .k-op{background:#4fb8a8}
+  .glyph { font-size:9px; color:#7a8087; }
+
+  /* ---------- preview subject (center) ---------- */
+  .subject { position:relative; background:#141619; display:flex; flex-direction:column; }
+  .pv-head { display:flex; align-items:center; gap:8px; padding:6px 12px; background:#1e2126; border-bottom:1px solid #0c0d0f; font-size:11.5px; }
+  .seg { display:flex; border:1px solid #383d44; border-radius:4px; overflow:hidden; }
+  .seg div { padding:3px 10px; color:#7a8087; }
+  .seg .on { background:#3a2f1f; color:#e8c27a; font-weight:600; }
+  .seg.mode .on { background:#26313f; color:#8fc1f2; }
+  .pv-head .status { color:#7a8087; font-size:10.5px; margin-left:auto; }
+
+  /* edit-mode accent frame = run-tint idiom */
+  .stage { flex:1; margin:12px 14px 8px; position:relative; border:2px solid #b98a3e; border-radius:6px;
+           background:#101214; box-shadow:inset 0 0 60px rgba(185,138,62,.05); }
+  .modechip { position:absolute; top:-1px; left:14px; transform:translateY(-50%); background:#3a2f1f;
+              border:1px solid #b98a3e; color:#e8c27a; border-radius:4px; padding:1px 10px; font-size:10.5px; font-weight:600; z-index:9; }
+
+  .pv-app { position:absolute; inset:16px; border:1px solid #33373e; border-radius:4px; background:#181a1e; display:flex; }
+  .pv-main { flex:1; display:flex; flex-direction:column; }
+  .pv-cap { background:#22252a; padding:4px 10px; font-size:11px; color:#9aa0a8; border-bottom:1px solid #24272c; }
+
+  .widget { margin:10px 14px 0; padding:8px 10px; background:#22252a; border:1px solid #33373e; border-radius:3px;
+            font-size:11.5px; position:relative; }
+  .widget.sel { border-color:#d9b26a; box-shadow:0 0 0 1px #d9b26a; }
+  .widget.sel::after { content:"✎ Mixer"; position:absolute; top:-9px; left:8px; background:#3a2f1f;
+                       border:1px solid #b98a3e; color:#e8c27a; font-size:9px; padding:0 6px; border-radius:3px; }
+  .widget.halo { border-color:#3d5a7a; box-shadow:0 0 0 1px #3d5a7a; }
+  .widget .meter { display:inline-block; font-family:Consolas,monospace; color:#79c879; }
+
+  .insertline { margin:6px 14px 0; height:0; border-top:2px solid #8fc1f2; position:relative; }
+  .insertline::before { content:""; position:absolute; left:-4px; top:-4px; width:6px; height:6px; border-radius:50%; background:#8fc1f2; }
+  .ghost { margin:4px 14px 0; padding:8px 10px; background:#22252a; border:1px dashed #8fc1f2; border-radius:3px;
+           font-size:11.5px; opacity:.65; transform:translateX(26px); position:relative; }
+  .ghost::after { content:"Reorder TransportBar"; position:absolute; right:-8px; top:-16px; background:#16181b;
+                  border:1px solid #3d5a7a; color:#8fc1f2; font-size:9.5px; padding:0 6px; border-radius:3px; white-space:nowrap; }
+
+  /* region splitter */
+  .pv-split { width:7px; cursor:col-resize; background:#1c1f23; border-left:1px solid #24272c; border-right:1px solid #24272c; position:relative; }
+  .pv-split.hot { background:#26313f; border-color:#3d5a7a; }
+  .pv-split.hot::after { content:"Split 0.42"; position:absolute; top:12px; left:10px; background:#16181b;
+                         border:1px solid #3d5a7a; color:#8fc1f2; font-size:9.5px; padding:0 6px; border-radius:3px; white-space:nowrap; z-index:5; }
+  .pv-side { width:200px; background:#1a1d21; padding:8px; font-size:10.5px; color:#9aa0a8; }
+  .pv-side .item { padding:3px 6px; border-radius:3px; }
+  .pv-side .item.halo { outline:1px solid #3d5a7a; background:#22252a; }
+
+  /* quick inspector floating beside selection */
+  .qi { position:absolute; right:230px; top:240px; width:210px; background:#1e2126f8; border:1px solid #3d5a7a;
+        border-radius:5px; z-index:8; box-shadow:0 4px 16px rgba(0,0,0,.5); font-size:11px; }
+  .qi .qh { display:flex; align-items:center; gap:6px; padding:4px 8px; border-bottom:1px solid #24272c; color:#c9ccd1; font-weight:600; }
+  .qi .qh .pin { margin-left:auto; color:#8fc1f2; }
+  .qi .sec { padding:3px 8px 2px; color:#7a8087; font-size:9.5px; letter-spacing:.08em; }
+  .qi .fr { display:flex; padding:2px 8px; }
+  .qi .fr .lab { width:46%; color:#9aa0a8; }
+  .qi .fr .val { flex:1; background:#22252a; border:1px solid #33373e; border-radius:3px; padding:0 6px; color:#c9ccd1; }
+  .qi .fr .val.on { border-color:#2f6b3a; color:#8fd99b; }
+
+  .hintline { position:absolute; left:0; right:0; bottom:0; background:#16181bf5; border-top:1px solid #24272c;
+              padding:3px 12px; font-size:11px; color:#7a8087; z-index:5; border-radius:0 0 4px 4px; }
+  .hintline b { color:#e8c27a; font-weight:600; }
+
+  /* ---------- right column: inspector ---------- */
+  .right { border-left:1px solid #0c0d0f; display:flex; flex-direction:column; background:#191c20; }
+  .insp-sub { padding:6px 10px; background:#1e2126; font-size:11.5px; color:#c9ccd1; border-bottom:1px solid #24272c; }
+  .insp-sub .path { color:#7a8087; }
+  .section { border-bottom:1px solid #24272c; }
+  .sec-head { display:flex; align-items:center; gap:7px; padding:5px 10px; background:#20232830; font-size:11.5px; font-weight:600; }
+  .sec-head .tri { color:#7a8087; font-size:9px; }
+  .sec-head .ico { width:8px; height:8px; border-radius:2px; }
+  .sec-head .en { margin-left:auto; width:11px; height:11px; border:1px solid #4a505a; border-radius:2px; background:#26313f; }
+  .sec-head .kebab { color:#7a8087; padding-left:8px; }
+  .frow { display:flex; align-items:center; padding:2.5px 10px 2.5px 26px; font-size:11.5px; }
+  .frow .lab { width:44%; color:#9aa0a8; }
+  .frow .val { flex:1; background:#22252a; border:1px solid #33373e; border-radius:3px; padding:1.5px 7px; color:#c9ccd1; }
+  .frow .val.expr { color:#4fb8a8; font-family:Consolas,monospace; font-size:10.5px; }
+  .frow .rst { color:#5a6069; padding-left:6px; font-size:10px; }
+  .bodyed { margin:4px 10px 6px 26px; background:#101214; border:1px solid #33373e; border-radius:3px;
+            font:10.5px Consolas,monospace; color:#c9ccd1; padding:6px 8px; }
+  .bodyed .kw { color:#8fc1f2; } .bodyed .fn { color:#e8c27a; }
+  .chip { font-size:10px; padding:1px 7px; border-radius:8px; border:1px solid #383d44; color:#9aa0a8; }
+  .chip.ok { border-color:#2f6b3a; color:#8fd99b; }
+  .charcount { color:#5a6069; font-size:9.5px; text-align:right; padding:0 10px 4px; }
+
+  /* ---------- bottom console ---------- */
+  .console { grid-column:1/4; background:#17191d; border-top:1px solid #0c0d0f; display:flex; flex-direction:column; }
+  .con-tabs { display:flex; align-items:center; background:#1e2126; border-bottom:1px solid #24272c; }
+  .con-tabs .tab { padding:5px 16px; font-size:11.5px; color:#7a8087; }
+  .con-tabs .tab.on { color:#c9ccd1; background:#17191d; border-top:2px solid #8fc1f2; }
+  .con-head { display:flex; align-items:center; gap:8px; padding:4px 12px; border-bottom:1px solid #24272c; font-size:11px; }
+  .con-head .ctx { color:#9aa0a8; }
+  .con-head .spacer { flex:1; }
+  .sev { display:flex; gap:2px; }
+  .sev div { padding:1px 8px; border:1px solid #33373e; border-radius:3px; font-size:10px; color:#9aa0a8; }
+  .sev .on { background:#26313f; border-color:#3d5a7a; color:#8fc1f2; }
+  .con-body { flex:1; font:11px Consolas,monospace; padding:4px 12px; color:#9aa0a8; }
+  .ln { display:flex; gap:8px; padding:1px 0; }
+  .ln .sevdot { width:7px; height:7px; border-radius:50%; margin-top:3px; flex:none; }
+  .sev-i{background:#5a6069} .sev-e2{background:#79c879}
+
+  /* ---------- status bar ---------- */
+  .status { grid-column:1/4; background:#1a1d21; border-top:1px solid #0c0d0f; display:flex; align-items:center;
+            gap:18px; padding:0 12px; font-size:11px; color:#7a8087; }
+  .status b { color:#e8c27a; font-weight:600; }
+  .status .spacer { flex:1; }
+  .status .fact { border-left:1px solid #2a2e34; padding-left:14px; }
+  .status .fact em { color:#e8c27a; font-style:normal; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- toolbar: same flow order; observe cluster carries the ONE transport rail -->
+  <div class="toolbar">
+    <div class="tb-group"><div class="btn split">＋ Add</div><div class="btn">⌘ Palette</div><div class="cap">compose</div></div>
+    <div class="sep"></div>
+    <div class="tb-group"><div class="btn">↶</div><div class="btn">↷</div><div class="btn">🕑</div><div class="cap">iterate</div></div>
+    <div class="sep"></div>
+    <div class="tb-group"><div class="btn split">Save</div><div class="cap">persist</div></div>
+    <div class="sep"></div>
+    <div class="tb-group"><div class="btn primary split">✓ Generate</div><div class="cap">produce</div></div>
+    <div class="spacer"></div>
+    <div class="tb-group"><span class="count">⚠ 0</span><div class="cap">problems</div></div>
+    <div class="tb-group">
+      <div class="btn">Code</div><div class="btn lit">👁 Live</div>
+      <div class="rail2">
+        <i class="n-input" style="left:8px"></i><i class="n-input" style="left:16px"></i><i class="n-snap" style="left:28px"></i>
+        <i class="n-input" style="left:40px"></i><i class="n-cmd" style="left:52px"></i><i class="n-input" style="left:64px"></i>
+        <i class="n-snap" style="left:84px"></i><i class="n-input" style="left:100px"></i><i class="n-input" style="left:118px"></i>
+        <i class="n-cmd" style="left:132px"></i><i class="n-input" style="left:150px"></i><i class="n-cursor" style="left:170px"></i>
+        <span class="recdot"></span>
+      </div><span class="railbadge">run now · ⏺ 312t</span>
+      <div class="cap">observe</div>
+    </div>
+  </div>
+
+  <!-- outliner -->
+  <div class="outliner">
+    <div class="ol-tabs"><div class="on">Tree</div><div>Data</div><div>Prefabs</div></div>
+    <div class="tree">
+      <div class="band-label" style="border-top:none;margin-top:0">DESIGN</div>
+      <div class="row"><span class="dot k-app"></span>MixerApp <span class="glyph">✎</span></div>
+      <div class="row ind1"><span class="dot k-window"></span>MainWindow <span class="glyph">✎</span></div>
+      <div class="row ind2 sel"><span class="dot k-control"></span>Mixer <span class="glyph">✎</span></div>
+      <div class="row ind3"><span class="dot k-struct"></span>MixerData</div>
+      <div class="row ind2 halo"><span class="dot k-control"></span>TransportBar <span class="glyph">✎</span></div>
+      <div class="row ind1"><span class="dot k-sidebar"></span>Library <span class="glyph">✎</span></div>
+      <div class="row ind1"><span class="dot k-op"></span>MainRegion · split <span class="glyph">✎</span></div>
+      <div class="band-label">LIVE</div>
+      <div class="row"><span class="dot k-app"></span>Mirror (this app) <span class="glyph">👁</span></div>
+    </div>
+  </div>
+
+  <!-- preview subject -->
+  <div class="subject">
+    <div class="pv-head">
+      <span style="color:#9aa0a8">Preview</span>
+      <div class="seg"><div class="on">Interp</div><div>DLL</div></div>
+      <div class="seg mode"><div>▶ Interact</div><div class="on">✎ Edit</div></div>
+      <div class="btn">⏸</div><div class="btn">↻ Reinit</div><div class="btn rec split">⏺ Recording · 312t</div>
+      <span class="status">Interpreted live — edits apply next frame · E toggles mode</span>
+    </div>
+
+    <div class="stage">
+      <div class="modechip">✎ EDIT — input goes to the model, app runs beneath</div>
+
+      <div class="pv-app">
+        <div class="pv-main">
+          <div class="pv-cap">MixerApp — MainWindow</div>
+          <div class="widget sel">Mixer &nbsp; <span class="meter">[▮▮▮▮▮▯▯]</span> &nbsp; −6.0 dB</div>
+          <div class="insertline"></div>
+          <div class="ghost">Transport &nbsp; ⏵ ⏸ ⏹</div>
+          <div class="widget">Meters &nbsp; <span class="meter">L −8.2 · R −7.9</span></div>
+        </div>
+        <div class="pv-split hot"></div>
+        <div class="pv-side">
+          <div style="padding:2px 6px; color:#7a8087; font-size:9.5px; letter-spacing:.08em;">LIBRARY</div>
+          <div class="item halo">Loop_120bpm.wav</div>
+          <div class="item">Kick_01.wav</div>
+          <div class="item">Snare_03.wav</div>
+        </div>
+      </div>
+
+      <!-- quick inspector at the point of attention -->
+      <div class="qi">
+        <div class="qh"><span class="dot k-control" style="width:8px;height:8px;border-radius:2px"></span> Mixer <span class="pin">📌</span></div>
+        <div class="sec">FIELDS</div>
+        <div class="fr"><span class="lab">gain_db</span><span class="val">−6.0</span></div>
+        <div class="fr"><span class="lab">pressed → rising</span><span class="val expr" style="color:#4fb8a8">Cmd_Play</span></div>
+        <div class="sec">STYLE</div>
+        <div class="fr"><span class="lab">FrameRounding</span><span class="val on">6 · live</span></div>
+      </div>
+
+      <div class="hintline"><b>✎ Edit</b> — drag reorder · drag across = move to host · dbl-click rename · divider = split · RMB verbs · <b>N</b> inspect · <b>Esc</b> exit</div>
+    </div>
+  </div>
+
+  <!-- inspector -->
+  <div class="right">
+    <div class="insp-sub"><span class="path">MainWindow ▸</span> <b>Mixer</b> — Control &nbsp;<span class="chip ok">✓ in preview</span></div>
+    <div class="section">
+      <div class="sec-head"><span class="tri">▾</span><span class="ico k-control"></span>Identity<span class="en"></span><span class="kebab">⋮</span></div>
+      <div class="frow"><span class="lab">Name</span><span class="val">Mixer</span><span class="rst">⟲</span></div>
+      <div class="frow"><span class="lab">Host</span><span class="val">MainWindow · seq 2</span><span class="rst">⟲</span></div>
+    </div>
+    <div class="section">
+      <div class="sec-head"><span class="tri">▾</span><span class="ico k-struct"></span>Fields<span class="en"></span><span class="kebab">⋮</span></div>
+      <div class="frow"><span class="lab">gain_db · Persist</span><span class="val">−6.0</span><span class="rst">⟲</span></div>
+      <div class="frow"><span class="lab">default ⇐ capture</span><span class="val expr">Capture as default</span></div>
+    </div>
+    <div class="section">
+      <div class="sec-head"><span class="tri">▾</span><span class="ico k-op"></span>Body · OnUpdate<span class="chip ok" style="margin-left:8px">✓ compiles</span><span class="en"></span><span class="kebab">⋮</span></div>
+      <div class="bodyed"><span class="kw">if</span> (<span class="fn">ImAppRising</span>(t, lt, pressed))<br>&nbsp;&nbsp;&nbsp;&nbsp;queue(Cmd_Play);</div>
+      <div class="charcount">61 / 2048</div>
+    </div>
+    <div class="section">
+      <div class="sec-head"><span class="tri">▸</span><span class="ico k-window"></span>Style<span class="en" style="background:#1f3a24"></span><span class="kebab">⋮</span></div>
+    </div>
+  </div>
+
+  <!-- console: edit gestures echo as named undo entries -->
+  <div class="console">
+    <div class="con-tabs"><div class="tab on">Output</div><div class="tab">Code</div><div class="tab">Replay</div><div class="tab">Project</div></div>
+    <div class="con-head"><span class="ctx">MixerApp — preview session · editing</span><span class="spacer"></span>
+      <div class="sev"><div>err 0</div><div>warn 0</div><div class="on">info</div></div>
+      <div class="chip">filter…</div><div class="chip">Copy</div><div class="chip">Clear</div></div>
+    <div class="con-body">
+      <div class="ln"><span class="sevdot sev-e2"></span>edit: Reorder TransportBar — seq 3 → 2 (undo: "Reorder TransportBar")</div>
+      <div class="ln"><span class="sevdot sev-e2"></span>edit: Split 0.50 → 0.42 on MainRegion (undo: "Edit Split")</div>
+      <div class="ln"><span class="sevdot sev-e2"></span>capture: Mixer.gain_db default ⇐ −6.0 (undo: "Edit Mixer")</div>
+      <div class="ln"><span class="sevdot sev-i"></span>preview: interpreted — 3 edits applied next frame · signature 0x4C21 dirty → Generate amber</div>
+      <div class="ln"><span class="sevdot sev-i"></span>record: meta take running · 312 ticks · snapshots 2</div>
+    </div>
+  </div>
+
+  <!-- status bar: edit-mode keymap hint left, facts right -->
+  <div class="status">
+    <span><b>✎ Edit</b> · drag reorder · dbl-click rename · divider split · <b>N</b> inspect · <b>Esc</b> exit</span>
+    <span class="spacer"></span>
+    <span class="fact">mode: <em>EDIT</em> · backend interp</span>
+    <span class="fact">sel: MainWindow ▸ <b style="color:#c9ccd1">Mixer</b></span>
+    <span class="fact">⏺ 312t · 2 snap</span>
+    <span class="fact">edits 3 · <em>generate pending</em></span>
+  </div>
+</div>
+</body>
+</html>

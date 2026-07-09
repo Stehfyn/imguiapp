@@ -9,6 +9,12 @@ three tools; they are three postures of one studio** — Author (edit the model)
 model run, edit it in place), Replay (interrogate a recorded run). Every posture shares one design
 language, one command vocabulary, one transport, one health grammar.
 
+Scope framing: gens 1–2 delivered a **proof of concept** — the surfaces exist and the ideas are
+proven, but small positioning/sizing defects remain and several features stop at the skeleton.
+Gen 3 is the production build-out: every surface below is specified to *finished*, not to
+minimal-diff; the coherence audit (§8.0) is fixed first so no known bug class survives into — or
+re-enters through — the new work.
+
 Acceptance pillars (every proposal names the ones it serves, or is cut):
 **consistency** (grammar conformance is 100%: zero bespoke constants), **communicability** (every
 state change echoes in a named zone; every verb teaches its chord), **accessibility** (WCAG 2.2
@@ -167,6 +173,132 @@ floor of 8 px** regardless of zoom (hit only; visuals still scale). Fixes A4.
   test fails. The project inspector's Theme section (demo.cpp:2101–2214) already edits the tables
   live; the grammar stays *data*, dogfooded by the machinery it teaches.
 
+### 3.7 Temporal grammar — designing in phase
+
+The visual grammar (§3.1–3.5) is the *spatial* half of the design language. The *temporal* half is
+phase coherence ([bug-classes.md](bug-classes.md) §Phase Coherence) — and gen 3 promotes it from a
+review checklist applied after the fact to a **design input stated before the first line lands**.
+The framework's thesis (derive in update, draw in render, one-frame skew explicit) is a design
+constraint of the same rank as the type ladder; a feature that cannot state its phase story is not
+designed yet, whatever its mockup looks like.
+
+**The law: update derives and updates the model; render represents it.** One sentence carries the
+whole temporal grammar — *derivation-first* means exactly this pairing: update first **derives**
+the facts (geometry, layout, events) and then **updates** the model against them; it is the sole
+writer, and "the model" includes every geometry fact anything else depends on. Render is a pure
+*representation* of that model under this frame's camera: it may compute freely in service of
+representing (that is what makes it a projection, not a copy), but nothing it computes may
+outlive its draw call.
+
+```
+              │◀───────────────────────────  frame T  ───────────────────────────▶│
+              │                                                                   │
+              │  UPDATE — derive + update MODEL    RENDER — represents the MODEL  │
+              │  ┌──────────────────────────┐     ┌───────────────────────────┐   │
+  intents ────┼─▶│ apply intents against    │     │ draw model(T)             │   │
+  (T-1)       │  │ complete facts           │     │   × transform(T)          │   │
+  Temp ───────┼─▶│ derive geometry, layout, │────▶│ repr-local calc OK — pure,│   │
+  (T-1)       │  │ events (Temp ⊕ LastTemp) │model│ dies with its draw call   │   │
+              │  │ from model + style +     │ (T) │ record intent + Temp      │───┼─▶ intents(T)
+              │  │ CalcTextSize (pure query)│     │ [exception: read-back,    │   │   Temp(T)
+              │  │ — the SOLE writer        │     │  laundered to model units]│───┼─▶ facts(T)
+              │  └──────────────────────────┘     └───────────────────────────┘   │   (exception only)
+              │                                                                   │
+              └── crossings: intents, Temp, and (exception only) laundered facts ─┘
+
+  the illegal arrows are all one arrow — render output leaking into the model story:
+  ✗ §1   pixels measured(T-1) ──combined with──▶ transform(T)              one-frame flash
+  ✗ §1b  apply(v) ──▶ measure ──▶ v′ ≠ v, no named fixed point             drift / "animation"
+  ✗ §1c  RENDER ──▶ model write mid-publication (between Canvas Begin/End)  stale obstacle set
+```
+
+**Derivation-first, and where the line actually sits.** `CalcTextSize` is a pure function — it is
+legal in *any* phase. The phase question is never "who may measure text"; it is **who consumes the
+result**:
+
+- **If the value participates in the model's story** — a plate size other nodes lay out against,
+  a group/containment rect, an obstacle set, a stored hit target, a row height a band reserves,
+  anything another frame or another consumer reads — it is model state, so **update derives it**:
+  from the model's own content (rows, labels, pins), the style tables (type ladder, paddings,
+  quanta), and pure queries. Derived in update(T), represented in render(T): same frame, nothing
+  crosses, no settle, and species §1/§1b become unrepresentable because no measured pixel exists.
+- **If the value serves only this representation** — centering a label in an already-sized plate,
+  ellipsizing, clip tests — render computes it freely. Legality test: *delete the draw call and
+  the computation must have no remaining effect.* The moment a render-computed value steers logic
+  downstream, it has silently become model state living in the wrong phase — which is precisely
+  what the audit confirmed in the field (F2: a render-derived em fed row layout, composed wrong;
+  F1: a render-pass rect fed the drag obstacle set from the wrong altitude).
+- **Read-back is the marked exception, not the norm** — reserved for content whose layout only
+  imgui knows (arbitrary host-submitted widget stacks: preview surfaces, embedded editors). The
+  exception's contract: laundered to model units at capture with that frame's own transform,
+  every loop through it deadbanded (§1b), and the call site commented with *why derivation is
+  impossible here*. During the derivation-first migration the read-back doubles as a verification
+  harness: derived size ≍ measured size, asserted under the zoom acid test.
+- The Temp/LastTemp input skew is the same law applied to input: render *records* raw samples
+  (representation-side fact capture), update *derives* events from them. Nothing new to learn —
+  edge detection was always derivation-first.
+
+**Six patterns that make violations unrepresentable** (prefer a pattern over a guard — a guard
+must remember to run; a structure cannot forget):
+
+1. **Derive, then update** — update derives the sizes and layout the model story needs (from
+   model + style + pure queries) and mutates the model against them; render receives, never
+   decides.
+2. **Representation-locality** — render-computed values die with their draw call; anything that
+   would survive moves to update.
+3. **Edit-intent bus** — OnDraw records "the user is dragging X"; OnUpdate (or post-`CanvasEnd`)
+   applies it against this frame's complete facts.
+4. **One producer per fact** — two consumers recomputing a value from raw state can disagree for a
+   frame; compute once in update, publish, consume (this is what data dependencies are *for*).
+5. **Model units at capture** — for the read-back exception: divide out every frame-varying
+   transform with *that frame's own* values at capture; consumers re-apply the current transform.
+6. **Inert zero** — every TempData/action field's zero value means *none*; real actions are
+   positive. First-frame and skipped-writer frames are then inert by construction.
+
+**The phase contract.** Every proposed feature that touches measured geometry, cached values, or
+model writes ships a five-line contract in its design note (slice reviews reject its absence):
+
+| Line | Question it answers |
+|---|---|
+| **Facts** | what the model story needs, **derived in update** from model + style + pure queries — and for anything measured instead, why derivation is impossible there |
+| **Derived** | what is computed from the facts, and in which phase (update / marked read-back exception — never mid-render, never render-local values escaping) |
+| **Writes** | which phase mutates the model? render-phase gestures record *intent only*, applied post-submission (§1c) |
+| **Loops** | every measure→apply→measure cycle, with its **named fixed point** (exact invariant units, or a deadband) (§1b) |
+| **Crossings** | every value that crosses a frame boundary, with its invariant-units proof — deliberate T+1 settling is fine *and commented as such* |
+
+**Five patterns that make violations unrepresentable** (prefer a pattern over a guard — a guard
+must remember to run; a structure cannot forget):
+
+1. **Model units at capture** — divide out every frame-varying transform with *that frame's own*
+   values; consumers re-apply the current transform (the canvas engine's core invariant).
+2. **Edit-intent bus** — OnDraw records "the user is dragging X"; OnUpdate (or post-`CanvasEnd`)
+   applies it against this frame's complete facts. One frame of settle in model units is
+   imperceptible; a mid-publication write is a flash.
+3. **One producer per fact** — two panels recomputing a value from raw state can disagree for a
+   frame; compute once, publish, consume (this is what data dependencies are *for*).
+4. **Same-frame read-back** — measure at submission with the same transform used to place, store
+   immediately in model units; the stale-decoration class becomes unrepresentable.
+5. **Inert zero** — every TempData/action field's zero value means *none*; real actions are
+   positive. First-frame and skipped-writer frames are then inert by construction.
+
+**Gen-3 features, pre-contracted** (the contract applied at design time — what it looks like):
+
+| Feature | Phase story |
+|---|---|
+| Composer node plates (§5.1) | sizes **derived in update** from the row model (fields/pins/labels × type ladder × paddings); zoom applied only at draw; the engine measurement path becomes a verification assert (derived ≍ measured under the zoom acid test) |
+| Transport rail (§4.2) | notch positions derive from tick indices (model units) each frame; scrub is an update-phase state restore; nothing caches rail pixels |
+| WYSIWYG overlay, interpreter (§5.2) | overlay rects read from THIS frame's surface manifest post-submission; every gesture is an intent applied through the normal mutation path in update — the gesture grammar *is* pattern 2 |
+| WYSIWYG overlay, DLL (§5.2) | rect report and rasterized frame cross the ABI as a **coherent pair stamped with the same tick**; the overlay draws in the image's own space onto that image — panel-side pan/zoom of a newer frame can never meet an older rect |
+| Lifecycle lanes (§5.1) | lane assignments/geometry derive from model order in update; bands and the spine draw from this frame's lane table; slot drag is an intent into the F58–60 order write |
+| Quick inspector anchor (§5.4 gen 2 / §5.2) | anchored to this frame's widget/node rect, re-read each frame — never a cached screen position |
+| Zoom pill (§5.1) | reads engine zoom the frame it draws; no state |
+| Uniform widths / any ratchet | keeps the existing model-unit deadband; the fixed point is named in the code comment |
+
+**Exit discipline per slice**: the zoom acid test (rapid wheel over every decoration, zero
+single-frame artifacts) runs on every surface a slice touches; every `screen-pos/dimensions` call
+site the slice adds is classified by draw phase in review (read, don't sample — the audit method
+is the review method).
+
 ## 4. The studio frame — one shell, three postures
 
 ### 4.1 Postures = layout presets + transport source
@@ -239,8 +371,10 @@ zones are already anchored at fixed em offsets, demo.cpp:1837–1840 — the *ru
 
 Preview graduates from bottom-tab to the Observe posture's **subject panel** (right column, sized
 like the UMG/UI Builder canvas — see `media/grabs/unreal/umg-designer-full.png`,
-`media/grabs/unity/uibuilder-full-labeled.png`). Both backends render in-panel (interpreter
-widgets; DLL rasterized frame — existing paths demo.cpp:2849–2900).
+`media/grabs/unity/uibuilder-full-labeled.png`; end state mocked in
+[media/mock/previewer-wysiwyg-endgoal.html](media/mock/previewer-wysiwyg-endgoal.html)). Both
+backends render in-panel (interpreter widgets; DLL rasterized frame — existing paths
+demo.cpp:2849–2900).
 
 **Two modes, one toggle, mode-you-must-see** (header segmented control + cursor + frame):
 
@@ -345,9 +479,39 @@ being zero in ST6).
 
 ## 8. Delivery slices
 
+### 8.0 The coherence floor (fix first — the audited POC defects)
+
+Two full bug-class audits (2026-07-09; phase-coherence species + all other classes, read-don't-
+sample over the five tool files) confirmed four defects and cleared the rest of the surface
+(intent-defer, deadbands, seating, adoption roads, altitude verbs, eviction round-trips, residency,
+zero-value defaults, dead-chrome flags all verified clean). The floor is fixed before any slice
+lands, so gen-3 work builds on coherent ground:
+
+| # | Defect | Fix locus |
+|---|---|---|
+| F1 | `AppGroupAccumulate` unsubmitted-member fallback reads root `GridPos` while drilled — group frames balloon toward root coords on drill-in and publish a wrong-altitude obstacle rect (both audits, independently) | nodes.cpp:8961 mirrors the scope-aware fallback its three siblings use (nodes.cpp:6777, 6802, 5507) |
+| F2 | Scope order strip + portal chips size text by `GetFontSize() × AppCanvasScale` = FontRatio applied twice — chips render FontRatio× oversized under any DPI/user font scale, overflowing the reserved band row | nodes.cpp:9963, 10103 — `× AppCanvasZoom`, not `× AppCanvasScale` |
+| F3 | Outliner drag-reparent discards `AppGraphReparent`'s bool — illegal kind pairs (Control→Struct, Field→Window/Sidebar) complete the gesture silently | nodes.cpp:16046 rides the refusal channel (the link-refused idiom, nodes.cpp:4032–4038); drop gate kind-filters so illegal targets never highlight |
+| F4 | `_TrunkRoutes` cache keyed by owner id has no erase in `AppGraphRemoveNode` — memory-only growth | sweep joins the removal road (nodes.cpp:2850–2902) |
+
+Watch item (plausible, not confirmed): DLL preview paused + panel resize rasterizes last-ticked
+draw data into the new size for a frame (demo.cpp:2855–2874) — decide frozen-view semantics when
+ST4 touches that path.
+
+**Guardrail carried by every slice below**: new features ship the §3.7 phase contract; reviews
+classify every added screen-pos/dimensions call site by phase and every geometry verb by altitude;
+the audit smell table is the review grep list. That is how "fully fleshed out" stays compatible
+with "no known bug class re-enters."
+
+Task-level tracker with source identifiers:
+[composer-studio-checklist.md](composer-studio-checklist.md).
+
+### 8.1 The slices
+
 | Slice | Contents | Exit test |
 |---|---|---|
-| **ST1 — Grammar closure** | D5 literal sweep into tables; D3/D4 idiom unification; zoom pill; status hint revival; keymap editor reachable; D11 one default | literal ratchet green; step: hint text present; step: rebind via UI |
+| **ST0 — Coherence floor** | F1–F4 above | drill-in acid test (enter/leave scopes under zoom, zero single-frame group artifacts); FontRatio ≠ 1 chrome test; refused-reparent notice step; trunk-route sweep step |
+| **ST1 — Grammar closure** | D5 literal sweep into tables; D3/D4 idiom unification; zoom pill; status hint revival; keymap editor reachable; D11 one default; **derive-and-update pass** on Composer-owned geometry (node plates, band rows, chip metrics — F2's whole class), engine read-back demoted to verification assert | literal ratchet green; step: hint text present; step: rebind via UI; derived ≍ measured assert green under zoom acid |
 | **ST2 — One transport** | `AppBlTransportRail`; toolbar scrub replaced; Replay tab (D2); identity gate single-source (D10); Project-tab run listing | step: LIVE and FILE scrub through one widget; playback window gone |
 | **ST3 — Observe + WYSIWYG (interpreter)** | preview as subject; Interact/Edit modes; gesture grammar (reorder/reparent/rename/split/capture-default/palette-drop); quick-inspector-at-widget | steps: each gesture row round-trips with named undo |
 | **ST4 — DLL parity + bodies** | rect-report ABI; overlay on DLL; compiling wash; (name,type) preservation (D9); Body section editor + compile chip (D8) | F78.5 body edited in-app, runs in preview |

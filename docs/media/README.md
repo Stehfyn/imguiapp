@@ -62,6 +62,11 @@ Note: the UE Details-panel doc page persistently 403'd; its discipline is covere
 
 ## mock/
 
-- `composer-gen3-endgoal.html` / `.render.png` — gen-3 end-goal visual: the Lifecycle Studio
-  (lifecycle-lane root canvas, in-panel DLL preview, body sections in the inspector, console-grade
-  Output, flow-ordered toolbar). Companion to the gen-3 design doc.
+- `composer-gen3-endgoal.html` / `.render.png` — gen-3 end-goal visual, Author posture: the
+  Lifecycle Studio (lifecycle-lane root canvas, in-panel DLL preview, body sections in the
+  inspector, console-grade Output, flow-ordered toolbar). Companion to composer-studio-design.md.
+- `previewer-wysiwyg-endgoal.html` / `.render.png` — gen-3 end-goal visual, Observe posture:
+  WYSIWYG previewer in Edit mode (Interact/Edit segmented toggle, accent mode frame, drag-reorder
+  ghost + insertion line, split-divider handle, quick inspector at the widget, Body section with
+  compile chip, edit gestures echoed as named undo in Output, one transport rail with record
+  armed). Companion to composer-studio-design.md §5.2.

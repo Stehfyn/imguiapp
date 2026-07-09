@@ -2859,9 +2859,14 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
                                     const int fh = (int)avail.y;
                                     if (fw > 0 && fh > 0)
                                     {
-                                        ImGui::AppPreviewDllSetDisplaySize(ed->PreviewDll, fw, fh);
+                                        // Display size follows the panel only while ticking: the rasterized draw data and the
+                                        // size it was authored at stay a coherent pair -- a paused resize letterboxes the
+                                        // frozen frame rather than re-mapping stale geometry into a new size.
                                         if (ed->PreviewRun)
+                                        {
+                                            ImGui::AppPreviewDllSetDisplaySize(ed->PreviewDll, fw, fh);
                                             ImGui::AppPreviewDllTick(ed->PreviewDll, io.DeltaTime);
+                                        }
                                         const ImU32 clear = ImGui::GetColorU32(ImGuiCol_WindowBg);
                                         if (ImGui::AppPreviewDllRasterizeFrame(ed->PreviewDll, fw, fh, clear, &ed->PreviewDllRgba))
                                         {

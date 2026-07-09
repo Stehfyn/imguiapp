@@ -2897,6 +2897,9 @@ void AppGraphRemoveNode(ImGuiAppGraph* g, int node_id)
         if (ids.Size == 0)
             g->ScopeOrders.erase(g->ScopeOrders.Data + oi);
     }
+    for (int ti = g->_TrunkRoutes.Size - 1; ti >= 0; ti--)   // trunk-route cache entry dies with its owner
+        if (g->_TrunkRoutes.Data[ti].OwnerId == node_id)
+            g->_TrunkRoutes.erase(g->_TrunkRoutes.Data + ti);
 
     g->Nodes.erase(n);   // surviving nodes/ports/links keep their ids; ids are never reused
 }
@@ -8957,8 +8960,9 @@ static void AppGroupAccumulate(const ImGuiAppGraph* g, int owner_id, bool show_l
         return;
     if (!n->HasGridPos && !AppEditorNodeIsSubmitted(g, owner_id))
         return;   // neither a settled model position nor a measurement yet (first-ever frame)
-    // Engine position: the input FSM moves it before submission; GridPos is last frame's read-back.
-    const ImVec2 p = AppEditorNodeIsSubmitted(g, owner_id) ? AppCanvasNodePos(g, owner_id) : n->GridPos;
+    // Effective position: a drilled interior renders from its placements, not GridPos (the fallback
+    // covers members absent from last frame's pool -- drill-entry, un-collapse, freshly added).
+    const ImVec2 p = AppEditorNodeIsSubmitted(g, owner_id) ? AppCanvasNodePos(g, owner_id) : AppNodeScopePos(g, n);
     ImVec2 d;
     if (!AppNodeModelSize(g, owner_id, &d))
         d = AppLayoutNodeSize(g, n);
@@ -9960,7 +9964,7 @@ static void AppDrawScopeOrderStrip(ImGuiAppGraph* g, ImVec2 editor_min, ImVec2 e
 
     ImGuiAppCanvasState* cv = AppEditorCanvas(g);
     const float z = AppCanvasScale(g);
-    const float em = GetFontSize() * z;
+    const float em = GetFontSize() * AppCanvasZoom(g);   // Zoom only: GetFontSize() already carries FontRatio
     ImDrawList* dl = CanvasAnnotationDrawList(cv);
     dl->PushClipRect(editor_min, editor_min + editor_size, true);
     const bool win_hovered = IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
@@ -10099,8 +10103,7 @@ static void AppDrawScopePortals(ImGuiAppGraph* g, ImVec2 editor_min, ImVec2 edit
         return;
 
     ImGuiAppCanvasState* cv = AppEditorCanvas(g);
-    const float z = AppCanvasScale(g);
-    const float em = GetFontSize() * z;
+    const float em = GetFontSize() * AppCanvasZoom(g);   // Zoom only: GetFontSize() already carries FontRatio
     ImDrawList* dl = CanvasAnnotationDrawList(cv);
     dl->PushClipRect(editor_min, editor_min + editor_size, true);
     const bool win_hovered = IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
@@ -15361,7 +15364,12 @@ static bool AppGraphReparent(ImGuiAppGraph* g, int child_id, int parent_id)
     const bool ok = (child->Kind == ImGuiAppNodeKind_Control && (parent->Kind == ImGuiAppNodeKind_Window || parent->Kind == ImGuiAppNodeKind_Sidebar))
                  || (child->Kind == ImGuiAppNodeKind_Field   && parent->Kind == ImGuiAppNodeKind_Struct);
     if (!ok)
+    {
+        // Refusals reachable by gesture must say so (the drop gate makes UI roads unofferable;
+        // this notice covers every other caller -- defense in depth, docs/bug-classes.md).
+        AppGraphNotify(g, "reparent refused: a %s cannot host a %s.", AppNodeKindName(parent->Kind), AppNodeKindName(child->Kind));
         return false;
+    }
     const int cout = AppNodeFirstPortKind(child, ImGuiAppPortKind_ChildOut);
     const int pin  = AppNodeFirstPortKind(parent, ImGuiAppPortKind_ChildIn);
     if (cout == 0 || pin == 0)
@@ -15794,12 +15802,20 @@ static void AppTreeDrawNode(ImGuiAppGraph* g, int node_id, ImGuiAppTreeCtx* c)
     }
     if (!n->IsLive && (n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar || n->Kind == ImGuiAppNodeKind_Struct) && BeginDragDropTarget())
     {
-        if (const ImGuiPayload* pl = AcceptDragDropPayload("APPNODE"))
-        {
-            c->Act = 5;
-            c->ActNode = *(const int*)pl->Data;
-            c->ActTarget = n->Id;
-        }
+        // Kind-gate BEFORE accept: an illegal pair never highlights as droppable (a target that
+        // highlights but refuses on release is the silent-refusal class, docs/bug-classes.md).
+        const ImGuiPayload* peek = GetDragDropPayload();
+        const ImGuiAppNode* src = (peek != nullptr && peek->IsDataType("APPNODE")) ? AppGraphFindNode(g, *(const int*)peek->Data) : nullptr;
+        const bool legal = src != nullptr
+            && ((src->Kind == ImGuiAppNodeKind_Control && (n->Kind == ImGuiAppNodeKind_Window || n->Kind == ImGuiAppNodeKind_Sidebar))
+             || (src->Kind == ImGuiAppNodeKind_Field && n->Kind == ImGuiAppNodeKind_Struct));
+        if (legal)
+            if (const ImGuiPayload* pl = AcceptDragDropPayload("APPNODE"))
+            {
+                c->Act = 5;
+                c->ActNode = *(const int*)pl->Data;
+                c->ActTarget = n->Id;
+            }
         EndDragDropTarget();
     }
 
