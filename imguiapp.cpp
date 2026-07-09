@@ -264,7 +264,7 @@ bool ImGuiApp::Initialize(const ImGuiAppConfig* config)
 
 void ImGuiApp::Shutdown()
 {
-    if (!Initialized && PlatformData == nullptr && Children.empty() && Windows.empty() && Sidebars.empty() && StorageEntries.empty())
+    if (!Initialized && PlatformData == nullptr && Children.empty() && DisplayLayer == nullptr && StorageEntries.empty())
         return;
 
     // One paced app per process by design. The funcs' teardown hook releases its wait
@@ -444,12 +444,10 @@ void ImGuiAppTaskLayer::OnDetach(ImGuiApp* app) const
 
 void ImGuiAppTaskLayer::OnUpdate(ImGuiApp* app, float dt) const
 {
-    // OnUpdate consumes the TempData recorded by last frame's OnDraw and mutates PersistData; runs before
-    // the Command layer collects OnGetCommand, so state updated this frame can emit a command the same frame.
-    // Dependency order: every producer updates before its consumers, regardless of hosting order.
-    const ImVector<ImGuiAppNodeBase*>* order = ImGui::AppRebuildUpdateOrder(app);
-    for (int i = 0; i < order->Size; i++)
-        order->Data[i]->OnUpdate(app, dt);
+    // The global data-node update walk is the root's job (UpdateApp), not this layer's; task
+    // nodes (external informational sources) arrive at N4.
+    IM_UNUSED(app);
+    IM_UNUSED(dt);
 }
 
 void ImGuiAppTaskLayer::OnDraw(const ImGuiApp* app) const
@@ -703,13 +701,13 @@ void ImGuiAppDisplayLayer::OnDetach(ImGuiApp* app) const
         ImGui::PopAppSidebar(app);
     while (!app->DisplayLayer->Windows.empty())
         ImGui::PopAppWindow(app);
-    ShutdownAppNodes(app, app->DisplayLayer->Controls);
+    ImGui::ShutdownAppNodes(app, app->DisplayLayer->Controls);
     app->DisplayLayer = nullptr;
 }
 
 void ImGuiAppDisplayLayer::OnUpdate(ImGuiApp* app, float dt) const
 {
-    // Hosted controls update in the Task layer; hosts here always see this frame's control state.
+    // Hosted controls update in UpdateApp's data-node walk; hosts here always see this frame's control state.
     for (ImGuiAppSidebarBase* sidebar : Sidebars)
         sidebar->OnUpdate(app, dt);
 
@@ -913,6 +911,15 @@ IMGUI_API void UpdateApp(ImGuiApp* app, float dt)
     IM_ASSERT(app != nullptr && "NULL ImGuiApp!");
 
     AppWALWrite(app->WAL, ImGuiAppWALLevel_Frame, "frame update begin");
+
+    // Data nodes first, spanning every hosting layer: OnUpdate consumes the TempData recorded by
+    // last frame's OnDraw and mutates PersistData before any layer runs, so state updated this
+    // frame can emit a command the same frame (Command layer). Dependency order: every producer
+    // updates before its consumers, regardless of hosting order.
+    const ImVector<ImGuiAppNodeBase*>* order = AppRebuildUpdateOrder(app);
+    for (int i = 0; i < order->Size; i++)
+        order->Data[i]->OnUpdate(app, dt);
+
     for (ImGuiAppNodeBase* layer : app->Children)
     {
         AppWALWrite(app->WAL, ImGuiAppWALLevel_Frame, "update %s", layer->Label);

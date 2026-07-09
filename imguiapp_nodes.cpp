@@ -1482,7 +1482,7 @@ static void AppEmitControlWithDeps(const ImGuiAppGraph* g, const ImGuiAppNode* n
     const bool temp_exploded    = n->TempStructId    >= 0 && AppGraphFindNode(g, n->TempStructId)    != nullptr;
 
     // Edge-triggered EmitCommand events need a persist latch: OnUpdate (which sees last_temp_data) sets it on
-    // the edge, OnGetCommand (which does not) emits it the same frame -- the Task layer updates before the
+    // the edge, OnGetCommand (which does not) emits it the same frame -- the update walk runs before the
     // Command layer collects. Dedup by command so two events sharing a command share the latch.
     ImVector<int> latch_events;
     for (int e = 0; e < n->Events.Size; e++)
@@ -1623,7 +1623,7 @@ static void AppEmitControlWithDeps(const ImGuiAppGraph* g, const ImGuiAppNode* n
     else
     {
         // Event-driven command emissions: level events read temp_data directly; edge events read the persist latch
-        // OnUpdate set this frame (the Task layer updates before the Command layer collects).
+        // OnUpdate set this frame (the update walk runs before the Command layer collects).
         bool any_cmd_event = false;
         for (int e = 0; e < n->Events.Size; e++)
         {

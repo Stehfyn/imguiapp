@@ -1269,7 +1269,7 @@ IMGUI_API const ImGuiAppFileSystemFuncs* AppFileSystemFuncs();
 namespace ImGui
 {
 // Nodes sorted by the resolved dependency wiring: every producer before its consumers, composition
-// order among independents; rebuilt on composition change. ONLY the Task layer's OnUpdate pass iterates
+// order among independents; rebuilt on composition change. ONLY UpdateApp's data-node pass iterates
 // this -- command collection and rendering stay composition order.
 IMGUI_API const ImVector<ImGuiAppNodeBase*>* AppRebuildUpdateOrder(ImGuiApp* app);
 
