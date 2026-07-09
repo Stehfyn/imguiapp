@@ -36,6 +36,13 @@ kinds — so the mirror becomes an isomorphism instead of a translation.
   `PushWindowControl` / `PushSidebarControl` become the child-window push. Free `PushAppControl`
   dies. `PushAppTask` is born. Model enum appends `ImGuiAppNodeKind_Task` (append-only,
   serialized as int — safe).
+- **D9 — containment is generic, dispatch is kind-tagged.** The root owns a flat `app->Layers`
+  (layer nodes, stack order); every layer hosts one `ImVector<ImGuiAppNodeBase*> Children` in push
+  order. `ImGuiAppNodeKind` lives in imguiapp.h (public vocabulary, D1); the push paths stamp
+  `ImGuiAppNodeBase::Kind`; consumers filter by kind — no typed per-kind vectors. Draw order stays
+  a display contract (kind-phased: sidebars, windows, free controls), never push order. The
+  `app->DisplayLayer` cache survives as the display domain's push-time relationship, seated by
+  OnAttach (special-cased on push by design).
 
 ## Done
 
@@ -60,12 +67,17 @@ kinds — so the mirror becomes an isomorphism instead of a translation.
   layer list as its children and walks them through the node hooks, no layer-typed access left
   in the frame path. IMGUIAPP_PREVIEW_ABI bumped.
 
+- **N3** — collections migrated into their layers. First `app->Windows/Sidebars/Controls` moved
+  under the Display layer as typed vectors; then D9 replaced them with the single generic
+  kind-discriminated `Children` on `ImGuiAppLayerBase`, `app->Children` renamed back to
+  `app->Layers`, and `ImGuiAppNodeKind` moved public with `Kind` stamped on every pushed node.
+  The global update walk left `ImGuiAppTaskLayer::OnUpdate` (now inert until N4) for the top of
+  `UpdateApp` (D4): data nodes update first, spanning every hosting layer, then layers run.
+  Pops/drains scan `Children` back-to-front by kind; composition ID hashes layers count + window
+  labels + sidebar labels (kind-filtered passes, hash-order preserved); codegen emits
+  cast-`Children.back()` accessors and the checked-in goldens match. IMGUIAPP_PREVIEW_ABI bumped.
+
 ## Phases (each lands green: build + 7 ctest suites incl. style/section/indent ratchets)
-- **N3 — collections migrate into their layers.** `app->Windows/Sidebars/Controls` flat vectors
-  move into the Display layer node; cross-cutting services (storage registry, dependency-sorted
-  update order, WAL, composition ID, state history, mirror walk) iterate the tree. The global
-  update walk finds a home independent of the Task layer (D4): update order spans all data
-  nodes regardless of hosting layer, exactly as `AppRebuildUpdateOrder` does today.
 - **N4 — task nodes.** Task-node base: no OnDraw (D5); Persist/Temp/deps via the same adapter
   stack; an input-capture hook (working name OnPoll) runs where OnDraw's TempData-recording
   half runs today — before OnUpdate consumes, skipped when replay injects — preserving the
