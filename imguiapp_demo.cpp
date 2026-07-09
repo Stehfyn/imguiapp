@@ -1750,8 +1750,16 @@ struct ImGuiAppStatusStripControl : ImGuiAppControl<ImGuiAppStatusStripData, ImG
         if (data->HasMirror)
         {
             const ImGuiApp* a = doc->Mirror;
-            ImFormatString(data->MirrorCounts, IM_ARRAYSIZE(data->MirrorCounts), "L%d W%d S%d C%d", a->Children.Size, a->DisplayLayer->Windows.Size, a->DisplayLayer->Sidebars.Size, a->DisplayLayer->Controls.Size);
-            data->MirrorInit = a->Children.Size > 0;   // "composed"; Initialized is the platform flag
+            int nw = 0, ns = 0, nc = 0;
+            if (a->DisplayLayer != nullptr)
+                for (const ImGuiAppNodeBase* node : a->DisplayLayer->Children)
+                {
+                    nw += node->Kind == ImGuiAppNodeKind_Window;
+                    ns += node->Kind == ImGuiAppNodeKind_Sidebar;
+                    nc += node->Kind == ImGuiAppNodeKind_Control;
+                }
+            ImFormatString(data->MirrorCounts, IM_ARRAYSIZE(data->MirrorCounts), "L%d W%d S%d C%d", a->Layers.Size, nw, ns, nc);
+            data->MirrorInit = a->Layers.Size > 0;   // "composed"; Initialized is the platform flag
         }
 
         ImGui::AppGraphSelectionBreadcrumb(&doc->Graph, doc->Selection, data->Breadcrumb, IM_ARRAYSIZE(data->Breadcrumb));
@@ -3283,9 +3291,9 @@ IMGUI_API void ShowAppDemo(bool* p_open, ImGuiApp* host)
     if (s_composed != app)
     {
         ImGuiViewport* vp = GetMainViewport();
-        // The Composer is ALWAYS the first window pushed: first in app->DisplayLayer->Windows, first to Begin.
+        // The Composer is ALWAYS the first window pushed: first window in the display Children, first to Begin.
         PushAppWindow<ComposerWindow>(app);
-        ImGuiAppWindowBase* metrics = app->DisplayLayer->Windows.back();
+        ImGuiAppWindowBase* metrics = (ImGuiAppWindowBase*)app->DisplayLayer->Children.back();
         metrics->HasInitialPlacement = true;
         metrics->InitialSize = ImVec2(vp->WorkSize.x * 0.66f, vp->WorkSize.y * 0.66f);
         metrics->InitialPos  = vp->WorkPos + ImVec2(vp->WorkSize.x * 0.10f, vp->WorkSize.y * 0.10f);
@@ -3295,7 +3303,7 @@ IMGUI_API void ShowAppDemo(bool* p_open, ImGuiApp* host)
         PushWindowControl<ImGuiAppStatusStripControl>(app, metrics);   // status bar renders LAST -> window bottom
 
         PushAppWindow<DemoPanelWindow>(app);
-        ImGuiAppWindowBase* panel = app->DisplayLayer->Windows.back();
+        ImGuiAppWindowBase* panel = (ImGuiAppWindowBase*)app->DisplayLayer->Children.back();
         panel->HasInitialPlacement = true;
         panel->InitialSize = ImVec2(vp->WorkSize.x * 0.30f, vp->WorkSize.y * 0.40f);
         panel->InitialPos  = vp->WorkPos + ImVec2(vp->WorkSize.x * 0.02f, vp->WorkSize.y * 0.04f);
@@ -3306,12 +3314,14 @@ IMGUI_API void ShowAppDemo(bool* p_open, ImGuiApp* host)
     // Chrome windows, by label (the vector reallocs as examples push/pop).
     ImGuiAppWindowBase* panel = nullptr;
     ImGuiAppWindowBase* metrics = nullptr;
-    for (int i = 0; i < app->DisplayLayer->Windows.Size; i++)
+    for (int i = 0; i < app->DisplayLayer->Children.Size; i++)
     {
-        if (strcmp(app->DisplayLayer->Windows.Data[i]->Label, "ImGuiAppLayer Demo") == 0)
-            panel = app->DisplayLayer->Windows.Data[i];
-        else if (strcmp(app->DisplayLayer->Windows.Data[i]->Label, "ImGuiAppComposer") == 0)
-            metrics = app->DisplayLayer->Windows.Data[i];
+        if (app->DisplayLayer->Children.Data[i]->Kind != ImGuiAppNodeKind_Window)
+            continue;
+        if (strcmp(app->DisplayLayer->Children.Data[i]->Label, "ImGuiAppLayer Demo") == 0)
+            panel = (ImGuiAppWindowBase*)app->DisplayLayer->Children.Data[i];
+        else if (strcmp(app->DisplayLayer->Children.Data[i]->Label, "ImGuiAppComposer") == 0)
+            metrics = (ImGuiAppWindowBase*)app->DisplayLayer->Children.Data[i];
     }
     ImGuiAppDemoMenuData* st = GetDemoMenu(app);
     IM_ASSERT(panel != nullptr && metrics != nullptr && st != nullptr);
@@ -3349,7 +3359,7 @@ IMGUI_API void ShowAppDemo(bool* p_open, ImGuiApp* host)
         if (st->ShowBaseWindow)
         {
             PushAppWindow<BaseWindow>(app);
-            ImGuiAppWindowBase* w = app->DisplayLayer->Windows.back();
+            ImGuiAppWindowBase* w = (ImGuiAppWindowBase*)app->DisplayLayer->Children.back();
             w->HasInitialPlacement = true;
             w->InitialSize = ImVec2(em * 16.0f, em * 8.0f);
             w->InitialPos  = ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + em * 2.0f);
@@ -3362,7 +3372,7 @@ IMGUI_API void ShowAppDemo(bool* p_open, ImGuiApp* host)
         if (st->ShowRandomTime || st->ShowBreathing)
         {
             PushAppWindow<SampleWindow>(app);
-            ImGuiAppWindowBase* w = app->DisplayLayer->Windows.back();
+            ImGuiAppWindowBase* w = (ImGuiAppWindowBase*)app->DisplayLayer->Children.back();
             w->HasInitialPlacement = true;
             w->InitialSize = ImVec2(em * 18.0f, 0.0f);
             w->InitialPos  = ImVec2(vp->WorkPos.x + em * 2.0f, vp->WorkPos.y + vp->WorkSize.y * 0.55f);

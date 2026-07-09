@@ -123,7 +123,6 @@ typedef int ImGuiAppEventEdge;         // -> enum ImGuiAppEventEdge_         // 
 typedef int ImGuiAppFieldType;         // -> enum ImGuiAppFieldType_         // draft field scalar type
 typedef int ImGuiAppHoverSource;       // -> enum ImGuiAppHoverSource_       // Enum: what the editor hover targets
 typedef int ImGuiAppLayerType;         // -> enum ImGuiAppLayerType_         // layer discriminator
-typedef int ImGuiAppNodeKind;          // -> enum ImGuiAppNodeKind_          // node discriminator
 typedef int ImGuiAppPortKind;          // -> enum ImGuiAppPortKind_          // port discriminator
 typedef int ImGuiAppTransportSource;   // -> enum ImGuiAppTransportSource_   // LiveRing vs FileRun
 
@@ -137,7 +136,7 @@ typedef int ImGuiAppTransportSource;   // -> enum ImGuiAppTransportSource_   // 
 #define IMGUIAPP_CONTROL_BODY_MAX 2048   // ImGuiAppNodeDraft per-method custom C++ body cap (fixed buffer -> draft stays memcpy-safe)
 
 #ifndef IMGUIAPP_PREVIEW_ABI
-#define IMGUIAPP_PREVIEW_ABI 20260710u   // host<->DLL preview ABI tag (F78); bump on any layout/vtable/signature change. Since 0.4.1 (July 2026, 401)
+#define IMGUIAPP_PREVIEW_ABI 20260711u   // host<->DLL preview ABI tag (F78); bump on any layout/vtable/signature change. Since 0.4.1 (July 2026, 401)
 #endif
 
 // Private command range: dispatch ids above the public ImGuiAppCommand_COUNT.
@@ -403,23 +402,8 @@ struct ImGuiAppNodeDraft
 // [SECTION] Typed graph kinds (node/layer/port/edge discriminators)
 //-----------------------------------------------------------------------------
 
-// A node mirrors one slot of the live ImGuiApp object model (imguiapp.h). App is the singleton
-// root; Layers push via PushAppLayer<T>, Windows/Sidebars via PushAppWindow/Sidebar<T>, Controls (the
-// only draftable kind) via PushAppControl<T>.
-enum ImGuiAppNodeKind_
-{
-    ImGuiAppNodeKind_App = 0,
-    ImGuiAppNodeKind_Layer,
-    ImGuiAppNodeKind_Window,
-    ImGuiAppNodeKind_Sidebar,
-    ImGuiAppNodeKind_Control,
-    ImGuiAppNodeKind_Struct,    // a standalone data struct (PersistData/TempData), wired into a control's DataIn
-    ImGuiAppNodeKind_Field,     // one field of a struct, "exploded" out for per-field wiring (drives bindings)
-    ImGuiAppNodeKind_Note,      // non-semantic annotation frame (F48/R1): titled rect, excluded from codegen/validation. APPEND ONLY -- serialized as int
-    ImGuiAppNodeKind_Op,        // logic/compare/select/min-max operator (F54): operator in TypeName, IsBuiltin=false, folds into the consumer's expression (F55). APPEND ONLY -- serialized as int
-    ImGuiAppNodeKind_Layout,    // dock-builder composition node (F57): Region/Split/Tabs variant in TypeName; Layout layer's first domain. APPEND ONLY -- serialized as int
-    ImGuiAppNodeKind_COUNT,
-};
+// ImGuiAppNodeKind (node discriminator) lives in imguiapp.h: the runtime stamps it on every
+// pushed node (ImGuiAppNodeBase::Kind), so the public header owns the vocabulary.
 
 // The five CORE layer classes are permanent, one each, immutable type -- codegen emits
 // PushAppLayer<ImGuiAppXxxLayer>. Custom is a user-authored ImGuiAppLayer subclass: the NODE'S NAME is
@@ -1276,6 +1260,7 @@ IMGUI_API const ImVector<ImGuiAppNodeBase*>* AppRebuildUpdateOrder(ImGuiApp* app
 // Shut down + free every node in `nodes` (OnShutdown, unregister its storage, delete). Internal:
 // called only by the Pop* composition functions (imguiapp.cpp).
 IMGUI_API void ShutdownAppNodes(ImGuiApp* app, ImVector<ImGuiAppDisplayNodeBase*>& nodes);
+IMGUI_API void ShutdownAppNodes(ImGuiApp* app, ImVector<ImGuiAppNodeBase*>& nodes);
 
 // AV: encoder teardown + image codec + meta-stream verify/parse
 // Close (if open) then Destroy any provider's encoder via its vtable. Null-safe.

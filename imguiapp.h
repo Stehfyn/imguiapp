@@ -184,12 +184,13 @@ namespace ImGui
     IMGUI_API void        AppControlRegisterStorage(ImGuiApp* app, ImGuiAppControlBase* control, const char* name, ImGuiID data_type_id, ImGuiID instance, void* instance_data, bool snapshottable, int inst_size, int temp_offset, int temp_size, void (*destroy)(void*), const char* host_kind, const char* host_label);
     // Type-erased tail: append the wired node to its owning list, initialize and attach it.
     IMGUI_API void        AppControlPush(ImGuiApp* app, ImVector<ImGuiAppDisplayNodeBase*>* list, ImGuiAppDisplayNodeBase* node);
+    IMGUI_API void        AppControlPush(ImGuiApp* app, ImVector<ImGuiAppNodeBase*>* list, ImGuiAppNodeBase* node);
     IMGUI_API void        UnregisterAppStorage(ImGuiApp* app, ImGuiID id);                                                                            // destroys + removes one entry
     IMGUI_API void        ClearAppStorage(ImGuiApp* app);
 
     // Internal helper for the inline Push templates below (defined in imguiapp.cpp; must stay here because
     // those public templates call it). ShutdownAppNodes -- cpp-only -- lives in imguiapp_internal.h.
-    IMGUI_API void        AppDeduplicateItemLabel(char* label, int label_size, const ImVector<ImGuiAppWindowBase*>* windows, const ImVector<ImGuiAppSidebarBase*>* sidebars);
+    IMGUI_API void        AppDeduplicateItemLabel(char* label, int label_size, const ImVector<ImGuiAppNodeBase*>* nodes);   // scans window/sidebar kinds
     // Dependency-slot key resolution for the adapter template below (order: explicit binding ->
     // the control's own instance id -> the type singleton). Defined in imguiapp.cpp.
     IMGUI_API ImGuiID     AppResolveDependencyKey(const ImGuiApp* app, ImGuiID type_id, ImGuiID instance_id, const ImGuiAppDataBinding* binds, int binds_count, bool* out_optional);
@@ -791,13 +792,33 @@ IMGUI_API ImGuiID ImAppHashType(ImGuiID type_id, ImGuiID instance);
 // [SECTION] App object model (layers, items, controls, ImGuiApp, adapter/control templates)
 //-----------------------------------------------------------------------------
 
+// Node discriminator, shared by the runtime (ImGuiAppNodeBase::Kind, stamped by the push paths)
+// and the Composer's model. App is the singleton root; Layers push via PushAppLayer<T>,
+// Windows/Sidebars via PushAppWindow/Sidebar<T>, Controls (the only draftable kind) via PushAppControl<T>.
+typedef int ImGuiAppNodeKind;   // -> enum ImGuiAppNodeKind_
+enum ImGuiAppNodeKind_
+{
+    ImGuiAppNodeKind_App = 0,
+    ImGuiAppNodeKind_Layer,
+    ImGuiAppNodeKind_Window,
+    ImGuiAppNodeKind_Sidebar,
+    ImGuiAppNodeKind_Control,
+    ImGuiAppNodeKind_Struct,    // a standalone data struct (PersistData/TempData), wired into a control's DataIn
+    ImGuiAppNodeKind_Field,     // one field of a struct, "exploded" out for per-field wiring (drives bindings)
+    ImGuiAppNodeKind_Note,      // non-semantic annotation frame (F48/R1): titled rect, excluded from codegen/validation. APPEND ONLY -- serialized as int
+    ImGuiAppNodeKind_Op,        // logic/compare/select/min-max operator (F54): operator in TypeName, IsBuiltin=false, folds into the consumer's expression (F55). APPEND ONLY -- serialized as int
+    ImGuiAppNodeKind_Layout,    // dock-builder composition node (F57): Region/Split/Tabs variant in TypeName; Layout layer's first domain. APPEND ONLY -- serialized as int
+    ImGuiAppNodeKind_COUNT,
+};
+
 // A node: an authorable item in the composition tree + the live-mirror surface -- compile-time-erased
 // data identity re-exposed on the type-erased base, so tools inspect any node without knowing its
 // concrete template pack. Mirror hooks default inert (imguiapp.cpp); ImGuiAppControlMirrorAdapter<>
 // overrides each from its pack. (ImGuiAppLiveFieldDesc lives in imguiapp_reflect.h, included at the top.)
 struct ImGuiAppNodeBase : ImGuiAppInterface
 {
-    char Label[IM_LABEL_SIZE]; // type name by default; deduplicated with "##N" on real collisions
+    char             Label[IM_LABEL_SIZE];             // type name by default; deduplicated with "##N" on real collisions
+    ImGuiAppNodeKind Kind = ImGuiAppNodeKind_COUNT;    // stamped by the push paths; discriminates generic node lists
 
     // Lifetime bracket: once per node object (push creates -> OnInitialize; pop destroys -> OnShutdown).
     virtual void OnInitialize(ImGuiApp*) const                         = 0;
@@ -829,10 +850,11 @@ struct ImGuiAppNodeBase : ImGuiAppInterface
     virtual bool    SetDependencyBinding(ImGuiApp* app, const ImGuiAppDataBinding* bind); // re-route one declared dependency at runtime (Composer rewiring); false = TypeID not in pack
 };
 
-// Type marker: a layer node -- a domain in the stack (Task/Command/Status/Layout/Display or custom);
-// N3 moves each domain's hosted node list onto its layer.
+// A layer node: a domain in the stack (Task/Command/Status/Layout/Display or custom); hosts its
+// domain's nodes as generic children (N3), discriminated by Kind.
 struct ImGuiAppLayerBase : ImGuiAppNodeBase
 {
+    ImVector<ImGuiAppNodeBase*> Children;   // hosted domain nodes, in push order
 };
 
 // A display node: submits ImGui widgets during the draw phase. The display layer brackets each
@@ -933,12 +955,9 @@ struct ImGuiAppLayoutLayer : ImGuiAppLayer
 
 struct ImGuiAppDisplayLayer : ImGuiAppLayer
 {
-    // Display domain (N3): the layer hosts the app's display nodes; push/pop routes through the
-    // app->DisplayLayer cache (seated by OnAttach, cleared -- after draining -- by OnDetach).
-    ImVector<ImGuiAppWindowBase*>      Windows;
-    ImVector<ImGuiAppSidebarBase*>     Sidebars;
-    ImVector<ImGuiAppDisplayNodeBase*> Controls;   // free display controls (app-level push)
-
+    // Display domain (N3): windows, sidebars, and free controls live in Children (kind-discriminated,
+    // push order); push/pop routes through the app->DisplayLayer cache (seated by OnAttach, cleared
+    // -- after draining -- by OnDetach).
     virtual void OnAttach(ImGuiApp*)        const override final;
     virtual void OnDetach(ImGuiApp*)        const override final;
     virtual void OnUpdate(ImGuiApp*, float) const override final;
@@ -949,6 +968,8 @@ struct ImGuiAppDisplayLayer : ImGuiAppLayer
 // hooks; inert here so the app participates in the one tree (D2).
 struct ImGuiAppBase : ImGuiAppNodeBase
 {
+    ImGuiAppBase() { Kind = ImGuiAppNodeKind_App; }
+
     virtual void OnExecuteCommand(ImGuiAppCommand cmd) = 0;
     bool         ShutdownPending                       = false;
 
@@ -1009,7 +1030,7 @@ struct ImGuiApp : ImGuiAppBase
     // State: composition (push order), platform/presentation, services (null = inactive)
     ImGuiStorage                       Data;                          // id-keyed instance storage (controls' Persist/Temp blocks)
     ImVector<ImGuiAppStorageEntry>     StorageEntries;
-    ImVector<ImGuiAppNodeBase*>        Children;                      // layer nodes, in stack order (the root node's children)
+    ImVector<ImGuiAppNodeBase*>        Layers;                        // layer nodes, in stack order (the root node's children)
     ImGuiAppDisplayLayer*              DisplayLayer        = nullptr; // display-domain host (seated by its attach; null = no display layer composed)
     ImVector<ImGuiAppNodeBase*>        UpdateOrder;                   // dependency-sorted OnUpdate iteration (AppRebuildUpdateOrder)
     int                                CompositionRevision = 0;       // bumped by every storage register/unregister (pop+repush of the same type still advances it)
@@ -1357,7 +1378,7 @@ namespace ImGui
     {
         IM_ASSERT(app);
         IM_ASSERT(app->DisplayLayer != nullptr && "Push the Display layer before controls");
-        AppControlPush(app, &app->DisplayLayer->Controls, AppControlCreate<T>(app, instance, binds, binds_count, nullptr, nullptr));
+        AppControlPush(app, &app->DisplayLayer->Children, AppControlCreate<T>(app, instance, binds, binds_count, nullptr, nullptr));
     }
 
     // Host a control inside a window: instance data registers in app->Data as usual, but the control joins
@@ -1386,14 +1407,26 @@ namespace ImGui
         IM_ASSERT(app);
         if (app->DisplayLayer == nullptr)   // every data node is display-hosted until N4
             return;
-        for (int i = 0; i < app->DisplayLayer->Controls.Size; i++)
-            visitor(app->DisplayLayer->Controls.Data[i], (ImGuiAppWindowBase*)nullptr);
-        for (int s = 0; s < app->DisplayLayer->Sidebars.Size; s++)
-            for (int i = 0; i < app->DisplayLayer->Sidebars.Data[s]->Children.Size; i++)
-                visitor(app->DisplayLayer->Sidebars.Data[s]->Children.Data[i], (ImGuiAppWindowBase*)app->DisplayLayer->Sidebars.Data[s]);
-        for (int w = 0; w < app->DisplayLayer->Windows.Size; w++)
-            for (int i = 0; i < app->DisplayLayer->Windows.Data[w]->Children.Size; i++)
-                visitor(app->DisplayLayer->Windows.Data[w]->Children.Data[i], app->DisplayLayer->Windows.Data[w]);
+        const ImVector<ImGuiAppNodeBase*>& nodes = app->DisplayLayer->Children;
+        for (int i = 0; i < nodes.Size; i++)
+            if (nodes.Data[i]->Kind == ImGuiAppNodeKind_Control)
+                visitor(nodes.Data[i], (ImGuiAppWindowBase*)nullptr);
+        for (int s = 0; s < nodes.Size; s++)
+        {
+            if (nodes.Data[s]->Kind != ImGuiAppNodeKind_Sidebar)
+                continue;
+            ImGuiAppSidebarBase* sidebar = (ImGuiAppSidebarBase*)nodes.Data[s];
+            for (int i = 0; i < sidebar->Children.Size; i++)
+                visitor(sidebar->Children.Data[i], (ImGuiAppWindowBase*)sidebar);
+        }
+        for (int w = 0; w < nodes.Size; w++)
+        {
+            if (nodes.Data[w]->Kind != ImGuiAppNodeKind_Window)
+                continue;
+            ImGuiAppWindowBase* window = (ImGuiAppWindowBase*)nodes.Data[w];
+            for (int i = 0; i < window->Children.Size; i++)
+                visitor(window->Children.Data[i], window);
+        }
     }
 
     template <typename Visitor>
@@ -1402,14 +1435,26 @@ namespace ImGui
         IM_ASSERT(app);
         if (app->DisplayLayer == nullptr)
             return;
-        for (int i = 0; i < app->DisplayLayer->Controls.Size; i++)
-            visitor((const ImGuiAppNodeBase*)app->DisplayLayer->Controls.Data[i], (const ImGuiAppWindowBase*)nullptr);
-        for (int s = 0; s < app->DisplayLayer->Sidebars.Size; s++)
-            for (int i = 0; i < app->DisplayLayer->Sidebars.Data[s]->Children.Size; i++)
-                visitor((const ImGuiAppNodeBase*)app->DisplayLayer->Sidebars.Data[s]->Children.Data[i], (const ImGuiAppWindowBase*)app->DisplayLayer->Sidebars.Data[s]);
-        for (int w = 0; w < app->DisplayLayer->Windows.Size; w++)
-            for (int i = 0; i < app->DisplayLayer->Windows.Data[w]->Children.Size; i++)
-                visitor((const ImGuiAppNodeBase*)app->DisplayLayer->Windows.Data[w]->Children.Data[i], (const ImGuiAppWindowBase*)app->DisplayLayer->Windows.Data[w]);
+        const ImVector<ImGuiAppNodeBase*>& nodes = app->DisplayLayer->Children;
+        for (int i = 0; i < nodes.Size; i++)
+            if (nodes.Data[i]->Kind == ImGuiAppNodeKind_Control)
+                visitor((const ImGuiAppNodeBase*)nodes.Data[i], (const ImGuiAppWindowBase*)nullptr);
+        for (int s = 0; s < nodes.Size; s++)
+        {
+            if (nodes.Data[s]->Kind != ImGuiAppNodeKind_Sidebar)
+                continue;
+            const ImGuiAppSidebarBase* sidebar = (const ImGuiAppSidebarBase*)nodes.Data[s];
+            for (int i = 0; i < sidebar->Children.Size; i++)
+                visitor((const ImGuiAppNodeBase*)sidebar->Children.Data[i], (const ImGuiAppWindowBase*)sidebar);
+        }
+        for (int w = 0; w < nodes.Size; w++)
+        {
+            if (nodes.Data[w]->Kind != ImGuiAppNodeKind_Window)
+                continue;
+            const ImGuiAppWindowBase* window = (const ImGuiAppWindowBase*)nodes.Data[w];
+            for (int i = 0; i < window->Children.Size; i++)
+                visitor((const ImGuiAppNodeBase*)window->Children.Data[i], window);
+        }
     }
 } // namespace ImGui
 
