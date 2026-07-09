@@ -236,6 +236,7 @@ struct ImGuiApp_ImplWin32D2DDXGI_Data
     // at the monitor's refresh rate instead of the WM_TIMER floor. PacePending coalesces to one queued
     // tick (a stalled main thread must not fill the message queue).
     HANDLE        PaceThread;
+    HANDLE        PaceWake;                 // auto-reset event: state changes (modal enter/exit, shutdown) wake the thread
     volatile bool PaceThreadStop;
     volatile bool PaceModalLive;
     volatile LONG PacePending;
@@ -403,9 +404,25 @@ static bool ImGuiApp_ImplWin32D2DDXGI_WaitForVerticalBlank(ImGuiApp_ImplWin32D2D
     return true;
 }
 
-// Pace thread body: per-thread D3DKMT adapter (its blocking vblank waits must not share the render
-// thread's handle), one coalesced posted tick per vblank while a modal loop is live. Falls back to a
-// refresh-period sleep when the adapter cannot be opened (remote/indirect displays).
+static float ImGuiApp_ImplWin32D2DDXGI_PacerPrimaryRefreshHz();   // pacer seam, defined with its family below
+
+// DCompositionWaitForCompositorClock (dcomp.dll, Win10 2004+): blocks until the next compositor tick OR
+// one of the given handles signals -- the exact primitive for a wakeable vblank-paced thread. Loaded once
+// (process-global fact, like the uxtheme ordinals); older systems fall back to the tiers below.
+typedef DWORD (WINAPI* ImGuiApp_ImplWin32D2DDXGI_PFN_WaitForCompositorClock)(UINT count, const HANDLE* handles, DWORD timeout_ms);
+static ImGuiApp_ImplWin32D2DDXGI_PFN_WaitForCompositorClock ImGuiApp_ImplWin32D2DDXGI_WaitForCompositorClock = nullptr;
+static bool ImGuiApp_ImplWin32D2DDXGI_WaitForCompositorClockLoaded = false;
+
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+
+// Pace thread body: entirely event-driven (no polling sleeps). Parked on the wake event while no modal
+// loop is live; while live, waits per tick on the best available clock:
+//   1. DCompositionWaitForCompositorClock -- compositor tick, multiplexed with the wake event.
+//   2. D3DKMTWaitForVerticalBlankEvent on a per-thread adapter -- hardware vblank (state changes are
+//      observed within one blank; the wait cannot be multiplexed).
+//   3. A high-resolution waitable timer at the primary refresh period, multiplexed with the wake event.
 static DWORD WINAPI ImGuiApp_ImplWin32D2DDXGI_PaceThreadProc(LPVOID param)
 {
     ImGuiApp_ImplWin32D2DDXGI_Data* bd = (ImGuiApp_ImplWin32D2DDXGI_Data*)param;
@@ -413,34 +430,65 @@ static DWORD WINAPI ImGuiApp_ImplWin32D2DDXGI_PaceThreadProc(LPVOID param)
 
     D3DKMT_OPENADAPTERFROMHDC oa = {};
     oa.hDc = ::GetDC(hwnd);
-    const LONG open_status = D3DKMTOpenAdapterFromHdc(&oa);
+    LONG open_status = D3DKMTOpenAdapterFromHdc(&oa);
     ::ReleaseDC(hwnd, oa.hDc);
+    HANDLE timer = nullptr;
 
     while (!bd->PaceThreadStop)
     {
         if (!bd->PaceModalLive)
         {
-            ::Sleep(50);   // parked: the run loop paces itself outside modal loops
+            ::WaitForSingleObject(bd->PaceWake, INFINITE);   // parked: the run loop paces itself outside modal loops
             continue;
         }
-        if (open_status == 0)
+
+        bool tick = false;
+        if (ImGuiApp_ImplWin32D2DDXGI_WaitForCompositorClock != nullptr)
+        {
+            const DWORD wait = ImGuiApp_ImplWin32D2DDXGI_WaitForCompositorClock(1, &bd->PaceWake, INFINITE);
+            tick = (wait == WAIT_OBJECT_0 + 1);   // WAIT_OBJECT_0 = state-change wake; re-evaluate
+        }
+        else if (open_status == 0)
         {
             D3DKMT_WAITFORVERTICALBLANKEVENT vbe = {};
             vbe.hAdapter      = oa.hAdapter;
             vbe.VidPnSourceId = oa.VidPnSourceId;
-            if (D3DKMTWaitForVerticalBlankEvent(&vbe) != 0)
-                ::Sleep(8);
+            if (D3DKMTWaitForVerticalBlankEvent(&vbe) == 0)
+                tick = true;
+            else
+                open_status = -1;   // adapter lost (remote/indirect display): drop to the timer tier
         }
         else
         {
-            ::Sleep(8);
+            if (timer == nullptr)
+            {
+                timer = ::CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+                if (timer == nullptr)
+                    timer = ::CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_ALL_ACCESS);
+                if (timer == nullptr)
+                    break;   // no clock source at all; the WM_TIMER fallback still paces the modal loop
+                float hz = ImGuiApp_ImplWin32D2DDXGI_PacerPrimaryRefreshHz();
+                if (hz <= 0.0f)
+                    hz = 60.0f;
+                LARGE_INTEGER due;
+                due.QuadPart = -(LONGLONG)(10000000.0 / hz);   // 100ns units, relative
+                ::SetWaitableTimer(timer, &due, (LONG)(1000.0f / hz + 0.5f), nullptr, nullptr, FALSE);
+            }
+            const HANDLE handles[2] = { bd->PaceWake, timer };
+            const DWORD wait = ::WaitForMultipleObjects(2, handles, FALSE, INFINITE);
+            tick = (wait == WAIT_OBJECT_0 + 1);
         }
-        if (bd->PaceThreadStop)
-            break;
-        if (bd->PaceModalLive && ::InterlockedCompareExchange(&bd->PacePending, 1, 0) == 0)
+
+        if (tick && !bd->PaceThreadStop && bd->PaceModalLive &&
+            ::InterlockedCompareExchange(&bd->PacePending, 1, 0) == 0)
             ::PostMessage(hwnd, IMGUIAPP_WIN32D2DDXGI_WM_PACE, 0, 0);
     }
 
+    if (timer != nullptr)
+    {
+        ::CancelWaitableTimer(timer);
+        ::CloseHandle(timer);
+    }
     if (open_status == 0)
     {
         D3DKMT_CLOSEADAPTER close = { oa.hAdapter };
@@ -892,7 +940,14 @@ bool ImGuiApp_ImplWin32D2DDXGI_Init(ImGuiApp* app, const ImGuiApp_ImplWin32D2DDX
     bd->RendererBackendInitialized = true;
 
     // Modal-loop pacing: keeps repaints at monitor refresh rate through size/move/menu loops.
-    bd->PaceThread = ::CreateThread(nullptr, 0, ImGuiApp_ImplWin32D2DDXGI_PaceThreadProc, bd, 0, nullptr);
+    if (!ImGuiApp_ImplWin32D2DDXGI_WaitForCompositorClockLoaded)
+    {
+        ImGuiApp_ImplWin32D2DDXGI_WaitForCompositorClockLoaded = true;
+        if (HMODULE dcomp = ::GetModuleHandleA("dcomp.dll"))
+            ImGuiApp_ImplWin32D2DDXGI_WaitForCompositorClock = (ImGuiApp_ImplWin32D2DDXGI_PFN_WaitForCompositorClock)(void*)::GetProcAddress(dcomp, "DCompositionWaitForCompositorClock");
+    }
+    bd->PaceWake   = ::CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    bd->PaceThread = bd->PaceWake != nullptr ? ::CreateThread(nullptr, 0, ImGuiApp_ImplWin32D2DDXGI_PaceThreadProc, bd, 0, nullptr) : nullptr;
 
     if (!init_info->NoChrome)
         ImGuiApp_ImplWin32D2DDXGI_InstallChrome(app);   // canonical caption chrome; failure (fonts absent) just leaves it off
@@ -908,10 +963,16 @@ void ImGuiApp_ImplWin32D2DDXGI_Shutdown(ImGuiApp* app)
 
     if (bd->PaceThread != nullptr)
     {
-        bd->PaceThreadStop = true;   // the thread wakes within one vblank (or its parked sleep)
+        bd->PaceThreadStop = true;
+        ::SetEvent(bd->PaceWake);   // wakes a parked or clock-multiplexed wait; a bare vblank wait exits within one blank
         ::WaitForSingleObject(bd->PaceThread, 2000);
         ::CloseHandle(bd->PaceThread);
         bd->PaceThread = nullptr;
+    }
+    if (bd->PaceWake != nullptr)
+    {
+        ::CloseHandle(bd->PaceWake);
+        bd->PaceWake = nullptr;
     }
 
     ImGuiApp_ImplWin32D2DDXGI_UninstallChrome(app);   // chrome brushes/fonts ride the D2D context released below
@@ -1613,13 +1674,19 @@ static LRESULT WINAPI ImGuiApp_ImplWin32D2DDXGI_WndProc(HWND hWnd, UINT msg, WPA
             bd->Moving        = false;
             bd->Resizing      = false;
             bd->PaceModalLive = true;   // vblank pace thread starts posting refresh-rate ticks
+            if (bd->PaceWake != nullptr)
+                ::SetEvent(bd->PaceWake);   // unpark
         }
         ::SetTimer(hWnd, 0x69, USER_TIMER_MINIMUM, nullptr);   // fallback cadence (pace thread may lack a vblank source)
         return 0;
     case WM_EXITSIZEMOVE:
     case WM_EXITMENULOOP:
         if (bd != nullptr)
+        {
             bd->PaceModalLive = false;
+            if (bd->PaceWake != nullptr)
+                ::SetEvent(bd->PaceWake);   // return the thread to its parked wait
+        }
         ::KillTimer(hWnd, 0x69);
         ImGuiApp_ImplWin32D2DDXGI_ModalRepaint(app, bd, hWnd, false, true, true);
         return 0;

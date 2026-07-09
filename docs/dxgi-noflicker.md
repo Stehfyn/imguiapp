@@ -124,11 +124,20 @@ modal repaint whose target frame AND client size match the stamp. `WM_NCCALCSIZE
 the R2 ordering wait always runs. A size change always invalidates the stamp (the `WM_WINDOWPOSCHANGED`
 correction after a resize tick must never be skipped).
 
-**R5 — Steady cadence via the modal timer.** `WM_ENTERSIZEMOVE`/`WM_ENTERMENULOOP` start a
-`USER_TIMER_MINIMUM` timer; each `WM_TIMER` runs a (0, 1) repaint (subject to R4) + `DwmFlush` when not
-moving; `WM_EXITSIZEMOVE`/`WM_EXITMENULOOP` kill it and repaint once. This keeps animations alive and
-guarantees a repaint source during pure-move loops (where `WM_NCCALCSIZE` never fires; note that a pure
-move needs no content repaint for correctness — the DComp visual travels with the window).
+**R5 — Refresh-rate cadence through modal loops (pace thread + timer fallback).** Modal loops swallow the
+run loop, and `WM_TIMER` at `USER_TIMER_MINIMUM` caps repaints near 64 Hz — visibly below a 120/144 Hz
+monitor. A dedicated pace thread closes the gap: parked on an auto-reset wake event while no modal loop is
+live, it waits per tick on the best available clock — (1) `DCompositionWaitForCompositorClock`, which
+blocks until the next compositor tick OR the wake event (the ideal primitive: fully event-driven,
+multiplexed); (2) `D3DKMTWaitForVerticalBlankEvent` on the thread's own adapter handle; (3) a
+high-resolution waitable timer at the primary refresh period multiplexed with the wake event. No polling
+sleeps anywhere. Each tick posts ONE coalesced `WM_APP` message (an interlocked pending flag guards the
+queue against a stalled main thread); the modal loop dispatches it and the handler runs a (0, 1) repaint,
+waitless (the thread already supplied the phase), deduped by R4. `WM_ENTERSIZEMOVE`/`WM_ENTERMENULOOP`
+unpark the thread and also start the `USER_TIMER_MINIMUM` timer as a fallback cadence;
+`WM_EXITSIZEMOVE`/`WM_EXITMENULOOP` re-park it, kill the timer, and repaint once. This keeps animations
+alive and repaints at the monitor's rate even during pure-move loops (where `WM_NCCALCSIZE` never fires;
+a pure move needs no content repaint for correctness — the DComp visual travels with the window).
 
 **R6 — Content pin: self-healing against geometry that outruns content (THE origin-moving-edge
 guarantee).** The presented content was rendered for a specific window origin. Whenever a
