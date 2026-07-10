@@ -1,0 +1,192 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Composer Gen 4 — first run: the cold open explains itself</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { width:1920px; height:1200px; background:#141619; color:#c9ccd1; font:13px/1.4 "Segoe UI",system-ui,sans-serif; overflow:hidden; position:relative; }
+  .app { display:grid; width:100%; height:100%;
+         grid-template-rows: 44px 1fr 190px 26px;
+         grid-template-columns: 260px 1fr 430px;
+         filter:brightness(.55); }
+
+  .toolbar { grid-column:1/4; background:#1e2126; border-bottom:1px solid #0c0d0f;
+             display:flex; align-items:center; gap:8px; padding:0 12px; }
+  .btn { background:#2a2e34; border:1px solid #383d44; border-radius:4px; padding:4px 12px;
+         color:#c9ccd1; font-size:12.5px; white-space:nowrap; }
+  .btn.split::after { content:" ▾"; color:#7a8087; }
+  .btn.play { background:#1f3a24; border-color:#2f6b3a; color:#8fd99b; font-weight:600; font-size:13px; padding:5px 18px; }
+  .btn.help { border-radius:50%; width:26px; height:26px; padding:0; text-align:center; color:#8fc1f2; }
+  .spacer { flex:1; }
+  .views { display:flex; gap:2px; background:#191c20; border:1px solid #33373e; border-radius:5px; padding:2px; }
+  .views div { padding:4px 16px; font-size:12.5px; color:#8a9097; border-radius:4px; }
+  .views .on { background:#26313f; color:#cfe3f7; font-weight:600; }
+
+  .panel-h { display:flex; align-items:baseline; gap:8px; padding:7px 10px 5px;
+             border-bottom:1px solid #24272c; }
+  .panel-h b { font-size:11px; letter-spacing:.12em; color:#9aa0a8; }
+  .panel-h span { font-size:10.5px; color:#5a5f66; }
+
+  .left { background:#191c20; border-right:1px solid #0c0d0f; display:flex; flex-direction:column; }
+  .lib { flex:0 0 465px; display:flex; flex-direction:column; border-bottom:1px solid #0c0d0f; }
+  .lib-cat { font-size:9.5px; letter-spacing:.14em; color:#5a5f66; padding:8px 10px 3px; }
+  .lib-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; padding:2px 10px; }
+  .tile { background:#20242a; border:1px solid #33373e; border-radius:5px; padding:8px 4px 6px;
+          text-align:center; font-size:10.5px; color:#9aa0a8; }
+  .tile i { display:block; font-style:normal; font-size:17px; margin-bottom:3px; }
+  .i-win{color:#5b9bd5} .i-side{color:#7fc4c9} .i-ctl{color:#79c879} .i-data{color:#b58ad4} .i-op{color:#4fb8a8}
+  .apppanel { flex:1; display:flex; flex-direction:column; }
+  .emptymsg { padding:22px 16px; font-size:12px; color:#6a7078; text-align:center; }
+
+  .subject { position:relative; background:#141619;
+             background-image:radial-gradient(#1d2025 1px, transparent 1px); background-size:22px 22px; }
+  .ghost { position:absolute; left:50%; top:44%; transform:translate(-50%,-50%);
+           width:520px; height:340px; border:2px dashed #33404d; border-radius:8px;
+           display:flex; align-items:center; justify-content:center; }
+  .ghost div { text-align:center; font-size:14px; color:#5f7387; line-height:1.7; }
+  .ghost b { color:#8fc1f2; }
+
+  .inspector { background:#191c20; border-left:1px solid #0c0d0f; display:flex; flex-direction:column; }
+
+  .console { grid-column:1/4; background:#16181c; border-top:1px solid #0c0d0f; display:flex; flex-direction:column; }
+  .con-h { display:flex; align-items:center; gap:8px; padding:5px 12px; border-bottom:1px solid #24272c; }
+  .con-h b { font-size:11px; letter-spacing:.12em; color:#9aa0a8; }
+  .con-h span { font-size:10.5px; color:#5a5f66; }
+
+  .status { grid-column:1/4; background:#1e2126; border-top:1px solid #0c0d0f; display:flex;
+            align-items:center; padding:0 12px; font-size:11px; color:#8a9097; gap:16px; }
+
+  /* ---------- welcome overlay ---------- */
+  .veil { position:absolute; inset:0; background:rgba(10,11,13,.45); }
+  .welcome { position:absolute; left:50%; top:50%; transform:translate(-50%,-52%);
+             width:980px; background:#1b1e23; border:1px solid #3a3f47; border-radius:10px;
+             box-shadow:0 24px 80px rgba(0,0,0,.6); padding:36px 44px 28px; }
+  .welcome h1 { font-size:22px; font-weight:600; color:#e8eaed; }
+  .welcome .statement { font-size:14px; color:#9aa0a8; margin:8px 0 26px; }
+  .cards { display:flex; gap:18px; }
+  .card { flex:1; background:#20242a; border:1px solid #33373e; border-radius:8px; padding:16px;
+          display:flex; flex-direction:column; gap:10px; }
+  .card.hi { border-color:#3d5a7a; box-shadow:0 0 0 1px #3d5a7a; }
+  .card .pic { height:120px; border-radius:5px; background:#141619; border:1px solid #24272c;
+               position:relative; overflow:hidden; }
+  .card h2 { font-size:14.5px; color:#e8eaed; font-weight:600; }
+  .card p { font-size:12px; color:#8a9097; line-height:1.5; }
+  .card .go { margin-top:auto; align-self:flex-start; background:#26313f; border:1px solid #3d5a7a;
+              border-radius:4px; padding:4px 14px; color:#8fc1f2; font-size:12px; }
+  .card.hi .go { background:#1f3a24; border-color:#2f6b3a; color:#8fd99b; }
+  .wfoot { display:flex; align-items:center; margin-top:24px; font-size:11.5px; color:#6a7078; }
+  .wfoot .later { margin-left:auto; color:#8a9097; }
+
+  /* card art */
+  .art-blank { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+               width:70%; height:60%; border:2px dashed #33404d; border-radius:6px; }
+  .art-mix { position:absolute; left:14%; top:22%; width:72%; height:56%;
+             background:#1b1e23; border:1px solid #3a3f47; border-radius:4px; padding:8px; }
+  .art-mix .t { height:5px; background:#79c879; border-radius:2px; width:60%; margin:6px 0; }
+  .art-mix .m { display:flex; gap:2px; } .art-mix .m i { width:8px; height:12px; background:#2f6b3a; border-radius:1px; }
+  .art-steps { position:absolute; left:16%; top:20%; font:12px Consolas,monospace; color:#5f9ed6; line-height:1.9; }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <div class="toolbar">
+    <div class="btn split">+ Add</div>
+    <div class="btn">Save</div>
+    <div class="spacer"></div>
+    <div class="views">
+      <div class="on">Design</div><div>Logic</div><div>Code</div><div>Replay</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="btn play">▶ Play</div>
+    <div class="btn split">Build ●</div>
+    <div class="btn help">?</div>
+  </div>
+
+  <div class="left">
+    <div class="lib">
+      <div class="panel-h"><b>LIBRARY</b><span>everything you can add — drag it in</span></div>
+      <div class="lib-cat">WINDOWS</div>
+      <div class="lib-grid">
+        <div class="tile"><i class="i-win">▢</i>Window</div>
+        <div class="tile"><i class="i-side">▙</i>Sidebar</div>
+        <div class="tile"><i class="i-win">◫</i>Split</div>
+      </div>
+      <div class="lib-cat">CONTROLS</div>
+      <div class="lib-grid">
+        <div class="tile"><i class="i-ctl">▬</i>Slider</div>
+        <div class="tile"><i class="i-ctl">▣</i>Button</div>
+        <div class="tile"><i class="i-ctl">◉</i>Toggle</div>
+        <div class="tile"><i class="i-ctl">≣</i>List</div>
+        <div class="tile"><i class="i-ctl">▤</i>Meter</div>
+        <div class="tile"><i class="i-ctl">T</i>Label</div>
+      </div>
+      <div class="lib-cat">DATA</div>
+      <div class="lib-grid">
+        <div class="tile"><i class="i-data">⬡</i>Data</div>
+        <div class="tile"><i class="i-op">ƒ</i>Op</div>
+        <div class="tile"><i class="i-data">⇄</i>Command</div>
+      </div>
+    </div>
+    <div class="apppanel">
+      <div class="panel-h"><b>APP</b><span>what your app is made of</span></div>
+      <div class="emptymsg">Nothing here yet —<br>add from the Library above</div>
+    </div>
+  </div>
+
+  <div class="subject">
+    <div class="ghost">
+      <div><b>Drag a Window from the Library</b><br>to start your app</div>
+    </div>
+  </div>
+
+  <div class="inspector">
+    <div class="panel-h"><b>INSPECTOR</b><span>the selected thing</span></div>
+    <div class="emptymsg">Select anything — in your app, the App list,<br>or the Logic canvas — to edit it here</div>
+  </div>
+
+  <div class="console">
+    <div class="con-h"><b>CONSOLE</b><span>build + run messages</span></div>
+    <div class="emptymsg" style="text-align:left; padding:10px 14px;">Build and run messages appear here</div>
+  </div>
+
+  <div class="status">
+    <div>Welcome — pick a starting point, or press <b>?</b> anytime for a map of this screen</div>
+  </div>
+</div>
+
+<div class="veil"></div>
+<div class="welcome">
+  <h1>Composer</h1>
+  <div class="statement">Compose an app from controls, wire its data, test it live — then Build
+    generates the C++.</div>
+  <div class="cards">
+    <div class="card">
+      <div class="pic"><div class="art-blank"></div></div>
+      <h2>Blank app</h2>
+      <p>An empty canvas. Drag a Window in from the Library and go.</p>
+      <div class="go">Start blank</div>
+    </div>
+    <div class="card hi">
+      <div class="pic"><div class="art-mix"><div class="t"></div>
+        <div class="m"><i></i><i></i><i></i><i></i><i></i></div></div></div>
+      <h2>Mixer example</h2>
+      <p>A small working app — a gain slider, a meter, a transport. Poke at something real.</p>
+      <div class="go">Open example</div>
+    </div>
+    <div class="card">
+      <div class="pic"><div class="art-steps">1. add a window<br>2. add a button<br>3. make it count…</div></div>
+      <h2>Build a counter</h2>
+      <p>Ten guided steps in the real editor: place, wire, play, build. About five minutes.</p>
+      <div class="go">Start tutorial</div>
+    </div>
+  </div>
+  <div class="wfoot">
+    <label>▢ don't show this again</label>
+    <div class="later">Esc — decide later</div>
+  </div>
+</div>
+
+</body>
+</html>

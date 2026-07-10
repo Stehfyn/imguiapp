@@ -1,0 +1,249 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Composer Gen 4 — Play mode: testing is unmistakable</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { width:1920px; height:1200px; background:#141619; color:#c9ccd1; font:13px/1.4 "Segoe UI",system-ui,sans-serif; overflow:hidden; }
+  .app { display:grid; width:100%; height:100%;
+         grid-template-rows: 44px 1fr 190px 26px;
+         grid-template-columns: 260px 1fr 430px; }
+
+  .toolbar { grid-column:1/4; background:#1e2126; border-bottom:1px solid #0c0d0f;
+             display:flex; align-items:center; gap:8px; padding:0 12px; }
+  .btn { background:#2a2e34; border:1px solid #383d44; border-radius:4px; padding:4px 12px;
+         color:#c9ccd1; font-size:12.5px; white-space:nowrap; }
+  .btn.split::after { content:" ▾"; color:#7a8087; }
+  .btn.stop { background:#3a2323; border-color:#7a3d3d; color:#f2a08f; font-weight:600; font-size:13px; padding:5px 18px; }
+  .btn.help { border-radius:50%; width:26px; height:26px; padding:0; text-align:center; color:#8fc1f2; }
+  .spacer { flex:1; }
+  .views { display:flex; gap:2px; background:#191c20; border:1px solid #33373e; border-radius:5px; padding:2px; opacity:.55; }
+  .views div { padding:4px 16px; font-size:12.5px; color:#8a9097; border-radius:4px; }
+  .views .on { background:#26313f; color:#cfe3f7; font-weight:600; }
+
+  .rail { display:flex; align-items:center; gap:8px; }
+  .rail .track { width:220px; height:10px; background:#22252a; border:1px solid #33373e; border-radius:5px; position:relative; }
+  .rail .track i { position:absolute; top:2px; width:2px; height:6px; background:#5a6069; }
+  .rail .track .snap { background:#e0a04a; }
+  .rail .track .cmd { background:#79c879; }
+  .rail .track .cur { width:3px; background:#8fc1f2; height:8px; top:1px; }
+  .rail .t { font:11px Consolas,monospace; color:#9aa0a8; }
+  .rec { display:flex; align-items:center; gap:6px; font-size:11.5px; color:#f2a08f; }
+  .rec .dot { width:9px; height:9px; border-radius:50%; background:#d55e5e; }
+
+  .panel-h { display:flex; align-items:baseline; gap:8px; padding:7px 10px 5px;
+             border-bottom:1px solid #24272c; }
+  .panel-h b { font-size:11px; letter-spacing:.12em; color:#9aa0a8; }
+  .panel-h span { font-size:10.5px; color:#5a5f66; }
+
+  .left { background:#191c20; border-right:1px solid #0c0d0f; display:flex; flex-direction:column; opacity:.6; }
+  .lib { flex:0 0 300px; display:flex; flex-direction:column; border-bottom:1px solid #0c0d0f; }
+  .lib-cat { font-size:9.5px; letter-spacing:.14em; color:#5a5f66; padding:8px 10px 3px; }
+  .lib-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; padding:2px 10px; }
+  .tile { background:#20242a; border:1px solid #33373e; border-radius:5px; padding:8px 4px 6px;
+          text-align:center; font-size:10.5px; color:#9aa0a8; }
+  .tile i { display:block; font-style:normal; font-size:17px; margin-bottom:3px; }
+  .i-win{color:#5b9bd5} .i-side{color:#7fc4c9} .i-ctl{color:#79c879}
+  .apppanel { flex:1; display:flex; flex-direction:column; }
+  .tree { flex:1; padding:4px 0; font-size:12px; }
+  .row { display:flex; align-items:center; gap:6px; padding:3px 10px; }
+  .row .dot { width:7px; height:7px; border-radius:2px; flex:none; }
+  .row.sel { background:#26313f; }
+  .ind1 { padding-left:26px; } .ind2 { padding-left:42px; }
+  .k-app{background:#c9ccd1} .k-window{background:#5b9bd5} .k-sidebar{background:#7fc4c9}
+  .k-control{background:#79c879} .k-struct{background:#b58ad4}
+
+  /* ---------- subject: RUNNING ---------- */
+  .subject { position:relative; background:#161a1d;
+             background-image:radial-gradient(#1d2126 1px, transparent 1px); background-size:22px 22px;
+             box-shadow:inset 0 0 0 2px #3d6a8a, inset 0 0 60px rgba(90,150,200,.06); }
+  .playing { position:absolute; left:50%; top:14px; transform:translateX(-50%);
+             background:#26313f; border:1px solid #3d6a8a; border-radius:14px; padding:3px 16px;
+             font-size:11.5px; color:#8fc1f2; letter-spacing:.06em; }
+  .playing b { color:#cfe3f7; }
+
+  .appwin { position:absolute; left:340px; top:120px; width:760px; height:560px;
+            background:#1b1e23; border:1px solid #3a3f47; border-radius:6px;
+            box-shadow:0 8px 28px rgba(0,0,0,.5); display:flex; flex-direction:column; }
+  .appwin .tbar { background:#23272d; border-bottom:1px solid #0f1114; border-radius:6px 6px 0 0;
+                  padding:6px 12px; font-size:12.5px; color:#e8eaed; }
+  .appwin .body { flex:1; padding:18px 22px; display:flex; flex-direction:column; gap:16px; }
+  .widget { padding:10px 12px; }
+  .widget .wname { font-size:12px; color:#9aa0a8; margin-bottom:6px; }
+  .slider { display:flex; align-items:center; gap:12px; }
+  .slider .track { flex:1; height:6px; background:#2a2e34; border-radius:3px; position:relative; }
+  .slider .fill { position:absolute; left:0; top:0; height:6px; width:78%; background:#79c879; border-radius:3px; }
+  .slider .knob { position:absolute; left:78%; top:-4px; width:14px; height:14px; border-radius:50%;
+                  background:#e8eaed; border:1px solid #0c0d0f; box-shadow:0 0 0 3px rgba(143,193,242,.35); }
+  .slider .val { font:12px Consolas,monospace; color:#e8eaed; width:70px; }
+  .cursor { position:absolute; left:76.5%; top:-18px; font-size:15px; color:#e8eaed; }
+  .meter { display:flex; gap:3px; margin-top:8px; }
+  .meter i { width:14px; height:20px; background:#2a2e34; border-radius:2px; }
+  .meter i.on { background:#79c879; }
+  .meter i.hot { background:#e0a04a; }
+  .transport { display:flex; gap:8px; }
+  .transport .tb { background:#2a2e34; border:1px solid #383d44; border-radius:4px; padding:5px 14px;
+                   color:#c9ccd1; font-size:13px; }
+  .transport .tb.lit { background:#1f3a24; border-color:#2f6b3a; color:#8fd99b; }
+
+  .sidedock { position:absolute; left:120px; top:150px; width:180px; height:420px;
+              background:#1b1e23; border:1px solid #3a3f47; border-radius:6px; }
+  .sidedock .tbar { background:#23272d; border-bottom:1px solid #0f1114; border-radius:6px 6px 0 0;
+                    padding:5px 10px; font-size:11.5px; color:#e8eaed; }
+  .sidedock .empty { padding:28px 14px; font-size:11px; color:#5a5f66; text-align:center; }
+
+  /* ---------- inspector (live) ---------- */
+  .inspector { background:#191c20; border-left:1px solid #0c0d0f; display:flex; flex-direction:column; }
+  .livechip { margin-left:auto; font-size:10px; color:#8fc1f2; border:1px solid #3d6a8a; border-radius:8px; padding:0 8px; }
+  .isec { border-bottom:1px solid #24272c; padding:8px 12px; }
+  .isec h3 { font-size:11px; letter-spacing:.1em; color:#9aa0a8; margin-bottom:6px; }
+  .idrow { display:flex; align-items:center; gap:8px; font-size:12.5px; color:#e8eaed; }
+  .idrow .kindchip { font-size:10px; color:#79c879; border:1px solid #2c522c; border-radius:3px; padding:0 6px; }
+  .idsub { font-size:11.5px; color:#7a8087; margin-top:2px; }
+  .frow { display:flex; align-items:center; gap:8px; padding:2.5px 0; font-size:12px; }
+  .frow label { width:110px; color:#9aa0a8; }
+  .field { flex:1; background:#22252a; border:1px solid #33373e; border-radius:4px; padding:2.5px 8px;
+           font:11.5px Consolas,monospace; color:#e8eaed; }
+  .field.live { border-color:#3d6a8a; color:#cfe3f7; }
+  .subcap { font-size:10.5px; color:#5a5f66; margin:5px 0 2px; }
+
+  .console { grid-column:1/4; background:#16181c; border-top:1px solid #0c0d0f; display:flex; flex-direction:column; }
+  .con-h { display:flex; align-items:center; gap:8px; padding:5px 12px; border-bottom:1px solid #24272c; }
+  .con-h b { font-size:11px; letter-spacing:.12em; color:#9aa0a8; }
+  .con-h span { font-size:10.5px; color:#5a5f66; }
+  .lines { padding:6px 14px; font:11.5px Consolas,monospace; color:#9aa0a8; }
+  .lines .ln { padding:1.5px 0; }
+  .lines .cmd { color:#79c879; }
+  .lines .liv { color:#8fc1f2; }
+
+  .status { grid-column:1/4; background:#1e2126; border-top:1px solid #0c0d0f; display:flex;
+            align-items:center; padding:0 12px; font-size:11px; color:#8a9097; gap:16px; }
+  .status b { color:#c9ccd1; font-weight:600; }
+  .status .facts { margin-left:auto; display:flex; gap:16px; color:#6a7078; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="toolbar">
+    <div class="btn split" style="opacity:.55;">+ Add</div>
+    <div class="btn" style="opacity:.55;">Save</div>
+    <div class="spacer"></div>
+    <div class="views">
+      <div class="on">Design</div><div>Logic</div><div>Code</div><div>Replay</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="rail">
+      <div class="t">run 03:12 · tick 11 520</div>
+      <div class="track">
+        <i style="left:14px"></i><i style="left:31px"></i><i class="snap" style="left:52px"></i>
+        <i style="left:80px"></i><i class="cmd" style="left:118px"></i><i style="left:150px"></i>
+        <i class="snap" style="left:171px"></i><i class="cur" style="left:196px"></i>
+      </div>
+      <div class="btn">⏸</div>
+      <div class="rec"><span class="dot"></span>Record ▾</div>
+    </div>
+    <div class="btn stop">⏹ Stop</div>
+    <div class="btn help">?</div>
+  </div>
+
+  <div class="left">
+    <div class="lib">
+      <div class="panel-h"><b>LIBRARY</b><span>everything you can add — drag it in</span></div>
+      <div class="lib-cat">CONTROLS</div>
+      <div class="lib-grid">
+        <div class="tile"><i class="i-ctl">▬</i>Slider</div>
+        <div class="tile"><i class="i-ctl">▣</i>Button</div>
+        <div class="tile"><i class="i-ctl">◉</i>Toggle</div>
+        <div class="tile"><i class="i-ctl">≣</i>List</div>
+        <div class="tile"><i class="i-ctl">▤</i>Meter</div>
+        <div class="tile"><i class="i-ctl">T</i>Label</div>
+      </div>
+    </div>
+    <div class="apppanel">
+      <div class="panel-h"><b>APP</b><span>what your app is made of</span></div>
+      <div class="tree">
+        <div class="row"><span class="dot k-app"></span>MixerApp</div>
+        <div class="row ind1"><span class="dot k-window"></span>MainWindow</div>
+        <div class="row ind2 sel"><span class="dot k-control"></span>Mixer</div>
+        <div class="row ind2"><span class="dot k-control"></span>TransportBar</div>
+        <div class="row ind1"><span class="dot k-sidebar"></span>Library</div>
+        <div class="row ind1"><span class="dot k-struct"></span>MixerData</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="subject">
+    <div class="playing"><b>PLAYING</b> — your input drives the app · Esc to stop</div>
+
+    <div class="sidedock">
+      <div class="tbar">Library</div>
+      <div class="empty">empty dock</div>
+    </div>
+
+    <div class="appwin">
+      <div class="tbar">MainWindow</div>
+      <div class="body">
+        <div class="widget">
+          <div class="wname">gain</div>
+          <div class="slider">
+            <div class="track"><div class="fill"></div><div class="knob"></div><div class="cursor">🖱</div></div>
+            <div class="val">−3.5 dB</div>
+          </div>
+          <div class="meter">
+            <i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i>
+            <i class="on"></i><i class="on"></i><i class="hot"></i><i></i>
+          </div>
+        </div>
+        <div class="widget">
+          <div class="wname">TransportBar</div>
+          <div class="transport">
+            <div class="tb lit">▶</div><div class="tb">⏸</div><div class="tb">⏹</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="inspector">
+    <div class="panel-h"><b>INSPECTOR</b><span>the selected thing</span>
+      <span class="livechip">live — edits keep</span></div>
+    <div class="isec">
+      <div class="idrow"><span class="dot k-control" style="width:9px;height:9px;border-radius:2px;background:#79c879;"></span>
+        <b>Mixer</b> <span class="kindchip">Control</span></div>
+      <div class="idsub">inside MainWindow · running</div>
+    </div>
+    <div class="isec">
+      <h3>STATE</h3>
+      <div class="subcap">Saved — kept between runs</div>
+      <div class="frow"><label>gain_db</label><div class="field live">−3.5</div></div>
+      <div class="subcap">Input — read fresh every frame</div>
+      <div class="frow"><label>pressed</label><div class="field live">yes</div></div>
+      <div class="frow"><label>hovered</label><div class="field live">yes</div></div>
+    </div>
+    <div class="isec">
+      <h3>BEHAVIOR</h3>
+      <div style="font-size:12px; color:#9aa0a8; padding:2px 0;">When <span style="color:#8fc1f2">pressed starts</span>
+        → <span style="color:#79c879">send command Play</span>
+        <span style="color:#5a5f66"> · fired 2 s ago</span></div>
+    </div>
+  </div>
+
+  <div class="console">
+    <div class="con-h"><b>CONSOLE</b><span>build + run messages</span></div>
+    <div class="lines">
+      <div class="ln cmd">▶ Play — recording this run (meta, free)</div>
+      <div class="ln liv">Mixer.gain_db −6.0 → −3.5 (your drag · live edit kept)</div>
+      <div class="ln cmd">Cmd_Play dispatched — from Mixer, when pressed starts</div>
+    </div>
+  </div>
+
+  <div class="status">
+    <div><b>Esc</b> stop · <b>⏸</b> freeze time · drag the rail to rewind this run</div>
+    <div class="facts"><span>MixerApp ▸ MainWindow ▸ Mixer</span><span>Playing · 60 fps</span><span>Build ✓</span></div>
+  </div>
+
+</div>
+</body>
+</html>

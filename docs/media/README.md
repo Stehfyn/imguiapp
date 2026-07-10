@@ -62,11 +62,20 @@ Note: the UE Details-panel doc page persistently 403'd; its discipline is covere
 
 ## mock/
 
-- `composer-gen3-endgoal.html` / `.render.png` — gen-3 end-goal visual, Author posture: the
-  Lifecycle Studio (lifecycle-lane root canvas, in-panel DLL preview, body sections in the
-  inspector, console-grade Output, flow-ordered toolbar). Companion to composer-studio-design.md.
-- `previewer-wysiwyg-endgoal.html` / `.render.png` — gen-3 end-goal visual, Observe posture:
-  WYSIWYG previewer in Edit mode (Interact/Edit segmented toggle, accent mode frame, drag-reorder
-  ghost + insertion line, split-divider handle, quick inspector at the widget, Body section with
-  compile chip, edit gestures echoed as named undo in Output, one transport rail with record
-  armed). Companion to composer-studio-design.md §5.2.
+Gen 4 (current — companions to composer-studio-design.md):
+
+- `composer-gen4-first-run.html` / `.render.png` — the cold open: welcome cards + product
+  statement over the empty shell; every panel self-labeled with its empty-state verb (§7).
+- `composer-gen4-design-view.html` / `.render.png` — Design view: the app is the subject
+  (WYSIWYG center, full bleed), Library grid, App tree, sentence Inspector (This is…/Looks/
+  State/Behavior/Wiring), Console, teaching status line (§3–§6).
+- `composer-gen4-play-mode.html` / `.render.png` — Play mode: running subject with unmistakable
+  mode chrome, time rail + record in the toolbar, "live — edits keep" Inspector chip (§5).
+
+Gen 3 (superseded shell; canvas interior still representative of the Logic view, design §4.2):
+
+- `composer-gen3-endgoal.html` / `.render.png` — lifecycle-lane canvas, in-panel DLL preview,
+  body sections, console-grade Output. Companion to archive/composer-studio-design-gen3.md.
+- `previewer-wysiwyg-endgoal.html` / `.render.png` — WYSIWYG previewer in Edit mode; the gesture
+  grammar shown landed in ST3 and carries into gen-4 Design view. Companion to
+  archive/composer-studio-design-gen3.md §5.2.

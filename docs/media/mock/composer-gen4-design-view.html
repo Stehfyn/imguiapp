@@ -1,0 +1,304 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Composer Gen 4 — Design view: the app is the subject</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { width:1920px; height:1200px; background:#141619; color:#c9ccd1; font:13px/1.4 "Segoe UI",system-ui,sans-serif; overflow:hidden; }
+  .app { display:grid; width:100%; height:100%;
+         grid-template-rows: 44px 1fr 190px 26px;
+         grid-template-columns: 260px 1fr 430px; }
+
+  /* ---------- toolbar ---------- */
+  .toolbar { grid-column:1/4; background:#1e2126; border-bottom:1px solid #0c0d0f;
+             display:flex; align-items:center; gap:8px; padding:0 12px; }
+  .btn { background:#2a2e34; border:1px solid #383d44; border-radius:4px; padding:4px 12px;
+         color:#c9ccd1; font-size:12.5px; white-space:nowrap; }
+  .btn.split::after { content:" ▾"; color:#7a8087; }
+  .btn.play { background:#1f3a24; border-color:#2f6b3a; color:#8fd99b; font-weight:600; font-size:13px; padding:5px 18px; }
+  .btn.build { background:#1e2b21; border-color:#2f6b3a; color:#8fd99b; }
+  .btn.help { border-radius:50%; width:26px; height:26px; padding:0; text-align:center; color:#8fc1f2; }
+  .sep { width:1px; height:22px; background:#383d44; }
+  .spacer { flex:1; }
+  .views { display:flex; gap:2px; background:#191c20; border:1px solid #33373e; border-radius:5px; padding:2px; }
+  .views div { padding:4px 16px; font-size:12.5px; color:#8a9097; border-radius:4px; }
+  .views .on { background:#26313f; color:#cfe3f7; font-weight:600; }
+
+  /* ---------- panels: shared header ---------- */
+  .panel-h { display:flex; align-items:baseline; gap:8px; padding:7px 10px 5px;
+             border-bottom:1px solid #24272c; }
+  .panel-h b { font-size:11px; letter-spacing:.12em; color:#9aa0a8; }
+  .panel-h span { font-size:10.5px; color:#5a5f66; }
+
+  /* ---------- left column ---------- */
+  .left { background:#191c20; border-right:1px solid #0c0d0f; display:flex; flex-direction:column; }
+  .lib { flex:0 0 465px; display:flex; flex-direction:column; border-bottom:1px solid #0c0d0f; }
+  .lib-search { margin:8px 10px 4px; background:#22252a; border:1px solid #33373e; border-radius:4px;
+                padding:3px 8px; color:#6a7078; font-size:11.5px; }
+  .lib-cat { font-size:9.5px; letter-spacing:.14em; color:#5a5f66; padding:8px 10px 3px; }
+  .lib-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; padding:2px 10px; }
+  .tile { background:#20242a; border:1px solid #33373e; border-radius:5px; padding:8px 4px 6px;
+          text-align:center; font-size:10.5px; color:#9aa0a8; }
+  .tile i { display:block; font-style:normal; font-size:17px; margin-bottom:3px; }
+  .tile.drag { border-color:#8fc1f2; color:#cfe3f7; box-shadow:0 0 0 1px #8fc1f2; }
+  .i-win{color:#5b9bd5} .i-side{color:#7fc4c9} .i-ctl{color:#79c879} .i-data{color:#b58ad4} .i-op{color:#4fb8a8}
+
+  .apppanel { flex:1; display:flex; flex-direction:column; }
+  .tree { flex:1; padding:4px 0; font-size:12px; }
+  .row { display:flex; align-items:center; gap:6px; padding:3px 10px; }
+  .row .dot { width:7px; height:7px; border-radius:2px; flex:none; }
+  .row.sel { background:#26313f; }
+  .ind1 { padding-left:26px; } .ind2 { padding-left:42px; }
+  .k-app{background:#c9ccd1} .k-window{background:#5b9bd5} .k-sidebar{background:#7fc4c9}
+  .k-control{background:#79c879} .k-struct{background:#b58ad4}
+
+  /* ---------- subject: the app, WYSIWYG ---------- */
+  .subject { position:relative; background:#141619;
+             background-image:radial-gradient(#1d2025 1px, transparent 1px); background-size:22px 22px; }
+  .watermark { position:absolute; right:18px; top:12px; font-size:11.5px; color:#4a4f57; }
+  .zoom { position:absolute; right:18px; bottom:14px; background:#20242a; border:1px solid #33373e;
+          border-radius:4px; padding:2px 9px; font-size:11px; color:#9aa0a8; }
+
+  .appwin { position:absolute; left:340px; top:120px; width:760px; height:560px;
+            background:#1b1e23; border:1px solid #3a3f47; border-radius:6px;
+            box-shadow:0 8px 28px rgba(0,0,0,.5); display:flex; flex-direction:column; }
+  .appwin .tbar { background:#23272d; border-bottom:1px solid #0f1114; border-radius:6px 6px 0 0;
+                  padding:6px 12px; font-size:12.5px; color:#e8eaed; display:flex; gap:8px; align-items:center; }
+  .appwin .tbar .plate { margin-left:auto; font-size:10px; color:#5b9bd5; border:1px solid #2b4a6b;
+                          border-radius:3px; padding:0 6px; }
+  .appwin .body { flex:1; padding:18px 22px; display:flex; flex-direction:column; gap:16px; }
+
+  .widget { border:1px solid transparent; border-radius:4px; padding:10px 12px; }
+  .widget .wname { font-size:12px; color:#9aa0a8; margin-bottom:6px; }
+  .slider { display:flex; align-items:center; gap:12px; }
+  .slider .track { flex:1; height:6px; background:#2a2e34; border-radius:3px; position:relative; }
+  .slider .fill { position:absolute; left:0; top:0; height:6px; width:62%; background:#79c879; border-radius:3px; }
+  .slider .knob { position:absolute; left:62%; top:-4px; width:14px; height:14px; border-radius:50%;
+                  background:#c9ccd1; border:1px solid #0c0d0f; }
+  .slider .val { font:12px Consolas,monospace; color:#e8eaed; width:70px; }
+  .meter { display:flex; gap:3px; margin-top:8px; }
+  .meter i { width:14px; height:20px; background:#2a2e34; border-radius:2px; }
+  .meter i.on { background:#79c879; }
+  .meter i.hot { background:#e0a04a; }
+
+  .widget.sel { border-color:#8fc1f2; box-shadow:0 0 0 1px #8fc1f2; position:relative; }
+  .handle { position:absolute; width:7px; height:7px; background:#8fc1f2; border:1px solid #0c0d0f; }
+  .h-tl{left:-4px;top:-4px} .h-tr{right:-4px;top:-4px} .h-bl{left:-4px;bottom:-4px} .h-br{right:-4px;bottom:-4px}
+  .sel-tag { position:absolute; top:-22px; left:-1px; background:#26313f; border:1px solid #3d5a7a;
+             border-radius:3px 3px 0 0; font-size:10.5px; color:#8fc1f2; padding:1px 8px; }
+
+  .transport { display:flex; gap:8px; }
+  .transport .tb { background:#2a2e34; border:1px solid #383d44; border-radius:4px; padding:5px 14px;
+                   color:#c9ccd1; font-size:13px; }
+
+  .sidedock { position:absolute; left:120px; top:150px; width:180px; height:420px;
+              background:#1b1e23; border:1px solid #3a3f47; border-radius:6px;
+              box-shadow:0 8px 28px rgba(0,0,0,.5); }
+  .sidedock .tbar { background:#23272d; border-bottom:1px solid #0f1114; border-radius:6px 6px 0 0;
+                    padding:5px 10px; font-size:11.5px; color:#e8eaed; display:flex; }
+  .sidedock .tbar .plate { margin-left:auto; font-size:9.5px; color:#7fc4c9; border:1px solid #2e5457;
+                            border-radius:3px; padding:0 5px; }
+  .sidedock .empty { padding:28px 14px; font-size:11px; color:#5a5f66; text-align:center; }
+
+  .caret { position:absolute; left:340px; top:392px; width:760px; height:0; border-top:2px solid #8fc1f2; opacity:.0; }
+
+  /* ---------- inspector ---------- */
+  .inspector { background:#191c20; border-left:1px solid #0c0d0f; display:flex; flex-direction:column; overflow:hidden; }
+  .isec { border-bottom:1px solid #24272c; padding:8px 12px; }
+  .isec h3 { font-size:11px; letter-spacing:.1em; color:#9aa0a8; margin-bottom:6px; display:flex; align-items:center; gap:6px; }
+  .isec h3 .dot { width:8px; height:8px; border-radius:2px; }
+  .idrow { display:flex; align-items:center; gap:8px; font-size:12.5px; color:#e8eaed; }
+  .idrow .kindchip { font-size:10px; color:#79c879; border:1px solid #2c522c; border-radius:3px; padding:0 6px; }
+  .idsub { font-size:11.5px; color:#7a8087; margin-top:2px; }
+  .frow { display:flex; align-items:center; gap:8px; padding:2.5px 0; font-size:12px; }
+  .frow label { width:110px; color:#9aa0a8; }
+  .field { flex:1; background:#22252a; border:1px solid #33373e; border-radius:4px; padding:2.5px 8px;
+           font:11.5px Consolas,monospace; color:#e8eaed; }
+  .subcap { font-size:10.5px; color:#5a5f66; margin:5px 0 2px; }
+  .sentence { display:flex; align-items:center; gap:5px; flex-wrap:wrap; padding:4px 0; font-size:12px; color:#9aa0a8; }
+  .pick { background:#26313f; border:1px solid #3d5a7a; border-radius:4px; padding:1.5px 8px;
+          color:#8fc1f2; font-size:11.5px; white-space:nowrap; }
+  .pick::after { content:" ▾"; color:#55708c; font-size:9px; }
+  .addrow { font-size:11.5px; color:#5f9ed6; padding:4px 0; }
+  .minor { background:#22252a; border:1px solid #33373e; border-radius:4px; color:#9aa0a8;
+           font-size:11px; padding:2.5px 10px; display:inline-block; }
+  .chips { display:flex; gap:5px; flex-wrap:wrap; padding:3px 0; }
+  .chip { font-size:10.5px; padding:1px 8px; border-radius:8px; border:1px solid #383d44; color:#9aa0a8; }
+  .chip.r { border-color:#4a3760; color:#b58ad4; }
+  .chip.w { border-color:#2e5457; color:#7fc4c9; }
+
+  /* ---------- console ---------- */
+  .console { grid-column:1/4; background:#16181c; border-top:1px solid #0c0d0f; display:flex; flex-direction:column; }
+  .con-h { display:flex; align-items:center; gap:8px; padding:5px 12px; border-bottom:1px solid #24272c; }
+  .con-h b { font-size:11px; letter-spacing:.12em; color:#9aa0a8; }
+  .con-h span { font-size:10.5px; color:#5a5f66; }
+  .con-h .filters { margin-left:auto; display:flex; gap:5px; }
+  .fpill { font-size:10px; padding:1px 8px; border-radius:8px; border:1px solid #383d44; color:#9aa0a8; }
+  .fpill.warn { border-color:#6b5a2f; color:#e0c04a; }
+  .lines { padding:6px 14px; font:11.5px Consolas,monospace; color:#9aa0a8; }
+  .lines .ln { padding:1.5px 0; }
+  .lines .warn { color:#e0c04a; }
+  .lines .ok { color:#79c879; }
+
+  /* ---------- status bar ---------- */
+  .status { grid-column:1/4; background:#1e2126; border-top:1px solid #0c0d0f; display:flex;
+            align-items:center; padding:0 12px; font-size:11px; color:#8a9097; gap:16px; }
+  .status b { color:#c9ccd1; font-weight:600; }
+  .status .facts { margin-left:auto; display:flex; gap:16px; color:#6a7078; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="toolbar">
+    <div class="btn split">+ Add</div>
+    <div class="btn">Save</div>
+    <div class="sep"></div>
+    <div class="spacer"></div>
+    <div class="views">
+      <div class="on">Design</div><div>Logic</div><div>Code</div><div>Replay</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="btn play">▶ Play</div>
+    <div class="btn build split">Build ✓</div>
+    <div class="btn help">?</div>
+  </div>
+
+  <div class="left">
+    <div class="lib">
+      <div class="panel-h"><b>LIBRARY</b><span>everything you can add — drag it in</span></div>
+      <div class="lib-search">search controls…</div>
+      <div class="lib-cat">WINDOWS</div>
+      <div class="lib-grid">
+        <div class="tile"><i class="i-win">▢</i>Window</div>
+        <div class="tile"><i class="i-side">▙</i>Sidebar</div>
+        <div class="tile"><i class="i-win">◫</i>Split</div>
+      </div>
+      <div class="lib-cat">CONTROLS</div>
+      <div class="lib-grid">
+        <div class="tile drag"><i class="i-ctl">▬</i>Slider</div>
+        <div class="tile"><i class="i-ctl">▣</i>Button</div>
+        <div class="tile"><i class="i-ctl">◉</i>Toggle</div>
+        <div class="tile"><i class="i-ctl">≣</i>List</div>
+        <div class="tile"><i class="i-ctl">▤</i>Meter</div>
+        <div class="tile"><i class="i-ctl">T</i>Label</div>
+      </div>
+      <div class="lib-cat">DATA</div>
+      <div class="lib-grid">
+        <div class="tile"><i class="i-data">⬡</i>Data</div>
+        <div class="tile"><i class="i-op">ƒ</i>Op</div>
+        <div class="tile"><i class="i-data">⇄</i>Command</div>
+      </div>
+    </div>
+    <div class="apppanel">
+      <div class="panel-h"><b>APP</b><span>what your app is made of</span></div>
+      <div class="tree">
+        <div class="row"><span class="dot k-app"></span>MixerApp</div>
+        <div class="row ind1"><span class="dot k-window"></span>MainWindow</div>
+        <div class="row ind2 sel"><span class="dot k-control"></span>Mixer</div>
+        <div class="row ind2"><span class="dot k-control"></span>TransportBar</div>
+        <div class="row ind1"><span class="dot k-sidebar"></span>Library</div>
+        <div class="row ind1"><span class="dot k-struct"></span>MixerData</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="subject">
+    <div class="watermark">not running — press ▶ Play to interact</div>
+
+    <div class="sidedock">
+      <div class="tbar">Library <span class="plate">Sidebar</span></div>
+      <div class="empty">empty dock —<br>drag a control here</div>
+    </div>
+
+    <div class="appwin">
+      <div class="tbar">MainWindow <span class="plate">Window</span></div>
+      <div class="body">
+        <div class="widget sel">
+          <div class="sel-tag">Mixer</div>
+          <span class="handle h-tl"></span><span class="handle h-tr"></span>
+          <span class="handle h-bl"></span><span class="handle h-br"></span>
+          <div class="wname">gain</div>
+          <div class="slider">
+            <div class="track"><div class="fill"></div><div class="knob"></div></div>
+            <div class="val">−6.0 dB</div>
+          </div>
+          <div class="meter">
+            <i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i>
+            <i class="hot"></i><i></i><i></i><i></i>
+          </div>
+        </div>
+        <div class="widget">
+          <div class="wname">TransportBar</div>
+          <div class="transport">
+            <div class="tb">▶</div><div class="tb">⏸</div><div class="tb">⏹</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="zoom">100%</div>
+  </div>
+
+  <div class="inspector">
+    <div class="panel-h"><b>INSPECTOR</b><span>the selected thing</span></div>
+    <div class="isec">
+      <div class="idrow"><span class="dot k-control" style="width:9px;height:9px;border-radius:2px;"></span>
+        <b>Mixer</b> <span class="kindchip">Control</span></div>
+      <div class="idsub">inside MainWindow · drawn 1st</div>
+    </div>
+    <div class="isec">
+      <h3>LOOKS</h3>
+      <div class="frow"><label>label</label><div class="field">gain</div></div>
+      <div class="frow"><label>width</label><div class="field">fill</div></div>
+    </div>
+    <div class="isec">
+      <h3>STATE</h3>
+      <div class="subcap">Saved — kept between runs</div>
+      <div class="frow"><label>gain_db</label><div class="field">−6.0</div></div>
+      <div class="subcap">Input — read fresh every frame</div>
+      <div class="frow"><label>pressed</label><div class="field">no</div></div>
+      <div class="frow"><label>hovered</label><div class="field">no</div></div>
+    </div>
+    <div class="isec">
+      <h3>BEHAVIOR</h3>
+      <div class="sentence">When <span class="pick">pressed</span> <span class="pick">starts</span>
+        → <span class="pick">send command</span> <span class="pick">Play</span></div>
+      <div class="addrow">+ When…</div>
+      <div style="padding-top:4px;"><span class="minor">Edit update code…</span>
+        <span style="font-size:10.5px;color:#79c879;"> ✓ compiles · runs in Play</span></div>
+    </div>
+    <div class="isec">
+      <h3>WIRING</h3>
+      <div class="chips">
+        <span class="chip r">reads MixerData</span>
+        <span class="chip w">writes TransportData</span>
+      </div>
+      <div style="padding-top:4px;"><span class="minor">Edit logic…</span>
+        <span style="font-size:10.5px;color:#5a5f66;"> opens the node canvas at Mixer</span></div>
+    </div>
+  </div>
+
+  <div class="console">
+    <div class="con-h"><b>CONSOLE</b><span>build + run messages</span>
+      <div class="filters">
+        <span class="fpill">err 0</span><span class="fpill warn">warn 2</span>
+        <span class="fpill">info</span><span class="fpill">filter…</span>
+      </div>
+    </div>
+    <div class="lines">
+      <div class="ln warn">⚠ Mixer — TransportData is read but not wired · click to fix in Logic</div>
+      <div class="ln warn">⚠ Library — this sidebar is empty · drag a control into it</div>
+      <div class="ln ok">✓ Build wrote imguix_generated_control.h — up to date with your design</div>
+    </div>
+  </div>
+
+  <div class="status">
+    <div><b>slider</b> — drag to reorder · double-click to rename · <b>N</b> inspect · right-click menu</div>
+    <div class="facts"><span>MixerApp ▸ MainWindow ▸ Mixer</span><span>Design</span><span>Build ✓</span></div>
+  </div>
+
+</div>
+</body>
+</html>
