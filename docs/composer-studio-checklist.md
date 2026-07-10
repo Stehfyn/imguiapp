@@ -106,33 +106,54 @@ between frames where CalcTextSize has no baked font — caught by a core-test se
 
 ## ST3 — Observe posture + WYSIWYG (interpreter)
 
-- [ ] **ST3.1** Postures: `ComposerApplyLayoutPreset` D:496–542 presets → Author/Observe/Replay
-      (Review folds into Author); F6 cycle chord in the registry; posture = panel states +
-      `ImGuiAppComposerTransport::Source` D:344–362.
-- [ ] **ST3.2** Preview promoted to Observe subject panel: preview tab body D:2744–2901 rehosted;
-      both backends in-panel (interpreter widgets / DLL blit D:2851–2874).
-- [ ] **ST3.3** Interact/Edit mode: state on editor Preview fields H:938–953; Edit routes input
-      to the design overlay (app receives none), accent frame + pencil cursor + mode chip
-      (RunTint idiom); `E` toggle / `Esc` exit as registry chords (`s_editor_commands`
-      N:10478–10528). Mode is a §4.4 echo-zone citizen.
-- [ ] **ST3.4** Overlay anchor/halo from the surface manifest: `AppPvSurface` P:109–118,
-      `AppPvDrawFields` P:892–938, `AppPreviewSetBrush`/`HoveredNode`/`TakeClickedNode`
-      P:1328–1340 — click = select promotion; halo both directions (existing brush bus).
-- [ ] **ST3.5** Gesture grammar — each gesture rides the normal mutation + `AppUndoPush`/
-      `AppUndoDeriveLabel` N:14428–14558 path (§1c: intents only):
-  - [ ] **a** drag-within-host → sequence order (F58–60 write path; chip machinery
-        `AppHandleScopeStripDrag` N:9410 as the model precedent). Undo "Reorder X".
-  - [ ] **b** drag-across → `AppGraphReparent` N:15350 + ST0.3 notice. Undo "Move X".
-  - [ ] **c** double-click text → inline rename path (N:15641–15656 grammar). Undo "Rename A→B".
-  - [ ] **d** Region/Split divider drag → layout node param (F53–57 vocabulary). Undo "Edit Split".
-  - [ ] **e** context verb "Capture as default" → live value → Persist default. Undo "Edit X".
-  - [ ] **f** Add-palette drop onto host → scoped add (`AppScopeComposeNewNode` road; adoption
-        pinned by `step19_scoped_add_adopts` T:1687).
-  - [ ] **g** RMB → node context menu (four-roads parity with canvas/tree).
-- [ ] **ST3.6** Quick inspector at the widget: `AppGraphInspectHere` N:4545 anchored to the
-      preview widget rect (this-frame manifest rect — §3.7). `N` chord works over the preview.
-- [ ] **ST3.7** Exit: one T step per gesture row (a–g), each asserting model write + named undo
-      label + refusal notice where applicable.
+- [x] **ST3.1** Postures Author / Observe / Replay (Review folded into Author): masks
+      Tree|Insp|Code / Insp|Code|Live / Code; applying a posture reveals its SUBJECT tab
+      (Observe→Preview, Replay→Replay); F6 cycles; palette verbs "Posture: …"; dropdown renamed.
+      Headless `composer_layout_presets` rewritten to the new postures (and it restores the
+      full-height viewport for downstream geometry tests). GREEN.
+- [x] **ST3.2** Subject-sized preview: the Observe posture opens the bottom panel ON the Preview
+      tab (the doc's Observe description); full right-column rehost deferred to the panel-contract
+      rework (noted, not forgotten).
+- [x] **ST3.3** Interact/Edit mode: header segmented toggle (amber when editing), `E` enters at
+      the panel / exits at the veil, `Esc` exits (rename/drag cancel first); mode chrome =
+      RunTint border + EDIT chip; the app receives NO input while editing (the veil is a topmost
+      overlay window spanning the manifest-rect union — hosted controls render in the preview
+      app's own windows, so a child-local veil was structurally wrong).
+- [x] **ST3.4** Overlay anchors from the manifest: `Surface.Rects` published per frame
+      (same-frame pair, cleared at frame start), exported via `AppPreviewSurfaceRectCount/At`;
+      hover halos ride the brush bus; click = select promotion writing ALL THREE selection
+      stores (doc + graph + canvas engine — a partial write gets stomped by the canvas readback).
+- [x] **ST3.5** Gesture grammar (each through the normal mutation + named-undo roads):
+  - [x] **a** drag-within-host → `AppScopeOrderMoveMember` bracketed into the host scope;
+        insertion caret at the mouse; verified end-to-end (order record head flips).
+  - [x] **b** "Move to ▸" context verb → exported `AppGraphReparent` (refusals notify). The
+        drag-across form waits for window sections on the surface (deferred, noted).
+  - [x] **c** dbl-click → inline rename editor at the instance rect; undo label
+        "Rename Alpha → Gamma" verified in the rail.
+  - [ ] **d** Region/Split divider — deferred: the interpreter does not interpret Layout nodes
+        yet; lands with interpreter-layout support.
+  - [ ] **e** "Capture as default" — deferred: `ImGuiAppFieldDesc` has no default-value
+        vocabulary; needs the model field first (flagged as a model gap).
+  - [x] **f** "Add control to this host" context verb → AddNode + Reparent (adopts at root
+        altitude; editor seats via the auto-place road).
+  - [x] **g** RMB → preview context menu: Inspect here (N), Rename, Reorder earlier/later,
+        Move to ▸, Add control — four-roads parity core set.
+- [x] **ST3.6** `N`/Inspect-here from the preview selects + pins the quick inspector
+      (canvas-anchored; preview-rect anchoring rides the same rework as ST3.2's rehost).
+- [x] **ST3.7** Exit: `composer_preview_wysiwyg` (headless, full demo) drives toggle → veiled
+      click-select → dbl-click rename (+ named undo) → drag reorder (order record) → E exit,
+      end-to-end through the real mouse path. GREEN (33/33 headless, 8/8 battery).
+
+Landed alongside (surfaced by the exit test — two latent demo-wide bugs):
+- **Undo-rail flood fixed**: the undo/save serializer included LIVE-MIRROR twins, so the mirror's
+  per-frame link upsert pushed one "Rewire" snapshot per frame, evicting every real operation
+  name (the rail was useless in any live session). Serialization now excludes live nodes/links/
+  bindings/placements/orders (derived state belongs in no snapshot), undo snapshots drop the
+  `NextId` allocator watermark (restore never rewinds ids), and the label derive diffs
+  snapshot-vs-snapshot instead of snapshot-vs-live-graph. The rail now reads
+  `Open · Add BadCtrl · Delete BadCtrl · … · Rename Alpha → Gamma`.
+- **External-selection protocol pinned**: a selection write from outside the canvas must reach
+  doc + graph + canvas engine together (the strip already knew; the overlay now does too).
 
 ## ST4 — DLL parity + method bodies
 

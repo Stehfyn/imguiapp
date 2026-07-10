@@ -967,6 +967,12 @@ struct ImGuiAppEditorState
     ImU64                          PreviewRecTick = 0;                 // F70: ticks recorded this take (== the exported run's tick spine)
     int                            PreviewRecSnapEvery = 30;           // F70: StateSnapshot cadence in ticks (a nearest-snapshot restore point every N)
     char                           PreviewRecPath[256] = "headless-artifacts/preview-session.meta";  // F70: exported container path
+    bool                           PreviewEdit = false;                // ST3: preview WYSIWYG mode -- input goes to the design overlay, the app runs beneath untouched
+    int                            PreviewDragNode = -1;               // ST3: instance panel being drag-reordered (-1 = idle)
+    int                            PreviewRenameNode = -1;             // ST3: instance in inline rename (-1 = none)
+    char                           PreviewRenameBuf[IM_LABEL_SIZE] = ""; // ST3: rename editor buffer
+    bool                           PreviewRenameFocus = false;         // ST3: one-shot keyboard-focus grab when the rename opens
+    int                            PreviewCtxNode = -1;                // ST3: instance the preview context menu opened on
     bool                           PreviewUseDll = false;              // F78.5: preview backend selector -- DLL (compiled real program) vs the interpreter (default)
     ImGuiAppPreviewDll*            PreviewDll = nullptr;               // F78.5: compiled-DLL preview session (heap; opaque; created lazily, freed on Reinit / process exit)
     ImGuiID                        PreviewDllSig = 0;                  // F78.5: AppGraphSignature the DLL preview was last compiled at; a change recompiles + hot-swaps
@@ -1546,6 +1552,7 @@ IMGUI_API ImGuiAppNode*     AppGraphAddBuiltin(ImGuiAppGraph* g, ImGuiAppNodeKin
 // fixes the operand-pin arity; the result DataOut is stamped DataTypeId=0 (opts out of one-producer-per-type).
 IMGUI_API ImGuiAppNode*     AppGraphAddOp(ImGuiAppGraph* g, const char* op_token);
 IMGUI_API void              AppGraphRemoveNode(ImGuiAppGraph* g, int node_id);
+IMGUI_API bool              AppGraphReparent(ImGuiAppGraph* g, int child_id, int parent_id);   // move the containment edge (refusals notify)
 IMGUI_API const ImGuiAppNode* AppGraphFindNode(const ImGuiAppGraph* g, int node_id);
 IMGUI_API int                 AppGraphFindNodeIndex(const ImGuiAppGraph* g, int node_id); // write path: index into g->Nodes
 IMGUI_API const ImGuiAppNodePort* AppGraphFindPort(const ImGuiAppGraph* g, int port_id, const ImGuiAppNode** out_owner);
@@ -2417,6 +2424,12 @@ IMGUI_API void AppPreviewRender(ImGuiAppPreview* session);
 // Selection brushing (design 8.2), composer -> preview: the selected/hovered node's widget group haloes
 // in the surface. Pass -1 for none. Set before the frame; consumed while the controls render.
 IMGUI_API void AppPreviewSetBrush(ImGuiAppPreview* session, int selected_node_id, int hover_node_id);
+
+// This frame's instance-panel rects (screen space, submission order): the WYSIWYG overlay's anchors.
+// RectAt returns the node id (-1 out of range). Rects and the frame they were measured in are a
+// same-frame pair; nothing crosses the frame boundary.
+IMGUI_API int  AppPreviewSurfaceRectCount(const ImGuiAppPreview* session);
+IMGUI_API int  AppPreviewSurfaceRectAt(const ImGuiAppPreview* session, int i, ImVec2* out_min, ImVec2* out_max);
 
 // Preview -> composer: the node whose widget group the mouse rested over this frame (-1 = none). Cheap to
 // read after AppPreviewFrame/Render; the composer forwards it to AppGraphHoverNode so the canvas haloes.

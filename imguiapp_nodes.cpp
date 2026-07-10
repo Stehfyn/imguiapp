@@ -3061,7 +3061,6 @@ static bool   AppNodeIsInScope(const ImGuiAppGraph* g, int id);   // fwd
 static int    AppGraphParentOf(const ImGuiAppGraph* g, int child_node_id);   // fwd
 static ImVec2 AppNodeScopePos(const ImGuiAppGraph* g, const ImGuiAppNode* n);   // fwd
 static void   AppNodeScopePosStore(ImGuiAppGraph* g, int node_id, const ImVec2& pos);   // fwd
-static bool   AppGraphReparent(ImGuiAppGraph* g, int child_id, int parent_id);   // fwd
 
 static ImGuiAppNode* AppGraphDuplicateNode(ImGuiAppGraph* g, const ImGuiAppNode* src)
 {
@@ -8889,7 +8888,6 @@ static int AppGroupOwnerOf(const ImGuiAppGraph* g, int id)
 // inside a scope only that node's composition is submitted, and members carry execution-order badges.
 //-----------------------------------------------------------------------------
 
-static bool AppGraphReparent(ImGuiAppGraph* g, int child_id, int parent_id);   // fwd (defined by the outliner)
 
 // Scope parent: which composition scope a node lives in (the tree the breadcrumb walks). -1 = root.
 static int AppScopeParentOf(const ImGuiAppGraph* g, int id)
@@ -13416,33 +13414,72 @@ static void AppNodeParseEvent(ImGuiAppNode* n, const char* line)
 
 // Serialize the whole graph to the imgui-style text format (shared by AppGraphSave for files and by the
 // in-memory undo snapshots). Positions are included so undo restores layout, not just topology.
-static void AppGraphSerialize(const ImGuiAppGraph* g, ImGuiTextBuffer* buf)
+// Live-mirror twins are DERIVED state (rebuilt from the running app every frame): they belong in
+// no snapshot -- not in saves, not in the undo rail. Including them let the mirror's per-frame
+// link upsert flood the history with one "Rewire" per frame, evicting every real operation name.
+static bool AppGraphNodeIdIsLive(const ImGuiAppGraph* g, int id)
+{
+    const ImGuiAppNode* n = AppGraphFindNode(g, id);
+    return n != nullptr && n->IsLive;
+}
+
+static void AppGraphSerializeEx(const ImGuiAppGraph* g, ImGuiTextBuffer* buf, bool include_next_id)
 {
     buf->appendf("[Graph]\n");
-    buf->appendf("NextId=%d\n", g->NextId);
+    if (include_next_id)   // undo snapshots omit the allocator watermark: ids are monotonic and never rewind,
+        buf->appendf("NextId=%d\n", g->NextId);   // and the live mirror's per-frame allocs would churn the rail
     for (int i = 0; i < g->Nodes.Size; i++)
-        AppEmitNodeRecord(buf, &g->Nodes.Data[i]);
+        if (!g->Nodes.Data[i].IsLive)
+            AppEmitNodeRecord(buf, &g->Nodes.Data[i]);
     for (int i = 0; i < g->Links.Size; i++)
-        buf->appendf("Link=%d,%d,%d,%d\n", g->Links.Data[i].Id, g->Links.Data[i].StartAttr, g->Links.Data[i].EndAttr, (int)g->Links.Data[i].Kind);
+    {
+        const ImGuiAppNodeLink* l = &g->Links.Data[i];
+        if (AppGraphNodeIdIsLive(g, AppGraphPortOwnerId(g, l->StartAttr)) || AppGraphNodeIdIsLive(g, AppGraphPortOwnerId(g, l->EndAttr)))
+            continue;
+        buf->appendf("Link=%d,%d,%d,%d\n", l->Id, l->StartAttr, l->EndAttr, (int)l->Kind);
+    }
     for (int i = 0; i < g->Bindings.Size; i++)
-        buf->appendf("Bind=%d,%s,%s\n", g->Bindings.Data[i].LinkId, g->Bindings.Data[i].DstField, g->Bindings.Data[i].SrcField);
+    {
+        bool live_link = false;
+        for (int li = 0; li < g->Links.Size; li++)
+            if (g->Links.Data[li].Id == g->Bindings.Data[i].LinkId)
+            {
+                live_link = AppGraphNodeIdIsLive(g, AppGraphPortOwnerId(g, g->Links.Data[li].StartAttr))
+                         || AppGraphNodeIdIsLive(g, AppGraphPortOwnerId(g, g->Links.Data[li].EndAttr));
+                break;
+            }
+        if (!live_link)
+            buf->appendf("Bind=%d,%s,%s\n", g->Bindings.Data[i].LinkId, g->Bindings.Data[i].DstField, g->Bindings.Data[i].SrcField);
+    }
     for (int i = 0; i < g->ScopePlacements.Size; i++)
+    {
+        if (AppGraphNodeIdIsLive(g, g->ScopePlacements.Data[i].ScopeId) || AppGraphNodeIdIsLive(g, g->ScopePlacements.Data[i].NodeId))
+            continue;
         buf->appendf("Place=%d,%d,%g,%g\n", g->ScopePlacements.Data[i].ScopeId, g->ScopePlacements.Data[i].NodeId,
                      g->ScopePlacements.Data[i].Pos.x, g->ScopePlacements.Data[i].Pos.y);
+    }
     // F58 order records: one line per scope, "Order=<scopeId>,<id0>,<id1>,...". A default graph authors none,
     // so the serialization stays byte-identical to the pre-feature format (like the sparse keymap below).
     for (int i = 0; i < g->ScopeOrders.Size; i++)
     {
         const ImGuiAppScopeOrder* ord = &g->ScopeOrders.Data[i];
+        if (AppGraphNodeIdIsLive(g, ord->ScopeId))
+            continue;
         buf->appendf("Order=%d", ord->ScopeId);
         for (int k = 0; k < ord->NodeIds.Size; k++)
-            buf->appendf(",%d", ord->NodeIds.Data[k]);
+            if (!AppGraphNodeIdIsLive(g, ord->NodeIds.Data[k]))
+                buf->appendf(",%d", ord->NodeIds.Data[k]);
         buf->append("\n");
     }
     // F74 keymap: sparse user overrides only (a default graph writes none, so it stays byte-identical to
     // the pre-feature serialization). Key==0 (ImGuiKey_None) encodes an explicit unbind.
     for (int i = 0; i < g->Keymap.Size; i++)
         buf->appendf("Keybind=%d,%d,%d\n", g->Keymap.Data[i].CmdId, (int)g->Keymap.Data[i].Key, g->Keymap.Data[i].Mods);
+}
+
+static void AppGraphSerialize(const ImGuiAppGraph* g, ImGuiTextBuffer* buf)
+{
+    AppGraphSerializeEx(g, buf, true);
 }
 
 // The prefab registry (F04) rides in a sidecar file beside the graph ("<graph>.prefabs"). Each entry
@@ -14735,7 +14772,7 @@ const int      APP_UNDO_CAP = 128;
 static char* AppUndoSnapshot(const ImGuiAppGraph* g)
 {
     ImGuiTextBuffer buf;
-    AppGraphSerialize(g, &buf);
+    AppGraphSerializeEx(g, &buf, false);   // no allocator watermark: restore never rewinds ids
     const int n = buf.size();
     char* s = (char*)IM_ALLOC((size_t)n + 1);
     memcpy(s, buf.c_str(), (size_t)n);
@@ -14917,17 +14954,22 @@ void AppGraphCheckpoint(ImGuiAppGraph* g)
         return;
     }
 
-    // Name the step: deserialize the snapshot the live graph just diverged from, diff against the live graph.
+    // Name the step: diff SNAPSHOT vs SNAPSHOT (both design-only). Diffing against the live graph
+    // would count the mirror's derived twins as "added" nodes on every step.
     char label[96];
     ImStrncpy(label, "Edit", IM_ARRAYSIZE(label));
     if (AppGraphEditorState(g)->Undo.Cursor >= 0)
     {
         char* backup_text = AppUndoStrdup(AppGraphEditorState(g)->Undo.Snaps.Data[AppGraphEditorState(g)->Undo.Cursor]);   // deserialize mutates in place
-        ImGuiAppGraph prev;
+        char* now_text = AppUndoStrdup(snap);
+        ImGuiAppGraph prev, now;
         AppGraphDeserialize(&prev, backup_text);
+        AppGraphDeserialize(&now, now_text);
         IM_FREE(backup_text);
-        AppUndoDeriveLabel(&prev, g, label, IM_ARRAYSIZE(label));
-        prev.Nodes.clear_destruct();   // scratch graph owns its nodes' inner vectors; ImVector never destructs elements
+        IM_FREE(now_text);
+        AppUndoDeriveLabel(&prev, &now, label, IM_ARRAYSIZE(label));
+        prev.Nodes.clear_destruct();   // scratch graphs own their nodes' inner vectors; ImVector never destructs elements
+        now.Nodes.clear_destruct();
     }
     AppUndoPush(g, snap, label);
 }
@@ -15654,7 +15696,8 @@ static int AppNodeFirstPortKind(const ImGuiAppNode* n, ImGuiAppPortKind kind)
 
 // Re-parent a node by moving its containment edge: a Control onto a Window/Sidebar (host it), or a Field onto a
 // Struct. Removes the child's old containment edge, adds a new one (child ChildOut -> parent ChildIn).
-static bool AppGraphReparent(ImGuiAppGraph* g, int child_id, int parent_id)
+// Exported: the preview WYSIWYG "Move to" verb rides the same road as the outliner drag.
+bool AppGraphReparent(ImGuiAppGraph* g, int child_id, int parent_id)
 {
     const ImGuiAppNode* child = AppGraphFindNode(g, child_id);
     const ImGuiAppNode* parent = AppGraphFindNode(g, parent_id);

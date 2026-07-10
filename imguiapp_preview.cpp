@@ -103,6 +103,14 @@ struct ImGuiAppPvCommandName
     int  Value;
 };
 
+// One instance panel's screen rect this frame (the WYSIWYG overlay's anchor source: rects and the
+// frame they belong to are a same-frame pair -- 3.7's coherent-pair rule).
+struct ImGuiAppPvRect
+{
+    int    NodeId;
+    ImVec2 Min, Max;
+};
+
 // The on-camera surface + selection-brushing channel (design 8), bundled off the session. All transient;
 // never snapshotted. Composer -> preview: Brush* name the node whose widget group haloes. Preview ->
 // composer: HoverNode/ClickNode report the node the mouse is over / clicked, latched until taken.
@@ -113,6 +121,7 @@ struct ImGuiAppPvSurface
     int  BrushHover;     // composer -> preview halo target (hovered node id, -1 none)
     int  HoverNode;      // preview -> composer: node under the mouse this frame (-1 none)
     int  ClickNode;      // preview -> composer: node whose panel was clicked (latched, -1 none)
+    ImVector<ImGuiAppPvRect> Rects;   // this frame's instance panel rects, submission order
 
     ImGuiAppPvSurface() { Enabled = false; BrushSelected = -1; BrushHover = -1; HoverNode = -1; ClickNode = -1; }
 };
@@ -919,6 +928,13 @@ void AppPvDrawFields(ImGuiAppPreview* s, const ImGuiAppPvInstance* inst, char* b
     // preview: halo the group when the selection (primary) or hover names it -- theme-derived, em-padded.
     const ImVec2 gmin = ImGui::GetItemRectMin();
     const ImVec2 gmax = ImGui::GetItemRectMax();
+    {
+        ImGuiAppPvRect r;
+        r.NodeId = inst->NodeId;
+        r.Min = gmin;
+        r.Max = gmax;
+        s->Surface.Rects.push_back(r);   // this frame's anchor for the WYSIWYG overlay
+    }
     const float  em   = ImGui::GetFontSize();
     const float  pad  = em * 0.25f;
     if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseHoveringRect(gmin, gmax))
@@ -1213,6 +1229,7 @@ void AppPreviewFrame(ImGuiAppPreview* session, float dt)
 {
     if (session == nullptr || session->App == nullptr) return;
     session->Surface.HoverNode = -1;   // recomputed this frame while the controls render (design 8.2)
+    session->Surface.Rects.resize(0);  // this frame's anchors rebuild with this frame's widgets
     session->Tick++;
     UpdateApp(session->App, dt);
     RenderApp(session->App);
@@ -1322,6 +1339,7 @@ void AppPreviewRender(ImGuiAppPreview* session)
 {
     if (session == nullptr || session->App == nullptr) return;
     session->Surface.HoverNode = -1;   // paused: render (and brush) the frozen state without a Task pass
+    session->Surface.Rects.resize(0);
     RenderApp(session->App);
 }
 
@@ -1343,6 +1361,22 @@ int AppPreviewTakeClickedNode(ImGuiAppPreview* session)
     const int n = session->Surface.ClickNode;
     session->Surface.ClickNode = -1;   // consumed
     return n;
+}
+
+// This frame's instance-panel rects (screen space, submission order): the WYSIWYG overlay's
+// anchors. Rect and frame are a same-frame pair; nothing here survives the frame.
+int AppPreviewSurfaceRectCount(const ImGuiAppPreview* session)
+{
+    return session != nullptr ? session->Surface.Rects.Size : 0;
+}
+
+int AppPreviewSurfaceRectAt(const ImGuiAppPreview* session, int i, ImVec2* out_min, ImVec2* out_max)
+{
+    if (session == nullptr || i < 0 || i >= session->Surface.Rects.Size)
+        return -1;
+    if (out_min != nullptr) *out_min = session->Surface.Rects.Data[i].Min;
+    if (out_max != nullptr) *out_max = session->Surface.Rects.Data[i].Max;
+    return session->Surface.Rects.Data[i].NodeId;
 }
 #endif // IMGUIX_DISABLE_TOOLS
 } // namespace ImGui

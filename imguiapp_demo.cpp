@@ -343,6 +343,9 @@ enum ImGuiAppComposerHostCmd_
     ImGuiAppComposerHostCmd_ToggleLive,
     ImGuiAppComposerHostCmd_Shortcuts,
     ImGuiAppComposerHostCmd_PanelReplay,
+    ImGuiAppComposerHostCmd_PostureAuthor,
+    ImGuiAppComposerHostCmd_PostureObserve,
+    ImGuiAppComposerHostCmd_PostureReplay,
 };
 
 // App-time transport (F29): a per-frame snapshot ring of the mirror's snapshottable (trivially-copyable)
@@ -503,12 +506,14 @@ static void DocLog(ImGuiAppGraphDocData* doc, int severity, const char* fmt, ...
 // Layout presets (F36): named workspace configs over the sidebar / bottom-panel / live visibilities.
 // The active preset is derived, not stored -- it is whichever config the current visibilities match,
 // so a manual toggle simply un-lights the preset. Visibilities persist through the layout sidecar.
+// ST3.1 postures: Author / Observe / Replay (Review folded into Author -- the code panel is part
+// of authoring; the source map is its tie). A posture = panel states + which panel is the subject.
 enum ImGuiAppComposerLayoutPreset_
 {
     ImGuiAppComposerLayoutPreset_None = 0,
-    ImGuiAppComposerLayoutPreset_Compose,   // authoring: both sidebars, no bottom panel, live hidden
-    ImGuiAppComposerLayoutPreset_Review,    // compare design vs generated: sidebars + code panel + live
-    ImGuiAppComposerLayoutPreset_Observe,   // watch the running app: canvas + bottom panel + live, no sidebars
+    ImGuiAppComposerLayoutPreset_Author,    // edit the model: sidebars + code panel
+    ImGuiAppComposerLayoutPreset_Observe,   // watch/edit the running preview: inspector + bottom (Preview) + live
+    ImGuiAppComposerLayoutPreset_Replay,    // interrogate a recorded run: bottom (Replay) as the subject
 };
 enum ImGuiAppComposerLayoutVis_          // one bit per toggleable surface
 {
@@ -522,9 +527,9 @@ static int ComposerLayoutPresetMask(int preset)
 {
     switch (preset)
     {
-    case ImGuiAppComposerLayoutPreset_Compose: return ImGuiAppComposerLayoutVis_Tree | ImGuiAppComposerLayoutVis_Insp;
-    case ImGuiAppComposerLayoutPreset_Review:  return ImGuiAppComposerLayoutVis_Tree | ImGuiAppComposerLayoutVis_Insp | ImGuiAppComposerLayoutVis_Code | ImGuiAppComposerLayoutVis_Live;
-    case ImGuiAppComposerLayoutPreset_Observe: return ImGuiAppComposerLayoutVis_Code | ImGuiAppComposerLayoutVis_Live;
+    case ImGuiAppComposerLayoutPreset_Author:  return ImGuiAppComposerLayoutVis_Tree | ImGuiAppComposerLayoutVis_Insp | ImGuiAppComposerLayoutVis_Code;
+    case ImGuiAppComposerLayoutPreset_Observe: return ImGuiAppComposerLayoutVis_Insp | ImGuiAppComposerLayoutVis_Code | ImGuiAppComposerLayoutVis_Live;
+    case ImGuiAppComposerLayoutPreset_Replay:  return ImGuiAppComposerLayoutVis_Code;
     default:                           return 0;
     }
 }
@@ -1205,6 +1210,11 @@ struct ImGuiAppToolbarControl : ImGuiAppControl<ImGuiAppToolbarData, ImGuiAppToo
         if (temp_data->ApplyPreset != ImGuiAppComposerLayoutPreset_None)
         {
             ComposerApplyLayoutPreset(doc, temp_data->ApplyPreset);
+            // A posture names its subject: the bottom panel opens ON that subject's tab.
+            if (temp_data->ApplyPreset == ImGuiAppComposerLayoutPreset_Observe)
+                doc->RevealPanel = ImGuiAppComposerPanel_Preview;
+            else if (temp_data->ApplyPreset == ImGuiAppComposerLayoutPreset_Replay)
+                doc->RevealPanel = ImGuiAppComposerPanel_Replay;
         }
         if (temp_data->Undo)
         {
@@ -1498,11 +1508,18 @@ struct ImGuiAppToolbarControl : ImGuiAppControl<ImGuiAppToolbarData, ImGuiAppToo
             int cur_preset = ImGuiAppComposerLayoutPreset_None;
             {
                 const int cur = ComposerLayoutVisFlags(doc);
-                for (int p = ImGuiAppComposerLayoutPreset_Compose; p <= ImGuiAppComposerLayoutPreset_Observe; p++)
+                for (int p = ImGuiAppComposerLayoutPreset_Author; p <= ImGuiAppComposerLayoutPreset_Replay; p++)
                     if (cur == ComposerLayoutPresetMask(p))
                         cur_preset = p;
             }
-            static const char* preset_names[] = { "Layout", "Compose", "Review", "Observe" };
+            static const char* preset_names[] = { "Layout", "Author", "Observe", "Replay" };
+
+            // F6 cycles the postures (Author -> Observe -> Replay -> ...): one keystroke to switch
+            // what the studio's subject is.
+            if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().WantTextInput
+                && ImGui::IsKeyPressed(ImGuiKey_F6, false))
+                temp_data->ApplyPreset = (cur_preset >= ImGuiAppComposerLayoutPreset_Replay || cur_preset < ImGuiAppComposerLayoutPreset_Author)
+                                       ? ImGuiAppComposerLayoutPreset_Author : cur_preset + 1;
             const char* layout_lbl = ICON_FA_TABLE_COLUMNS "###layoutmenu";   // icon-only: the toolbar has no room for a label
 
             const float pad2 = style.FramePadding.x * 2.0f;
@@ -1570,17 +1587,17 @@ struct ImGuiAppToolbarControl : ImGuiAppControl<ImGuiAppToolbarData, ImGuiAppToo
             if (cur_preset != ImGuiAppComposerLayoutPreset_None)
                 ImGui::PopStyleColor();
             if (cur_preset != ImGuiAppComposerLayoutPreset_None)
-                ImGui::SetItemTooltip("Workspace layout: %s", preset_names[cur_preset]);
+                ImGui::SetItemTooltip("Studio posture: %s (F6 cycles)", preset_names[cur_preset]);
             else
-                ImGui::SetItemTooltip("Workspace layout presets (Compose / Review / Observe)");
+                ImGui::SetItemTooltip("Studio postures (Author / Observe / Replay -- F6 cycles)");
             if (ImGui::BeginPopup("##layout_presets"))
             {
-                if (ImGui::MenuItem("Compose###preset-compose", nullptr, cur_preset == ImGuiAppComposerLayoutPreset_Compose))
-                    temp_data->ApplyPreset = ImGuiAppComposerLayoutPreset_Compose;
-                if (ImGui::MenuItem("Review###preset-review", nullptr, cur_preset == ImGuiAppComposerLayoutPreset_Review))
-                    temp_data->ApplyPreset = ImGuiAppComposerLayoutPreset_Review;
+                if (ImGui::MenuItem("Author###preset-author", "F6", cur_preset == ImGuiAppComposerLayoutPreset_Author))
+                    temp_data->ApplyPreset = ImGuiAppComposerLayoutPreset_Author;
                 if (ImGui::MenuItem("Observe###preset-observe", nullptr, cur_preset == ImGuiAppComposerLayoutPreset_Observe))
                     temp_data->ApplyPreset = ImGuiAppComposerLayoutPreset_Observe;
+                if (ImGui::MenuItem("Replay###preset-replay", nullptr, cur_preset == ImGuiAppComposerLayoutPreset_Replay))
+                    temp_data->ApplyPreset = ImGuiAppComposerLayoutPreset_Replay;
                 ImGui::EndPopup();
             }
 
@@ -1599,6 +1616,9 @@ struct ImGuiAppToolbarControl : ImGuiAppControl<ImGuiAppToolbarData, ImGuiAppToo
             case ImGuiAppComposerHostCmd_ToggleLive:   temp_data->ToggleLive = true; break;
             case ImGuiAppComposerHostCmd_Shortcuts:    temp_data->OpenShortcuts = true; break;
             case ImGuiAppComposerHostCmd_PanelReplay:  temp_data->RevealPanel = ImGuiAppComposerPanel_Replay; break;
+            case ImGuiAppComposerHostCmd_PostureAuthor:  temp_data->ApplyPreset = ImGuiAppComposerLayoutPreset_Author; break;
+            case ImGuiAppComposerHostCmd_PostureObserve: temp_data->ApplyPreset = ImGuiAppComposerLayoutPreset_Observe; break;
+            case ImGuiAppComposerHostCmd_PostureReplay:  temp_data->ApplyPreset = ImGuiAppComposerLayoutPreset_Replay; break;
             default: break;
             }
 
@@ -2009,6 +2029,314 @@ static void ShowGeneratedCodeView(const ImGuiAppGraph* graph, const char* str_id
 //-----------------------------------------------------------------------------
 // [SECTION] Composer editor body (outliner | canvas + bottom console | inspector; project inspector)
 //-----------------------------------------------------------------------------
+
+//-----------------------------------------------------------------------------
+// [SECTION] Preview WYSIWYG overlay (ST3): Edit mode gestures on the interpreter surface
+//-----------------------------------------------------------------------------
+// The running preview is an editing surface: every gesture writes the MODEL through the same
+// mutation roads the canvas/tree use (one writer; the per-frame checkpoint derives the undo
+// label). Rects come from THIS frame's surface manifest -- a same-frame pair, never cached.
+
+// Containment parent (window/sidebar hosting this node) via the child's ChildOut edge; -1 = none.
+static int ComposerHostOf(const ImGuiAppGraph* g, int node_id)
+{
+    int child_out = 0;
+    for (int i = 0; i < g->Nodes.Size && child_out == 0; i++)
+        if (g->Nodes.Data[i].Id == node_id)
+            for (int p = 0; p < g->Nodes.Data[i].Ports.Size; p++)
+                if (g->Nodes.Data[i].Ports.Data[p].Kind == ImGuiAppPortKind_ChildOut)
+                { child_out = g->Nodes.Data[i].Ports.Data[p].Id; break; }
+    if (child_out == 0)
+        return -1;
+    for (int li = 0; li < g->Links.Size; li++)
+    {
+        if (g->Links.Data[li].Kind != ImGuiAppEdgeKind_Containment || g->Links.Data[li].StartAttr != child_out)
+            continue;
+        for (int i = 0; i < g->Nodes.Size; i++)
+            for (int p = 0; p < g->Nodes.Data[i].Ports.Size; p++)
+                if (g->Nodes.Data[i].Ports.Data[p].Id == g->Links.Data[li].EndAttr)
+                    return g->Nodes.Data[i].Id;
+    }
+    return -1;
+}
+
+// Reorder within the host's scope order (F58-60 write path). The order record lives on the host
+// scope; bracket the view there for the write -- view state restored the same statement group.
+static bool ComposerPreviewReorder(ImGuiAppGraph* g, int node_id, int new_slot)
+{
+    const int host = ComposerHostOf(g, node_id);
+    if (host < 0)
+        return false;
+    g->ViewScope.push_back(host);
+    const bool ok = ImGui::AppScopeOrderMoveMember(g, node_id, new_slot);
+    g->ViewScope.pop_back();
+    return ok;
+}
+
+// Edit-mode overlay over the interpreter surface. Hosted controls render inside the PREVIEW APP'S
+// OWN windows (real Begin/End -- the surface child only hosts free chrome), so the veil is a
+// topmost overlay WINDOW spanning this frame's instance-rect union: the app's widgets receive no
+// input while Edit is on, and every gesture anchors on the same-frame manifest rects.
+static void ComposerPreviewEditOverlay(ImGuiAppGraphDocData* doc, ImGuiAppGraph* graph, int* selection)
+{
+    ImGuiAppEditorState* ed = ImGui::AppGraphEditorState(graph);
+    ImGuiAppPreview* pv = ed->Preview;
+    const float em = ImGui::GetFontSize();
+
+    // Union of this frame's instance rects = the veil's extent.
+    ImVec2 umin(FLT_MAX, FLT_MAX), umax(-FLT_MAX, -FLT_MAX);
+    const int nrects_u = ImGui::AppPreviewSurfaceRectCount(pv);
+    for (int i = 0; i < nrects_u; i++)
+    {
+        ImVec2 mn, mx;
+        ImGui::AppPreviewSurfaceRectAt(pv, i, &mn, &mx);
+        umin = ImVec2(ImMin(umin.x, mn.x), ImMin(umin.y, mn.y));
+        umax = ImVec2(ImMax(umax.x, mx.x), ImMax(umax.y, mx.y));
+    }
+    if (nrects_u == 0)
+        return;   // nothing on the surface yet: nothing to veil or edit
+    umin = ImVec2(umin.x - em * 0.5f, umin.y - em * 1.4f);   // include title bands + air
+    umax = ImVec2(umax.x + em * 0.5f, umax.y + em * 0.5f);
+
+    ImGui::SetNextWindowPos(umin);
+    ImGui::SetNextWindowSize(ImVec2(umax.x - umin.x, umax.y - umin.y));
+    ImGui::SetNextWindowBgAlpha(0.0f);
+    if (!ImGui::Begin("##pveditveil", nullptr,
+                      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
+                    | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+                    | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse))
+    {
+        ImGui::End();
+        return;
+    }
+    ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());   // the veil must WIN hover over the app's windows
+
+    const ImVec2 cmin = umin, cmax = umax;
+    ImGui::SetCursorScreenPos(cmin);
+    ImGui::InvisibleButton("##editveil", ImVec2(ImMax(1.0f, cmax.x - cmin.x), ImMax(1.0f, cmax.y - cmin.y)));
+    const bool veil_hovered = ImGui::IsItemHovered();
+    const ImVec2 mp = ImGui::GetIO().MousePos;
+
+    // This frame's instance under the mouse (rects are the manifest's, same frame as the widgets).
+    int hit = -1;
+    ImVec2 hit_mn, hit_mx;
+    const int nrects = ImGui::AppPreviewSurfaceRectCount(pv);
+    for (int i = 0; i < nrects; i++)
+    {
+        ImVec2 mn, mx;
+        const int nid = ImGui::AppPreviewSurfaceRectAt(pv, i, &mn, &mx);
+        if (mp.x >= mn.x && mp.x < mx.x && mp.y >= mn.y && mp.y < mx.y)
+        { hit = nid; hit_mn = mn; hit_mx = mx; }
+    }
+    if (veil_hovered && hit >= 0)
+    {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        ImGui::AppGraphHoverNode(graph, hit, ImGuiAppHoverSource_External);   // halo canvas + tree + surface (next-frame brush)
+    }
+
+    // Mode chords live where the mouse lives: the veil window owns hover while Edit is on.
+    if ((veil_hovered || ImGui::IsWindowFocused()) && !ImGui::GetIO().WantTextInput)
+    {
+        if (ImGui::IsKeyPressed(ImGuiKey_E, false))
+            ed->PreviewEdit = false;
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && ed->PreviewRenameNode < 0 && ed->PreviewDragNode < 0)
+            ed->PreviewEdit = false;
+    }
+
+    // Gestures. Click = select promotion; press begins a potential reorder drag. An external
+    // selection write must reach every store the sync reads -- doc-local, graph, AND the canvas
+    // engine (whose readback republishes its own set each frame and would stomp a partial write).
+    auto select_node = [&](int node)
+    {
+        *selection = node;
+        graph->Selection.resize(0);
+        graph->Selection.push_back(node);
+        ImGui::CanvasSelectNode(ImGui::AppGraphEditorCanvas(graph), node, false);
+    };
+    if (veil_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hit >= 0)
+    {
+        select_node(hit);
+        ed->PreviewDragNode = hit;
+    }
+    if (veil_hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && hit >= 0)
+    {
+        if (const ImGuiAppNode* n = ImGui::AppGraphFindNode(graph, hit); n != nullptr && !n->IsLive)
+        {
+            ed->PreviewRenameNode = hit;
+            ed->PreviewRenameFocus = true;
+            ImStrncpy(ed->PreviewRenameBuf, n->Draft.Name, IM_ARRAYSIZE(ed->PreviewRenameBuf));
+        }
+    }
+    if (veil_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && hit >= 0)
+    {
+        ed->PreviewCtxNode = hit;
+        select_node(hit);
+        ImGui::OpenPopup("##pvctx");
+    }
+
+    // Drag-reorder: siblings of the dragged node's host, in this frame's visual order; the
+    // insertion slot follows the mouse; release applies through the order write path.
+    if (ed->PreviewDragNode >= 0)
+    {
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+        {
+            const int drag = ed->PreviewDragNode;
+            ed->PreviewDragNode = -1;
+            if (ImGui::IsMouseDragPastThreshold(ImGuiMouseButton_Left, 4.0f))
+            {
+                const int host = ComposerHostOf(graph, drag);
+                int slot = 0;
+                for (int i = 0; i < nrects; i++)
+                {
+                    ImVec2 mn, mx;
+                    const int nid = ImGui::AppPreviewSurfaceRectAt(pv, i, &mn, &mx);
+                    if (nid == drag || ComposerHostOf(graph, nid) != host)
+                        continue;
+                    if ((mn.y + mx.y) * 0.5f < mp.y)
+                        slot++;
+                }
+                if (ComposerPreviewReorder(graph, drag, slot))
+                    DocLog(doc, 0, "preview edit: reorder -> slot %d", slot);
+            }
+        }
+        else if (ImGui::IsMouseDragPastThreshold(ImGuiMouseButton_Left, 4.0f))
+        {
+            // Insertion caret between sibling panels at the mouse y.
+            ImGui::GetWindowDrawList()->AddLine(ImVec2(cmin.x + em * 0.5f, mp.y), ImVec2(cmax.x - em * 0.5f, mp.y),
+                                                ImGui::AppComposerGetStyle()->Gold, ImMax(1.5f, em * 0.1f));
+        }
+    }
+
+    // Inline rename at the instance's title row: submitted after the veil, so it wins input.
+    if (ed->PreviewRenameNode >= 0)
+    {
+        ImVec2 rmn = cmin, rmx = cmin;
+        bool found = false;
+        for (int i = 0; i < nrects; i++)
+        {
+            ImVec2 mn, mx;
+            if (ImGui::AppPreviewSurfaceRectAt(pv, i, &mn, &mx) == ed->PreviewRenameNode)
+            { rmn = mn; rmx = mx; found = true; break; }
+        }
+        if (!found)
+        {
+            ed->PreviewRenameNode = -1;   // instance left the surface (edit applied): drop the editor
+        }
+        else
+        {
+            ImGui::SetCursorScreenPos(ImVec2(rmn.x, rmn.y - em * 0.15f));
+            ImGui::SetNextItemWidth(ImMax(em * 6.0f, rmx.x - rmn.x));
+            if (ed->PreviewRenameFocus)
+            {
+                ImGui::SetKeyboardFocusHere();
+                ed->PreviewRenameFocus = false;
+            }
+            const bool done = ImGui::InputText("##pvrename", ed->PreviewRenameBuf, IM_ARRAYSIZE(ed->PreviewRenameBuf),
+                                               ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+            const bool deactivated = ImGui::IsItemDeactivated();
+            if (done || (deactivated && !ImGui::IsKeyPressed(ImGuiKey_Escape)))
+            {
+                ImGuiAppNode* n = nullptr;
+                for (int i = 0; i < graph->Nodes.Size; i++)
+                    if (graph->Nodes.Data[i].Id == ed->PreviewRenameNode)
+                        n = &graph->Nodes.Data[i];
+                if (n != nullptr && !n->IsLive && ed->PreviewRenameBuf[0] != 0 && strcmp(n->Draft.Name, ed->PreviewRenameBuf) != 0)
+                {
+                    ImStrncpy(n->Draft.Name, ed->PreviewRenameBuf, IM_ARRAYSIZE(n->Draft.Name));
+                    DocLog(doc, 0, "preview edit: renamed -> %s", n->Draft.Name);
+                }
+                ed->PreviewRenameNode = -1;
+            }
+            else if (deactivated)
+            {
+                ed->PreviewRenameNode = -1;   // Esc: cancel
+            }
+        }
+    }
+
+    // Context verbs: the preview's four-roads parity menu.
+    if (ImGui::BeginPopup("##pvctx"))
+    {
+        const int cn = ed->PreviewCtxNode;
+        const ImGuiAppNode* n = ImGui::AppGraphFindNode(graph, cn);
+        if (n == nullptr)
+        {
+            ImGui::CloseCurrentPopup();
+        }
+        else
+        {
+            ImGui::TextDisabled("%s", n->Draft.Name[0] ? n->Draft.Name : "(unnamed)");
+            ImGui::Separator();
+            if (ImGui::MenuItem(ICON_FA_CIRCLE_INFO "  Inspect here", "N"))
+            {
+                *selection = cn;
+                graph->Selection.resize(0);
+                graph->Selection.push_back(cn);
+                ImGui::CanvasSelectNode(ImGui::AppGraphEditorCanvas(graph), cn, false);
+                ImGui::AppGraphInspectHere(graph, cn);
+            }
+            if (ImGui::MenuItem(ICON_FA_PEN "  Rename", "dbl-click", false, !n->IsLive))
+            {
+                ed->PreviewRenameNode = cn;
+                ed->PreviewRenameFocus = true;
+                ImStrncpy(ed->PreviewRenameBuf, n->Draft.Name, IM_ARRAYSIZE(ed->PreviewRenameBuf));
+            }
+            const int nudge_host = ComposerHostOf(graph, cn);
+            if (ImGui::MenuItem(ICON_FA_ARROW_UP "  Reorder earlier", "drag", false, !n->IsLive && nudge_host >= 0))
+            {
+                graph->ViewScope.push_back(nudge_host);
+                const bool ok = ImGui::AppScopeOrderNudge(graph, cn, -1);
+                graph->ViewScope.pop_back();
+                if (ok)
+                    DocLog(doc, 0, "preview edit: reordered %s one slot earlier", n->Draft.Name);
+            }
+            if (ImGui::MenuItem(ICON_FA_ARROW_DOWN "  Reorder later", "drag", false, !n->IsLive && nudge_host >= 0))
+            {
+                graph->ViewScope.push_back(nudge_host);
+                const bool ok = ImGui::AppScopeOrderNudge(graph, cn, +1);
+                graph->ViewScope.pop_back();
+                if (ok)
+                    DocLog(doc, 0, "preview edit: reordered %s one slot later", n->Draft.Name);
+            }
+            if (ImGui::BeginMenu(ICON_FA_ARROW_RIGHT_ARROW_LEFT "  Move to", !n->IsLive))
+            {
+                const int cur_host = ComposerHostOf(graph, cn);
+                for (int i = 0; i < graph->Nodes.Size; i++)
+                {
+                    const ImGuiAppNode* w = &graph->Nodes.Data[i];
+                    if (w->IsLive || (w->Kind != ImGuiAppNodeKind_Window && w->Kind != ImGuiAppNodeKind_Sidebar) || w->Id == cur_host)
+                        continue;
+                    if (ImGui::MenuItem(w->Draft.Name[0] ? w->Draft.Name : "(unnamed)"))
+                        if (ImGui::AppGraphReparent(graph, cn, w->Id))   // refusals notify through the shared channel
+                            DocLog(doc, 0, "preview edit: moved %s -> %s", n->Draft.Name, w->Draft.Name);
+                }
+                ImGui::EndMenu();
+            }
+            if (ImGui::MenuItem(ICON_FA_PLUS "  Add control to this host"))
+            {
+                const int host = ComposerHostOf(graph, cn);
+                if (ImGuiAppNode* added = ImGui::AppGraphAddNode(graph, ImGuiAppNodeKind_Control, "NewControl"))
+                    if (host >= 0 && ImGui::AppGraphReparent(graph, added->Id, host))
+                        DocLog(doc, 0, "preview edit: added control into host %d", host);
+            }
+            ImGui::Separator();
+            ImGui::TextDisabled("edits apply next frame");
+        }
+        ImGui::EndPopup();
+    }
+
+    // Mode chrome: the run-tint idiom -- accent frame + chip. A mode the user must see.
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRect(ImVec2(cmin.x + 1.0f, cmin.y + 1.0f), ImVec2(cmax.x - 1.0f, cmax.y - 1.0f),
+                ImGui::AppComposerGetStyle()->RunTintBorder, 0.0f, 0, ImMax(2.0f, em * 0.12f));
+    const char* chip = ICON_FA_PENCIL "  EDIT";
+    const ImVec2 ts = ImGui::CalcTextSize(chip);
+    const ImVec2 c0(cmin.x + em * 0.5f, cmin.y + em * 0.35f);
+    dl->AddRectFilled(ImVec2(c0.x - em * 0.3f, c0.y - em * 0.15f), ImVec2(c0.x + ts.x + em * 0.3f, c0.y + ts.y + em * 0.15f),
+                      ImGui::AppComposerGetStyle()->GroupTitleBg, em * 0.25f);
+    dl->AddText(c0, ImGui::AppComposerGetStyle()->Gold, chip);
+    ImGui::End();   // ##pveditveil
+}
 
 struct ImGuiAppEditorBodyData
 {
@@ -2541,6 +2869,9 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
                     { ImGuiAppComposerHostCmd_ToggleLive,   "",  "View: Toggle live mirror",         "",       ImGuiKey_None, 0,             ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT,  ImGuiAppCommandSource_Host },
                     { ImGuiAppComposerHostCmd_Shortcuts,    "",  "View: Rebind shortcuts...",        "",       ImGuiKey_None, 0,             ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT,  ImGuiAppCommandSource_Host },
                     { ImGuiAppComposerHostCmd_PanelReplay,  "",  "Panel: Replay",                    "",       ImGuiKey_None, 0,             ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT,  ImGuiAppCommandSource_Host },
+                    { ImGuiAppComposerHostCmd_PostureAuthor,  "", "Posture: Author",                 "F6",     ImGuiKey_None, 0,             ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT,  ImGuiAppCommandSource_Host },
+                    { ImGuiAppComposerHostCmd_PostureObserve, "", "Posture: Observe",                "",       ImGuiKey_None, 0,             ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT,  ImGuiAppCommandSource_Host },
+                    { ImGuiAppComposerHostCmd_PostureReplay,  "", "Posture: Replay",                 "",       ImGuiKey_None, 0,             ImGuiAppCmdSurface_Palette, ImGuiAppNodeKind_COUNT,  ImGuiAppCommandSource_Host },
                 };
                 ImGui::AppGraphSetHostCommands(graph, host_cmds, IM_ARRAYSIZE(host_cmds));
 
@@ -2818,6 +3149,24 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
                                 ed->PreviewRun = !ed->PreviewRun;
                             ImGui::SetItemTooltip(ed->PreviewRun ? "Pause the previewed model (widgets stay live)" : "Run the previewed model");
                             ImGui::SameLine();
+
+                            // ST3: Interact / Edit mode -- a mode the user must SEE. Edit routes input to the design
+                            // overlay (the app runs beneath, untouched); every gesture writes the MODEL through the
+                            // normal mutation + named-undo roads. Interpreter surface only (the DLL overlay is ST4).
+                            if (!ed->PreviewUseDll)
+                            {
+                                const bool editing = ed->PreviewEdit;
+                                if (editing)
+                                    ImGui::PushStyleColor(ImGuiCol_Button, ComposerCol(ImGui::AppComposerGetStyle()->HealthStale));
+                                if (ImGui::Button(editing ? ICON_FA_PENCIL "  Edit###pvmode" : ICON_FA_HAND_POINTER "  Interact###pvmode"))
+                                    ed->PreviewEdit = !ed->PreviewEdit;
+                                if (editing)
+                                    ImGui::PopStyleColor();
+                                ImGui::SetItemTooltip(editing
+                    ? "Edit mode: drag reorders, dbl-click renames, right-click for verbs -- the app receives no input (E / Esc exits)"
+                    : "Interact mode: input drives the running preview (E enters Edit)");
+                                ImGui::SameLine();
+                            }
                             if (ImGui::Button(ICON_FA_ARROW_ROTATE_LEFT "  Reinit"))
                             {
                                 ComposerPreviewRecordStop(ed, doc->Transport);   // a live take can't outlive its app
@@ -2924,12 +3273,26 @@ struct ImGuiAppEditorBodyControl : ImGuiAppControl<ImGuiAppEditorBodyData, ImGui
                                     if (ed->PreviewRec != nullptr && ed->PreviewRun)
                                         ComposerPreviewRecordPump(ed, io.DeltaTime);
 
-                                    const int pv_hover = ImGui::AppPreviewHoveredNode(ed->Preview);    // preview -> composer
-                                    if (pv_hover >= 0)
-                                        ImGui::AppGraphHoverNode(graph, pv_hover, ImGuiAppHoverSource_External);
-                                    const int pv_click = ImGui::AppPreviewTakeClickedNode(ed->Preview);
-                                    if (pv_click >= 0)
-                                        selection = pv_click;
+                                    if (!ed->PreviewEdit)
+                                    {
+                                        const int pv_hover = ImGui::AppPreviewHoveredNode(ed->Preview);    // preview -> composer
+                                        if (pv_hover >= 0)
+                                            ImGui::AppGraphHoverNode(graph, pv_hover, ImGuiAppHoverSource_External);
+                                        const int pv_click = ImGui::AppPreviewTakeClickedNode(ed->Preview);
+                                        if (pv_click >= 0)
+                                            selection = pv_click;
+                                    }
+                                    else
+                                    {
+                                        (void)ImGui::AppPreviewTakeClickedNode(ed->Preview);   // veiled widgets can't click; drain the latch
+                                        ComposerPreviewEditOverlay(doc, graph, &selection);
+                                    }
+
+                                    // ST3 entry chord: E over the panel enters Edit (the veil window
+                                    // owns the exit chords while the mode is on -- hover lives there).
+                                    if (!ed->PreviewEdit && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && !io.WantTextInput
+                                        && ImGui::IsKeyPressed(ImGuiKey_E, false))
+                                        ed->PreviewEdit = true;
                                 }
                                 else if (!dll_shown)
                                 {
